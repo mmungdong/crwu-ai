@@ -38,22 +38,7 @@ func commandDefinitions() []commandDefinition {
 			},
 			handler: runHelp,
 		},
-		{
-			Name:        "h3yun login",
-			Description: "Authenticate the current employee with DingTalk and store the CRWU session in the operating system credential store.",
-			Usage:       "crwu h3yun login [--server <url>] [--no-browser] [--timeout <duration>] [--json]",
-			Examples: []commandExample{
-				{
-					Description: "Authenticate with DingTalk through the configured CRWU server.",
-					Command:     "crwu h3yun login",
-				},
-				{
-					Description: "Authenticate through a specific CRWU server and return machine-readable identity details.",
-					Command:     "crwu h3yun login --server https://crwu.example.com --json",
-				},
-			},
-			handler: runH3YunLogin,
-		},
+
 		{
 			Name:        "h3yun ping",
 			Description: "Verify the H3Yun personal access token against the H3Yun agent gateway.",
@@ -277,7 +262,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // the process entry point.
 func RunWithDependencies(args []string, stdout, stderr io.Writer, configured Dependencies) int {
 	return runWithDependencies(args, stdout, stderr, dependencies{
-		login:  configured.H3YunLogin,
 		ops:    configured.H3YunOps,
 		web:    configured.H3YunWeb,
 		getenv: configured.Getenv,

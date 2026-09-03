@@ -45,7 +45,6 @@ func TestRunSchemeWritesMachineReadableCommandCatalog(t *testing.T) {
 
 	wantCommands := map[string]bool{
 		"help":                  false,
-		"h3yun login":           false,
 		"h3yun ping":            false,
 		"h3yun tools":           false,
 		"h3yun session bind":    false,

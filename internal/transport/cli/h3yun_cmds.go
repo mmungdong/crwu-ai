@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,29 @@ type H3YunOpsService interface {
 	Ping(ctx context.Context) (json.RawMessage, error)
 	Tools(ctx context.Context) (json.RawMessage, error)
 	Call(ctx context.Context, tool string, arguments map[string]any) (json.RawMessage, error)
+}
+
+// Dependencies are the application services injected into the CLI.
+type Dependencies struct {
+	H3YunOps H3YunOpsService
+	H3YunWeb H3YunWebService
+	Getenv   func(string) string
+}
+
+// dependencies are the resolved, unexported services used by handlers.
+type dependencies struct {
+	ops    H3YunOpsService
+	web    H3YunWebService
+	getenv func(string) string
+}
+
+func defaultDependencies() dependencies {
+	getenv := os.Getenv
+	return dependencies{
+		getenv: getenv,
+		ops:    envH3YunOps(getenv),
+		web:    envH3YunWeb(getenv),
+	}
 }
 
 const h3yunCallTimeout = 60 * time.Second

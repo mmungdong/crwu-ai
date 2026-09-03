@@ -1,6 +1,6 @@
 // Package h3yuncreds stores H3Yun credentials locally in the operating system
 // credential store. This is an approved temporary deviation from AGENTS.md
-// ("server holds H3Yun credentials") until crwu-server hosts a credential
+// ("server holds H3Yun credentials") unless a centralized credential vault is later introduced
 // vault; the storage seam is kept swappable.
 package h3yuncreds
 
