@@ -39,3 +39,4 @@ This repository contains AI-related tools, including Skills and MCP servers.
 - Run the relevant tests, formatting checks, and lint checks before considering work complete.
 - If automated verification is unavailable, document the manual verification performed.
 - Update affected documentation whenever setup, configuration, commands, or behavior changes.
+- When updating README documentation, synchronize all supported language versions.
