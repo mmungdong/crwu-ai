@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/mmungdong/crwu-ai/internal/buildinfo"
 )
 
-type commandHandler func(stdout, stderr io.Writer) int
+type commandHandler func(args []string, stdout, stderr io.Writer) int
 
 type commandDefinition struct {
 	Name        string           `json:"name"`
@@ -66,40 +67,54 @@ func commandDefinitions() []commandDefinition {
 
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		printUsage(stderr)
+		_ = writeUsage(stderr)
 		return 2
 	}
 
 	if args[0] == "-h" || args[0] == "--help" {
-		return runHelp(stdout, stderr)
+		return runHelp(args[1:], stdout, stderr)
 	}
 
 	for _, command := range commandDefinitions() {
 		if command.Name == args[0] {
-			return command.handler(stdout, stderr)
+			return command.handler(args[1:], stdout, stderr)
 		}
 	}
 
 	fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
-	printUsage(stderr)
+	_ = writeUsage(stderr)
 	return 2
 }
 
-func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: crwu <command>")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Commands:")
+func usageText() string {
+	var text strings.Builder
+	text.WriteString("Usage: crwu <command>\n\nCommands:\n")
 	for _, command := range commandDefinitions() {
-		fmt.Fprintf(w, "  %-8s %s\n", command.Name, command.Description)
+		fmt.Fprintf(&text, "  %-8s %s\n", command.Name, command.Description)
 	}
+	return text.String()
 }
 
-func runHelp(stdout, _ io.Writer) int {
-	printUsage(stdout)
+func writeUsage(w io.Writer) error {
+	_, err := io.WriteString(w, usageText())
+	return err
+}
+
+func runHelp(args []string, stdout, stderr io.Writer) int {
+	if code, rejected := rejectArguments("help", args, stderr); rejected {
+		return code
+	}
+	if err := writeUsage(stdout); err != nil {
+		return reportOutputError("help", err, stderr)
+	}
 	return 0
 }
 
-func runScheme(stdout, stderr io.Writer) int {
+func runScheme(args []string, stdout, stderr io.Writer) int {
+	if code, rejected := rejectArguments("scheme", args, stderr); rejected {
+		return code
+	}
+
 	document := struct {
 		Version  string              `json:"version"`
 		Commands []commandDefinition `json:"commands"`
@@ -111,13 +126,30 @@ func runScheme(stdout, stderr io.Writer) int {
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(document); err != nil {
-		fmt.Fprintf(stderr, "write scheme: %v\n", err)
-		return 1
+		return reportOutputError("scheme", err, stderr)
 	}
 	return 0
 }
 
-func runVersion(stdout, _ io.Writer) int {
-	fmt.Fprintf(stdout, "crwu %s\n", buildinfo.String())
+func runVersion(args []string, stdout, stderr io.Writer) int {
+	if code, rejected := rejectArguments("version", args, stderr); rejected {
+		return code
+	}
+	if _, err := fmt.Fprintf(stdout, "crwu %s\n", buildinfo.String()); err != nil {
+		return reportOutputError("version", err, stderr)
+	}
 	return 0
+}
+
+func rejectArguments(name string, args []string, stderr io.Writer) (int, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	fmt.Fprintf(stderr, "command %q does not accept arguments\n", name)
+	return 2, true
+}
+
+func reportOutputError(name string, err error, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "write %s output: %v\n", name, err)
+	return 1
 }
