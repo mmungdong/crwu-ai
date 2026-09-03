@@ -3,7 +3,7 @@ package buildinfo
 import "fmt"
 
 var (
-	Version = "dev"
+	Version = "0.0.1"
 	Commit  = "unknown"
 )
 

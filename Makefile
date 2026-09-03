@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= dev
+VERSION ?= 0.0.1
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 BINARY := crwu

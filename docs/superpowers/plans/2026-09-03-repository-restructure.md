@@ -58,7 +58,7 @@ Expected: compilation failure identifying the missing build information API.
 - [x] **Step 3: Implement minimal build information**
 
 ```go
-var Version = "dev"
+var Version = "0.0.1"
 var Commit = "unknown"
 
 func String() string {
@@ -134,7 +134,7 @@ Expected: all commands exit zero and `bin/crwu` exists.
 
 Run: `./bin/crwu version`
 
-Expected: one line beginning with `crwu dev (commit ` and containing the short
+Expected: one line beginning with `crwu 0.0.1 (commit ` and containing the short
 Git commit selected by Make.
 
 ### Task 3: Migrate the Directory Skeleton and Documentation

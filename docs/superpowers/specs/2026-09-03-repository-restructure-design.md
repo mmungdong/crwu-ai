@@ -86,8 +86,8 @@ canonical developer build entry point.
 - `make test` runs all Go tests.
 - `make fmt` checks or applies standard Go formatting.
 - `make clean` removes only the repository-local `bin` output directory.
-- Version and commit values are injected through Go linker flags and have safe
-  development defaults when the binary is built directly with `go build`.
+- Version and commit values are injected through Go linker flags. Direct builds
+  use the current release version and `unknown` commit as safe defaults.
 - Cross-platform release targets are deferred until release packaging is
   requested.
 

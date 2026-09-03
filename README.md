@@ -35,10 +35,29 @@ directory.
 ```text
 crwu version    print version and commit information
 crwu help       show command help
+crwu scheme     print the command catalog as JSON for AI clients
 ```
 
 MCP and provider-specific commands will be introduced with their first working
 use cases; the skeleton does not advertise commands that are not implemented.
+
+## AI command discovery
+
+`crwu scheme` is the canonical machine-readable command catalog. Its JSON output
+contains the current CLI version and every supported subcommand. Each command
+has an English description, exact usage, and at least one example with its own
+English description.
+
+```bash
+crwu scheme
+```
+
+The command writes only JSON to standard output so an AI client can parse it
+without removing human-oriented log lines. Diagnostics are written to standard
+error with a non-zero exit status.
+
+See [`docs/cli-command-contract.md`](docs/cli-command-contract.md) before adding
+or changing a command.
 
 ## Architecture
 
