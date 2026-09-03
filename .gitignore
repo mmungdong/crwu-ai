@@ -1,0 +1,8 @@
+/bin/
+
+.env
+.env.*
+!.env.example
+
+/configs/workbuddy/*.json
+!/configs/workbuddy/*.example.json
