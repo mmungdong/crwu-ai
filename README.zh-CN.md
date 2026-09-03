@@ -1,180 +1,213 @@
-<h1 align="center">CRWU Agent Harness</h1>
+<div align="center">
 
-<p align="center">
-  在同一仓库中统一 AI CLI 工具、MCP 服务器、Python Skills 与 Workflow 编排。
-</p>
+# 🤖 CRWU Agent Harness
 
-<p align="center">
-  <a href="https://github.com/mmungdong/crwu-ai/releases">
-    <img src="https://img.shields.io/badge/version-0.0.1-3b82f6" alt="version 0.0.1">
-  </a>
-  <a href="https://go.dev/doc/devel/release">
-    <img src="https://img.shields.io/badge/go-1.24%2B-00add8?logo=go" alt="Go 1.24+">
-  </a>
-  <a href="./Makefile">
-    <img src="https://img.shields.io/badge/build-make-1f2937?logo=gnu" alt="GNU Make">
-  </a>
-  <a href="./README.md">
-    <img src="https://img.shields.io/badge/lang-English-blue" alt="English documentation">
-  </a>
-</p>
+**用一套稳定的命令面把 AI 宿主接入企业系统——始终以正确的员工身份、安全地操作。**
 
-<p align="center">
-  <img src="https://img.shields.io/badge/WorkBuddy-supported-7c3aed" alt="WorkBuddy supported">
-  <img src="https://img.shields.io/badge/MCP-planned-64748b" alt="MCP planned">
-  <img src="https://img.shields.io/badge/Skills-planned-64748b" alt="Skills planned">
-  <img src="https://img.shields.io/badge/Workflows-planned-64748b" alt="Workflows planned">
-</p>
+[**English**](README.md)
+
+<br>
+
+![Go](https://img.shields.io/badge/Go-1.24%2B-00add8?logo=go&logoColor=white)
+![版本](https://img.shields.io/badge/version-0.0.1-3b82f6)
+![构建](https://img.shields.io/badge/build-GNU%20Make-1f2937?logo=gnu&logoColor=white)
+![会话](https://img.shields.io/badge/H3Yun%E4%BC%9A%E8%AF%9D%20%E2%9C%85-%E5%8F%AF%E7%94%A8-22c55e)
+![MCP](https://img.shields.io/badge/MCP-%E8%A7%84%E5%88%92%E4%B8%AD-64748b)
+
+*命令行优先 · H3Yun 员工级读取 · 无需运维服务端*
+
+</div>
 
 ---
 
-## 概览
+## 🌟 这是什么
 
-**CRWU Agent Harness** 是一个基于 Go 的命令行工具套件，它通过稳定的命令
-目录将 WorkBuddy 与企业系统连接起来。仓库按协议传输层、应用用例、外部系统
-集成以及 Python Skills 进行了清晰划分。
+CRWU 是一个 **Go 命令行工具集**，为 AI 宿主——WorkBuddy、DeepSeek Harness、
+运维终端——提供**稳定、可审计**的企业系统访问方式。一个可执行文件（`crwu`），
+一份机器可读的命令目录（`crwu scheme`），智能体可以自行发现命令。
 
-> **当前状态：** 可执行的项目骨架。MCP 工具、H3Yun/钉钉 API、认证以及
-> Python Skills 均已规划，将在首个可用用例中逐步引入。
+首个生产级垂直能力是 **H3Yun（氚云）员工级数据访问**：
 
-## 组件
+- 🔐 氚云运行在贵司钉钉内，员工**没有氚云独立密码**；
+- 📱 员工在 `h3yun.com` 用钉钉扫码，把获得的**网页会话**在本机绑定一次
+  （48 小时，可续期）；
+- 🛡️ 之后每条命令都**在员工本人权限下执行**——应用、表单、记录与附件，
+  与员工在浏览器里看到的一致。无密码、不跨员工串数据、**无需运维任何服务端**。
 
-| 组件 | 范围 | 状态 |
-|------|------|------|
-| **AI CLI** | 人与 AI 驱动的命令入口（`crwu`） | ![available](https://img.shields.io/badge/status-available-22c55e) |
-| **MCP Server** | 未来的 Model Context Protocol 传输边界 | ![planned](https://img.shields.io/badge/status-planned-64748b) |
-| **Python Skills** | 独立打包的 Agent Skills | ![planned](https://img.shields.io/badge/status-planned-64748b) |
-| **Workflow Engine** | 未来跨提供商流程的编排层 | ![planned](https://img.shields.io/badge/status-planned-64748b) |
+> ✅ **今天可用：** 会话绑定 · 应用/表单/记录浏览 · 附件下载——全部按员工
+> 权限执行。⏳ **路线图：** Agent 网关（`h3pat`）工具、MCP 传输与 Python
+> Skills（见 [🔀 双通道](#-双通道两种接入方式)）。
 
-## 目录
-
-- [概览](#概览)
-- [组件](#组件)
-- [环境要求](#环境要求)
-- [快速开始](#快速开始)
-- [命令](#命令)
-- [AI 命令发现](#ai-命令发现)
-- [架构](#架构)
-- [目录结构](#目录结构)
-- [开发](#开发)
-- [文档](#文档)
-
-## 环境要求
-
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| Go | 1.24+ | 构建 `crwu` 必需 |
-| GNU Make | 任意 | 用于构建任务 |
-
-## 快速开始
-
-构建二进制文件、打印版本并运行测试：
+## 🚀 快速开始
 
 ```bash
-make build
+# 前置：Go 1.24+、GNU Make
+make build          # 产出 ./bin/crwu
 ./bin/crwu version
 make test
 ```
 
-如果 Go 不在 `PATH` 中，可以将其路径传给 Make：
+产物只写入 `bin/`（`make clean` 可清空）。开始使用**无需配置文件**；可选
+环境变量 `H3YUN_BASE_URL` 可在测试时覆盖氚云控制台地址。
+
+## 🔑 员工使用流程
+
+**① 绑定一次会话** —— 让员工在 `h3yun.com` 扫码，然后绑定从浏览器复制的
+Bearer JWT（DevTools → Network → `Authorization`）：
 
 ```bash
-make GO=/path/to/go build
+./bin/crwu h3yun session bind --token '<会话 JWT>'
+./bin/crwu h3yun session status      # 是谁、哪个引擎、剩余有效期
 ```
 
-生成的二进制文件仅写入 `bin/` 目录。运行 `make clean` 可删除该目录。
-
-## 命令
-
-| 命令 | 用法 | 说明 |
-|------|------|------|
-| `help` | `crwu help` | 显示可用命令及用法信息 |
-| `scheme` | `crwu scheme` | 为 AI 客户端输出机器可读的命令目录 |
-| `version` | `crwu version` | 显示 CLI 版本及构建提交信息 |
-
-MCP 与各类提供商专用命令将在首个可用用例中引入。当前骨架不会宣传尚未
-实现的命令。
-
-## AI 命令发现
-
-`crwu scheme` 是规范的机器可读命令目录。其 JSON 输出包含当前 CLI 版本
-以及所有支持的子命令。每个命令都包含英文描述、精确用法以及至少一个带
-英文说明的示例。
+**② 以该员工身份浏览工作台**
 
 ```bash
-crwu scheme
+./bin/crwu h3yun apps list
+./bin/crwu h3yun apps children --app <应用编码>
+./bin/crwu h3yun forms search --keyword <名称>
 ```
 
-该命令仅向标准输出写入 JSON，以便 AI 客户端在不剔除面向人类的日志行的
-情况下直接解析。诊断信息写入标准错误，并以非零退出状态返回失败。
+**③ 读取记录并下载附件**
 
-在新增或修改命令前，请参阅
+```bash
+./bin/crwu h3yun records list    --schema <表单编码> [--keyword <关键词>]
+./bin/crwu h3yun records get     --schema <表单编码> --id <记录ID>
+./bin/crwu h3yun files list      --schema <表单编码> --id <记录ID>
+./bin/crwu h3yun file download   --schema <表单编码> --id <记录ID> --out ./附件
+```
+
+> 🔒 **凭证存在哪里？** 只存本机 OS 凭据存储（`internal/platform/h3yuncreds`）
+> ——绝不落入文件、日志、scheme 输出或聊天。会话 48 小时后过期，用
+> `session refresh` 续期，或重新扫码绑定。
+
+## 🧭 命令参考
+
+### 💻 基础
+
+| 命令 | 作用 |
+| --- | --- |
+| `crwu help` | 显示可用命令与用法 |
+| `crwu scheme` | 为 AI 客户端输出机器可读的命令目录 |
+| `crwu version` | 显示 CLI 版本与构建提交 |
+
+### 🔐 会话（员工绑定）
+
+| 命令 | 作用 |
+| --- | --- |
+| `crwu h3yun session bind --token <jwt>` | 把员工的 H3Yun 网页会话绑定到本机 |
+| `crwu h3yun session status` | 查看绑定身份、引擎与有效期 |
+| `crwu h3yun session refresh` | 续期已绑定的会话 |
+| `crwu h3yun session clear` | 清除已绑定的会话 |
+
+### 📦 应用与表单
+
+| 命令 | 作用 |
+| --- | --- |
+| `crwu h3yun apps list [--keyword <名称>]` | 列出员工可访问的应用 |
+| `crwu h3yun apps children --app <编码>` | 列出某应用下的表单 |
+| `crwu h3yun apps search --keyword <名称>` | 搜索应用 *(Agent 通道)* |
+| `crwu h3yun forms search --keyword <名称>` | 按名称搜索表单 *(网页会话)* |
+
+### 📋 记录
+
+| 命令 | 作用 |
+| --- | --- |
+| `crwu h3yun records list --schema <编码> [--page] [--size] [--keyword]` | 分页浏览某表单的记录 |
+| `crwu h3yun records get --schema <编码> --id <ID>` | 取单条记录（含各字段） |
+| `crwu h3yun records query --schema <编码> --sql <SELECT>` | 只读 SQL 查询 *(Agent 通道)* |
+
+### 📎 附件
+
+| 命令 | 作用 |
+| --- | --- |
+| `crwu h3yun files list --schema <编码> --id <ID>` | 列出记录的全部附件 |
+| `crwu h3yun file download --schema <编码> --id <ID> --out <目录>` | 下载全部附件——原名 + 自动去重 |
+
+### ⚡ Agent 网关（`h3pat`）
+
+| 命令 | 作用 |
+| --- | --- |
+| `crwu h3yun ping` | 与 H3Yun Agent 网关握手 |
+| `crwu h3yun tools` | 列出当前凭证可见的网关工具 |
+
+## 🧠 AI 命令发现
+
+`crwu scheme` 只在标准输出写**纯 JSON**——版本、描述、用法、示例一份目录，
+AI 客户端无需剥离人类日志即可解析；诊断走标准错误并以非零码退出。
+
+新增或改动命令前请先阅读
 [`docs/cli-command-contract.md`](docs/cli-command-contract.md)。
 
-## 架构
+## 🔀 双通道：两种接入方式
+
+| 通道 | 凭证 | 端点 | 状态 |
+| --- | --- | --- | --- |
+| 🌐 **会话**（网页控制台） | 员工扫码会话 JWT | `www.h3yun.com/v1/...` | ✅ 可用 |
+| ⚡ **Agent**（MCP 网关） | 个人访问凭证 `h3pat_*` | `www.h3yun.com/v1/agent/mcp` | ⏳ 需氚云开通数据面 |
+
+📚 设计记录：[`design-h3yun-auth.md`](docs/design-h3yun-auth.md)（鉴权）·
+[`design-h3yun-cli.md`](docs/design-h3yun-cli.md)（CLI）·
+[`design-h3yun-connector.md`](docs/design-h3yun-connector.md)（连接器）
+
+## 🏗️ 架构
 
 ```mermaid
 flowchart LR
-    WorkBuddy -->|MCP| MCP_TRANSPORT[MCP 传输层]
-    Operator  -->|CLI| CLI_TRANSPORT[CLI 传输层]
-    MCP_TRANSPORT --> APP[应用用例]
-    CLI_TRANSPORT --> APP
+    WorkBuddy -->|MCP（规划中）| MCP_TRANSPORT[MCP 传输层]
+    DeepSeek[DeepSeek Harness] -->|CLI 适配| CLI_TRANSPORT[CLI 传输层]
+    Operator -->|CLI| CLI_TRANSPORT
+    CLI_TRANSPORT --> APP[应用服务]
+    MCP_TRANSPORT --> APP
     APP --> H3Yun[H3Yun 集成]
-    APP --> DingTalk[钉钉集成]
+    H3Yun --> S[网页会话 REST]
+    H3Yun --> A[Agent 网关 MCP]
 ```
 
-设计原则：
+- 🚏 **传输层**只负责解析与展示（现在是 CLI，将来有 MCP）。
+- 🧩 **应用服务**编排与宿主无关的用例（`internal/app/h3yunops`、
+  `internal/app/h3yunweb`）。
+- 🔌 **集成层**只封装提供商协议——H3Yun 网页 REST 与 Agent MCP 客户端同置
+  于 `internal/integrations/h3yun`，互不引用其他提供商。
+- 🔑 **凭证**按机器本地绑定（`internal/platform/h3yuncreds`）——**没有需要
+  运维的服务端**。
 
-- 传输层负责协议模式、命令解析与展示。
-- 应用服务协调与宿主无关的用例。
-- 集成层负责提供商客户端、认证细节、DTO 以及错误转换。
-- H3Yun 与钉钉集成互为兄弟模块，彼此不引用。
-- Python Skills 独立打包，不链接到 Go 二进制文件中。
+## 📂 目录结构
 
-目前仅支持并记录 WorkBuddy 作为 AI 宿主。协议代码避免与 WorkBuddy 私有
-实现耦合，但不声明或维护对其他宿主的兼容性。
+```text
+cmd/crwu/                       进程入口
+internal/
+  app/h3yunops/                 Agent 网关应用服务
+  app/h3yunweb/                 网页会话服务（绑定/续期/读取/附件）
+  buildinfo/                    链接器注入的构建元数据
+  integrations/h3yun/           H3Yun 网页 REST + Agent MCP 客户端
+  platform/h3yuncreds/          H3Yun 会话本地 OS 凭据存储
+  transport/cli/                命令行为
+  transport/mcp/                未来的 MCP 协议边界
+docs/                           设计记录（鉴权 / CLI / 连接器）
+tests/                          跨包测试
+```
 
-## 目录结构
-
-| 路径 | 用途 |
-|------|------|
-| `cmd/crwu/` | 进程入口 |
-| `internal/buildinfo/` | 链接器注入的构建元数据 |
-| `internal/transport/cli/` | CLI 命令行为 |
-| `internal/transport/mcp/` | 未来的 MCP 协议边界 |
-| `internal/app/` | 未来共享的应用用例 |
-| `internal/integrations/` | 未来的 H3Yun 与钉钉适配器 |
-| `internal/auth/` | 未来横切身份策略 |
-| `internal/config/` | 未来类型化配置加载 |
-| `internal/observability/` | 未来的日志、指标与链路追踪 |
-| `skills/` | 独立打包的 Python Skills |
-| `configs/workbuddy/` | WorkBuddy 配置示例 |
-| `deployments/` | 部署资源（待引入） |
-| `tests/` | 跨包契约与集成测试 |
-| `docs/` | 架构与实现记录 |
-
-## 开发
-
-依次格式化、构建并测试：
+## 🛠️ 开发
 
 ```bash
-make fmt
-make build
+make fmt     # gofmt
+make build   # 产出 ./bin/crwu
 make test
 ```
 
-请保持默认应用版本在 `internal/buildinfo` 与根目录 `Makefile` 中同步。
+保持默认版本在 `internal/buildinfo` 与根目录 `Makefile` 中同步。
 
-## 文档
+## 📚 文档
 
-- [`docs/cli-command-contract.md`](docs/cli-command-contract.md) — 每个
-  `crwu` 子命令必须遵守的规范。
-- [`AGENTS.md`](AGENTS.md) — 面向智能体的开发指南。
-- [`CONTEXT.md`](CONTEXT.md) — 项目领域词汇表。
-- [`README.md`](README.md) — 同步的英文文档。
+- [`docs/cli-command-contract.md`](docs/cli-command-contract.md) — 每个 `crwu` 子命令必须遵守的规范
+- [`AGENTS.md`](AGENTS.md) — 面向智能体的开发指南
+- [`CONTEXT.md`](CONTEXT.md) — 领域词汇表
 
 ---
 
-<p align="center">
-  <a href="./README.md">English</a>
-</p>
+<div align="center">
+
+**[English](README.md)**
+
+</div>

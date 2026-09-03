@@ -1,189 +1,221 @@
-<h1 align="center">CRWU Agent Harness</h1>
+<div align="center">
 
-<p align="center">
-  Unifies AI CLI tools, MCP servers, Python Skills, and workflow orchestration in one codebase.
-</p>
+# 🤖 CRWU Agent Harness
 
-<p align="center">
-  <a href="https://github.com/mmungdong/crwu-ai/releases">
-    <img src="https://img.shields.io/badge/version-0.0.1-3b82f6" alt="version 0.0.1">
-  </a>
-  <a href="https://go.dev/doc/devel/release">
-    <img src="https://img.shields.io/badge/go-1.24%2B-00add8?logo=go" alt="Go 1.24+">
-  </a>
-  <a href="./Makefile">
-    <img src="https://img.shields.io/badge/build-make-1f2937?logo=gnu" alt="GNU Make">
-  </a>
-  <a href="./README.zh-CN.md">
-    <img src="https://img.shields.io/badge/lang-中文-red" alt="中文文档">
-  </a>
-</p>
+**Connect AI hosts to your enterprise systems through one stable command surface — safely acting as the right employee.**
 
-<p align="center">
-  <img src="https://img.shields.io/badge/WorkBuddy-supported-7c3aed" alt="WorkBuddy supported">
-  <img src="https://img.shields.io/badge/MCP-planned-64748b" alt="MCP planned">
-  <img src="https://img.shields.io/badge/Skills-planned-64748b" alt="Skills planned">
-  <img src="https://img.shields.io/badge/Workflows-planned-64748b" alt="Workflows planned">
-</p>
+[**简体中文**](README.zh-CN.md)
+
+<br>
+
+![Go](https://img.shields.io/badge/Go-1.24%2B-00add8?logo=go&logoColor=white)
+![Version](https://img.shields.io/badge/version-0.0.1-3b82f6)
+![Make](https://img.shields.io/badge/build-GNU%20Make-1f2937?logo=gnu&logoColor=white)
+![Session](https://img.shields.io/badge/H3Yun_session_✅-available-22c55e)
+![MCP](https://img.shields.io/badge/MCP-planned-64748b)
+
+*CLI-first · H3Yun employee-scope reads · no server to operate*
+
+</div>
 
 ---
 
-## Overview
+## 🌟 What it is
 
-**CRWU Agent Harness** is a Go-based command-line toolkit that connects WorkBuddy
-to enterprise systems through a stable command catalog. The repository is
-organized so that protocol transports, application use cases, external-system
-integrations, and Python Skills remain clearly separated.
+CRWU is a **Go command-line harness** that gives AI hosts — WorkBuddy,
+DeepSeek Harness, operator terminals — a stable, auditable way to reach
+enterprise systems. One executable (`crwu`), one machine-readable command
+catalog (`crwu scheme`) that agents can discover on their own.
 
-> **Current status:** executable project skeleton. MCP tools, H3Yun/DingTalk
-> APIs, authentication, and Python Skills are planned and will be introduced
-> with their first working use cases.
+The first production vertical is **H3Yun (氚云) employee-scope data access**:
 
-## Components
+- 🔐 H3Yun lives inside your DingTalk; employees have **no H3Yun password**.
+- 📱 Each employee scans a QR at `h3yun.com` with DingTalk and binds the
+  resulting **web session** to this machine once (48 h, refreshable).
+- 🛡️ Every command afterwards runs **under that employee's permissions** —
+  apps, forms, records and attachments exactly as they see them. No passwords,
+  no cross-employee data, no server to operate.
 
-| Component | Scope | Status |
-|-----------|-------|--------|
-| **AI CLI** | Human and AI-driven command entry point (`crwu`) | ![available](https://img.shields.io/badge/status-available-22c55e) |
-| **MCP Server** | Future Model Context Protocol transport boundary | ![planned](https://img.shields.io/badge/status-planned-64748b) |
-| **Python Skills** | Independently packaged agent skills | ![planned](https://img.shields.io/badge/status-planned-64748b) |
-| **Workflow Engine** | Future orchestration layer for cross-provider flows | ![planned](https://img.shields.io/badge/status-planned-64748b) |
+> ✅ **Working today:** session binding · app / form / record browsing ·
+> attachment downloads — under the employee's own permissions.
+> ⏳ **On the roadmap:** agent-gateway (`h3pat`) tools, the MCP transport and
+> Python Skills (see [🔀 Channels](#-channels--two-ways-in)).
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Components](#components)
-- [Requirements](#requirements)
-- [Quick Start](#quick-start)
-- [Commands](#commands)
-- [AI Command Discovery](#ai-command-discovery)
-- [Architecture](#architecture)
-- [Directory Map](#directory-map)
-- [Development](#development)
-- [Documentation](#documentation)
-
-## Requirements
-
-| Dependency | Version | Notes |
-|------------|---------|-------|
-| Go         | 1.24+   | Required to build `crwu` |
-| GNU Make   | any     | Used for build tasks |
-
-## Quick Start
-
-Build the binary, print its version, and run the tests:
+## 🚀 Quick start
 
 ```bash
-make build
+# Prerequisites: Go 1.24+, GNU Make
+make build          # writes ./bin/crwu
 ./bin/crwu version
 make test
 ```
 
-If Go is not on `PATH`, pass its location to Make:
+Binaries land only in `bin/` (`make clean` removes them). No configuration
+file is required; optional `H3YUN_BASE_URL` overrides the H3Yun console origin
+for testing.
+
+## 🔑 Employee workflow
+
+**1 · Bind the session once** — the employee scans at `h3yun.com`, then you
+bind the bearer JWT copied from the browser (DevTools → Network →
+`Authorization`):
 
 ```bash
-make GO=/path/to/go build
+./bin/crwu h3yun session bind --token '<session JWT>'
+./bin/crwu h3yun session status      # who, which engine, time-to-expiry
 ```
 
-Generated binaries are written only to `bin/`. Run `make clean` to remove that
-directory.
-
-## Commands
-
-| Command | Usage | Description |
-|---------|-------|-------------|
-| `help` | `crwu help` | Show available commands and usage information. |
-| `scheme` | `crwu scheme` | Print the machine-readable command catalog for AI clients. |
-| `version` | `crwu version` | Show the CLI version and build commit. |
-
-MCP and provider-specific commands will be introduced with their first working
-use cases. The skeleton does not advertise commands that are not implemented.
-
-## AI Command Discovery
-
-`crwu scheme` is the canonical machine-readable command catalog. Its JSON output
-contains the current CLI version and every supported subcommand. Each command
-has an English description, exact usage, and at least one example with its own
-English description.
+**2 · Browse the workspace as that employee**
 
 ```bash
-crwu scheme
+./bin/crwu h3yun apps list
+./bin/crwu h3yun apps children --app <appCode>
+./bin/crwu h3yun forms search --keyword <name>
 ```
 
-The command writes only JSON to standard output so an AI client can parse it
-without stripping human-oriented log lines. Diagnostics are written to standard
-error with a non-zero exit status.
+**3 · Read records and pull attachments**
 
-See [`docs/cli-command-contract.md`](docs/cli-command-contract.md) before adding
-or changing a command.
+```bash
+./bin/crwu h3yun records list   --schema <schemaCode> [--keyword <kw>]
+./bin/crwu h3yun records get    --schema <schemaCode> --id <recordId>
+./bin/crwu h3yun files list     --schema <schemaCode> --id <recordId>
+./bin/crwu h3yun file download  --schema <schemaCode> --id <recordId> --out ./files
+```
 
-## Architecture
+> 🔒 **Where do credentials live?** Only in the OS credential store
+> (`internal/platform/h3yuncreds`) — never in files, logs, scheme output or
+> chat. Sessions expire after 48 h; renew with `session refresh` or re-bind.
+
+## 🧭 Command reference
+
+### 💻 Basics
+
+| Command | Purpose |
+| --- | --- |
+| `crwu help` | Show available commands and usage |
+| `crwu scheme` | Print the machine-readable command catalog for AI clients |
+| `crwu version` | Show the CLI version and build commit |
+
+### 🔐 Session (employee binding)
+
+| Command | Purpose |
+| --- | --- |
+| `crwu h3yun session bind --token <jwt>` | Bind the employee's H3Yun web session to this machine |
+| `crwu h3yun session status` | Show the bound identity, engine and expiry |
+| `crwu h3yun session refresh` | Renew the bound session token |
+| `crwu h3yun session clear` | Remove the bound session |
+
+### 📦 Apps & forms
+
+| Command | Purpose |
+| --- | --- |
+| `crwu h3yun apps list [--keyword <name>]` | List applications the employee can access |
+| `crwu h3yun apps children --app <code>` | List the forms inside one application |
+| `crwu h3yun apps search --keyword <name>` | Search applications *(agent channel)* |
+| `crwu h3yun forms search --keyword <name>` | Search forms by name *(web session)* |
+
+### 📋 Records
+
+| Command | Purpose |
+| --- | --- |
+| `crwu h3yun records list --schema <code> [--page] [--size] [--keyword]` | Page through a form's records |
+| `crwu h3yun records get --schema <code> --id <id>` | Load one record with its fields |
+| `crwu h3yun records query --schema <code> --sql <select>` | Read-only SQL query *(agent channel)* |
+
+### 📎 Attachments
+
+| Command | Purpose |
+| --- | --- |
+| `crwu h3yun files list --schema <code> --id <id>` | List the record's attachment files |
+| `crwu h3yun file download --schema <code> --id <id> --out <dir>` | Download all attachments — deduplicated, original names |
+
+### ⚡ Agent gateway (`h3pat`)
+
+| Command | Purpose |
+| --- | --- |
+| `crwu h3yun ping` | Handshake with the H3Yun agent gateway |
+| `crwu h3yun tools` | List the gateway tools visible to the current token |
+
+## 🧠 AI command discovery
+
+`crwu scheme` writes **only JSON** to standard output — version, descriptions,
+usages and examples in one catalog — so AI clients parse it without stripping
+log noise; diagnostics go to stderr with a non-zero exit code.
+
+Read [`docs/cli-command-contract.md`](docs/cli-command-contract.md) before
+adding or changing a command.
+
+## 🔀 Channels — two ways in
+
+| Channel | Credential | Endpoint | Status |
+| --- | --- | --- | --- |
+| 🌐 **Session** (web console) | Employee QR-scan session JWT | `www.h3yun.com/v1/...` | ✅ Working |
+| ⚡ **Agent** (MCP gateway) | Personal access token `h3pat_*` | `www.h3yun.com/v1/agent/mcp` | ⏳ Needs H3Yun data-plane enablement |
+
+📚 Design records: [`design-h3yun-auth.md`](docs/design-h3yun-auth.md) ·
+[`design-h3yun-cli.md`](docs/design-h3yun-cli.md) ·
+[`design-h3yun-connector.md`](docs/design-h3yun-connector.md)
+
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
-    WorkBuddy -->|MCP| MCP_TRANSPORT[MCP transport]
-    Operator  -->|CLI| CLI_TRANSPORT[CLI transport]
-    MCP_TRANSPORT --> APP[Application use cases]
-    CLI_TRANSPORT --> APP
-    APP --> H3Yun[H3Yun integration]
-    APP --> DingTalk[DingTalk integration]
+    WorkBuddy -->|MCP (planned)| MCP_TRANSPORT[MCP transport]
+    DeepSeek[DeepSeek Harness] -->|CLI adapter| CLI_TRANSPORT[CLI transport]
+    Operator -->|CLI| CLI_TRANSPORT
+    CLI_TRANSPORT --> APP[Application services]
+    MCP_TRANSPORT --> APP
+    APP --> H3Yun[H3Yun integrations]
+    H3Yun --> S[web-session REST]
+    H3Yun --> A[agent-gateway MCP]
 ```
 
-Design principles:
+- 🚏 **Transports** own parsing & presentation (CLI now, MCP later).
+- 🧩 **Application services** orchestrate host-neutral use cases
+  (`internal/app/h3yunops`, `internal/app/h3yunweb`).
+- 🔌 **Integrations** own provider protocols only — H3Yun web REST and agent
+  MCP clients live under `internal/integrations/h3yun`, never importing
+  another provider.
+- 🔑 **Credentials** are bound per machine
+  (`internal/platform/h3yuncreds`) — there is no server to operate.
 
-- Transports own protocol schemas, command parsing, and presentation.
-- Application services coordinate host-neutral use cases.
-- Integrations own provider clients, provider authentication details, DTOs, and
-  provider error translation.
-- H3Yun and DingTalk integrations are siblings. Neither imports the other.
-- Python Skills are packaged independently and are not linked into the Go
-  binary.
+## 📂 Repository layout
 
-Only WorkBuddy is currently supported and documented as an AI host. Protocol
-code avoids WorkBuddy-private coupling, but compatibility with other hosts is
-not claimed or maintained.
+```text
+cmd/crwu/                        process entry point
+internal/
+  app/h3yunops/                 agent-gateway application service
+  app/h3yunweb/                 web-session service (bind/refresh/reads/files)
+  buildinfo/                    linker-injected build metadata
+  integrations/h3yun/           H3Yun web REST + agent MCP clients
+  platform/h3yuncreds/          local OS-credential-store persistence
+  transport/cli/                command behavior
+  transport/mcp/                future MCP protocol boundary
+docs/                           design records (auth / cli / connector)
+tests/                          cross-package tests
+```
 
-## Directory Map
-
-| Path | Purpose |
-|------|---------|
-| `cmd/crwu/` | Process entry point |
-| `internal/buildinfo/` | Linker-injected build metadata |
-| `internal/transport/cli/` | CLI command behavior |
-| `internal/transport/mcp/` | Future MCP protocol boundary |
-| `internal/app/` | Future shared application use cases |
-| `internal/integrations/` | Future H3Yun and DingTalk adapters |
-| `internal/auth/` | Future cross-cutting identity policy |
-| `internal/config/` | Future typed configuration loading |
-| `internal/observability/` | Future logs, metrics, and tracing |
-| `skills/` | Independently packaged Python Skills |
-| `configs/workbuddy/` | WorkBuddy configuration examples |
-| `deployments/` | Deployment assets when introduced |
-| `tests/` | Cross-package contract and integration tests |
-| `docs/` | Architecture and implementation records |
-
-## Development
-
-Format, build, and test in one flow:
+## 🛠️ Development
 
 ```bash
-make fmt
-make build
+make fmt     # gofmt
+make build   # writes ./bin/crwu
 make test
 ```
 
-Keep the default application version synchronized between
-`internal/buildinfo` and the root `Makefile`.
+Keep the default version synchronized between `internal/buildinfo` and the
+root `Makefile`.
 
-## Documentation
+## 📚 Documentation
 
-- [`docs/cli-command-contract.md`](docs/cli-command-contract.md) — rules every
-  `crwu` subcommand must follow.
-- [`AGENTS.md`](AGENTS.md) — agent-facing development guidelines.
-- [`CONTEXT.md`](CONTEXT.md) — domain glossary for the project.
-- [`README.zh-CN.md`](README.zh-CN.md) — synchronized Chinese documentation.
+- [`docs/cli-command-contract.md`](docs/cli-command-contract.md) — rules every `crwu` subcommand must follow
+- [`AGENTS.md`](AGENTS.md) — agent-facing development guidelines
+- [`CONTEXT.md`](CONTEXT.md) — domain glossary
 
 ---
 
-<p align="center">
-  <a href="./README.zh-CN.md">简体中文</a>
-</p>
+<div align="center">
+
+**[简体中文](README.zh-CN.md)**
+
+</div>

@@ -44,9 +44,24 @@ func TestRunSchemeWritesMachineReadableCommandCatalog(t *testing.T) {
 	}
 
 	wantCommands := map[string]bool{
-		"help":    false,
-		"scheme":  false,
-		"version": false,
+		"help":                  false,
+		"h3yun ping":            false,
+		"h3yun tools":           false,
+		"h3yun session bind":    false,
+		"h3yun session status":  false,
+		"h3yun session refresh": false,
+		"h3yun session clear":   false,
+		"h3yun apps search":     false,
+		"h3yun apps list":       false,
+		"h3yun apps children":   false,
+		"h3yun forms search":    false,
+		"h3yun records query":   false,
+		"h3yun records list":    false,
+		"h3yun records get":     false,
+		"h3yun files list":      false,
+		"h3yun file download":   false,
+		"scheme":                false,
+		"version":               false,
 	}
 	for _, command := range document.Commands {
 		found, ok := wantCommands[command.Name]
