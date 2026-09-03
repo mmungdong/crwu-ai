@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-03 · feat · 首个交互式查询 Skill（h3yun-query）
+
+- 新增：`skills/h3yun-query/SKILL.md`
+- 影响命令：复用 `h3yun apps list / apps children / forms search /
+  records list / records get / files list / file download`（只读）
+- 说明：按"系统 → 表单 → 记录"逐层交互查询，每页 20 条、可翻页、支持标题
+  关键词查找；不发散写操作
+
+---
+
 ## 2026-09-03 · feat · H3Yun 员工级网页会话通道上线
 
 - 新增命令：`h3yun session bind/status/refresh/clear`、`h3yun apps list`、
