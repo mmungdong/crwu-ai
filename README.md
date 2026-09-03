@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧰 CRWU Agent Harness
+# 🤖 CRWU Agent Harness
 
 **Connect AI hosts to your enterprise systems through one stable command surface — safely acting as the right employee.**
 
@@ -129,14 +129,14 @@ bind the bearer JWT copied from the browser (DevTools → Network →
 | `crwu h3yun files list --schema <code> --id <id>` | List the record's attachment files |
 | `crwu h3yun file download --schema <code> --id <id> --out <dir>` | Download all attachments — deduplicated, original names |
 
-### 🤖 Agent gateway (`h3pat`)
+### ⚡ Agent gateway (`h3pat`)
 
 | Command | Purpose |
 | --- | --- |
 | `crwu h3yun ping` | Handshake with the H3Yun agent gateway |
 | `crwu h3yun tools` | List the gateway tools visible to the current token |
 
-## 🤖 AI command discovery
+## 🧠 AI command discovery
 
 `crwu scheme` writes **only JSON** to standard output — version, descriptions,
 usages and examples in one catalog — so AI clients parse it without stripping

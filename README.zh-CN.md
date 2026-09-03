@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧰 CRWU Agent Harness
+# 🤖 CRWU Agent Harness
 
 **用一套稳定的命令面把 AI 宿主接入企业系统——始终以正确的员工身份、安全地操作。**
 
@@ -124,14 +124,14 @@ Bearer JWT（DevTools → Network → `Authorization`）：
 | `crwu h3yun files list --schema <编码> --id <ID>` | 列出记录的全部附件 |
 | `crwu h3yun file download --schema <编码> --id <ID> --out <目录>` | 下载全部附件——原名 + 自动去重 |
 
-### 🤖 Agent 网关（`h3pat`）
+### ⚡ Agent 网关（`h3pat`）
 
 | 命令 | 作用 |
 | --- | --- |
 | `crwu h3yun ping` | 与 H3Yun Agent 网关握手 |
 | `crwu h3yun tools` | 列出当前凭证可见的网关工具 |
 
-## 🤖 AI 命令发现
+## 🧠 AI 命令发现
 
 `crwu scheme` 只在标准输出写**纯 JSON**——版本、描述、用法、示例一份目录，
 AI 客户端无需剥离人类日志即可解析；诊断走标准错误并以非零码退出。
