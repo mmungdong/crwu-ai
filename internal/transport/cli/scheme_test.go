@@ -49,8 +49,12 @@ func TestRunSchemeWritesMachineReadableCommandCatalog(t *testing.T) {
 		"version": false,
 	}
 	for _, command := range document.Commands {
-		if _, ok := wantCommands[command.Name]; !ok {
+		found, ok := wantCommands[command.Name]
+		if !ok {
 			t.Fatalf("unexpected command %q in scheme output", command.Name)
+		}
+		if found {
+			t.Fatalf("duplicate command %q in scheme output", command.Name)
 		}
 		wantCommands[command.Name] = true
 	}
@@ -62,6 +66,12 @@ func TestRunSchemeWritesMachineReadableCommandCatalog(t *testing.T) {
 }
 
 func TestSchemeDocumentsEveryCommandForAIClients(t *testing.T) {
+	for _, command := range commandDefinitions() {
+		if command.handler == nil {
+			t.Fatalf("command %q has no handler", command.Name)
+		}
+	}
+
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"scheme"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0; stderr = %q", code, stderr.String())
