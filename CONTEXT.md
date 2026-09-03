@@ -16,22 +16,16 @@ accurate example.
 An invocation that accurately demonstrates one supported use of a command,
 paired with a concise English explanation of its purpose.
 
-## Employee Principal
+## Employee Session
 
-The explicit human employee on whose behalf CRWU acts. The first supported
-principal is established by DingTalk `corpId`, `userId`, `unionId`, and
-`openId`. An application credential or H3Yun engine credential is never an
-employee principal.
+The explicit employee on whose behalf CRWU acts. The session is the H3Yun web
+session token the employee obtained by QR scanning at h3yun.com (or a H3Yun
+personal access token for the agent channel), bound per machine in the local OS
+credential store. An application credential or H3Yun engine credential is never
+an employee identity.
 
-## CRWU Session
+## Credential Binding
 
-A short-lived opaque credential issued by `crwu-server` after DingTalk verifies
-an employee. The CLI stores this credential in the operating system credential
-store. It contains no DingTalk Client Secret, DingTalk token, H3Yun EngineCode,
-or H3Yun EngineSecret.
-
-## H3Yun Identity Mapping
-
-A fail-closed association from one explicit DingTalk employee principal to
-exactly one H3Yun user. Authentication may succeed before this mapping exists,
-but no H3Yun operation is authorized until the mapping is verified.
+The stored employee credential (see docs/design-h3yun-cli.md). It carries the
+H3Yun engine, the H3Yun user id from the session claims, and the expiry. Every
+H3Yun operation runs under the bound employee's permissions only.
