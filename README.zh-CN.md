@@ -200,6 +200,8 @@ make test
 
 ## 📚 文档
 
+- [`docs/cli-manual.md`](docs/cli-manual.md) — **CLI 使用说明书**（Agent 唯一需要读的使用文档）
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — CLI 变更纪要
 - [`docs/cli-command-contract.md`](docs/cli-command-contract.md) — 每个 `crwu` 子命令必须遵守的规范
 - [`AGENTS.md`](AGENTS.md) — 面向智能体的开发指南
 - [`CONTEXT.md`](CONTEXT.md) — 领域词汇表

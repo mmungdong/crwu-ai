@@ -34,6 +34,17 @@ This repository contains AI-related tools, including Skills and MCP servers.
 - Add or update tests that exercise command behavior and the generated scheme whenever a command changes.
 - Keep the default application version synchronized between `internal/buildinfo` and the root `Makefile`; the current version is `0.0.1`.
 
+## CLI Manual & Changelog
+
+- `docs/cli-manual.md` is the single source of truth for *using* the CLI, so an
+  agent can operate `crwu` without reading the whole repository. Update it
+  whenever commands, flags, environment variables, output contracts, channel
+  behavior, or workflows change.
+- Append an entry to `docs/CHANGELOG.md` for every functional CLI change
+  (feat / fix / refactor / docs), following that file's format.
+- Keep the README command tables in sync with the actual command catalog
+  (`crwu scheme`).
+
 ## Changes and Verification
 
 - Limit changes to the requested feature or tool; avoid unrelated refactoring.

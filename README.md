@@ -208,6 +208,8 @@ root `Makefile`.
 
 ## 📚 Documentation
 
+- [`docs/cli-manual.md`](docs/cli-manual.md) — **CLI user manual** (the one doc agents need)
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — CLI change log
 - [`docs/cli-command-contract.md`](docs/cli-command-contract.md) — rules every `crwu` subcommand must follow
 - [`AGENTS.md`](AGENTS.md) — agent-facing development guidelines
 - [`CONTEXT.md`](CONTEXT.md) — domain glossary
