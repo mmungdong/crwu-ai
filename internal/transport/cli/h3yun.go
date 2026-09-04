@@ -32,7 +32,7 @@ type H3YunWebService interface {
 	Apps(ctx context.Context, keyword string) (json.RawMessage, error)
 	Children(ctx context.Context, appCode string) (json.RawMessage, error)
 	SearchForms(ctx context.Context, keyword string) (json.RawMessage, error)
-	Records(ctx context.Context, schemaCode string, pageIndex, pageSize int, keyword string) (json.RawMessage, error)
+	Records(ctx context.Context, schemaCode string, pageIndex, pageSize int, keyword, filter string) (json.RawMessage, error)
 	RecordsGet(ctx context.Context, schemaCode, objectID string) (json.RawMessage, error)
 	Files(ctx context.Context, schemaCode, objectID string) ([]h3yunweb.Attachment, error)
 	Download(ctx context.Context, schemaCode, objectID, outDir string) ([]string, error)
@@ -310,10 +310,15 @@ func newFormsCommand(web H3YunWebService, examples map[string][]schemeExample) *
 
 func newRecordsCommand(deps Dependencies, examples map[string][]schemeExample) *cobra.Command {
 	records := &cobra.Command{Use: "records", Short: "H3Yun business records"}
-	records.AddCommand(buildLeaf("list", "Page through a form's records via the web session.", "", "  crwu h3yun records list --schema <code> [--keyword <kw>]", examples, "h3yun records list",
+	recordsListLong := "Lists rows of one form. --keyword searches record text; " +
+		"--filter narrows rows by field conditions, for example " +
+		`--filter "Status = 1 and Name Contains '测试'"` +
+		". The full --filter syntax is documented in docs/cli-manual.md §5."
+	recordsList := buildLeaf("list", "Page through a form's records via the web session.", recordsListLong, "  crwu h3yun records list --schema <code> [--keyword <kw>] [--filter <expr>]", examples, "h3yun records list",
 		func(command *cobra.Command) {
 			command.Flags().String("schema", "", "form schema code")
 			command.Flags().String("keyword", "", "optional record keyword")
+			command.Flags().String("filter", "", "optional field condition, e.g. `Status = 1 and Name Contains '测试'`")
 			command.Flags().Int("page", 1, "page number, starting at 1")
 			command.Flags().Int("size", 20, "page size (1..100)")
 		},
@@ -323,6 +328,7 @@ func newRecordsCommand(deps Dependencies, examples map[string][]schemeExample) *
 			}
 			schemaCode, _ := cmd.Flags().GetString("schema")
 			keyword, _ := cmd.Flags().GetString("keyword")
+			filter, _ := cmd.Flags().GetString("filter")
 			page, _ := cmd.Flags().GetInt("page")
 			size, _ := cmd.Flags().GetInt("size")
 			if strings.TrimSpace(schemaCode) == "" {
@@ -331,12 +337,16 @@ func newRecordsCommand(deps Dependencies, examples map[string][]schemeExample) *
 			if page < 1 || size < 1 || size > 100 {
 				return errors.New("--page must be positive and --size within 1..100")
 			}
-			data, err := deps.H3YunWeb.Records(cmd.Context(), strings.TrimSpace(schemaCode), page-1, size, strings.TrimSpace(keyword))
+			data, err := deps.H3YunWeb.Records(cmd.Context(), strings.TrimSpace(schemaCode), page-1, size, strings.TrimSpace(keyword), strings.TrimSpace(filter))
 			if err != nil {
 				return err
 			}
 			return emitOK(cmd, data)
-		}))
+		})
+	records.AddCommand(recordsList)
+	addExamples(examples, "h3yun records list",
+		"List only records matching a field condition.",
+		`crwu h3yun records list --schema <code> --filter "F0000036 Equal '国有企业' and Status = 1"`)
 	records.AddCommand(buildLeaf("get", "Load one record with its fields.", "", "  crwu h3yun records get --schema <code> --id <recordId>", examples, "h3yun records get",
 		func(command *cobra.Command) {
 			command.Flags().String("schema", "", "form schema code")

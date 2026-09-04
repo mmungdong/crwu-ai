@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-04 · feat · records list 支持 --filter 字段条件筛选
+
+- 影响命令：`crwu h3yun records list`（新增 flag `--filter <条件>`）
+- 说明：SQL 风格筛选表达式（`=`/`!=`/`<>`/`<`/`>`/`<=`/`>=`/Contains/Like/
+  StartWith/EndWith/In/NotIn/Between/IsNull/IsNotNull/IsNone/NotNone，支持
+  `and`/`or` 与括号，大小写不敏感），字段自动补 `<schemaCode>.` 前缀；
+  `--filter` 与 `--keyword` 可叠加
+- 语法与操作符表见 `docs/cli-manual.md` §4"记录"；氚云无 SQL `Like`，`Like`
+  已映射为 `Contains`
+- 相关：新增 `internal/integrations/h3yun/filter.go`（表达式→matcher 树，含
+  单元测试）；`internal/app/h3yunweb`（Records 透传 Filter）、
+  `internal/transport/cli`（flag + scheme 示例）；同步 skill `h3yun-query`
+
+---
+
 ## 2026-09-04 · docs · 扫码登录的沙箱运行注意与前置说明
 
 - 影响：`crwu h3yun session login` 的运行环境注意事项

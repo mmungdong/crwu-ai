@@ -73,7 +73,7 @@ make test
 **③ 读取记录并下载附件**
 
 ```bash
-./bin/crwu h3yun records list    --schema <表单编码> [--keyword <关键词>]
+./bin/crwu h3yun records list    --schema <表单编码> [--keyword <关键词>] [--filter "Status = 1 and Name Contains '测试'"]
 ./bin/crwu h3yun records get     --schema <表单编码> --id <记录ID>
 ./bin/crwu h3yun files list      --schema <表单编码> --id <记录ID>
 ./bin/crwu h3yun file download   --schema <表单编码> --id <记录ID> --out ./附件
@@ -116,7 +116,7 @@ make test
 
 | 命令 | 作用 |
 | --- | --- |
-| `crwu h3yun records list --schema <编码> [--page] [--size] [--keyword]` | 分页浏览某表单的记录 |
+| `crwu h3yun records list --schema <编码> [--page] [--size] [--keyword] [--filter <条件>]` | 分页浏览某表单的记录（`--filter` 按字段筛选） |
 | `crwu h3yun records get --schema <编码> --id <ID>` | 取单条记录（含各字段） |
 | `crwu h3yun records query --schema <编码> --sql <SELECT>` | 只读 SQL 查询 *(Agent 通道)* |
 

@@ -78,7 +78,7 @@ keyring — it is never printed or shared with the AI host. A DevTools-based
 **3 · Read records and pull attachments**
 
 ```bash
-./bin/crwu h3yun records list   --schema <schemaCode> [--keyword <kw>]
+./bin/crwu h3yun records list   --schema <schemaCode> [--keyword <kw>] [--filter "Status = 1 and Name Contains '测试'"]
 ./bin/crwu h3yun records get    --schema <schemaCode> --id <recordId>
 ./bin/crwu h3yun files list     --schema <schemaCode> --id <recordId>
 ./bin/crwu h3yun file download  --schema <schemaCode> --id <recordId> --out ./files
@@ -121,7 +121,7 @@ keyring — it is never printed or shared with the AI host. A DevTools-based
 
 | Command | Purpose |
 | --- | --- |
-| `crwu h3yun records list --schema <code> [--page] [--size] [--keyword]` | Page through a form's records |
+| `crwu h3yun records list --schema <code> [--page] [--size] [--keyword] [--filter <cond>]` | Page through a form's records (field conditions via `--filter`) |
 | `crwu h3yun records get --schema <code> --id <id>` | Load one record with its fields |
 | `crwu h3yun records query --schema <code> --sql <select>` | Read-only SQL query *(agent channel)* |
 

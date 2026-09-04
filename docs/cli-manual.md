@@ -80,8 +80,31 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 
 | 命令 | 说明 |
 |---|---|
-| `crwu h3yun records list --schema <编码> [--page n --size n] [--keyword <kw>]` | 分页查记录（`ObjectId` 即记录 ID） |
+| `crwu h3yun records list --schema <编码> [--page n --size n] [--keyword <kw>] [--filter <条件>]` | 分页查记录（`ObjectId` 即记录 ID）；`--filter` 按字段条件筛选（见下） |
 | `crwu h3yun records get --schema <编码> --id <记录ID>` | 单条详情（字段为 `F0000xxx`，人员类字段带 `*_Name`） |
+
+**`records list --filter` 字段筛选语法**（SQL 风格，关键字大小写不敏感；字符串值
+用单/双引号包裹）：
+
+| 写法 | 语义 |
+|---|---|
+| `Name = '测试'`（或 `Name Equal '测试'`） | 等于 |
+| `Status <> 2` / `Status != 2` / `Status NotEqual 2` | 不等于 |
+| `Status > 1` / `>=` / `<` / `<=`（也可写 `Above`/`NotBelow`/`Below`/`NotAbove` 或 `gt`/`ge`/`lt`/`le`） | 数值 / 日期比较 |
+| `Name Contains '测试'`（`Like` 同义，氚云没有 `Like`，映射为包含） | 模糊包含（≈ SQL `LIKE '%测试%'`） |
+| `Name StartWith '瑞'` / `Name EndWith '公司'`（可加 `not` 取反） | 前缀 / 后缀匹配 |
+| `Status In (1, 2)` / `Status NotIn (3)` | 在 / 不在集合内 |
+| `CreatedTime Between '2026-09-01' and '2026-09-30'` | 区间匹配（闭区间） |
+| `OwnerId IsNull` / `IsNotNull` / `IsNone` / `NotNone` | 空值判断 |
+| `(Name Contains 'a' or Name Contains 'b') and Status = 1` | 括号 + `and`/`or` 组合（`and` 优先） |
+
+- **字段名**：用记录返回 JSON 里的字段键——标准字段如 `Name`、`SeqNo`、`Status`、
+  `CreatedTime`、`ModifiedTime`、`OwnerId`，以及业务字段 `F0000xxx`。命令自动补
+  `<schemaCode>.` 前缀；字段名已含 `.`（跨表单全限定名）时按原样使用。
+- **值类型**：不加引号的数字、`true`/`false` 按类型传参；日期/时间建议用字符串，
+  如 `'2026-09-04'`、`'2026-09-04 13:55:21'`。中文文本（下拉/单选/名称等）用引号。
+- `--filter` 可与 `--keyword` 叠加；翻页 `--page n` 从 1 开始；无效表达式返回清晰
+  报错（退出码 1）。
 
 ### 附件
 
@@ -115,13 +138,15 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 crwu h3yun apps list
 crwu h3yun apps children --app <从上面拿到的 appCode>
 crwu h3yun records list --schema <表单 code，即 children 输出的 code> --keyword <关键词>
+crwu h3yun records list --schema <code> --filter "Status = 1 and Name Contains '测试'" --size 20
 crwu h3yun records get  --schema <编码> --id <ObjectId>
 crwu h3yun files list   --schema <编码> --id <ObjectId>
 crwu h3yun file download --schema <编码> --id <ObjectId> --out ./附件
 ```
 
 **纪律**：`appCode`/`schemaCode`/`recordId` 一律来自上一步命令的返回值，**禁止猜测或编造编码**；
-关键字搜不到先放宽关键字或换表单，不要硬试 ID。
+关键字搜不到先放宽关键字或换表单，不要硬试 ID；`--filter` 字段写错会直接报错，先跑一次
+`records list` 看返回字段名再筛选。
 
 ## 6. 双通道与已知限制
 
@@ -134,6 +159,7 @@ crwu h3yun file download --schema <编码> --id <ObjectId> --out ./附件
 - 单条"详情"务必用 `records get`（走过滤查询）；氚云 `loaddata` 接口会返回空壳，不要用。
 - 附件下载 URL 为 `www.h3yun.com/Form/Download/?AttachmentID=<FileId>`，需带会话鉴权；`file download` 已封装。
 - 记录字段输出含 `*_Original` 冗余结构属正常；人员/部门字段同时有 `*_Name` 可读名。
+- 氚云记录查询没有 SQL `Like`；`--filter` 里的 `Like` 自动映射为 `Contains`（包含匹配），前缀/后缀用 `StartWith`/`EndWith`。
 
 ## 7. 给 Agent 的调用约定
 

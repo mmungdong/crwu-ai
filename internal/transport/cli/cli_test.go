@@ -129,12 +129,17 @@ func (f *fakeOps) Call(_ context.Context, tool string, arguments map[string]any)
 }
 
 type fakeWeb struct {
-	session   h3yunweb.Session
-	err       error
-	apps      json.RawMessage
-	lastKw    string
-	ensureErr error
-	renewals  int
+	session     h3yunweb.Session
+	err         error
+	apps        json.RawMessage
+	lastKw      string
+	ensureErr   error
+	renewals    int
+	lastSchema  string
+	lastFilter  string
+	lastKeyword string
+	lastPage    int
+	lastSize    int
 }
 
 func (f *fakeWeb) EnsureFresh(context.Context) error {
@@ -162,7 +167,8 @@ func (f *fakeWeb) Children(context.Context, string) (json.RawMessage, error) {
 func (f *fakeWeb) SearchForms(context.Context, string) (json.RawMessage, error) {
 	return json.RawMessage(`[]`), f.err
 }
-func (f *fakeWeb) Records(context.Context, string, int, int, string) (json.RawMessage, error) {
+func (f *fakeWeb) Records(ctx context.Context, schemaCode string, pageIndex, pageSize int, keyword, filter string) (json.RawMessage, error) {
+	f.lastSchema, f.lastPage, f.lastSize, f.lastKeyword, f.lastFilter = schemaCode, pageIndex, pageSize, keyword, filter
 	return json.RawMessage(`{"rows":[]}`), f.err
 }
 func (f *fakeWeb) RecordsGet(context.Context, string, string) (json.RawMessage, error) {
@@ -206,6 +212,28 @@ func TestAppsSearchUsesZeroBasedGatewayPage(t *testing.T) {
 		t.Fatalf("call = %s %#v", ops.name, ops.args)
 	}
 	if !strings.Contains(stdout, `"total":1`) {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestRecordsListForwardsFilterAndKeyword(t *testing.T) {
+	web := &fakeWeb{}
+	code, stdout, stderr := runCLI(depsWith(nil, web), "h3yun", "records", "list",
+		"--schema", "Syx1", "--keyword", "测试客户",
+		"--filter", `Status = 1 and Name Contains '测试'`, "--page", "2", "--size", "5")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+	if web.lastSchema != "Syx1" || web.lastKeyword != "测试客户" {
+		t.Fatalf("schema/keyword = %q/%q", web.lastSchema, web.lastKeyword)
+	}
+	if web.lastFilter != `Status = 1 and Name Contains '测试'` {
+		t.Fatalf("filter = %q", web.lastFilter)
+	}
+	if web.lastPage != 1 || web.lastSize != 5 {
+		t.Fatalf("page/size = %d/%d, want 1/5", web.lastPage, web.lastSize)
+	}
+	if !strings.Contains(stdout, `"rows":[]`) {
 		t.Fatalf("stdout=%q", stdout)
 	}
 }

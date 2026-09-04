@@ -254,19 +254,29 @@ func (s *Service) SearchForms(ctx context.Context, keyword string) (json.RawMess
 	return client.SearchFunctionNodes(ctx, keyword, nil)
 }
 
-// Records queries business records of a form for the session user.
-func (s *Service) Records(ctx context.Context, schemaCode string, pageIndex, pageSize int, keyword string) (json.RawMessage, error) {
+// Records queries business records of a form for the session user. filter is
+// the --filter expression (syntax documented in docs/cli-manual.md §5); an
+// empty filter means no field condition.
+func (s *Service) Records(ctx context.Context, schemaCode string, pageIndex, pageSize int, keyword, filter string) (json.RawMessage, error) {
 	client, _, err := s.client(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return client.QueryRecords(ctx, h3yun.QueryRecordsParams{
+	params := h3yun.QueryRecordsParams{
 		SchemaCode:   schemaCode,
 		PageIndex:    pageIndex,
 		PageSize:     pageSize,
 		Keyword:      keyword,
 		RequireCount: true,
-	})
+	}
+	if strings.TrimSpace(filter) != "" {
+		built, err := h3yun.BuildFilter(schemaCode, filter)
+		if err != nil {
+			return nil, fmt.Errorf("invalid record filter: %w", err)
+		}
+		params.Filter = built
+	}
+	return client.QueryRecords(ctx, params)
 }
 
 // RecordsGet loads one business record row (filtered query, the same source

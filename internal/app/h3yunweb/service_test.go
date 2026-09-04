@@ -50,14 +50,15 @@ func (f *fakeStore) Delete(context.Context) error {
 }
 
 type fakeClient struct {
-	token    string
-	engine   string
-	apps     json.RawMessage
-	children json.RawMessage
-	forms    json.RawMessage
-	records  json.RawMessage
-	record   json.RawMessage
-	refresh  string
+	token     string
+	engine    string
+	apps      json.RawMessage
+	children  json.RawMessage
+	forms     json.RawMessage
+	records   json.RawMessage
+	record    json.RawMessage
+	refresh   string
+	lastQuery h3yun.QueryRecordsParams
 }
 
 func (f *fakeClient) UserInfo(context.Context) (json.RawMessage, error) {
@@ -73,7 +74,8 @@ func (f *fakeClient) ListChildren(context.Context, string, []int) (json.RawMessa
 func (f *fakeClient) SearchFunctionNodes(context.Context, string, []int) (json.RawMessage, error) {
 	return f.forms, nil
 }
-func (f *fakeClient) QueryRecords(context.Context, h3yun.QueryRecordsParams) (json.RawMessage, error) {
+func (f *fakeClient) QueryRecords(ctx context.Context, params h3yun.QueryRecordsParams) (json.RawMessage, error) {
+	f.lastQuery = params
 	return f.records, nil
 }
 func (f *fakeClient) GetRecord(context.Context, string, string) (json.RawMessage, error) {
@@ -155,5 +157,59 @@ func TestAppsRequiresBoundSession(t *testing.T) {
 	service := testService(&fakeStore{}, &fakeClient{})
 	if _, err := service.Apps(context.Background(), ""); err == nil {
 		t.Fatal("Apps() error = nil, want no-session error")
+	}
+}
+
+func TestRecordsPassesFilterToQuery(t *testing.T) {
+	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
+	client := &fakeClient{records: json.RawMessage(`{"returnData":[]}`)}
+	service := testService(store, client)
+
+	data, err := service.Records(context.Background(), "Syx1", 1, 20, "客户", `F0000036 Equal '国有企业'`)
+	if err != nil {
+		t.Fatalf("Records() error = %v", err)
+	}
+	if !strings.Contains(string(data), "returnData") {
+		t.Fatalf("data = %s", data)
+	}
+	if client.lastQuery.Keyword != "客户" {
+		t.Fatalf("keyword = %q", client.lastQuery.Keyword)
+	}
+	if client.lastQuery.Filter == nil {
+		t.Fatal("Records() sent no filter although one was requested")
+	}
+	encoded, _ := json.Marshal(client.lastQuery.Filter)
+	for _, want := range []string{`"Syx1.F0000036"`, `"Equal"`, `国有企业`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("filter payload = %s, want containing %q", encoded, want)
+		}
+	}
+}
+
+func TestRecordsWithoutFilterOmitsFilter(t *testing.T) {
+	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
+	client := &fakeClient{records: json.RawMessage(`{"returnData":[]}`)}
+	service := testService(store, client)
+
+	if _, err := service.Records(context.Background(), "Syx1", 0, 20, "", ""); err != nil {
+		t.Fatalf("Records() error = %v", err)
+	}
+	if client.lastQuery.Filter != nil {
+		t.Fatalf("Records() sent a filter without --filter: %#v", client.lastQuery.Filter)
+	}
+}
+
+func TestRecordsRejectsInvalidFilterExpression(t *testing.T) {
+	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
+	client := &fakeClient{records: json.RawMessage(`{"returnData":[]}`)}
+	service := testService(store, client)
+
+	if _, err := service.Records(context.Background(), "Syx1", 0, 20, "", "Status ="); err == nil {
+		t.Fatal("Records() error = nil, want filter parse error")
+	} else if !strings.Contains(err.Error(), "invalid record filter") {
+		t.Fatalf("Records() error = %q, want invalid-record-filter", err)
+	}
+	if client.lastQuery.SchemaCode != "" {
+		t.Fatalf("QueryRecords was called although the filter is invalid: %+v", client.lastQuery)
 	}
 }
