@@ -43,6 +43,15 @@
 
 ---
 
+## 2026-09-03 · refactor · 用 cobra 重写 CLI（docker/k8s 规范）
+
+- 影响命令：全部（结构不变，命令路径/flag 保持一致）
+- 说明：命令改为嵌套树，help 分层折叠（`crwu help h3yun session`）；flag 由
+  cobra/pflag 管理并校验必填参数；`crwu scheme` 目录改为由 cobra 命令树实时
+  生成，与 help 描述同源；退出码统一：成功 0、任何错误 1
+
+---
+
 ## 2026-09-03 · feat · H3Yun 员工级网页会话通道上线
 
 - 新增命令：`h3yun session bind/status/refresh/clear`、`h3yun apps list`、

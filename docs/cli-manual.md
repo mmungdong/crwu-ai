@@ -130,7 +130,7 @@ crwu h3yun file download --schema <编码> --id <ObjectId> --out ./附件
 
 ## 7. 给 Agent 的调用约定
 
-- 输出：成功 = 退出码 0，stdout 为 `{"ok":true,"data":...}` 纯 JSON；用法错误 = 退出码 2；运行错误 = 退出码 1（诊断在 stderr）。
+- 输出：成功 = 退出码 0，stdout 为 `{"ok":true,"data":...}` 纯 JSON；任何错误（含必填参数缺失等用法错误）均退出码 1，诊断在 stderr。
 - 需要发现命令时先跑 `crwu scheme`，不要凭记忆调用参数。
 - 本 CLI 当前**全部为只读操作**；未来加入写/审批命令后，执行前必须先向用户声明并等确认。
 - token 不得出现在任何工具输出/日志/会话记录里；若需重绑请用户自己执行 bind。
