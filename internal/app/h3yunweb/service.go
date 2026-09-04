@@ -83,6 +83,16 @@ func EnvService(getenv func(string) string) *Service {
 	}
 }
 
+func accountTypeString(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprintf("%v", value)
+}
+
 func (s *Service) now() time.Time {
 	if s.Now != nil {
 		return s.Now()
@@ -127,7 +137,7 @@ func (s *Service) Bind(ctx context.Context, rawToken string) (Session, error) {
 		EngineCode:  claims.EngineCode,
 		ShardKey:    claims.ShardKey,
 		UserID:      claims.UserID,
-		AccountType: claims.AccountType,
+		AccountType: accountTypeString(claims.AccountType),
 		Token:       token,
 		ExpiresAt:   claims.ExpiresAt,
 	}
