@@ -15,8 +15,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,24 +48,10 @@ func DiscoverBrowser() string {
 	if custom := strings.TrimSpace(os.Getenv("CRWU_BROWSER")); custom != "" {
 		return custom
 	}
-	candidates := []string{}
-	switch runtime.GOOS {
-	case "darwin":
-		candidates = []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		}
-	case "windows":
-		candidates = []string{
-			filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
-			filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
-			filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
-		}
-	default:
-		candidates = []string{"google-chrome", "chromium", "chromium-browser", "microsoft-edge"}
+	if path := defaultChromiumBrowser(); path != "" {
+		return path
 	}
-	for _, candidate := range candidates {
+	for _, candidate := range knownBrowserCandidates() {
 		if candidate != "" {
 			if path, err := exec.LookPath(candidate); err == nil {
 				return path

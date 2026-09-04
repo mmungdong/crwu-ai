@@ -17,6 +17,9 @@
 - 相关：`internal/platform/scanlogin`（浏览器捕获）、`internal/app/h3yunweb`、
   新增 skill `h3yun-login`
 - 环境变量：`CRWU_BROWSER`（指定浏览器可执行文件）
+- 默认浏览器支持：优先使用系统默认浏览器（需为 Chrome/Edge/Brave/Chromium 等
+  Chromium 系；Safari/Firefox 不支持 CDP 时回退到已装 Chromium），macOS 读
+  LaunchServices、Windows 读 UserChoice、Linux 读 xdg-settings
 
 ---
 
