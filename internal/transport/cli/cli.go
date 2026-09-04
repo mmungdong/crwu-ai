@@ -110,18 +110,30 @@ func addExamples(registry map[string][]schemeExample, path, description, command
 
 func newSchemeCommand(root *cobra.Command, examples map[string][]schemeExample) *cobra.Command {
 	return &cobra.Command{
-		Use:     "scheme",
+		Use:     "scheme [command-path]",
 		Short:   "Print the machine-readable command catalog for AI clients.",
-		Example: "  crwu scheme",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Long:    "Without an argument the full leaf catalog is printed; pass a command path such as 'h3yun apps' to print only that subtree.",
+		Example: "  crwu scheme\n  crwu scheme h3yun\n  crwu scheme h3yun session",
+		Args:    cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			leaves := collectLeaves(root, examples)
+			if len(args) > 0 {
+				prefix := strings.Join(args, " ")
+				filtered := leaves[:0]
+				for _, leaf := range leaves {
+					if leaf.Name == prefix || strings.HasPrefix(leaf.Name, prefix+" ") {
+						filtered = append(filtered, leaf)
+					}
+				}
+				if len(filtered) == 0 {
+					return fmt.Errorf("no commands under %q", prefix)
+				}
+				leaves = filtered
+			}
 			document := struct {
 				Version  string          `json:"version"`
 				Commands []schemeCommand `json:"commands"`
-			}{
-				Version:  buildinfo.Version,
-				Commands: collectLeaves(root, examples),
-			}
+			}{Version: buildinfo.Version, Commands: leaves}
 			return writeJSON(cmd.OutOrStdout(), document)
 		},
 	}

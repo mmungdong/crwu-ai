@@ -229,3 +229,28 @@ func TestSessionLoginStatusLinesAndSummary(t *testing.T) {
 		t.Fatalf("stdout=%q", stdout)
 	}
 }
+
+func TestSchemeCatalogFiltersByGroup(t *testing.T) {
+	_, stdout, _ := runCLI(envDependencies(func(string) string { return "" }), "scheme", "h3yun")
+	var doc struct {
+		Commands []struct {
+			Name string `json:"name"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("scheme output invalid: %v", err)
+	}
+	if len(doc.Commands) == 0 {
+		t.Fatal("expected h3yun leaves")
+	}
+	for _, command := range doc.Commands {
+		if !strings.HasPrefix(command.Name, "h3yun ") {
+			t.Fatalf("unexpected leaf %q in h3yun catalog", command.Name)
+		}
+	}
+
+	code, _, stderr := runCLI(envDependencies(func(string) string { return "" }), "scheme", "does-not-exist")
+	if code == 0 || !strings.Contains(stderr, "no commands under") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+}
