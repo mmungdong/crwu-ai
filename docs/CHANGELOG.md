@@ -9,6 +9,18 @@
 
 ---
 
+---
+
+## 2026-09-04 · docs · 审核统计规范接入 crwu-audit 路由
+
+- 影响：`skills/crwu-audit/SKILL.md` 汇总输出新增第 8 步"统计回填"
+- 说明：单份审核完成后按 crwu-knowledge `audit-skill/08-审核统计与台账规范.md` 产出统计字段
+  （A–G）并落入台账（模板 `knowledge-base/05-模板库/审核统计台账-模板.md`），用于周/月/批汇总
+  与知识库反哺（易错点候选/缺口反馈）；取值口径复用 crwu-knowledge 标签词典
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-04 · docs · crwu-audit 分层路由：总路由 + 房地产大方向（设计 v0.2）
 
 - 影响：skills 新增 `crwu-audit`（L0 总路由：全量路由注册表 + 分层分发/降级/汇总/门禁透传）、
