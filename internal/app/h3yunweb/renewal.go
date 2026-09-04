@@ -9,7 +9,7 @@ import (
 
 // autoRenewThreshold triggers a silent refresh when the remaining session time
 // drops to or below this duration.
-const autoRenewThreshold = 24 * time.Hour
+const autoRenewThreshold = 36 * time.Hour
 
 // EnsureFresh renews the bound session when it is at or near expiry. It is
 // called by the CLI middleware before employee-scope read commands so users

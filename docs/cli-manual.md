@@ -57,7 +57,7 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 |---|---|
 | `crwu h3yun session login` | 员工自助登录：自动开浏览器扫码并绑定（令牌不进对话） |
 | `crwu h3yun session bind --token <jwt>` | 绑定员工网页会话到本机（回退/受信路径） |
-- 自动续期：依赖会话的读命令执行前，若剩余 ≤24h 先静默 refresh；已过期则提示
+- 自动续期：依赖会话的读命令执行前，若剩余 ≤36h 先静默 refresh；已过期则提示
   重新执行 `crwu h3yun session login`
 | `crwu h3yun session status` | 查看绑定身份/引擎/剩余有效期 |
 | `crwu h3yun session refresh` | 续期（48h 内调用一次刷新） |
