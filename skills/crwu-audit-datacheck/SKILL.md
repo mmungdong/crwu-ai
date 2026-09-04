@@ -25,9 +25,30 @@ description: >-
 - 安装（如允许）：`python3 -m pip install --user openpyxl`；LibreOffice 需按系统安装。
 
 ## 主流程
+0. **H0 人工隐藏内容识别（先执行，默认忽略）**
+   - 目的：Excel 里人工手动隐藏的 表(sheet)/行/列（含折叠分组）通常是"说明性模板、资产负债表 0 值区、备用列"等，
+     不应把它们当残留或差异报警；自动勾稽**默认忽略隐藏区**，避免误报噪声。
+   - 识别（openpyxl 示例）：
+     ```python
+     import openpyxl
+     wb = openpyxl.load_workbook(f, data_only=True)
+     for ws in wb.worksheets:                       # sheet_state: visible/hidden/veryHidden
+         hid_rows = [r for r,d in ws.row_dimensions.items() if d.hidden]
+         hid_cols = [c for c,d in ws.column_dimensions.items() if d.hidden]
+         # 折叠分组：列 outlineLevel>0 且组头 collapsed=True 视同隐藏（可按开关）
+     ```
+     标准库(zipfile+xml)同样可读 `<sheetState>`/`<row hidden="1">`/`<col hidden="1">` 等属性。
+     `.xls` 经 soffice 转换后隐藏状态通常保留；若丢失 → 在"已忽略区"注明"隐藏状态未知"，不静默。
+   - 忽略规则：
+     1) 生成**忽略清单**并在输出注明：`已忽略隐藏 sheet N 个（名单）、隐藏行 M 行、隐藏列 K 列（段位）`；
+     2) 隐藏行/列上的单元格**不触发** C1–C6 报警（C5 串扰词、C6 占位残留同理不报）；
+     3) **合计仍以公式引用范围为准**：若合计公式把隐藏行纳入（SUM 到隐藏行），合计必须平，隐藏行不算漏；
+        隐藏行若未被任何合计引用 → 不报"该行未勾稽"；
+     4) 可见区正常全查；隐藏 sheet 整表跳过（其公式若被可见区引用，则按被引用的值核对）；
+     5) 如需人工抽查隐藏区内容，单独导出《隐藏区内容快照》，不进自动差异。
 1. **清单盘点**：列出材料包全部表格文件，标注每张表角色（明细/计算/汇总/填表说明/模板残留）。
-2. **解析**：按工具链读取值与公式；记录每表 sheet 名、行数、含公式/错误单元格数量。
-3. **六类检查**（命中才记差异）：
+2. **解析**：按工具链读取值与公式；按 H0 记录隐藏元数据并生成忽略清单；记录每表 sheet 名、行数、含公式/错误单元格数量。
+3. **六类检查**（命中才记差异；**隐藏区默认不纳入报警，见 H0**）：
    - C1 合计/勾稽：明细行求和 vs 表内合计 vs 汇总表合计 vs 报告结论金额/面积（单位一致）；
    - C2 跨表一致：同一口径（面积、租金单价、月/年租金、含税与否、物业费是否含入）在各表与报告间一致；
    - C3 公式错误：`#REF!`、`#DIV/0!`、`#N/A`、`#VALUE!` 等错误单元格（含隐藏/深层 sheet）；
