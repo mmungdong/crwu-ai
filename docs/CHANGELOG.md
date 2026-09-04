@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-04 · docs · crwu-audit 审核技能族：分类设计与首片叶子
+
+- 影响：skills 目录新增 `crwu-audit-realestate-rent`（提示型 Skill）；`skills/README.md` 注册；
+  新增 `docs/design-crwu-audit-skills.md`（划分判据/分类树/总路由 crwu-audit 契约/优先级）
+- 说明：crwu-audit 族按审核能力逻辑划分（report_type → object_type → method/scenario →
+  就绪度）；首片叶子=商铺租金/经营性物业市值类评估报告（市场法租金比较/成本法/收益法租约），
+  只读引用 crwu-knowledge 规则（RULE-01-02-281~305、543~578）与清单（CHK-MKT/CST）；
+  依赖 crwu-knowledge A 发布门禁：未发布仅试点（意见标注"依据待发布"）
+- 未新增/修改 crwu CLI 命令；总路由 `crwu-audit` 与其余叶子待后续实现
+
+---
+
 ## 2026-09-04 · feat · records list 支持 --filter 字段条件筛选
 
 - 影响命令：`crwu h3yun records list`（新增 flag `--filter <条件>`）

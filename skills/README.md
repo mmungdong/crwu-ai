@@ -13,3 +13,11 @@
 | --- | --- | --- |
 | [`h3yun-login`](h3yun-login/SKILL.md) | 提示型 | H3Yun 员工自助登录：自动开浏览器扫码绑定会话，令牌不进对话 |
 | [`h3yun-query`](h3yun-query/SKILL.md) | 提示型 | 交互式 H3Yun 查询：系统→表单→记录，20 条/页，支持标题关键词查找 |
+| [`crwu-audit-realestate-rent`](crwu-audit-realestate-rent/SKILL.md) | 提示型 | 审核【评估报告 × 不动产(商铺/办公/公寓等经营性物业)·租金或市场价值】：按知识库 CHK-MKT/CHK-CST 分区清单逐项审核，输出带依据引用意见单（依赖 crwu-knowledge 规则 A 发布门禁，未发布仅试点） |
+
+## crwu-audit 审核能力族
+
+按审核能力逻辑划分（报告形态 × 对象大类 × 方法/场景 × 能力就绪度），设计、分类树与总路由
+`crwu-audit` 契约见 [`docs/design-crwu-audit-skills.md`](../docs/design-crwu-audit-skills.md)。
+规则/清单单一事实源在 crwu-knowledge（`/Users/mungdong/code/github/mungdong/crwu-knowledge`），
+叶子技能只读引用、不复制规则正文。新增叶子需在该设计文档 §4 登记 + 本表注册。
