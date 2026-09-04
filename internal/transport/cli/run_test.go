@@ -21,7 +21,7 @@ func TestRunVersionWritesBuildInformation(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0", code)
 	}
-	if got := stdout.String(); !strings.Contains(got, "crwu 1.2.3") || !strings.Contains(got, "commit abc123") || !strings.Contains(got, "built 2026-09-04T02:00:00Z") {
+	if got := stdout.String(); !strings.Contains(got, "crwu 1.2.3") || !strings.Contains(got, "commit    abc123") || !strings.Contains(got, "built     2026-09-04 02:00:00 UTC") {
 		t.Fatalf("stdout = %q", got)
 	}
 	if stderr.Len() != 0 {

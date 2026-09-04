@@ -363,7 +363,7 @@ func runVersion(_ dependencies, args []string, stdout, stderr io.Writer) int {
 	if code, rejected := rejectArguments("version", args, stderr); rejected {
 		return code
 	}
-	if _, err := fmt.Fprintf(stdout, "crwu %s\n", buildinfo.String()); err != nil {
+	if _, err := fmt.Fprintln(stdout, buildinfo.PrettyString()); err != nil {
 		return reportOutputError("version", err, stderr)
 	}
 	return 0
