@@ -16,7 +16,7 @@
 | [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**：维护全部 crwu-audit-* 路由注册表；画像→分层分发→细分未命中降级父大方向→汇总输出（自身不做审核判断） |
 | [`crwu-audit-realestate`](crwu-audit-realestate/SKILL.md) | 提示型 | 房地产（不动产/房产）**大方向**通用审核：对象层+披露通用+方法适用性，按 报告/说明/明细表 分区（RULE-01-02-543~578、281~305） |
 | [`crwu-audit-realestate-rent`](crwu-audit-realestate-rent/SKILL.md) | 提示型 | 房地产大方向下 **L2 细分**：商铺/办公/公寓等经营性物业·租金或市场价值评估报告，执行 CHK-MKT/CHK-CST 专项清单（含表格勾稽必做步骤） |
-| [`crwu-audit-datacheck`](crwu-audit-datacheck/SKILL.md) | 提示型 | 跨方向 **L2 数据/表格勾稽**（C1–C6）：测算/明细/汇总表合计与口径、公式错误、跨项目串扰词、占位残留 → 差异清单（含 xlsx/.xls 解析与公式重算工具链说明） |
+| [`crwu-audit-datacheck`](crwu-audit-datacheck/SKILL.md) | 提示型 | 跨方向 **L2 数据/表格勾稽**（C1–C6）：测算/明细/汇总表合计与口径、公式错误、跨项目串扰词、占位残留 → 差异清单（含 xlsx/.xls 解析与公式重算工具链说明）。**H0：人工隐藏区（sheet/行/列/折叠组）强制跳过——禁读禁报，只审可见区** |
 
 ## crwu-audit 审核能力族（分层可插拔）
 
