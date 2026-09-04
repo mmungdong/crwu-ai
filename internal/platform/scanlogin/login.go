@@ -26,8 +26,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// H3YunLoginURL is the page the employee opens to scan the DingTalk QR code.
-const H3YunLoginURL = "https://www.h3yun.com"
+// H3YunLoginURL is the page crwu opens for the DingTalk QR login. Landing
+// directly on the DingTalk login entry avoids the homepage for employees.
+const H3YunLoginURL = "https://www.h3yun.com/entry/login/dingtalk"
 
 const (
 	sessionCookieName = "h3_token"

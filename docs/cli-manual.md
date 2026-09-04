@@ -35,8 +35,8 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 ```
 
 - crwu 自动打开浏览器窗口（优先系统默认浏览器，需 Chromium 系；找不到时设
-  `CRWU_BROWSER`）；
-- 员工在弹出窗口用**钉钉扫码**登录 `h3yun.com`（无需氚云密码）；
+  `CRWU_BROWSER`），直达钉钉登录入口 `h3yun.com/entry/login/dingtalk`；
+- 员工在弹出窗口用**钉钉扫码**完成登录（无需氚云密码）；
 - 会话由 crwu 经浏览器直接读取（cookie 双域 + localStorage/document.cookie
   兜底），**校验有效后才写入**本机 keyring；令牌从不打印、不外传。
 
