@@ -7,14 +7,17 @@ package scanlogin
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -207,24 +210,11 @@ func Capture(ctx context.Context, config Config) (string, error) {
 	ticker := time.NewTicker(cookiePollEvery)
 	defer ticker.Stop()
 	for {
-		result, err := client.call("Network.getCookies", map[string]any{"urls": []string{loginURL}})
-		if err != nil {
-			return "", fmt.Errorf("read cookies: %w", err)
+		if token, ok := cookiesToken(client, loginURL); ok {
+			return token, nil
 		}
-		var payload struct {
-			Cookies []struct {
-				Name   string `json:"name"`
-				Domain string `json:"domain"`
-				Value  string `json:"value"`
-			} `json:"cookies"`
-		}
-		if err := json.Unmarshal(result, &payload); err != nil {
-			return "", fmt.Errorf("decode cookies: %w", err)
-		}
-		for _, cookie := range payload.Cookies {
-			if cookie.Name == sessionCookieName && strings.Contains(cookie.Domain, "h3yun.com") && cookie.Value != "" {
-				return cookie.Value, nil
-			}
+		if token, ok := pageToken(client); ok {
+			return token, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -232,6 +222,106 @@ func Capture(ctx context.Context, config Config) (string, error) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// cookiesToken reads the session cookie for the login origin and its bare
+// domain, and accepts the value only when it is a valid, unexpired session.
+func cookiesToken(client *cdpClient, loginURL string) (string, bool) {
+	origins := []string{loginURL}
+	if parsed, err := url.Parse(loginURL); err == nil {
+		host := strings.TrimPrefix(parsed.Hostname(), "www.")
+		origins = append(origins, parsed.Scheme+"://"+host)
+	}
+	result, err := client.call("Network.getCookies", map[string]any{"urls": origins})
+	if err != nil {
+		return "", false
+	}
+	var payload struct {
+		Cookies []struct {
+			Name   string `json:"name"`
+			Domain string `json:"domain"`
+			Value  string `json:"value"`
+		} `json:"cookies"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return "", false
+	}
+	for _, cookie := range payload.Cookies {
+		if cookie.Name == sessionCookieName && strings.Contains(cookie.Domain, "h3yun.com") && validSessionToken(cookie.Value) {
+			return cookie.Value, true
+		}
+	}
+	return "", false
+}
+
+// pageToken falls back to reading the token from page state (cookie jar and
+// localStorage) in case the app keeps the session outside the cookie domain.
+func pageToken(client *cdpClient) (string, bool) {
+	expression := `JSON.stringify((function(){var c="",l="";try{c=document.cookie||""}catch(e){}` +
+		`try{if(window.localStorage){l=window.localStorage.getItem("h3_token")||""}}catch(e){}` +
+		`return {c:c,l:l}})())`
+	result, err := client.call("Runtime.evaluate", map[string]any{
+		"expression":    expression,
+		"returnByValue": true,
+	})
+	if err != nil {
+		return "", false
+	}
+	var payload struct {
+		Result struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return "", false
+	}
+	var state struct {
+		Cookie string `json:"c"`
+		Local  string `json:"l"`
+	}
+	if err := json.Unmarshal(payload.Result.Value, &state); err != nil {
+		return "", false
+	}
+	candidates := []string{state.Local}
+	if match := cookieValueRegex.FindStringSubmatch(state.Cookie); match != nil {
+		candidates = append(candidates, match[1])
+	}
+	for _, candidate := range candidates {
+		if validSessionToken(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+var cookieValueRegex = regexp.MustCompile(`(?:^|;\s*)h3_token=([^;]+)`)
+
+// validSessionToken reports whether the captured value looks like an
+// unexpired H3Yun session JWT (three segments, engine/user claims, future exp).
+func validSessionToken(token string) bool {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) != 3 {
+		return false
+	}
+	payload := parts[1]
+	if rest := len(payload) % 4; rest != 0 {
+		payload += strings.Repeat("=", 4-rest)
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(payload, "="))
+	if err != nil {
+		if decoded, err = base64.URLEncoding.DecodeString(payload); err != nil {
+			return false
+		}
+	}
+	var claims struct {
+		EngineCode string `json:"enginecode"`
+		UserID     string `json:"userid"`
+		ExpiresAt  int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return false
+	}
+	return claims.EngineCode != "" && claims.UserID != "" && claims.ExpiresAt > time.Now().Unix()
 }
 
 func waitForDebugger(ctx context.Context, port int) (string, error) {

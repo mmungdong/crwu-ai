@@ -20,6 +20,8 @@
 - 默认浏览器支持：优先使用系统默认浏览器（需为 Chrome/Edge/Brave/Chromium 等
   Chromium 系；Safari/Firefox 不支持 CDP 时回退到已装 Chromium），macOS 读
   LaunchServices、Windows 读 UserChoice、Linux 读 xdg-settings
+- 读取加固：cookie（www 域与根域双拉）+ 页面 JS localStorage/document.cookie
+  兜底；抓取值先解码校验 enginecode/userid/exp（未来时间）后才写入，无效不存储
 
 ---
 
