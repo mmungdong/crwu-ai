@@ -48,6 +48,7 @@ func TestRunSchemeWritesMachineReadableCommandCatalog(t *testing.T) {
 		"h3yun ping":            false,
 		"h3yun tools":           false,
 		"h3yun session bind":    false,
+		"h3yun session login":   false,
 		"h3yun session status":  false,
 		"h3yun session refresh": false,
 		"h3yun session clear":   false,

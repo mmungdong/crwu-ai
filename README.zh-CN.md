@@ -52,13 +52,15 @@ make test
 
 ## 🔑 员工使用流程
 
-**① 绑定一次会话** —— 让员工在 `h3yun.com` 扫码，然后绑定从浏览器复制的
-Bearer JWT（DevTools → Network → `Authorization`）：
+**① 员工自助登录（无需 DevTools）**
 
 ```bash
-./bin/crwu h3yun session bind --token '<会话 JWT>'
+./bin/crwu h3yun session login       # 自动开浏览器，员工用钉钉扫码
 ./bin/crwu h3yun session status      # 是谁、哪个引擎、剩余有效期
 ```
+
+会话令牌由 `crwu` 直接从浏览器读入本机 keyring——不打印、不发给 AI 宿主。
+（受信绑定者可走 DevTools 回退路径 `session bind --token <jwt>`。）
 
 **② 以该员工身份浏览工作台**
 
@@ -95,7 +97,8 @@ Bearer JWT（DevTools → Network → `Authorization`）：
 
 | 命令 | 作用 |
 | --- | --- |
-| `crwu h3yun session bind --token <jwt>` | 把员工的 H3Yun 网页会话绑定到本机 |
+| `crwu h3yun session login` | 员工自助登录：自动开浏览器扫码并绑定（令牌不进对话） |
+| `crwu h3yun session bind --token <jwt>` | 把员工的 H3Yun 网页会话绑定到本机（回退/受信路径） |
 | `crwu h3yun session status` | 查看绑定身份、引擎与有效期 |
 | `crwu h3yun session refresh` | 续期已绑定的会话 |
 | `crwu h3yun session clear` | 清除已绑定的会话 |

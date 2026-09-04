@@ -20,6 +20,13 @@ type fakeH3YunWeb struct {
 	appsErr error
 }
 
+func (f *fakeH3YunWeb) Login(_ context.Context, onStatus func(string)) (h3yunweb.Session, error) {
+	if onStatus != nil {
+		onStatus("status line")
+	}
+	return f.session, nil
+}
+
 func (f *fakeH3YunWeb) Bind(_ context.Context, token string) (h3yunweb.Session, error) {
 	if f.err != nil {
 		return h3yunweb.Session{}, f.err
@@ -199,6 +206,17 @@ func TestRunH3YunFileDownloadWritesOut(t *testing.T) {
 		t.Fatalf("exit code = %d; stderr = %q", code, stderr)
 	}
 	if !strings.Contains(stdout, "/tmp/x/faq记录.docx") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestRunH3YunSessionLoginCallsLogin(t *testing.T) {
+	web := &fakeH3YunWeb{session: h3yunweb.Session{EngineCode: "eng-1", UserID: "u1", ExpiresAt: time.Now().Add(time.Hour)}}
+	code, stdout, stderr := runH3Yun(dependencies{web: web}, "h3yun", "session", "login")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "status line") || !strings.Contains(stdout, "eng-1") {
 		t.Fatalf("stdout = %q", stdout)
 	}
 }

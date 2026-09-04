@@ -164,6 +164,18 @@ func commandDefinitions() []commandDefinition {
 			handler: runH3YunRecordsQuery,
 		},
 		{
+			Name:        "h3yun session login",
+			Description: "Employee self-service QR login: opens a browser, captures the H3Yun session locally, and binds it.",
+			Usage:       "crwu h3yun session login",
+			Examples: []commandExample{
+				{
+					Description: "Let the employee scan the DingTalk QR code to bind their H3Yun session.",
+					Command:     "crwu h3yun session login",
+				},
+			},
+			handler: runH3YunSessionLogin,
+		},
+		{
 			Name:        "h3yun session bind",
 			Description: "Bind the H3Yun web session token of the current employee to this machine.",
 			Usage:       "crwu h3yun session bind --token <jwt>",

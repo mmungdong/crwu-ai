@@ -15,6 +15,7 @@ import (
 // H3YunWebService is the session-channel (web console REST) capability exposed
 // to the CLI.
 type H3YunWebService interface {
+	Login(ctx context.Context, onStatus func(string)) (h3yunweb.Session, error)
 	Bind(ctx context.Context, token string) (h3yunweb.Session, error)
 	Status(ctx context.Context) (h3yunweb.Session, error)
 	Clear(ctx context.Context) error
@@ -372,6 +373,34 @@ func runH3YunFileDownload(deps dependencies, args []string, stdout, stderr io.Wr
 	}
 	if err := writeH3YunWebJSON(stdout, map[string]any{"files": written}); err != nil {
 		return reportOutputError("h3yun file download", err, stderr)
+	}
+	return 0
+}
+
+func runH3YunSessionLogin(deps dependencies, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintf(stderr, "command %q does not accept arguments\n", "h3yun session login")
+		return 2
+	}
+	if deps.web == nil {
+		fmt.Fprintln(stderr, "h3yun session login: H3Yun session service is unavailable")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	var session h3yunweb.Session
+	var err error
+	session, err = deps.web.Login(ctx, func(status string) {
+		if _, writeErr := fmt.Fprintln(stdout, status); writeErr != nil {
+			_ = writeErr
+		}
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "h3yun session login: %v\n", err)
+		return 1
+	}
+	if err := writeH3YunWebJSON(stdout, sessionSummary(session)); err != nil {
+		return reportOutputError("h3yun session login", err, stderr)
 	}
 	return 0
 }

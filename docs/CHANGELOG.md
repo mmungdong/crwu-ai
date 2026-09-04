@@ -9,6 +9,17 @@
 
 ---
 
+## 2026-09-03 · feat · 员工自助扫码登录（session login）
+
+- 新增命令：`h3yun session login`
+- 影响：自动拉起本机 Chrome/Edge 打开 h3yun.com，员工用钉钉扫码后由 crwu 经
+  CDP 直接读取会话并写入本机 keyring；令牌全程进程内处理，不打印/不进对话
+- 相关：`internal/platform/scanlogin`（浏览器捕获）、`internal/app/h3yunweb`、
+  新增 skill `h3yun-login`
+- 环境变量：`CRWU_BROWSER`（指定浏览器可执行文件）
+
+---
+
 ## 2026-09-03 · feat · 首个交互式查询 Skill（h3yun-query）
 
 - 新增：`skills/h3yun-query/SKILL.md`
