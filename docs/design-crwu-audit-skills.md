@@ -17,7 +17,8 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
     realestate → crwu-audit-realestate-rent ✅（租金/经营性物业专项）
                  realestate-asset 🅿️（抵押/转让市值等）｜ 军产/国资场景法律专项 🅿️
     enterprise → 收益法专项 🅿️ ｜ 证券/国资监管披露专项 🅿️
-    跨方向     → 数据校对/一致性（能力型）🅿️ ｜ 具体法律合规审核（按 scenario 挂）🅿️
+    跨方向     → crwu-audit-datacheck ✅ v0.1（数据/表格勾稽 C1-C6，能力型，可叠加任意叶子单独跑）
+                 ｜ 具体法律合规审核（按 scenario 挂）🅿️
 ```
 
 **路由语义（核心，用户定稿）**：
@@ -54,6 +55,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 | L0 | crwu-audit | 任何待审材料 | —（分发/汇总/门禁透传） | ✅ |
 | L1 | crwu-audit-realestate | 评估报告 × 不动产（房产/商铺/办公/公寓/厂房等，通用不动产逻辑） | 不动产 36 + 评估方法 25 + 报告准则通用披露（A 待发布） | ✅ |
 | L2 | crwu-audit-realestate-rent | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值，市场法租金比较/收益法租约/成本法） | + CHK-MKT-001~014 / CHK-CST-001~012 + 案例 B | ✅ |
+| L2 能力 | crwu-audit-datacheck | 跨方向 · 材料含测算/明细/汇总表（任何对象） | M-数据校对口径：C1–C6 差异清单 | ✅ v0.1 |
 | L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值 | 企业价值 50（A 待发布） | 🅿️ |
 | L1 | crwu-audit-intangible | 评估报告 × 无形资产 | 知识产权 42；无形资产总纲待精编 | 🅿️ |
 | L1 | crwu-audit-equipment | 评估报告 × 机器设备等单项资产 | 空白（先补 L2+精编） | 🅿️ |
@@ -99,4 +101,5 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] `skills/crwu-audit/SKILL.md`（L0 总路由：全量路由注册表 + 分层分发/降级/汇总/门禁）
 - [x] `skills/crwu-audit-realestate/SKILL.md`（L1 房地产大方向通用审核逻辑）
 - [x] `skills/crwu-audit-realestate-rent/SKILL.md`（L2 商铺租金/经营性物业市值专项）
-- [ ] 后续：案例 B 试点走查验证三层路由 → 补齐 enterprise-value/intangible 等大方向
+- [x] `skills/crwu-audit-datacheck/SKILL.md`（L2 跨方向数据/表格勾稽，rent/realestate 表格必做步骤已挂接）
+- [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/intangible 等大方向

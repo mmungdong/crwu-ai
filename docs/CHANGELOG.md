@@ -11,6 +11,20 @@
 
 ---
 
+---
+
+## 2026-09-04 · docs · crwu-audit-datacheck：跨方向表格勾稽能力 + 叶子必做步骤
+
+- 影响：skills 新增 `crwu-audit-datacheck`（L2 能力型：C1–C6 数据/表格勾稽、差异清单输出、
+  xlsx/.xls 解析与公式重算工具链说明）；`crwu-audit-realestate-rent`/`crwu-audit-realestate`
+  增加"表格勾稽必做（先于意见输出）"步骤；总路由注册表与设计文档 v0.2 登记该能力
+- 说明：Excel 明细/测算/汇总表属 M-数据校对职责（校准 G7），此前试点只审报告+说明属执行缺口；
+  现固化为必做：差异清单回传规则技能作判定（如汇总数与报告结论不符→反证数字污染），
+  解析失败必须明示"该表未核"；差异计入台账 data_diff_count（crwu-knowledge audit-skill/08）
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-04 · docs · 审核统计规范接入 crwu-audit 路由
 
 - 影响：`skills/crwu-audit/SKILL.md` 汇总输出新增第 8 步"统计回填"

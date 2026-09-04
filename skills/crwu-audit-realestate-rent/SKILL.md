@@ -87,6 +87,21 @@ crwu h3yun file download --schema <报告审核表单code> --id <记录ObjectId>
 
 （code/id 一律来自上一步命令输出，禁止猜测。）
 
+## 表格勾稽（必做，先于意见输出）
+
+> 材料含评估明细表/市场法计算表/成本法汇总表等 `.xlsx/.xls` 时，**先跑表格勾稽再出意见**，
+> 禁止"只读报告/说明就下结论"。按 `crwu-audit-datacheck` 执行 C1–C6：
+> C1 合计/勾稽（明细↔汇总↔报告结论金额与面积）· C2 跨表口径一致（含税、物业费、月/年、㎡）·
+> C3 公式错误（#REF!/#DIV/0!）· C4 单位/小数 · C5 **跨项目模板串扰**（项目名/坐落/房号/权证残留）
+> · C6 模板/占位残留。
+>
+> - 工具链：xlsx 用 `openpyxl`（读值 `data_only=True` + 公式串审）；`.xls`/公式重算需
+>   LibreOffice headless（`soffice --headless --convert-to xlsx`）；无工具则用 Python 标准库
+>   zipfile 读值；**解析/重算失败必须明示"该表未核"**，不得算通过。
+> - 差异清单回传本技能做规则判定（例：Excel 合计与报告结论不符 → 反证报告数字污染，
+>   依据 RULE-01-02-561/576/254；修正系数表与说明不一致 → CHK-MKT-013）；
+> - 差异条数计入台账 `data_diff_count`（`KB/audit-skill/08`）。
+
 ## 输出与防幻觉
 
 - 输出遵循 `KB/audit-skill/06-输出Schema与审核意见单.md`：意见 = 分区 + 严重度 + 依据引用 +
