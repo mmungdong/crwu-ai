@@ -30,6 +30,14 @@ description: >-
 - 换电脑 / 换账号时需要重新绑定。
 - 已绑定但想换成另一个员工身份时（先 `crwu h3yun session clear`）。
 
+## 前置：确保 `crwu` 可用
+
+`crwu` 是 Go 二进制，通常已随项目/环境装好（`which crwu` / `crwu version`
+可验证）。若**找不到**（`command not found`），**不要擅自改环境或自行从源码
+构建**——这属于部署/环境问题，应先**如实告知用户**："当前环境找不到 `crwu`
+命令"，并**询问用户**希望如何处理（例如由用户提供/安装该工具，或确认正确的
+调用路径）后再继续。技能纪律：遇到环境缺失如实转述、不擅自绕过或替用户做决定。
+
 ## 流程
 
 **唯一推荐步骤（自动扫码）**
@@ -39,10 +47,16 @@ crwu h3yun session login
 ```
 
 - crwu 会**自动打开一个浏览器窗口**（Chrome/Edge，找不到时提示装浏览器或设
-  `CRWU_BROWSER`）。
+  `CRWU_BROWSER`，可显式设
+  `CRWU_BROWSER="/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"`）。
 - 请员工在**弹出的窗口**里用钉钉扫码登录 h3yun.com（无需氚云密码）；
 - 成功后命令输出类似 `{"ok":true,"data":{...,"expiresIn":"47h…"}}`，会话已写入
   本机 keyring。
+
+> ⚠️ **AI 宿主沙箱注意**：在受沙箱隔离的 Agent 环境里，`session login` 派生的
+> GUI 浏览器会被沙箱拦截而**无法弹出窗口**（报 `websocket close 1006`、stderr
+> 含大量 file-write 被拒）。此时必须**脱离沙箱 + 前台**运行本命令（例如 Bash 工具
+> 加 `dangerouslyDisableSandbox`，且不用后台模式），Edge 窗口才能在桌面上弹出供扫码。
 
 **验证**
 
@@ -82,6 +96,7 @@ crwu h3yun session bind --token '<JWT>'
 | 扫码后一直等待超时 | 确认扫码用的是**钉钉**且属于本企业；重跑一次 `crwu h3yun session login` |
 | `session status` 显示另一个员工 | `crwu h3yun session clear` 后重新用正确员工扫码登录 |
 | 自动流程不可用 | 使用上面"回退"路径在本机粘贴绑定 |
+| 沙箱内运行、浏览器窗口弹不出（`websocket close 1006`） | 用**脱离沙箱 + 前台**方式运行 `session login`；可显式设 `CRWU_BROWSER` 指向 Edge/Chrome |
 
 ## 更多
 

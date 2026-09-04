@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-04 · docs · 扫码登录的沙箱运行注意与前置说明
+
+- 影响：`crwu h3yun session login` 的运行环境注意事项
+- 在 AI 宿主沙箱环境中，login 拉起的 GUI 浏览器会被沙箱拦截而弹不出窗口
+  （报 `websocket close 1006`），应**脱离沙箱 + 前台**运行，并用 `CRWU_BROWSER`
+  显式指定 Chromium 系浏览器路径
+- 同步 `docs/cli-manual.md`（§3 增加环境提示）与 `skills/h3yun-login/SKILL.md`
+  （增加"确保 crwu 可用"前置——`crwu` 缺失时应询问用户而非擅自构建/改环境；
+  `CRWU_BROWSER` 显式示例；沙箱拦截排障条目）
+
+---
+
 ## 2026-09-03 · feat · 员工自助扫码登录（session login）
 
 - 新增命令：`h3yun session login`

@@ -40,6 +40,11 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 - 会话由 crwu 经浏览器直接读取（cookie 双域 + localStorage/document.cookie
   兜底），**校验有效后才写入**本机 keyring；令牌从不打印、不外传。
 
+> ⚠️ **AI 宿主沙箱注意**：在受沙箱隔离的 Agent 环境里，`session login` 派生的
+> GUI 浏览器会被沙箱拦截而无法弹出窗口（报 `websocket close 1006`、stderr 含大量
+> file-write 被拒）。应**脱离沙箱 + 前台**运行本命令，并可用
+> `CRWU_BROWSER` 显式指定 Chromium 系浏览器（如 Edge）路径。
+
 **回退（受信 IT/本机粘贴，仅自动流程不可用时）**
 
 1. 让员工在浏览器打开 `https://www.h3yun.com` 扫码登录；
