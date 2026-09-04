@@ -13,7 +13,7 @@ func TestRunVersionWritesBuildInformation(t *testing.T) {
 	t.Cleanup(func() {
 		buildinfo.Version, buildinfo.Commit = oldVersion, oldCommit
 	})
-	buildinfo.Version, buildinfo.Commit = "1.2.3", "abc123"
+	buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate = "1.2.3", "abc123", "2026-09-04T02:00:00Z"
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"version"}, &stdout, &stderr)
@@ -21,8 +21,8 @@ func TestRunVersionWritesBuildInformation(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0", code)
 	}
-	if got, want := stdout.String(), "crwu 1.2.3 (commit abc123)\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+	if got := stdout.String(); !strings.Contains(got, "crwu 1.2.3") || !strings.Contains(got, "commit abc123") || !strings.Contains(got, "built 2026-09-04T02:00:00Z") {
+		t.Fatalf("stdout = %q", got)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())

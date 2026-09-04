@@ -35,6 +35,14 @@
 
 ---
 
+## 2026-09-03 · feat · version 输出构建信息
+
+- 影响命令：`crwu version`
+- 影响：输出含 版本号、commit 缩写、构建时间（UTC）、目标平台（macOS/Windows/
+  Linux + 架构），由 Makefile 注入 BuildDate；GOOS/GOARCH 为编译期值
+
+---
+
 ## 2026-09-03 · feat · H3Yun 员工级网页会话通道上线
 
 - 新增命令：`h3yun session bind/status/refresh/clear`、`h3yun apps list`、
