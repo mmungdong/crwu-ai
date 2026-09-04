@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-04 · docs · crwu-audit 分层路由：总路由 + 房地产大方向（设计 v0.2）
+
+- 影响：skills 新增 `crwu-audit`（L0 总路由：全量路由注册表 + 分层分发/降级/汇总/门禁透传）、
+  `crwu-audit-realestate`（L1 房地产大方向通用审核）；`crwu-audit-realestate-rent` 明确为 L2 细分；
+  `docs/design-crwu-audit-skills.md` 升级 v0.2（三层可插拔模型：L1 大方向 runnable → L2 细分
+  pluggable，细分未命中降级父大方向，最上层统一维护所有能力 skill 路由）
+- 说明：三层语义按用户口径——先判大方向→再尝试细分；细分未命中按上一层（大方向）审核逻辑开展；
+  大方向下可继续插"具体法律/专项内容"审核能力；总路由只分发不判断
+- 未新增/修改 crwu CLI 命令；后续：案例 B 试点走查验证三层路由
+
+---
+
 ## 2026-09-04 · docs · crwu-audit 审核技能族：分类设计与首片叶子
 
 - 影响：skills 目录新增 `crwu-audit-realestate-rent`（提示型 Skill）；`skills/README.md` 注册；
