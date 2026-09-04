@@ -26,10 +26,12 @@ const webBaseURL = "https://www.h3yun.com"
 // The CLI decodes it only to read routing/expiry metadata; the gateway verifies
 // the signature.
 type SessionClaims struct {
-	EngineCode   string    `json:"enginecode"`
-	ShardKey     string    `json:"shardkey"`
-	UserID       string    `json:"userid"`
-	AccountType  string    `json:"accounttype"`
+	EngineCode string `json:"enginecode"`
+	ShardKey   string `json:"shardkey"`
+	UserID     string `json:"userid"`
+	// AccountType may be a string ("DingId") or a numeric code on refreshed
+	// tokens; keep it raw and format at the call site.
+	AccountType  any       `json:"accounttype"`
 	LoginName    string    `json:"loginname"`
 	ExpiresHours int64     `json:"expireshours"`
 	ExpiresAt    time.Time `json:"-"`
@@ -304,10 +306,12 @@ func (c *WebClient) DownloadAttachment(ctx context.Context, attachmentID string)
 	return data, contentType, nil
 }
 
-// Refresh exchanges the session token for a fresh one. The endpoint may answer
-// with a bare JSON string or { token }.
+// Refresh exchanges the session token for a fresh one. The web console
+// contract is GET /v1/token/refresh?token=<jwt>; the answer carries the new
+// token in { token } (a bare JSON string is tolerated too).
 func (c *WebClient) Refresh(ctx context.Context) (string, error) {
-	raw, err := c.call(ctx, http.MethodGet, "/v1/token/refresh", nil)
+	path := "/v1/token/refresh?token=" + url.QueryEscape(c.token)
+	raw, err := c.call(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return "", err
 	}

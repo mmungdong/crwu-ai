@@ -27,19 +27,27 @@
 
 ## 3. 上手：绑定员工会话（一次性，每台机器每员工一次）
 
-1. 让员工在浏览器打开 `https://www.h3yun.com`，用钉钉扫码登录（员工无氚云密码也可）；
-2. DevTools → Network → 刷新/操作一次 → 找到任一发往 `h3yun.com/v1/...` 的请求；
-3. 复制其请求头 `Authorization` 的 Bearer 值（`eyJhbGci...` 整串，**不要带 `Bearer ` 前缀**也行）；
-4. 执行：
+**推荐（员工自助扫码，令牌不进对话/LLM）**
 
 ```bash
-crwu h3yun session bind --token '<JWT>'
+crwu h3yun session login
 crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 ```
 
-> 安全红线：token **只应出现在本机命令**，绝不写入日志/文件/scheme 输出/
-> 聊天/提交；会话在 `个人信息 → 管理凭证` 页无法吊销网页会话时，可执行
-> `session clear` 后让员工重新扫码。
+- crwu 自动打开浏览器窗口（优先系统默认浏览器，需 Chromium 系；找不到时设
+  `CRWU_BROWSER`）；
+- 员工在弹出窗口用**钉钉扫码**登录 `h3yun.com`（无需氚云密码）；
+- 会话由 crwu 经浏览器直接读取（cookie 双域 + localStorage/document.cookie
+  兜底），**校验有效后才写入**本机 keyring；令牌从不打印、不外传。
+
+**回退（受信 IT/本机粘贴，仅自动流程不可用时）**
+
+1. 让员工在浏览器打开 `https://www.h3yun.com` 扫码登录；
+2. 绑定者在本机执行 `crwu h3yun session bind --token '<JWT>'`（JWT 取自已登录
+   浏览器的请求头 `Authorization`，`eyJhbGci...` 整串，不带 `Bearer ` 前缀）。
+
+> 安全红线：token 只出现在**本机命令**；绝不写入日志/文件/scheme 输出/聊天/
+> 提交，绝不让 Agent 代看或代贴。需要吊销/换人时先 `session clear` 再重登。
 
 ## 4. 常用命令速查
 
@@ -47,7 +55,10 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 
 | 命令 | 说明 |
 |---|---|
-| `crwu h3yun session bind --token <jwt>` | 绑定员工网页会话到本机 |
+| `crwu h3yun session login` | 员工自助登录：自动开浏览器扫码并绑定（令牌不进对话） |
+| `crwu h3yun session bind --token <jwt>` | 绑定员工网页会话到本机（回退/受信路径） |
+- 自动续期：依赖会话的读命令执行前，若剩余 ≤36h 先静默 refresh；已过期则提示
+  重新执行 `crwu h3yun session login`
 | `crwu h3yun session status` | 查看绑定身份/引擎/剩余有效期 |
 | `crwu h3yun session refresh` | 续期（48h 内调用一次刷新） |
 | `crwu h3yun session clear` | 清除绑定 |
@@ -121,7 +132,7 @@ crwu h3yun file download --schema <编码> --id <ObjectId> --out ./附件
 
 ## 7. 给 Agent 的调用约定
 
-- 输出：成功 = 退出码 0，stdout 为 `{"ok":true,"data":...}` 纯 JSON；用法错误 = 退出码 2；运行错误 = 退出码 1（诊断在 stderr）。
+- 输出：成功 = 退出码 0，stdout 为 `{"ok":true,"data":...}` 纯 JSON；任何错误（含必填参数缺失等用法错误）均退出码 1，诊断在 stderr。
 - 需要发现命令时先跑 `crwu scheme`，不要凭记忆调用参数。
 - 本 CLI 当前**全部为只读操作**；未来加入写/审批命令后，执行前必须先向用户声明并等确认。
 - token 不得出现在任何工具输出/日志/会话记录里；若需重绑请用户自己执行 bind。

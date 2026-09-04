@@ -87,9 +87,12 @@ func TestWebClientUnauthorized(t *testing.T) {
 	}
 }
 
-func TestWebClientRefreshBareString(t *testing.T) {
+func TestWebClientRefreshUsesTokenQuery(t *testing.T) {
 	client := webServer(t, func(w http.ResponseWriter, r *http.Request) {
-		writeWeb(t, w, map[string]any{"returnData": "new-token", "successful": true})
+		if r.URL.Query().Get("token") != "jwt-token" {
+			t.Errorf("missing token query: %s", r.URL.RawQuery)
+		}
+		writeWeb(t, w, map[string]any{"returnData": map[string]any{"token": "new-token"}, "successful": true})
 	})
 	token, err := client.Refresh(context.Background())
 	if err != nil {

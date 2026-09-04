@@ -9,6 +9,22 @@
 
 ---
 
+## 2026-09-03 · feat · 员工自助扫码登录（session login）
+
+- 新增命令：`h3yun session login`
+- 影响：自动拉起本机 Chrome/Edge 打开 h3yun.com，员工用钉钉扫码后由 crwu 经
+  CDP 直接读取会话并写入本机 keyring；令牌全程进程内处理，不打印/不进对话
+- 相关：`internal/platform/scanlogin`（浏览器捕获）、`internal/app/h3yunweb`、
+  新增 skill `h3yun-login`
+- 环境变量：`CRWU_BROWSER`（指定浏览器可执行文件）
+- 默认浏览器支持：优先使用系统默认浏览器（需为 Chrome/Edge/Brave/Chromium 等
+  Chromium 系；Safari/Firefox 不支持 CDP 时回退到已装 Chromium），macOS 读
+  LaunchServices、Windows 读 UserChoice、Linux 读 xdg-settings
+- 读取加固：cookie（www 域与根域双拉）+ 页面 JS localStorage/document.cookie
+  兜底；抓取值先解码校验 enginecode/userid/exp（未来时间）后才写入，无效不存储
+
+---
+
 ## 2026-09-03 · feat · 首个交互式查询 Skill（h3yun-query）
 
 - 新增：`skills/h3yun-query/SKILL.md`
@@ -16,6 +32,34 @@
   records list / records get / files list / file download`（只读）
 - 说明：按"系统 → 表单 → 记录"逐层交互查询，每页 20 条、可翻页、支持标题
   关键词查找；不发散写操作
+
+---
+
+## 2026-09-03 · feat · version 输出构建信息
+
+- 影响命令：`crwu version`
+- 影响：输出含 版本号、commit 缩写、构建时间（UTC）、目标平台（macOS/Windows/
+  Linux + 架构），由 Makefile 注入 BuildDate；GOOS/GOARCH 为编译期值
+
+---
+
+## 2026-09-03 · feat · 会话惰性自动续期（中间件）
+
+- 影响命令：apps/forms/records/files 等依赖网页会话的读命令
+- 说明：h3yun 组 PersistentPreRunE 中间件在执行前检查会话剩余时间 ≤24h 则自动
+  refresh 一次；已过期则提示重新 `crwu h3yun session login`。session 管理命令与
+  agent 通道（ping/tools/apps search/records query）跳过
+- 相关：`internal/transport/cli/middleware.go`（CLI 中间件）、
+  `internal/app/h3yunweb/renewal.go`（EnsureFresh）
+
+---
+
+## 2026-09-03 · refactor · 用 cobra 重写 CLI（docker/k8s 规范）
+
+- 影响命令：全部（结构不变，命令路径/flag 保持一致）
+- 说明：命令改为嵌套树，help 分层折叠（`crwu help h3yun session`）；flag 由
+  cobra/pflag 管理并校验必填参数；`crwu scheme` 目录改为由 cobra 命令树实时
+  生成，与 help 描述同源；退出码统一：成功 0、任何错误 1
 
 ---
 

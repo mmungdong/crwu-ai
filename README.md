@@ -56,14 +56,16 @@ for testing.
 
 ## 🔑 Employee workflow
 
-**1 · Bind the session once** — the employee scans at `h3yun.com`, then you
-bind the bearer JWT copied from the browser (DevTools → Network →
-`Authorization`):
+**1 · Let the employee log in themselves — no DevTools needed**
 
 ```bash
-./bin/crwu h3yun session bind --token '<session JWT>'
+./bin/crwu h3yun session login       # opens a browser; employee scans with DingTalk
 ./bin/crwu h3yun session status      # who, which engine, time-to-expiry
 ```
+
+`crwu` reads the session token straight from the browser into the local
+keyring — it is never printed or shared with the AI host. A DevTools-based
+`session bind --token <jwt>` fallback exists for trusted binders.
 
 **2 · Browse the workspace as that employee**
 
@@ -100,7 +102,8 @@ bind the bearer JWT copied from the browser (DevTools → Network →
 
 | Command | Purpose |
 | --- | --- |
-| `crwu h3yun session bind --token <jwt>` | Bind the employee's H3Yun web session to this machine |
+| `crwu h3yun session login` | Employee self-service login: open a browser, QR-scan, and bind locally (token never reaches the conversation) |
+| `crwu h3yun session bind --token <jwt>` | Bind the employee's H3Yun web session to this machine (fallback / trusted path) |
 | `crwu h3yun session status` | Show the bound identity, engine and expiry |
 | `crwu h3yun session refresh` | Renew the bound session token |
 | `crwu h3yun session clear` | Remove the bound session |

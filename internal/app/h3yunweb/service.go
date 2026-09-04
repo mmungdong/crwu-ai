@@ -15,6 +15,7 @@ import (
 
 	"github.com/mmungdong/crwu-ai/internal/integrations/h3yun"
 	"github.com/mmungdong/crwu-ai/internal/platform/h3yuncreds"
+	"github.com/mmungdong/crwu-ai/internal/platform/scanlogin"
 )
 
 // Session aliases the stored credential type.
@@ -56,6 +57,9 @@ type Service struct {
 	NewClient ClientFactory
 	Now       func() time.Time
 	BaseURL   string
+	// Capturer captures a fresh employee web session via the local browser.
+	// Set by EnvService; nil disables `session login`.
+	Capturer func(ctx context.Context) (string, error)
 }
 
 // EnvService wires a Service from environment configuration (base URL from
@@ -65,11 +69,28 @@ func EnvService(getenv func(string) string) *Service {
 	if getenv != nil {
 		baseURL = strings.TrimSpace(getenv("H3YUN_BASE_URL"))
 	}
+	browser := ""
+	if getenv != nil {
+		browser = strings.TrimSpace(getenv("CRWU_BROWSER"))
+	}
 	return &Service{
 		Store:     h3yuncreds.NewStore(),
 		NewClient: RealClientFactory(baseURL),
 		BaseURL:   baseURL,
+		Capturer: func(ctx context.Context) (string, error) {
+			return scanlogin.Capture(ctx, scanlogin.Config{BrowserPath: browser})
+		},
 	}
+}
+
+func accountTypeString(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprintf("%v", value)
 }
 
 func (s *Service) now() time.Time {
@@ -116,7 +137,7 @@ func (s *Service) Bind(ctx context.Context, rawToken string) (Session, error) {
 		EngineCode:  claims.EngineCode,
 		ShardKey:    claims.ShardKey,
 		UserID:      claims.UserID,
-		AccountType: claims.AccountType,
+		AccountType: accountTypeString(claims.AccountType),
 		Token:       token,
 		ExpiresAt:   claims.ExpiresAt,
 	}
@@ -425,6 +446,31 @@ func uniquePath(dir, name string, used map[string]bool) string {
 	}
 }
 
+// Login captures a fresh employee session through the local browser (QR scan)
+// Login captures a fresh employee session through the local browser (QR scan)
+// and binds it. The session token is captured in-process and never printed.
+func (s *Service) Login(ctx context.Context, onStatus func(string)) (Session, error) {
+	if s.Capturer == nil {
+		return Session{}, errors.New("interactive browser login is unavailable")
+	}
+	if onStatus != nil {
+		onStatus("正在打开浏览器窗口，请用钉钉扫码登录氚云（无需密码）…")
+	}
+	token, err := s.Capturer(ctx)
+	if err != nil {
+		return Session{}, err
+	}
+	session, err := s.Bind(ctx, token)
+	if err != nil {
+		return Session{}, err
+	}
+	if onStatus != nil {
+		onStatus("会话已获取并写入本机凭据存储（令牌未显示、未外传）。")
+	}
+	return session, nil
+}
+
+// WhoAmI returns the session user payload.
 // WhoAmI returns the session user payload.
 func (s *Service) WhoAmI(ctx context.Context) (json.RawMessage, error) {
 	client, _, err := s.client(ctx)
