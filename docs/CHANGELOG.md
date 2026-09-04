@@ -43,6 +43,17 @@
 
 ---
 
+## 2026-09-03 · feat · 会话惰性自动续期（中间件）
+
+- 影响命令：apps/forms/records/files 等依赖网页会话的读命令
+- 说明：h3yun 组 PersistentPreRunE 中间件在执行前检查会话剩余时间 ≤24h 则自动
+  refresh 一次；已过期则提示重新 `crwu h3yun session login`。session 管理命令与
+  agent 通道（ping/tools/apps search/records query）跳过
+- 相关：`internal/transport/cli/middleware.go`（CLI 中间件）、
+  `internal/app/h3yunweb/renewal.go`（EnsureFresh）
+
+---
+
 ## 2026-09-03 · refactor · 用 cobra 重写 CLI（docker/k8s 规范）
 
 - 影响命令：全部（结构不变，命令路径/flag 保持一致）

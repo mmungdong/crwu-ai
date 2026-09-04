@@ -129,10 +129,17 @@ func (f *fakeOps) Call(_ context.Context, tool string, arguments map[string]any)
 }
 
 type fakeWeb struct {
-	session h3yunweb.Session
-	err     error
-	apps    json.RawMessage
-	lastKw  string
+	session   h3yunweb.Session
+	err       error
+	apps      json.RawMessage
+	lastKw    string
+	ensureErr error
+	renewals  int
+}
+
+func (f *fakeWeb) EnsureFresh(context.Context) error {
+	f.renewals++
+	return f.ensureErr
 }
 
 func (f *fakeWeb) Login(_ context.Context, onStatus func(string)) (h3yunweb.Session, error) {

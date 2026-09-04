@@ -447,6 +447,7 @@ func uniquePath(dir, name string, used map[string]bool) string {
 }
 
 // Login captures a fresh employee session through the local browser (QR scan)
+// Login captures a fresh employee session through the local browser (QR scan)
 // and binds it. The session token is captured in-process and never printed.
 func (s *Service) Login(ctx context.Context, onStatus func(string)) (Session, error) {
 	if s.Capturer == nil {

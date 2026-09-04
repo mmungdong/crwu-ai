@@ -57,6 +57,7 @@ type fakeClient struct {
 	forms    json.RawMessage
 	records  json.RawMessage
 	record   json.RawMessage
+	refresh  string
 }
 
 func (f *fakeClient) UserInfo(context.Context) (json.RawMessage, error) {
@@ -81,7 +82,12 @@ func (f *fakeClient) GetRecord(context.Context, string, string) (json.RawMessage
 func (f *fakeClient) DownloadAttachment(context.Context, string) ([]byte, string, error) {
 	return []byte("PK file"), "application/test", nil
 }
-func (f *fakeClient) Refresh(context.Context) (string, error) { return "fresh", nil }
+func (f *fakeClient) Refresh(context.Context) (string, error) {
+	if f.refresh == "" {
+		return "fresh", nil
+	}
+	return f.refresh, nil
+}
 
 func testService(store *fakeStore, client *fakeClient) *Service {
 	return &Service{

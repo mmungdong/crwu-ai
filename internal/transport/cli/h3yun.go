@@ -23,6 +23,7 @@ type H3YunOpsService interface {
 
 // H3YunWebService is the web-session (employee scope) capability.
 type H3YunWebService interface {
+	EnsureFresh(ctx context.Context) error
 	Login(ctx context.Context, onStatus func(string)) (h3yunweb.Session, error)
 	Bind(ctx context.Context, token string) (h3yunweb.Session, error)
 	Status(ctx context.Context) (h3yunweb.Session, error)
@@ -87,6 +88,7 @@ func newH3YunCommand(deps Dependencies, examples map[string][]schemeExample) *co
 	h3yun.AddCommand(newRecordsCommand(deps, examples))
 	h3yun.AddCommand(newFilesCommand(deps.H3YunWeb, examples))
 	h3yun.AddCommand(newFileCommand(deps.H3YunWeb, examples))
+	h3yun.PersistentPreRunE = sessionRenewalMiddleware(deps.H3YunWeb)
 	return h3yun
 }
 
@@ -103,18 +105,13 @@ func buildLeaf(use, short, long, example string, examples map[string][]schemeExa
 	if flags != nil {
 		flags(command)
 	}
-	// UseLine() needs a parent for the full path; register a best-effort usage.
 	addExamples(examples, path, short, firstExampleLine(example))
 	return command
 }
 
 func firstExampleLine(example string) string {
 	trimmed := strings.TrimSpace(example)
-	if trimmed == "" {
-		return "crwu " + strings.TrimSpace(strings.ReplaceAll(example, "  crwu ", "crwu "))
-	}
-	lines := strings.Split(trimmed, "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(trimmed, "\n") {
 		candidate := strings.TrimSpace(line)
 		if strings.HasPrefix(candidate, "crwu ") {
 			return candidate
