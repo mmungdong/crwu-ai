@@ -13,6 +13,30 @@
 
 ---
 
+## 2026-09-07 · docs · crwu-audit：references/00 §6.1 脏数据剔除改「重建法」+ 坐标系规则（BG8583 实操反哺）
+
+- 影响：`skills/crwu-audit/references/00-route-profile-schema.md` §6.1、`skills/crwu-audit-datacheck/SKILL.md`、`skills/crwu-audit-datacheck/references/00-KB装配表.md`（源仓与 ~/.dsh/skills 双份同步）
+- 说明：openpyxl delete_rows/delete_cols 不重映射/不清除 row_dimensions/column_dimensions → 删除法剔除隐藏内容会残留（BG8583 首版 VERIFY_FAIL 残留 40 处）；固化「重建法」（只复制可见 sheet×可见行×可见列，重开文件核残留=0）并禁止删除法；重建后工作版行列坐标整体收缩而公式串保留 raw 坐标 → 公式/引用/合计范围类勾稽一律回 raw 原件坐标、只取可见单元格判断，数据隔离增加「raw 只读可见区」唯一例外（datacheck C1/C3）
+- 未新增/修改 crwu CLI 命令
+
+---
+
+## 2026-09-07 · docs · crwu-audit-realestate-rent：清单逐条裁定表 + 校准点反查硬约束（执行 OPT-2026-09-07-01）
+
+- 影响：`skills/crwu-audit-realestate-rent/SKILL.md`、`skills/crwu-audit/references/99-维护说明.md`、`skills/crwu-audit-optimize/references/00-优化规范与文件落点.md`、KB `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核.md`（技能三处同步：源仓 / .skills-manager（=`~/.dsh` 软链目标）/ .workbuddy 实际生效）
+- 说明：BG8583 复盘——初版命中 CHK-MKT-001~014 仅 12 条被引用、无一显式裁定 → 漏 DC-013/EXP-008 两条高严重度缺陷。固化：命中清单**逐条裁定表（强制产物）**，未命中缺陷条目也必须留"符合+证据"痕；执行纪律改"命中才出意见、每条必出裁定"；校准点（B4/B8/B9/B11…）反查对应 CHK 为硬约束；技能同步目标更正为三处（~/.dsh 是软链、~/.workbuddy 实际生效）；KB CHK-008/013 补典型缺陷（BG8583 实案）。§6.1 重建法/坐标基准项已于同日先行落地（另条登记）
+- 未新增/修改 crwu CLI 命令
+
+---
+
+## 2026-09-07 · docs · crwu-audit：route_profile 增 scenario 装配键（评估目的×方法双键装配，执行 OPT-2026-09-07-02 第 1-3 项）
+
+- 影响：`skills/crwu-audit/references/00-route-profile-schema.md`（v0.3，§3 增 scenario 必填装配键＋装配纪律）、`skills/crwu-audit/references/01-audit-angles-catalog.md`（v0.2，词表增「KB scenario 装配键」列）、`skills/crwu-audit-realestate-rent/SKILL.md`（双键装配句＋profile 必填键＋场景排除回查纪律）——源仓与运行时同步
+- 说明：装配此前退化为方法键（kb_tool dims_hit 缺键=不过滤、场景筛选静默失效），目的相关检查装载不可见。本次固化：画像必须产出 scenario（受控取值只填已覆盖行=经营性物业出租，其余待能力落地补，禁止造值）；叶子缺键先补画像；scenario 排除须回路由层核画像。第 4 项（kb_tool assemble 缺键提示）**用户驳回，不做**
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-04 · docs · crwu-audit-datacheck：跨方向表格勾稽能力 + 叶子必做步骤
 
 - 影响：skills 新增 `crwu-audit-datacheck`（L2 能力型：C1–C6 数据/表格勾稽、差异清单输出、
