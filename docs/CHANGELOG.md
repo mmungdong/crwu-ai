@@ -210,3 +210,11 @@
   `docs/design-crwu-audit-skills.md`（§1 编排纪律）；同步 `~/.dsh/skills`（realestate/datacheck/router）
 - 说明：防止 Agent 绕过总路由直接调单个子技能导致报告不完整、口径漂移；datacheck 保留“用户明确只要数据核对差异清单”的独立执行例外（仅输出差异清单、不下判断）
 - 未新增/修改 crwu CLI 命令
+
+## 2026-09-07 · skills · crwu-audit 路由首判：机构 A/B/C 业务风险分类(references/03)
+- 影响：新增 `skills/crwu-audit/references/03-业务风险分类判定.md`；`SKILL.md`（§0 列表/§2 分发第 2 步首判/§5 纪律区分两类 ABC）；
+  `references/00`（route_profile.business_risk_class）；`references/02`（原则口径）；`references/99`（分层地图）；README/design
+- 说明：A/B/C 分类=审核严谨度参考与首页标注（制度 A1–A15/B1–B13/C1–C7 条款→谓词映射；A 先查取最高档、hits 列全；
+  金额<500万条款缺金额挂起；A13/A14/A15 与涉密为人工项）；**不裁剪审核角度**——agent 一律全面审核，最终通过由人工复核；
+  氚云风险等级字段 F0000020/级次/状态仅作对照不参与判定
+- 未新增/修改 crwu CLI 命令
