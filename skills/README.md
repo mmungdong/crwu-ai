@@ -23,7 +23,7 @@
 三层模型：`crwu-audit`（L0 总路由：统一维护全部能力 skill 路由）→ L1 大方向技能（命中即按该方向
 通用审核逻辑执行）→ L2 细分能力（挂在父大方向下可插拔；细分未命中降级父级大方向通用逻辑）。
 设计、能力树与路由表见 [`docs/design-crwu-audit-skills.md`](../docs/design-crwu-audit-skills.md)。
-规则/清单单一事实源在 crwu-knowledge（`/Users/mungdong/code/github/mungdong/crwu-knowledge`），
+总路由 `crwu-audit` 入口与知识库仓库解耦（不预读知识库入口文档/路径）；**叶子技能执行期按规则编号只读引用 crwu-knowledge 规则正文（收益法等细则不进技能，不复制正文）**。
 叶子技能只读引用、不复制规则正文。新增能力需在 crwu-audit 路由注册表 + 设计文档 §4 + 本表三处登记。
 
 
@@ -33,4 +33,4 @@
 - 画像层升级与注册表状态：enterprise-value / equipment / advisory / 财务报告专项 → **P1**；
   债权-金融不良 → P2；复核报告 → 待定；mining → P2。
 - 数据基线：氚云「报告审核」8,486 条（2026-09-07 快照），词表体量列与覆盖层判定即源于此；
-  复跑脚本 `pull_全量画像.py`（基线入库 crwu-knowledge 统计层前以工作区版本为准）。
+  复跑脚本 `pull_全量画像.py`（基线/统计由部署方维护，技能不持有）。
