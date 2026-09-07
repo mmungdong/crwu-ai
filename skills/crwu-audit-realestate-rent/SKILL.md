@@ -40,7 +40,7 @@ description: >-
 
 1. **知识库门禁（决定试点/正式模式）**
    - 先读 `KB/00-治理与规范/知识库大纲与进度总表.md`（更新/查询前必读）与
-     `KB/00-治理与规范/待人工发布清单-不动产方向-2026-09.md`（KB=`/Users/mungdong/code/github/mungdong/crwu-knowledge`）。
+     `KB/00-治理与规范/待人工发布清单-不动产方向-2026-09.md`（KB=`/Users/mungdong/.crwu/knowledge`）。
    - 若本技能依赖的规则（RULE-01-02-281~305、543~578 等）与清单（CHK-MKT/CST）仍为
      "A 待发布"（未回填 curated_by/reviewed_on）→ **试点模式**：可执行全部检查流程，但每条
      规则性意见须标注 `[依据待发布]`，并先告知用户"正式审核需先完成 P0 人工发布"。
