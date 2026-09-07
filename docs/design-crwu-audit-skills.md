@@ -81,15 +81,16 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 
 ## 5. 总路由 crwu-audit 契约（已实现骨架）
 
-1. **输入**：待审材料包（目录约定见 crwu-knowledge `audit-skill/01-调度器-SKILL总纲.md`）
-   或氚云项目定位（报告审核记录）。
+1. **输入**：待审材料包（目录约定由部署环境注入；画像/调度契约=KB `00-总纲/执行契约/01-调度器-SKILL总纲.md`，
+   KB 根常量 CRWU_KB_ROOT=`~/.crwu/knowledge/knowledge-base`，定义见 skills/README）或氚云项目定位（报告审核记录）。
 2. **画像**：report_type → object_type → method 集合 → scenario → stage → purpose/base_date
    （无基准日留空）。画像来源标注"材料/推断（置信低）"。
 3. **分层路由**：L1 大方向匹配 →（可选）L2 细分匹配 → 未命中细分降级父大方向 → 未命中大方向
    降级通用兜底或如实说明（§1 语义 3）。
 4. **执行**：调用命中技能的 `SKILL.md` 全流程；router 自身不产出具体审核判断。
 5. **汇总输出**：意见按分区去重 + 路由路径 + 《适用规则集快照》+ 三段式依据引用 + 答复/流转
-   （schema 见 crwu-knowledge `audit-skill/06`）；防幻觉协议（`audit-skill/07`）禁止放宽。
+   （schema=KB `00-总纲/执行契约/02-输出Schema与审核意见单.md`；防幻觉=KB `00-总纲/执行契约/03-防幻觉协议执行细则.md`，
+   禁止放宽）；统计回填=KB `00-总纲/执行契约/04-审核统计与台账规范.md`。
 6. **门禁透传**：命中技能依赖的 RULE/清单未人工发布 → 试点模式（意见标注"[依据待发布]"），
    正式审核须发布后运行。
 
@@ -105,6 +106,8 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 
 - 新能力 = 在 §4 表 + crwu-audit 路由注册表 + skills README 三处登记后创建目录；
 - 公共逻辑只在大方向技能维护一份；细分能力只写自己的增量清单/关注点，禁止复制大方向正文；
+- 规则/覆盖/路径类优化统一经 `crwu-audit-optimize`（族维护元技能，不经路由）：先输出拟改文件方案、
+  用户确认后按 99 流程执行并跑 `tools/kb` 校验回归（validate error=0 / 装配两跑一致 / 试点回归不劣化）；
 - 变更/新增后按 crwu-ai `AGENTS.md` 在 `docs/CHANGELOG.md` 追加纪要。
 
 ## 8. 本期交付
@@ -115,5 +118,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] `skills/crwu-audit-realestate-rent/SKILL.md`（L2 商铺租金/经营性物业市值专项）
 - [x] `skills/crwu-audit-datacheck/SKILL.md`（L2 跨方向数据/表格勾稽，rent/realestate 表格必做步骤已挂接）
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
+- [x] `tools/kb/kb_tool.py`（2026-09-07）：只读索引 kb-index.jsonl + validate + assemble（装配清单=命中/排除/门禁，可复现）
+- [x] `skills/crwu-audit-optimize/`（2026-09-07）：族维护/优化入口（反馈→单子画像定位→分桶→拟改文件方案→用户确认→99 流程执行→kb_tool 校验回归；不经 crwu-audit 路由、不产审核判断）
 - [ ] references 试点回测：跨形态 8~10 条 + BG8169/300673 回归
 - [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/equipment/advisory/财务报告 等大方向

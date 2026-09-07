@@ -236,3 +236,47 @@
 - 说明：含隐藏脏数据的 raw 原件**只归编排层持有，任何子技能/模块一律不得读取**；叶子/下游只能用已删隐藏数据的工作版
   （传工作版路径）；校验工作版隐藏区=0，失败即阻断；发现子技能直读 raw/原件 → 记违规
 - 未新增/修改 crwu CLI 命令
+
+## 2026-09-07 · refactor · 技能族 KB 引用统一（CRWU_KB_ROOT）+ 只读索引/校验/装配工具 tools/kb
+- 影响：`skills/README.md`（KB 根常量定义）；`crwu-audit/SKILL.md`（契约引用切 KB/00-总纲/执行契约 02-04 文件名）；
+  `crwu-audit-realestate`、`crwu-audit-realestate-rent`、`crwu-audit-datacheck` 的 SKILL.md 与 references/00-KB装配表.md
+  （去个人绝对路径/旧树目录名/省略号引用，装配表改稳定指针表）；知识库治理与批次文档（KB 根 README、目录地图、入库规范、
+  调度总纲、待发布清单、进度总表、索引卡、台账模板等）旧目录名清理；KB 本体个人路径去标识
+- 说明：KB 根常量 CRWU_KB_ROOT=`~/.crwu/knowledge/knowledge-base`（`~/.crwu/knowledge` 仅为父目录，不作引用根）；
+  skills/README 不随技能安装——每个运行时文件自带根常量字面定义；rent/realestate 删除与 datacheck 重复的 C1–C6/工具链正文（指针化）
+- 新增 `tools/kb/kb_tool.py`（stdlib only；index/validate/resolve/query/release/assemble/extract/selftest；CRWU_KB_ROOT 可覆盖）+ README + examples；
+  索引产物 `KB/00-总纲/治理/kb-index.jsonl`（首行 _meta，勿手改）；validate：索引新鲜度/定义锚点编号唯一/发布字段/词表(warn)/引用路径存在性+旧树标记+省略号
+- 校验基线：repo skills 与 KB 本体 validate warn=0 error=0；租金·市场法示例装配=96 命中（全 pending→试点门禁）/81 排除（含原因）/其余按归因汇总，两跑 diff 为空（可复现）
+- 未新增/修改 crwu CLI 命令；KB 版本管理机制（git/manifest/发布批次改造）不在本次范围，随钉钉知识库打通另期设计
+
+## 2026-09-07 · feat · crwu-audit-optimize：族维护/优化入口（先方案后执行）
+- 影响：新增 `skills/crwu-audit-optimize/`（SKILL.md + references/00-优化规范与文件落点、01-反馈定位与画像流程、02-方案模板与确认门禁）；
+  登记：skills/README 表+族段落、crwu-audit references/99-维护说明（§1 新行 + §2 步骤 0 前置）、design §7/§8、CHANGELOG；同步 ~/.dsh/skills
+- 说明：元技能，不经 crwu-audit 路由、不产审核判断。用户反馈（规则/检查点问题、"缺 XX 文档对 XX 文档/某业务·对象审核"）→
+  按 references/01 定位单子画像（对象 02/业务路线 01/方法 03/监管 04）与缺口分桶 A–E → 输出《优化方案》
+  （拟改文件清单源仓+运行时双份、联动登记、kb_tool 校验回归步骤）→ **用户确认后才动文件** → 执行后按 references/00 §4 验收基线收口
+- 校验基线：repo skills validate error=0；新 SKILL.md 行数 <300
+- 未新增/修改 crwu CLI 命令；不处理：发布状态翻转、KB 版本管理、钉钉迁移、技能安装机制
+
+## 2026-09-07 · docs · crwu-audit-optimize：KB 变更同步义务三件套（索引/装配表/目录地图）
+- 影响：`skills/crwu-audit-optimize/SKILL.md`（铁律 3、§4 步骤 1/4）、references/00（新增 §2.1 同步义务判定表）、references/02（方案模板/核对清单补项）；
+  `crwu-audit-datacheck/references/00-KB装配表.md`（同步义务行）；同步 ~/.dsh/skills
+- 说明：凡 KB 内容/结构变更 → `kb_tool.py index` 同批重跑（必做）；新增/改名/移动文件或装配范围变化 →
+  另同步叶子 00-KB装配表.md 与 KB 00-总纲/目录地图.md；发布状态翻转（质控人工）后亦须重跑 index 才更新 release 列
+- 未新增/修改 crwu CLI 命令
+
+## 2026-09-07 · feat · crwu-audit：兜底自动产出《待建子技能提案》（references/04）
+- 影响：新增 `skills/crwu-audit/references/04-待建子技能提案.md`；`crwu-audit/SKILL.md`（frontmatter 描述、
+  §0 目录、步骤 7 兜底后自动产提案卡、步骤 10 汇总附路由路径/调用链）；`references/99-维护说明.md`（§1 新行）；
+  `skills/README.md`（总路由行）；`crwu-audit-optimize`（SKILL B 桶 + references/01 §4.1：提案卡=优化输入起点）；同步 ~/.dsh/skills
+- 说明：按"评估目的×评估方法×评估对象"路由后无可用子技能（🅿️/⏳/未登记组合）时，自动五查
+  （注册表/词表/库内依据/对象与业务路线目录/数据体量）推导《待建子技能提案》卡：候选技能名、定位职责、
+  需要审核什么（分区+可复用 CHK/RULE+待建清单起点）、内容缺口（待补精编）、前置登记、优先级——
+  附 kb_tool 证据（可复现），非审核结论；画像歧义不产提案；落地正式化走 crwu-audit-optimize（先方案后执行）
+- 未新增/修改 crwu CLI 命令
+
+## 2026-09-07 · feat · 输出契约：审核意见单新增《复核意见对照与溯源》块（契约 02 §5）
+- 影响：KB `00-总纲/执行契约/02-输出Schema与审核意见单.md`（v0.2，新增 §5：输入与适用/对照分类 A·已在复核意见提出→必须给出 出处文件+条目/页码+原文摘录、B·复核未提出（AI 新增发现）→单列建议人工复核、C·未对照/输出 json+md 格式/红线）；`crwu-audit/SKILL.md` 步骤 10（汇总时材料含人工复核意见则附对照表）；同步 ~/.dsh/skills
+- 说明：对照只回答"是否已提出、在哪提出"，不评判人工意见质量；复核意见中存在而本次未命中的事项只在附注提示；
+  出处只能来自真实读取的复核意见文件，材料缺失/不可读→整表"未对照"，禁止编造出处，也禁止以"未提出"替代
+- 未新增/修改 crwu CLI 命令
