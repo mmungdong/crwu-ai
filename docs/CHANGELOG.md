@@ -191,3 +191,8 @@
   （SUM 覆盖隐藏区时注明"仅核可见部分"）；输出忽略清单仅含元数据（数量/名单/段位）。无法判定隐藏
   状态 → 该区按跳过处理并列入"隐藏状态未知 · 已跳过"，禁止回头取值
 - 未新增/修改 crwu CLI 命令
+
+## 2026-09-07 · skills · crwu-audit 画像层升级：references 运行材料 + 维护说明
+- 影响：`skills/crwu-audit/SKILL.md`（重构为 ≤300 行入口；输入双源=材料包/氚云报告审核记录；分发算法升级：报告形态→受控角度词表→对象→方法(附件名+抽验)→监管覆盖层；注册表状态 P0/P1/P2）；新增 `skills/crwu-audit/references/{00-route-profile-schema,01-audit-angles-catalog,02-overlay-rules,99-维护说明}.md`；同步 `~/.dsh/skills/crwu-audit` 拷贝；README 与 `docs/design-crwu-audit-skills.md`（v0.2→v0.3）
+- 说明：分发运行材料从 docs/ 收敛到技能自身 references/（Agent 加载友好，SKILL.md 不超行数上限）；监管覆盖层仅保留 国资(F0000082)/证券(F0000127∪0188…)/司法(F0000126)/金融(F0000124)；ABC/级次/状态不参与路由；数据基线=报告审核 8,486 条（2026-09-07）
+- 未新增/修改 crwu CLI 命令

@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | [`h3yun-login`](h3yun-login/SKILL.md) | 提示型 | H3Yun 员工自助登录：自动开浏览器扫码绑定会话，令牌不进对话 |
 | [`h3yun-query`](h3yun-query/SKILL.md) | 提示型 | 交互式 H3Yun 查询：系统→表单→记录，20 条/页，支持标题关键词查找 |
-| [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**：维护全部 crwu-audit-* 路由注册表；画像→分层分发→细分未命中降级父大方向→汇总输出（自身不做审核判断） |
+| [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**（≤300 行入口 + `references/` 运行材料）：维护全部 crwu-audit-* 路由注册表；画像=报告形态→经济行为主线（受控角度词表）→对象→方法（附件名+抽验）→监管覆盖层（国资/证券/司法/金融）；字段画像先行、弱结构化名称兜底；细分未命中降级父大方向→汇总输出（自身不做审核判断）；改前先读 `references/99-维护说明.md` |
 | [`crwu-audit-realestate`](crwu-audit-realestate/SKILL.md) | 提示型 | 房地产（不动产/房产）**大方向**通用审核：对象层+披露通用+方法适用性，按 报告/说明/明细表 分区（RULE-01-02-543~578、281~305） |
 | [`crwu-audit-realestate-rent`](crwu-audit-realestate-rent/SKILL.md) | 提示型 | 房地产大方向下 **L2 细分**：商铺/办公/公寓等经营性物业·租金或市场价值评估报告，执行 CHK-MKT/CHK-CST 专项清单（含表格勾稽必做步骤） |
 | [`crwu-audit-datacheck`](crwu-audit-datacheck/SKILL.md) | 提示型 | 跨方向 **L2 数据/表格勾稽**（C1–C6）：测算/明细/汇总表合计与口径、公式错误、跨项目串扰词、占位残留 → 差异清单（含 xlsx/.xls 解析与公式重算工具链说明）。**H0：人工隐藏区（sheet/行/列/折叠组）强制跳过——禁读禁报，只审可见区** |
@@ -25,3 +25,12 @@
 设计、能力树与路由表见 [`docs/design-crwu-audit-skills.md`](../docs/design-crwu-audit-skills.md)。
 规则/清单单一事实源在 crwu-knowledge（`/Users/mungdong/code/github/mungdong/crwu-knowledge`），
 叶子技能只读引用、不复制规则正文。新增能力需在 crwu-audit 路由注册表 + 设计文档 §4 + 本表三处登记。
+
+
+## V2.1 增补（2026-09-07）
+- `crwu-audit` 目录 = 精简入口 `SKILL.md`（≤300 行）+ `references/` 四件运行材料
+  （00 画像 schema / 01 受控角度词表 / 02 覆盖层判定 / 99 维护说明）；运行材料随技能加载，不再放 docs/。
+- 画像层升级与注册表状态：enterprise-value / equipment / advisory / 财务报告专项 → **P1**；
+  债权-金融不良 → P2；复核报告 → 待定；mining → P2。
+- 数据基线：氚云「报告审核」8,486 条（2026-09-07 快照），词表体量列与覆盖层判定即源于此；
+  复跑脚本 `pull_全量画像.py`（基线入库 crwu-knowledge 统计层前以工作区版本为准）。

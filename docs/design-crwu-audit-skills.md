@@ -1,6 +1,6 @@
 # crwu-audit 技能族设计（分层可插拔路由 v0.2）
 
-| 版本 | v0.2（分层路由模型） | 日期 | 2026-09-04 | 状态 | 已实现：总路由 crwu-audit + 房地产大方向 crwu-audit-realestate + 细分 crwu-audit-realestate-rent |
+| 版本 | v0.3（画像层契约：references 运行材料） | 日期 | 2026-09-07 | 状态 | 已实现：总路由 crwu-audit（references 四件）+ realestate + realestate-rent + datacheck；P0/P1/P2 按 8,486 条基线调整 |
 | --- | --- | --- | --- | --- |
 | 关联知识库 | crwu-knowledge（/Users/mungdong/code/github/mungdong/crwu-knowledge，规则/清单/治理唯一事实源） | | | |
 
@@ -47,8 +47,9 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - 新增任何能力（大方向或细分）必须：① 在 `skills/crwu-audit/SKILL.md` 路由注册表登记；② 在
   本文件 §4 树中登记；③ `skills/README.md` 注册；④ 命名/边界经质控确认。
 - 所有 crwu-audit-* 只读引用 crwu-knowledge 规则/清单（不同仓库，禁止复制规则正文）。
+- v0.3：`crwu-audit` 入口精简（≤300 行）+ `references/` 运行材料（00 schema/01 角度词表/02 覆盖层/99 维护说明）；**改前先读 99**；分发运行材料不再放 docs/（docs 只放族设计与变更记录）。
 
-## 4. 能力树与路由注册表（v0.2 现状）
+## 4. 能力树与路由注册表（v0.3 现状）
 
 | 层级 | 技能（skill 名） | 画像命中判据 | 知识库支撑 | 状态 |
 | --- | --- | --- | --- | --- |
@@ -56,11 +57,14 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 | L1 | crwu-audit-realestate | 评估报告 × 不动产（房产/商铺/办公/公寓/厂房等，通用不动产逻辑） | 不动产 36 + 评估方法 25 + 报告准则通用披露（A 待发布） | ✅ |
 | L2 | crwu-audit-realestate-rent | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值，市场法租金比较/收益法租约/成本法） | + CHK-MKT-001~014 / CHK-CST-001~012 + 案例 B | ✅ |
 | L2 能力 | crwu-audit-datacheck | 跨方向 · 材料含测算/明细/汇总表（任何对象） | M-数据校对口径：C1–C6 差异清单（**仅可见区**；H0：人工隐藏区 sheet/行/列/折叠组 强制跳过、禁读禁报） | ✅ v0.1 |
-| L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值 | 企业价值 50（A 待发布） | 🅿️ |
+| L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值（股权/产权转让、股东变动、收购并购、增资主线） | 企业价值 50（A 待发布） | 🅿️ P1 |
 | L1 | crwu-audit-intangible | 评估报告 × 无形资产 | 知识产权 42；无形资产总纲待精编 | 🅿️ |
-| L1 | crwu-audit-equipment | 评估报告 × 机器设备等单项资产 | 空白（先补 L2+精编） | 🅿️ |
-| L1 | crwu-audit-mining | 评估报告 × 矿业权 | 空白（另取矿业权准则原文） | 🅿️ |
-| L1 | crwu-audit-advisory | 咨询/估值文书（参照口径大方向） | 知识产权 42 参照 + 案例 A | 🅿️ |
+| L1 | crwu-audit-equipment | 评估报告 × 设备/存货等单项资产（含报废残值处置） | 空白（先补 L2+精编）；基线第二大对象 1,882 | 🅿️ P1 |
+| L1 | crwu-audit-mining | 评估报告 × 矿业权（采矿权 73/探矿权 13） | 空白（另取矿业权准则原文） | 🅿️ P2 |
+| L1 | crwu-audit-advisory | 咨询/估值文书（参照口径大方向，咨询+估值基线 1,482） | 知识产权 42 参照 + 案例 A | 🅿️ P1 |
+| L1 | 财务报告专项（减值 BR05 / 公允 BR04，含资产组/商誉） | 评估报告 × 财务报告目的（减值测试 523 / 公允价值计量 600） | 待精编 | 🅿️ P1 |
+| L2 | 债权/金融不良 | 咨询或评估 × 债权类对象 / 金融不良 | 待建 | 🅿️ P2 |
+| L2 | 复核报告 | 复核既有评估报告结论是否成立（评估 47 + 咨询 45） | 待建 | ⏳ 待定 |
 | L2 示例 | realestate-asset / 军产·国资法规专项 / 收益法专项 / 数据校对能力 | 见 §4 树注释 | 视内容而定 | 🅿️ |
 
 > 细分能力插拔示例（用户口径）：房地产大方向下可挂"对某具体法律/监管口径的审核能力"
@@ -102,4 +106,6 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] `skills/crwu-audit-realestate/SKILL.md`（L1 房地产大方向通用审核逻辑）
 - [x] `skills/crwu-audit-realestate-rent/SKILL.md`（L2 商铺租金/经营性物业市值专项）
 - [x] `skills/crwu-audit-datacheck/SKILL.md`（L2 跨方向数据/表格勾稽，rent/realestate 表格必做步骤已挂接）
-- [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/intangible 等大方向
+- [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
+- [ ] references 试点回测：跨形态 8~10 条 + BG8169/300673 回归
+- [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/equipment/advisory/财务报告 等大方向
