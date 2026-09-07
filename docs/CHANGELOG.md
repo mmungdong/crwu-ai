@@ -202,3 +202,11 @@
 - 说明：**入口/路由层**（crwu-audit）不再“先读 KB/00-治理与规范…门禁”、不引用 crwu-knowledge 绝对路径（分发材料自含于 references/）；
   **叶子技能保持原状**——执行期按规则编号只读引用 crwu-knowledge 规则正文（收益法等细则不塞进技能、不复制正文），避免两个仓库过度耦合
 - 未新增/修改 crwu CLI 命令
+
+## 2026-09-07 · skills · 叶子技能统一加“仅经 crwu-audit 编排调用”前置门禁
+- 影响：`skills/crwu-audit-realestate/SKILL.md`、`skills/crwu-audit-realestate-rent/SKILL.md`、
+  `skills/crwu-audit-datacheck/SKILL.md`（新增“⚠️ 调用前置条件”+ frontmatter 描述约束）；
+  `skills/crwu-audit/SKILL.md`（纪律：唯一编排入口）；`references/99-维护说明.md`（红线：新叶子必须自带门禁）；
+  `docs/design-crwu-audit-skills.md`（§1 编排纪律）；同步 `~/.dsh/skills`（realestate/datacheck/router）
+- 说明：防止 Agent 绕过总路由直接调单个子技能导致报告不完整、口径漂移；datacheck 保留“用户明确只要数据核对差异清单”的独立执行例外（仅输出差异清单、不下判断）
+- 未新增/修改 crwu CLI 命令
