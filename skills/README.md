@@ -36,7 +36,7 @@
 - 缓存语义（用户口径）：**目录可缓存、正文不缓存**——目录缓存只存结构与 nodeId/全路径索引，正文每次实时从钉钉导出（本次下载物只属本次审核），保证"员工钉钉更新 → AI 取到的正文永远最新"。
 - 缓存名一致性（v0.3.1/D12）：缓存目录身份 = `.cache-meta.space`（name+workspaceId）；缓存库名与目标不一致（改名/换库/历史残留）→ **先清理缓存目录、再在线重下目标库目录结构**（防跨库误命中；见 SKILL.md §5.0 与 design §10）。
 - 口径：案例 `knowledge/`（本次下载物）= 本次审核**实时参考**；`CRWU_KB_ROOT` = 仅维护/发布登记/离线归档（不冒充实时）；目录缓存 = 查找加速（无正文）；audit 族实时引用协议见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）。
-- 设计/决策点与改动纪律见 [`docs/design-crwu-dws.md`](../docs/design-crwu-dws.md)；源仓与运行时真身 `~/.skills-manager/skills`（`~/.dsh`/`~/.workbuddy` 软链）双份同步。
+- 设计/决策点与改动纪律见 [`docs/design-crwu-dws.md`](../docs/design-crwu-dws.md)；改动只落源仓，运行时部署由用户 skills 管理机制负责（不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）。
 
 ## V2.1 增补（2026-09-07）
 - `crwu-audit` 目录 = 精简入口 `SKILL.md`（≤300 行）+ `references/` 四件运行材料

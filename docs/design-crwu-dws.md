@@ -62,7 +62,7 @@
 
 ## 5. 架构与依赖
 
-- **形态**：提示型 Skill：`skills/crwu-dws/SKILL.md` + `references/`（00 快照 schema / 01 镜像 manifest / **02 缓存与兜底查找规范**）；无新依赖、不进 crwu Go 构建；源仓 → 运行时 `~/.dsh/skills/crwu-dws` 双份同步。
+- **形态**：提示型 Skill：`skills/crwu-dws/SKILL.md` + `references/`（00 快照 schema / 01 镜像 manifest / **02 缓存与兜底查找规范**）；无新依赖、不进 crwu Go 构建；源仓提交即交付，运行时部署由用户 skills 管理机制负责。
 - **依赖**：`dws` CLI（≥0.2.14，宿主注入）；命令语义权威 = `dingtalk-wiki`（目录/节点）+ `dingtalk-doc`（正文导出 `+export --export-format markdown`，回执 `localPath`+`sizeBytes>0` 即终态）；错误走 `dingtalk-shared`。
 - **缓存位置**：`~/.crwu/knowledge/dws-dir-cache/<库名>/`——**与 CRWU_KB_ROOT（=knowledge-base 子树）同级隔离**，kb_tool 不扫描、技能引用不指向此处（它是缓存不是事实源；事实源=钉钉）。
 - **上下游**：上游=钉钉知识库（员工维护）；下游=①案例目录（M2）②目录缓存（M1/M3）③消费缓存的各类 skill（crwu-audit 族等，联动见 §8）。
@@ -124,7 +124,7 @@
 1. `skills/crwu-dws/SKILL.md` + `references/00/01/02` 全部按 v0.3 落盘；
 2. `skills/README.md` 总表行 + 独立段落更新（M3/缓存语义）；
 3. `docs/CHANGELOG.md` 追加 v0.3 纪要；
-4. 运行时 `~/.dsh/skills/crwu-dws` 双份同步（diff -r 为空）；
+4. 运行时部署/校验交由用户 skills 管理机制执行（本侧不直接写运行时目录）；
 5. 提交 main（`v0.1.0` 基线之上；本版不新增 crwu CLI 命令）；
 6. 验收 T1–T12 需注入 `dws` 环境执行（本机 shell PATH 无 dws，验证方式在 changelog 记录）。
 

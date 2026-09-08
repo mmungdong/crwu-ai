@@ -26,7 +26,7 @@ metadata:
 - `references/00-目录快照schema.md` —— 快照 schema / 字段语义 / 渲染规则（M1/M2/M3 共用）
 - `references/01-镜像与manifest规范.md` —— M2-A 按清单实时下载 / M2-B 全量镜像布局与 manifest / 幂等与残留语义
 - `references/02-缓存与兜底查找规范.md` —— 缓存身份与名一致性清理 / 目录缓存布局 / node-index（含全路径键）/ M3 路径·查找与刷新协议 / 正文不落缓存红线
-- 改前必读 `docs/design-crwu-dws.md`（§10 决策点 D8–D12）；改动按仓库纪律源仓+运行时 `~/.dsh/skills` 双份同步（diff -r 为空）
+- 改前必读 `docs/design-crwu-dws.md`（§10 决策点 D8–D12）；改动只落源仓并提交，运行时部署由用户 skills 管理机制负责（不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）
 
 ## 1. 触发与模式消歧
 

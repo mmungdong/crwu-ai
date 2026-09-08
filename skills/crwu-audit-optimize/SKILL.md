@@ -32,9 +32,9 @@ description: >-
    禁止"边查边改"、禁止把方案与执行混在同一轮。
 2. 本技能不产审核判断、不翻转发布状态、不复制规则正文进技能（规则正文只在钉钉知识库——即 crwu-dws 实时下载源；
    技能内只写 RULE/CHK 编号 + 库内层级路径寻址键）。
-3. 改动只落在 references/00 §2 分层地图对应的**唯一落点文件**；源仓与运行时真身双份同步
-   （运行时真身 = `~/.skills-manager/skills/`，`~/.dsh/skills` 与 `~/.workbuddy/skills` 为其软链视图，
-   三处视图一致；`diff -r` 为空才算同步）；登记 design/README/CHANGELOG（99 流程）。**涉及知识库的变更
+3. 改动只落在 references/00 §2 分层地图对应的**唯一落点文件**并提交源仓；运行时部署由用户 skills
+   管理机制负责（维护者/agent 不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）；
+   登记 design/README/CHANGELOG（99 流程）。**涉及知识库的变更
    必须同批完成"索引/装配表/目录地图"三件套同步**（判定见 references/00 §2.1）：`kb_tool.py index` 重跑为必做，
    装配表与目录地图按变更类型判定——禁止留下"知识库已改、索引没刷 / 文件已动、指针没跟"的中间态。
 4. 引用协议（与 crwu-audit 族实时引用协议一致，见 design-audit-live-kb-protocol §2 R1–R5）：技能正文引用
@@ -87,8 +87,7 @@ description: >-
 1. 按 references/00 §2 顺序改文件（先落点文件、后引用它的上层文件）；涉及知识库变更时按 §2.1
    同步义务执行（新增/改名/移动知识库文件或调整装配范围 → 同步叶子 `references/00-KB装配表.md` 与
    知识库 `00-总纲/目录地图.md`；任何知识库 md 内容变更 → 同批重跑 `kb_tool.py index`）；
-2. 同步运行时真身（`~/.skills-manager/skills/`；`~/.dsh/skills` 与 `~/.workbuddy/skills` 为其软链视图），
-   源仓与真身 `diff -r` 为空、三处视图一致才算同步；
+2. 源仓提交；运行时部署/校验由用户 skills 管理机制执行（本侧不直接写运行时目录）；
 3. 登记：design §4/§7 + `skills/README.md` + `docs/CHANGELOG.md`（99 流程；改词表另提示复跑画像基线）；
    涉及知识库规则文件的改动同步更新批次 README/进度总表对应行；
 4. 校验回归（**全过才算完成**）：
