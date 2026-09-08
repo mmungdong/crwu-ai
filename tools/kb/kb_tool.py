@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """crwu 知识库工具（kb_tool）v0.1 —— 只读索引 / 自动校验 / 装配清单
 
-目标：让"技能按编号引用规则 → 命中文件+行号区间+发布状态"全链路可机器校验、可复现；
+目标：让"技能按编号引用规则 → 命中文件+行号区间+状态标注"全链路可机器校验、可复现；
 不引入向量库，不修改知识库内容（索引产物除外）。
 
 约定
@@ -11,6 +11,8 @@
 - 索引产物：<KB>/00-总纲/治理/kb-index.jsonl（首行为 _meta 记录；勿手改，重跑 index 刷新）
 - 锚点：md 中以 `### RULE-xxx` / `### CHK-xxx` 开头的标题行 = 一条条目的定义行（唯一性以此为准）
 - release 状态：confidence 含"已发布"→published；含"待发布"或等于 A → pending；否则 raw
+  （**2026-09-08 起仅信息口径，不作门禁/试点依据**——知识库文档即权威：装配命中文件经 crwu-dws
+  实时下载后下载即审，无"人工待发布/试点"判定）
 - 装配匹配语义（deterministic）：候选 = modules 命中或 dims 键命中；
   命中 = 候选且 object_type/method/scenario 任一给定键全部不冲突（空数组=通用=全匹配；
   stage 不作硬过滤，只展示，由叶子按材料分区判）；排除=候选内未命中者+原因。
@@ -153,7 +155,7 @@ def parse_file(path: str, rel: str):
         elif cur is not None and HEADING_RE.match(line):
             close(idx - 1, idx)
     close(len(lines), len(lines) + 1)
-    # 条目无 confidence 时回填文件头门禁（清单/批次文件头"待发布/A 内容核验"即该文件全部条目状态）
+    # 条目无 confidence 时回填文件头状态标注（信息口径；不作门禁/试点判定）
     head = "\n".join(lines[:16])
     if "待发布" in head or "待人工发布" in head:
         for e in entries:
@@ -514,11 +516,6 @@ def cmd_validate(args):
         for d in meta["duplicate_ids"]:
             errors.append(f"编号重复（定义锚点）：{d['id']} {d['files']}")
     if entries:
-        for e in entries:
-            if e["release"] == "published":
-                f = e.get("fields") or {}
-                if not (f.get("curated_by") or "").strip() and not (f.get("reviewed_on") or "").strip():
-                    errors.append(f"已发布条目缺 curated_by/reviewed_on：{e['id']} @ {e['file']}:{e['start']}")
         if not getattr(args, "no_vocab", False):
             warns += vocab_problems(entries, vocab_tokens(root))
     if args.skill_root:
@@ -594,7 +591,7 @@ def cmd_release(args):
     for e in entries:
         key = (e["type"], e["release"])
         stat[key] = stat.get(key, 0) + 1
-    print("== release 状态 ==")
+    print("== release 状态标注（信息口径；无门禁语义） ==")
     for (t, r), n in sorted(stat.items()):
         print(f"  {t:5s} {r:9s} {n}")
     if args.list:
@@ -628,14 +625,11 @@ def cmd_assemble(args):
     lines.append(f"- 生成于：{datetime.datetime.now().astimezone().isoformat(timespec='seconds')}")
     lines.append(f"- 索引：{meta.get('generated_at', '?')}（kb_root={meta.get('kb_root')}）")
     lines.append(f"- profile：`{json.dumps(profile, ensure_ascii=False)}`")
-    pend = [e for e in hits if e["release"] != "published"]
-    pub = len(hits) - len(pend)
     lines.append("")
-    lines.append("## 1 发布门禁")
-    lines.append(f"- 命中 {len(hits)} 条：published {pub} / pending {len(pend)}")
-    if pend:
-        ids = "、".join(e["id"] for e in pend[:80])
-        lines.append(f"- ⚠️ 命中含 {len(pend)} 条待发布依据 → **试点模式**（意见标 `[依据待发布]`）：{ids}{' …' if len(pend) > 80 else ''}")
+    lines.append("## 1 装配说明")
+    lines.append("- 无发布门禁（口径 2026-09-08）：知识库文档即权威——命中文件按库内层级路径经 crwu-dws")
+    lines.append("  实时下载后**下载即审**（出处=本次下载文件:行号+exportedAt）；release 仅信息标注。")
+    lines.append("  本清单只保证命中面不漏、可复现。")
     lines.append("")
     lines.append("## 2 命中清单")
     lines.append("")
@@ -726,7 +720,7 @@ def main():
     p_index = sub.add_parser("index", help="从 md 生成/刷新 kb-index.jsonl")
     p_index.set_defaults(fn=cmd_index)
 
-    p_v = sub.add_parser("validate", help="索引新鲜度/编号唯一/发布字段/词表/技能引用路径校验/实时协议 lint")
+    p_v = sub.add_parser("validate", help="索引新鲜度/编号唯一/词表/技能引用路径校验/实时协议 lint")
     p_v.add_argument("--skill-root", action="append", help="额外扫描的引用目录（如 crwu-ai/skills），可多次")
     p_v.add_argument("--no-vocab", action="store_true", help="跳过词表 warn 检查")
     p_v.add_argument("--forbid-literal", action="append", default=[], metavar="字面",
@@ -744,11 +738,11 @@ def main():
     p_q.add_argument("--dims-key", dest="dims_key", action="append", default=[], metavar="key=value")
     p_q.set_defaults(fn=cmd_query)
 
-    p_rel = sub.add_parser("release", help="发布状态汇总")
+    p_rel = sub.add_parser("release", help="状态标注汇总（信息口径；无门禁语义）")
     p_rel.add_argument("--list", action="store_true")
     p_rel.set_defaults(fn=cmd_release)
 
-    p_a = sub.add_parser("assemble", help="route_profile/画像 JSON → 装配清单（命中/排除/门禁）")
+    p_a = sub.add_parser("assemble", help="route_profile/画像 JSON → 装配清单（命中/排除及原因；无发布门禁）")
     p_a.add_argument("--profile", required=True, help="画像 JSON 文件（见 examples/）")
     p_a.add_argument("--out", help="输出 md 文件（缺省 stdout）")
     p_a.set_defaults(fn=cmd_assemble)

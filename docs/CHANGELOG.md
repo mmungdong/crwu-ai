@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-08 · docs · 移除"人工审核待发布/试点门禁"全链路（新口径：知识库文档即权威——装配/路由命中文件按库内层级路径经 crwu-dws 实时下载后**下载即审**，无发布/试点状态判定与 `[依据待发布]` 标注）
+
+- 影响：crwu-audit 族技能/refs（`crwu-audit` SKILL §2 步骤9 + refs 04/99、`crwu-audit-realestate` SKILL + refs00、`crwu-audit-realestate-rent` SKILL + refs00、`crwu-audit-datacheck` SKILL、`crwu-audit-optimize` SKILL + refs 00/01/02：删除 门禁透传/A 发布门禁/试点模式/待人工发布清单/release 状态行/curated_by/reviewed_on/发布登记 等判定语义，装配表"发布门禁"整行删除）；设计文档三份（`design-crwu-audit-skills.md`、`design-crwu-dws.md`、`design-audit-live-kb-protocol.md`：口径改写，协议决策 B 标记 ❌ 已废止）；`skills/README.md`、`skills/crwu-dws/SKILL.md` + refs 01 口径行（CRWU_KB_ROOT 一律"仅维护/离线归档"）；`tools/kb/kb_tool.py` + README（validate 删除"已发布条目须带 curated_by/reviewed_on"检查；assemble 输出"发布门禁/试点模式"段 → "装配说明（无发布门禁：下载即审）"；release 子命令=状态标注信息口径；docstring/注释同步）
+- 说明：按用户口径（2026-09-08）下掉"人工审核待发布"功能——路由命中某子技能后，该技能负责给出必须参考的知识库文件地址（库内层级路径键：规则/评估方法/法律文件/业务清单等），业务知识库内文档即"必须审核哪些地方"的总结与依据，装配命中后实时下载**直接审核**，不做"未发布→试点"判定、不标 `[依据待发布]`、不读《待人工发布清单》判定门禁；知识库内容侧历史"待发布/A 内容核验"标注仅信息残留、AI 不读取判定（清理归知识库维护）；kb_tool release/pending 保留为纯信息口径；技能内嵌"要审什么"正文本轮不动（后续如需收敛为纯地址指引另立项）
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-08 · docs · crwu-dws v0.4 + crwu-audit 族实时引用协议改造（R1–R5：目录可缓存、正文零缓存、清单驱动、实时下载、编号+层级路径寻址）
 
 - 影响：`docs/design-audit-live-kb-protocol.md`（新，v0.2 定稿）、crwu-audit 族 13 份技能文件（`crwu-audit` SKILL/refs 04/99、`crwu-audit-realestate` SKILL/refs00、`crwu-audit-realestate-rent` SKILL/refs00、`crwu-audit-datacheck` SKILL/refs00、`crwu-audit-optimize` SKILL/refs 00-02：源仓与 ~/.skills-manager/skills 真身双份同步，.dsh/.workbuddy 软链视图）、`crwu-dws` SKILL.md+refs 02（v0.4：M2-A 按清单实时下载/M2-B 全量镜像、M3 路径寻址、node-index 全路径键 by_path）、`tools/kb/kb_tool.py`+README（validate 实时协议 lint）、`skills/README.md`、`docs/design-crwu-dws.md`（v0.4 登记）、`docs/design-crwu-audit-skills.md`（残留清理）

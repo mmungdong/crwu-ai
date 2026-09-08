@@ -35,7 +35,7 @@
 - 独立能力线，与 crwu-audit 族**平级、互为上下游**：M1 查询/导出「中瑞世联 AI 测试知识库」层级目录并写目录缓存（`~/.crwu/knowledge/dws-dir-cache`）；M2-A 按 crwu-audit 路由/装配确定的本次文件清单实时下载到案例目录与源审核数据文件同级的 `knowledge/`（文件零缓存：每次审核重新下载）；M2-B 全量镜像仅显式留档；M3 供 skill 按 文件名/nodeId/**库内层级路径** 查找——缓存未命中自动刷新、仍无如实"没找到"。
 - 缓存语义（用户口径）：**目录可缓存、正文不缓存**——目录缓存只存结构与 nodeId/全路径索引，正文每次实时从钉钉导出（本次下载物只属本次审核），保证"员工钉钉更新 → AI 取到的正文永远最新"。
 - 缓存名一致性（v0.3.1/D12）：缓存目录身份 = `.cache-meta.space`（name+workspaceId）；缓存库名与目标不一致（改名/换库/历史残留）→ **先清理缓存目录、再在线重下目标库目录结构**（防跨库误命中；见 SKILL.md §5.0 与 design §10）。
-- 口径：案例 `knowledge/`（本次下载物）= 本次审核**实时参考**；`CRWU_KB_ROOT` = 仅维护/发布登记/离线归档（不冒充实时）；目录缓存 = 查找加速（无正文）；audit 族实时引用协议见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）。
+- 口径：案例 `knowledge/`（本次下载物）= 本次审核**实时参考**；`CRWU_KB_ROOT` = 仅维护/离线归档（不冒充实时；无发布门禁——知识库文档即权威、下载即审）；目录缓存 = 查找加速（无正文）；audit 族实时引用协议见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）。
 - 设计/决策点与改动纪律见 [`docs/design-crwu-dws.md`](../docs/design-crwu-dws.md)；改动只落源仓，运行时部署由用户 skills 管理机制负责（不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）。
 
 ## V2.1 增补（2026-09-07）
@@ -45,6 +45,6 @@
   债权-金融不良 → P2；复核报告 → 待定；mining → P2。
 - 数据基线：氚云「报告审核」8,486 条（2026-09-07 快照），词表体量列与覆盖层判定即源于此；
   复跑脚本 `pull_全量画像.py`（基线/统计由部署方维护，技能不持有）。
-- **知识库推理引用协议（实时版，2026-09-08）**：crwu-audit 族技能引用知识库只写 RULE/CHK 编号 + **库内层级路径**（如 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核.md`），**三不写**：知识库名称 / 本地根路径字面（`CRWU_KB_ROOT=`、`~/.crwu/`、`knowledge-base`）/ 节点 nodeId——nodeId 每次由 crwu-dws 目录树动态解析，正文按**本次审核文件清单**经 crwu-dws 实时下载（文件零缓存，下载时刻即最新）。设计/决策见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）与 `docs/design-crwu-dws.md`。机器校验：`tools/kb/kb_tool.py validate --skill-root <repo>/skills`（含实时协议三不写 lint，仅 crwu-audit* 目录生效）；对单个 audit 根加 `--forbid-literal <库名>` 禁知识库名字面（crwu-dws 自带默认库名，勿对其目录加）。README 见 `tools/kb/README.md`。本地静态根 `~/.crwu/knowledge/knowledge-base`（CRWU_KB_ROOT）降级为 维护/发布登记/离线归档（不冒充实时）；旧 `KB/…` 根相对写法废弃。**本 README 不随技能安装到 agent（仅源仓维护者视角）。**
+- **知识库推理引用协议（实时版，2026-09-08）**：crwu-audit 族技能引用知识库只写 RULE/CHK 编号 + **库内层级路径**（如 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核.md`），**三不写**：知识库名称 / 本地根路径字面（`CRWU_KB_ROOT=`、`~/.crwu/`、`knowledge-base`）/ 节点 nodeId——nodeId 每次由 crwu-dws 目录树动态解析，正文按**本次审核文件清单**经 crwu-dws 实时下载（文件零缓存，下载时刻即最新）。设计/决策见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）与 `docs/design-crwu-dws.md`。机器校验：`tools/kb/kb_tool.py validate --skill-root <repo>/skills`（含实时协议三不写 lint，仅 crwu-audit* 目录生效）；对单个 audit 根加 `--forbid-literal <库名>` 禁知识库名字面（crwu-dws 自带默认库名，勿对其目录加）。README 见 `tools/kb/README.md`。本地静态根 `~/.crwu/knowledge/knowledge-base`（CRWU_KB_ROOT）降级为 维护/离线归档（不冒充实时；无发布门禁——知识库文档即权威、下载即审）；旧 `KB/…` 根相对写法废弃。**本 README 不随技能安装到 agent（仅源仓维护者视角）。**
 - 2026-09-07：`references/03-业务风险分类判定.md` —— 机构 A/B/C 业务分类作为**路由首判**（严谨度参考、首页标注；
   agent 一律全面审核、不裁剪检查点，最终通过由人工复核；与氚云风险等级字段对照校验）。

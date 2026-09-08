@@ -22,7 +22,7 @@
 
 ## 1. 背景与动机
 
-- crwu 生态知识库唯一事实源路线（skills/README §V2.1 + tools/kb/README「迁移/演进」）：本地 `~/.crwu/knowledge/knowledge-base`（CRWU_KB_ROOT）为静态根（发布/门禁口径）；钉钉知识库打通后目录内容向本地迁移、可换根。
+- crwu 生态知识库唯一事实源路线（skills/README §V2.1 + tools/kb/README「迁移/演进」）：本地 `~/.crwu/knowledge/knowledge-base`（CRWU_KB_ROOT）为静态根（仅维护/离线归档，不冒充实时）；钉钉知识库打通后目录内容向本地迁移、可换根。
 - crwu-audit 及子 skill 推理时有两类输入：① **源审核数据文件**（材料包）；② **参考知识文档**（规则/清单/案例——员工在钉钉持续更新）。
 - v0.1/v0.2 解决了"看目录"与"案例期镜像"；**缺一层"查找兜底"**：skill 推理时按 RULE 编号/文档名/nodeId 找参考文档，不能每次全量在线遍历（慢、脆），也不能信任一份可能过期的静态副本——于是：**目录层用本地缓存 + 未命中自动刷新；正文层永远实时取用**。
 
@@ -116,7 +116,7 @@
 
 ## 8. crwu-audit 联动登记（下游消费方）
 
-- 案例 `knowledge/`（本次下载物）= 本次审核**实时参考**；`CRWU_KB_ROOT` = 仅维护/发布登记/离线归档（不冒充实时）；目录缓存 = **查找加速层**（永不提供正文）。
+- 案例 `knowledge/`（本次下载物）= 本次审核**实时参考**；`CRWU_KB_ROOT` = 仅维护/离线归档（不冒充实时）；**无发布/试点门禁（口径 2026-09-08）**：知识库文档即权威——装配/路由命中文件按库内层级路径实时下载后**下载即审**；目录缓存 = **查找加速层**（永不提供正文）。
 - **v0.4（2026-09-08）**：audit 族推理引用实时化协议已落定（R1–R5：目录可缓存、正文零缓存、清单驱动、实时下载、编号+层级路径寻址；见 `docs/design-audit-live-kb-protocol.md`）——总路由/叶子按本次命中技能装配路径表汇总文件清单 → crwu-dws M2-A 实时下载 → 只读引用（出处=本次下载文件:行号+exportedAt）。audit 族文件改动按该协议文档 §6 执行并登记（changelog/README/design 同步）。
 
 ## 9. 登记与部署（v0.3 已完成项 + 验收前提）
@@ -169,7 +169,7 @@
 
 ```
 ~/.crwu/knowledge/                    # 用户本地知识根（CRWU_KB_ROOT 仅指其下 knowledge-base）
-├── knowledge-base/                   # 发布/门禁基准（kb_tool 扫描域，本技能不碰）
+├── knowledge-base/                   # 仅维护/离线归档（不冒充实时；kb_tool 扫描域，本技能不碰）
 └── dws-dir-cache/                    # ← crwu-dws 目录缓存层（v0.3；永不存正文）
     └── <库名>/                       # 多库各一份（同名多空间 → 追加 -<spaceType>）
         ├── 目录快照.json             # crwu.kb-catalog.snapshot.v1（references/00）
