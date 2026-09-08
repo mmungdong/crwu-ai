@@ -13,6 +13,14 @@
 
 ---
 
+## 2026-09-08 · docs · crwu-dws：新增钉钉知识库只读域技能（M1 目录查询 + M2 知识文档批量下载到案例 knowledge/）
+
+- 影响：新增 `skills/crwu-dws/SKILL.md`、`skills/crwu-dws/references/00-目录快照schema.md`、`skills/crwu-dws/references/01-镜像与manifest规范.md`、`docs/design-crwu-dws.md`（v0.2 定稿）、`skills/README.md` 总表行+独立段落（源仓与 ~/.dsh/skills 双份同步）
+- 说明：围绕钉钉「中瑞世联 AI 测试知识库」的只读域技能（crwu-audit 推理参考文档实时化路线图读端第一步）——M1：组织/个人全范围精确库名解析（多命中全导、spaceType 只取真实返回）、DFS 递归完整层级导出（目录树.md + 目录快照.json，分页证据/防环/体量上限 10,000×20 层）；M2：把 crwu-audit 及子 skill 推理参考知识文档按库结构批量导出（adoc→md，`dws doc +export`，回执 localPath+sizeBytes>0 即终态）到与源审核数据文件同级的案例目录 `knowledge/`（目录由显式给定/部署约定 CRWU_CASE_DIR/询问三源决议，禁止猜）；`.crwu-manifest.jsonl` 幂等镜像（同 nodeId 原位覆盖=更新、不同 nodeId 同名加后缀、非 adoc 跳过如实报告、远端已删本地保留待人工清理）；**对钉钉零写**（wiki/doc 只读白名单）。口径登记：案例 knowledge/ = 推理实时参考，CRWU_KB_ROOT = 发布/门禁基准，两套口径读取优先级由 crwu-audit 族维护（另行登记）
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-07 · docs · crwu-audit：references/00 §6.1 脏数据剔除改「重建法」+ 坐标系规则（BG8583 实操反哺）
 
 - 影响：`skills/crwu-audit/references/00-route-profile-schema.md` §6.1、`skills/crwu-audit-datacheck/SKILL.md`、`skills/crwu-audit-datacheck/references/00-KB装配表.md`（源仓与 ~/.dsh/skills 双份同步）
