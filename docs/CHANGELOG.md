@@ -13,6 +13,14 @@
 
 ---
 
+## 2026-09-08 · docs · crwu-dws v0.3：新增本地目录缓存层 + M3 缓存兜底查找（目录可缓存、正文不缓存）
+
+- 影响：`skills/crwu-dws/SKILL.md`（三模式 M1/M2/M3）、`skills/crwu-dws/references/00-目录快照schema.md`（v2，落点迁移）、`references/01-镜像与manifest规范.md`（v2，案例镜像≠缓存+exportedAt 时效）、新增 `references/02-缓存与兜底查找规范.md`、`docs/design-crwu-dws.md`（v0.3 定稿）、`skills/README.md`（源仓与 ~/.dsh/skills 双份同步）
+- 说明：按用户口径加缓存兜底层——M1 目录产物落点改 `~/.crwu/knowledge/dws-dir-cache/<库名>/`（=~/.crwu/knowledge 下、与 CRWU_KB_ROOT=knowledge-base 子树同级隔离，kb_tool 不扫描；原子替换写入：.tmp-* 全成后 rename，meta 最后覆盖）；产物=目录快照/目录树/node-index/.cache-meta，**只存目录与索引，永不存正文**；M3 兜底查找协议：文件名/nodeId 精确查缓存索引（nodeId→条目、名称→多命中全列消歧）→ 未命中自动在线刷新（P1+P2 全量遍历+原子写缓存）→ 重查 → 仍无如实"未找到：<名>（目录已刷新至 <时间> 后仍不存在）"+ 相近候选≤5，不编造；刷新失败降级：旧缓存可用 → 标注"缓存可能过期（fetched_at）+失败原因"作答，否则"无法确认"；正文实时红线：每次取正文 = 现场 `dws doc +export` 临时取用即弃，唯一例外 = M2 案例镜像（用户明确留档，案例期快照、manifest 带 exportedAt、不进缓存层）；正文读取次序登记（供 audit 侧）：M3 现场实时 → M2 本案镜像 → 缓存（无正文）→ CRWU_KB_ROOT（门禁基准）；旧落点 ~/.crwu/kb-catalog 弃用不写、不迁移不删除
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-08 · docs · crwu-dws：新增钉钉知识库只读域技能（M1 目录查询 + M2 知识文档批量下载到案例 knowledge/）
 
 - 影响：新增 `skills/crwu-dws/SKILL.md`、`skills/crwu-dws/references/00-目录快照schema.md`、`skills/crwu-dws/references/01-镜像与manifest规范.md`、`docs/design-crwu-dws.md`（v0.2 定稿）、`skills/README.md` 总表行+独立段落（源仓与 ~/.dsh/skills 双份同步）
