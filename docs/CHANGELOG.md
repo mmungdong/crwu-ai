@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-08 · fix · 知识正文仅从钉钉按本次审核清单下载，并支持单文件与目录条目
+
+- 影响：`crwu-dws` SKILL、目录/manifest/缓存 references（M2 收敛为本次审核清单下载；删除整库留档能力；`01-镜像与manifest规范.md` 更名为 `01-审核下载与manifest规范.md`）、crwu-audit 总路由及 realestate/rent/datacheck/optimize 消费方、三份装配表、`skills/README.md`、`design-audit-live-kb-protocol.md`、`design-crwu-dws.md`，并新增 `tools/kb/test_dws_source_contract.py` 契约回归测试。
+- 说明：钉钉知识库是知识正文唯一来源；本地仅保存无正文的目录元数据缓存和当前审核工作集。每次审核均重新下载正文，跨审核不得复用。下载清单可混合单文件路径（只下载精确文件）和目录路径（递归下载目录内支持正文），清单外零下载；下载失败不得回退到本地正文。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
 ## 2026-09-08 · docs · audit 族知识库引用统一到目录级：目录级引用 = 下载该目录**全部**文档（folder 递归），禁止按“本次只用某文件/某段”挑选
 
 - 影响：三份 `00-KB装配表.md`（`crwu-audit-realestate-rent` / `crwu-audit-realestate` / `crwu-audit-datacheck`：装配表路径键统一为目录级并加“目录级引用语义”注记，原文件级/取段键合并为所在目录，如 CHK 清单→`06-规则库/清单-M-市场法/`、`清单-M-成本法/`，契约→`00-总纲/执行契约/`，校准/治理→`00-总纲/治理/`，勾稽口径两文件合并为 `06-规则库/M-数据对齐-勾稽与一致性/`）、`crwu-audit`/`crwu-audit-realestate`/`crwu-audit-realestate-rent`/`crwu-audit-datacheck` SKILL 正文引用句（契约/清单/校准路径改为目录级并注明全量下载）、`crwu-dws/SKILL.md` §6.2（目录级清单项 → 该目录**全部**文档逐一实时下载，目录内不得挑选）、`docs/design-audit-live-kb-protocol.md` §4（补“目录级清单项语义”）
