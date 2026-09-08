@@ -23,7 +23,7 @@
   "profile": { "id": "…", "isOrgCurrent": true }, // 执行 profile 证据（真实返回）
   "mode": "M1|M2",                                // 产出方
   "space": {
-    "name": "中瑞世联 AI 测试知识库",
+    "name": "中瑞世联评估审核知识库",
     "workspaceId": "…",                            // 来自真实返回
     "spaceType": "orgWikiSpace|myWikiSpace",        // 只取服务端真实返回；缺席=null，不按请求值伪造
     "scope_evidence": {

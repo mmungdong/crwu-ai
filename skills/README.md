@@ -11,6 +11,7 @@
 
 | Skill | 类型 | 作用 |
 | --- | --- | --- |
+| [`crwu-init`](crwu-init/SKILL.md) | 提示型 | crwu 环境**初始化/安装/更新分发器**：确定目标 agent（workbuddy/codex/opencode/deepseek harness，未指定则给选项 workbuddy/codex/deepseek harness）→ 联网核实其 skills 安装目录 → 从 `https://gitee.com/mengdong123/crwu-ai` 拉取 `skills/` → 安装全部/安装指定/更新（同名覆盖含子文件夹）到 agent skills 目录。不改技能正文、不跑业务 |
 | [`h3yun-login`](h3yun-login/SKILL.md) | 提示型 | H3Yun 员工自助登录：自动开浏览器扫码绑定会话，令牌不进对话 |
 | [`h3yun-query`](h3yun-query/SKILL.md) | 提示型 | 交互式 H3Yun 查询：系统→表单→记录，20 条/页，支持标题关键词查找 |
 | [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**（≤300 行入口 + `references/` 运行材料）：维护全部 crwu-audit-* 路由注册表；画像=报告形态→经济行为主线（受控角度词表）→对象→方法（附件名+抽验）→监管覆盖层（国资/证券/司法/金融）；字段画像先行、弱结构化名称兜底；细分未命中降级父大方向→汇总输出（自身不做审核判断）；**兜底/🅿️⏳ 命中时自动附《待建子技能提案》**（references/04：补哪个子技能/管什么/审什么）；画像必含 **scenario 装配键**（评估目的×方法双键，refs/00 §3 / 01）；改前先读 `references/99-维护说明.md` |
@@ -19,7 +20,7 @@
 | [`crwu-audit-datacheck`](crwu-audit-datacheck/SKILL.md) | 提示型 | 跨方向 **L2 数据/表格勾稽**（C1–C6）：测算/明细/汇总表合计与口径、公式错误、跨项目串扰词、占位残留 → 差异清单（含 xlsx/.xls 解析与公式重算工具链说明）。**H0：人工隐藏区（sheet/行/列/折叠组）强制跳过——禁读禁报，只审可见区**；**坐标基准：剔除隐藏后工作版行列收缩，公式/引用勾稽以 raw 原件坐标为准（可见区只读例外，见 crwu-audit refs/00 §6.1）** |
 | [`crwu-audit-optimize`](crwu-audit-optimize/SKILL.md) | 提示型（维护/元技能） | 审核能力族**维护/优化入口**（不经 crwu-audit 路由、不产审核判断）：用户反馈驱动的 规则/覆盖/路径 演进——先定位单子画像与缺口分桶（A 规则内容/B 覆盖缺失/C 词表/D 算法/E 漂移）→ 输出《优化方案》（拟改文件清单，源仓+运行时双份）→ **用户确认后**按 99 流程执行 + kb_tool 校验回归。规范见其 references/00-02 |
 
-| [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联 AI 测试知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
+| [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联评估审核知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
 
 ## crwu-audit 审核能力族（分层可插拔）
 

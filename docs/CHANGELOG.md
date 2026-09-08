@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-08 · feat · 新增 crwu-init 技能：crwu 环境初始化 / skills 安装 / 更新分发器
+
+- 影响：新增 `skills/crwu-init/SKILL.md` + `references/agent-skill-dirs.md`；`skills/README.md` 技能表登记。
+- 说明：提示型分发器，不产业务能力。流程：确定目标 agent（workbuddy/codex/opencode/deepseek harness，未指定则给选项）→ 联网核实其 skills 安装目录 → 从 `https://gitee.com/mengdong123/crwu-ai` 拉取 `skills/` → 安装全部 / 安装指定 / 更新（同名覆盖含子文件夹，`rm -rf`+`cp -R` 全量替换）→ 校验汇报。内置各 agent 用户级 skills 目录缓存（workbuddy `~/.workbuddy/skills`、codex `~/.codex/skills`、opencode `~/.config/opencode/skills`、dsh `~/.dsh/skills`），执行前联网核实、以官方为准并回写。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
 ## 2026-09-08 · fix · 知识正文仅从钉钉按本次审核清单下载，并支持单文件与目录条目
 
 - 影响：`crwu-dws` SKILL、目录/manifest/缓存 references（M2 收敛为本次审核清单下载；删除整库留档能力；`01-镜像与manifest规范.md` 更名为 `01-审核下载与manifest规范.md`）、crwu-audit 总路由及 realestate/rent/datacheck/optimize 消费方、三份装配表、`skills/README.md`、`design-audit-live-kb-protocol.md`、`design-crwu-dws.md`，并新增 `tools/kb/test_dws_source_contract.py` 契约回归测试。
@@ -42,7 +50,7 @@
 ## 2026-09-08 · docs · crwu-dws v0.3.1：新增缓存名一致性清理层（缓存库名 ≠ skill 目标库名 → 先清理缓存、在线重下远程目录结构）
 
 - 影响：`skills/crwu-dws/SKILL.md`（新增 §5.0 缓存名一致性校验与清理层，M1/M3 用缓存前置；frontmatter/§1/§2/§8/§10 同步口径）、`skills/crwu-dws/references/02-缓存与兜底查找规范.md`（v1.1：新增 §2 缓存身份与名一致性清理，原 §2–6 顺移为 §3–7，含正文红线/报告口径指针修正）、`skills/crwu-dws/references/00-目录快照schema.md`（引用指针随 §2→§3、§5→§6 更新 + §6 身份说明）、`docs/design-crwu-dws.md`（v0.3.1：新增 P3-M0 清理层流程、决策 D12、验收 T13、演进项 5）、`skills/README.md`（总表行+独立段落）（源仓与 ~/.skills-manager/skills/crwu-dws 运行时双份同步）
-- 说明：按用户口径加缓存清理层——每次 M1/M3 用缓存前先对账：缓存目录身份 = `.cache-meta.space`（name+workspaceId，真实返回）；与本次目标库名（默认「中瑞世联 AI 测试知识库」或指定库名；M1/刷新路径按 P1 name+workspaceId 双匹配，M3 命中路径保持"不发起在线遍历"、以请求库名做名级对账，workspaceId 一致性已由写缓存时 P1 校验固化于 meta）不一致（改名/换库/历史残留，或 meta 缺失损坏且目录名≠目标）→ **整体删除该缓存目录**（正式 4 文件+残留 .tmp-*；目录缓存=可再生中间产物、无正文，删除不违红线；只动 dws-dir-cache，不碰 M2 案例 knowledge/、CRWU_KB_ROOT、远端）→ 对目标库**在线重跑 P1+P2 全量遍历重新下载目录结构**并原子写缓存 → M3 侧重查；meta 缺失损坏但目录名==目标 → 不删除，按缓存损坏刷新覆盖；删除失败 → 报告路径问题、该缓存按不可用处理不静默复用；清理动作必在摘要/结论报告（"已清理不一致缓存：<目录>（缓存=<库名>，目标=<库名>）"）。副作用登记：临时指定其它库名运行时，与本次目标不一致的既有缓存（含默认库）会被清理，属"缓存可再生"的可接受代价（演进再评估见 design §12 项 5）
+- 说明：按用户口径加缓存清理层——每次 M1/M3 用缓存前先对账：缓存目录身份 = `.cache-meta.space`（name+workspaceId，真实返回）；与本次目标库名（默认「中瑞世联评估审核知识库」或指定库名；M1/刷新路径按 P1 name+workspaceId 双匹配，M3 命中路径保持"不发起在线遍历"、以请求库名做名级对账，workspaceId 一致性已由写缓存时 P1 校验固化于 meta）不一致（改名/换库/历史残留，或 meta 缺失损坏且目录名≠目标）→ **整体删除该缓存目录**（正式 4 文件+残留 .tmp-*；目录缓存=可再生中间产物、无正文，删除不违红线；只动 dws-dir-cache，不碰 M2 案例 knowledge/、CRWU_KB_ROOT、远端）→ 对目标库**在线重跑 P1+P2 全量遍历重新下载目录结构**并原子写缓存 → M3 侧重查；meta 缺失损坏但目录名==目标 → 不删除，按缓存损坏刷新覆盖；删除失败 → 报告路径问题、该缓存按不可用处理不静默复用；清理动作必在摘要/结论报告（"已清理不一致缓存：<目录>（缓存=<库名>，目标=<库名>）"）。副作用登记：临时指定其它库名运行时，与本次目标不一致的既有缓存（含默认库）会被清理，属"缓存可再生"的可接受代价（演进再评估见 design §12 项 5）
 - 未新增/修改 crwu CLI 命令
 
 ---
@@ -58,7 +66,7 @@
 ## 2026-09-08 · docs · crwu-dws：新增钉钉知识库只读域技能（M1 目录查询 + M2 知识文档批量下载到案例 knowledge/）
 
 - 影响：新增 `skills/crwu-dws/SKILL.md`、`skills/crwu-dws/references/00-目录快照schema.md`、`skills/crwu-dws/references/01-镜像与manifest规范.md`、`docs/design-crwu-dws.md`（v0.2 定稿）、`skills/README.md` 总表行+独立段落（源仓与 ~/.dsh/skills 双份同步）
-- 说明：围绕钉钉「中瑞世联 AI 测试知识库」的只读域技能（crwu-audit 推理参考文档实时化路线图读端第一步）——M1：组织/个人全范围精确库名解析（多命中全导、spaceType 只取真实返回）、DFS 递归完整层级导出（目录树.md + 目录快照.json，分页证据/防环/体量上限 10,000×20 层）；M2：把 crwu-audit 及子 skill 推理参考知识文档按库结构批量导出（adoc→md，`dws doc +export`，回执 localPath+sizeBytes>0 即终态）到与源审核数据文件同级的案例目录 `knowledge/`（目录由显式给定/部署约定 CRWU_CASE_DIR/询问三源决议，禁止猜）；`.crwu-manifest.jsonl` 幂等镜像（同 nodeId 原位覆盖=更新、不同 nodeId 同名加后缀、非 adoc 跳过如实报告、远端已删本地保留待人工清理）；**对钉钉零写**（wiki/doc 只读白名单）。口径登记：案例 knowledge/ = 推理实时参考，CRWU_KB_ROOT = 发布/门禁基准，两套口径读取优先级由 crwu-audit 族维护（另行登记）
+- 说明：围绕钉钉「中瑞世联评估审核知识库」的只读域技能（crwu-audit 推理参考文档实时化路线图读端第一步）——M1：组织/个人全范围精确库名解析（多命中全导、spaceType 只取真实返回）、DFS 递归完整层级导出（目录树.md + 目录快照.json，分页证据/防环/体量上限 10,000×20 层）；M2：把 crwu-audit 及子 skill 推理参考知识文档按库结构批量导出（adoc→md，`dws doc +export`，回执 localPath+sizeBytes>0 即终态）到与源审核数据文件同级的案例目录 `knowledge/`（目录由显式给定/部署约定 CRWU_CASE_DIR/询问三源决议，禁止猜）；`.crwu-manifest.jsonl` 幂等镜像（同 nodeId 原位覆盖=更新、不同 nodeId 同名加后缀、非 adoc 跳过如实报告、远端已删本地保留待人工清理）；**对钉钉零写**（wiki/doc 只读白名单）。口径登记：案例 knowledge/ = 推理实时参考，CRWU_KB_ROOT = 发布/门禁基准，两套口径读取优先级由 crwu-audit 族维护（另行登记）
 - 未新增/修改 crwu CLI 命令
 
 ---
