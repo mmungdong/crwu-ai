@@ -19,7 +19,7 @@
 | [`crwu-audit-datacheck`](crwu-audit-datacheck/SKILL.md) | 提示型 | 跨方向 **L2 数据/表格勾稽**（C1–C6）：测算/明细/汇总表合计与口径、公式错误、跨项目串扰词、占位残留 → 差异清单（含 xlsx/.xls 解析与公式重算工具链说明）。**H0：人工隐藏区（sheet/行/列/折叠组）强制跳过——禁读禁报，只审可见区**；**坐标基准：剔除隐藏后工作版行列收缩，公式/引用勾稽以 raw 原件坐标为准（可见区只读例外，见 crwu-audit refs/00 §6.1）** |
 | [`crwu-audit-optimize`](crwu-audit-optimize/SKILL.md) | 提示型（维护/元技能） | 审核能力族**维护/优化入口**（不经 crwu-audit 路由、不产审核判断）：用户反馈驱动的 规则/覆盖/路径 演进——先定位单子画像与缺口分桶（A 规则内容/B 覆盖缺失/C 词表/D 算法/E 漂移）→ 输出《优化方案》（拟改文件清单，源仓+运行时双份）→ **用户确认后**按 99 流程执行 + kb_tool 校验回归。规范见其 references/00-02 |
 
-| [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联 AI 测试知识库」**只读域**（与 audit 族平级、互为上下游）：M1 目录查询并缓存目录/索引到 `~/.crwu/knowledge/dws-dir-cache`（组织+个人全范围精确库名、多命中全导、分页证据）；M2 把 crwu-audit 推理参考知识文档按库结构批量导出（adoc→md）到与源审核数据文件同级的案例 `knowledge/`（案例期快照，.crwu-manifest.jsonl 幂等镜像）；M3 缓存兜底查找（文件名/nodeId：缓存命中→路径上下文；未命中→自动刷新→仍无如实"没找到"）；**目录可缓存、正文不缓存**（正文每次实时导出即弃，保证最新）；对钉钉零写；泛化 wiki/doc 走 dingtalk-wiki/doc |
+| [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联 AI 测试知识库」**只读域**（与 audit 族平级、互为上下游）：M1 目录查询并缓存目录/索引到 `~/.crwu/knowledge/dws-dir-cache`（组织+个人全范围精确库名、多命中全导、分页证据）；M2 把 crwu-audit 推理参考知识文档按库结构批量导出（adoc→md）到与源审核数据文件同级的案例 `knowledge/`（案例期快照，.crwu-manifest.jsonl 幂等镜像）；M3 缓存兜底查找（文件名/nodeId：缓存命中→路径上下文；未命中→自动刷新→仍无如实"没找到"）；**目录可缓存、正文不缓存**（正文每次实时导出即弃，保证最新）；**缓存库名与目标不一致 → 先清理缓存再在线重下**（防跨库误命中）；对钉钉零写；泛化 wiki/doc 走 dingtalk-wiki/doc |
 
 ## crwu-audit 审核能力族（分层可插拔）
 
@@ -34,6 +34,7 @@
 
 - 独立能力线，与 crwu-audit 族**平级、互为上下游**：M1 查询/导出「中瑞世联 AI 测试知识库」层级目录并写目录缓存（`~/.crwu/knowledge/dws-dir-cache`）；M2 把 crwu-audit 推理参考知识文档镜像到案例目录与源审核数据文件同级的 `knowledge/`（案例期快照）；M3 供 skill 按 文件名/nodeId 查找——缓存未命中自动刷新、仍无如实"没找到"。
 - 缓存语义（用户口径）：**目录可缓存、正文不缓存**——目录缓存只存结构与 nodeId 索引，正文每次实时从钉钉导出（临时取用即弃），保证"员工钉钉更新 → AI 取到的正文永远最新"；M2 案例镜像非缓存（仅供本案，重跑/M3 取再最新）。
+- 缓存名一致性（v0.3.1/D12）：缓存目录身份 = `.cache-meta.space`（name+workspaceId）；缓存库名与目标不一致（改名/换库/历史残留）→ **先清理缓存目录、再在线重下目标库目录结构**（防跨库误命中；见 SKILL.md §5.0 与 design §10）。
 - 口径：案例 `knowledge/` = 推理**实时参考**；`CRWU_KB_ROOT=~/.crwu/knowledge/knowledge-base` = **发布/门禁基准**；目录缓存 = 查找加速（无正文）；读取优先级由 crwu-audit 族维护（本技能不互相覆盖、不代改 audit 文件）。
 - 设计/决策点与改动纪律见 [`docs/design-crwu-dws.md`](../docs/design-crwu-dws.md)；源仓与运行时 `~/.dsh/skills` 双份同步。
 
