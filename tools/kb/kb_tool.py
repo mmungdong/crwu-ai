@@ -301,7 +301,7 @@ def vocab_problems(entries, tokens):
 def _is_meta_ellipsis_line(line: str) -> bool:
     """说明性文字里的 'KB/…'（如 '下文 KB/… 均相对该根'）不是引用，跳过告警。"""
     return "KB/…" in line and any(
-        w in line for w in ("均相对", "均为该根", "一律相对", "相对 CRWU_KB_ROOT", "相对该根", "禁止省略", "省略号"))
+        w in line for w in ("均相对", "均为该根", "一律相对", "相对 CRWU_KB_ROOT", "相对该根", "禁止省略", "省略号", "省略", "禁止", "废弃", "弃用"))
 
 
 def _is_forbidden_marker_line(line: str) -> bool:
@@ -329,6 +329,9 @@ def skill_path_problems(skill_root: str, kb_root: str):
                     for lit in _KB_LITERAL_RE.findall(line):
                         t = lit.lstrip("`")
                         if t.startswith("~"):
+                            if "dws-dir-cache" in t:
+                                # crwu-dws 目录缓存层：运行时首次 M1/M3 才生成，未生成不算引用缺失
+                                continue
                             full = os.path.abspath(os.path.expanduser(t))
                             if not os.path.exists(full):
                                 errors.append(f"{rel}:{lineno} 路径不存在 {t}")
@@ -337,12 +340,74 @@ def skill_path_problems(skill_root: str, kb_root: str):
                         if not t.startswith("KB/"):
                             continue
                         seg = t[3:].split(" ")[0]
-                        if not seg or seg == "…":
+                        if not seg or seg == "…" or seg.startswith("…"):
+                            continue
+                        if "省略" in seg or "『" in line or "』" in seg:
+                            # 实时协议元说明（"禁止「KB/…」式前缀省略"、"『KB/知识库』=…"释义等），非引用
                             continue
                         full = os.path.join(kb_root, seg)
                         # 允许文件或目录存在；"…/xx" 打头的省略写法提示
                         if not os.path.exists(full):
                             errors.append(f"{rel}:{lineno} KB 引用不存在：{t} → {full}")
+    return errors, warns
+
+
+# ---------------- 实时引用协议 lint（2026-09-08，crwu-dws × crwu-audit 实时引用改造） ----------------
+
+# 只对 crwu-audit* 族目录做"三不写"严格 lint（crwu-dws 等允许按需引用部署常量/默认库名）
+AUDIT_DIR_PREFIXES = ("crwu-audit",)
+# ① 本地知识库根常量赋值 / 根路径字面 / 内容副本目录字面（推理引用实时化后一律禁止写死在技能内）
+_LIVE_NO_ROOT_RES = [
+    re.compile(r"CRWU_KB_ROOT\s*="),
+    re.compile(r"~/?\.crwu/"),
+    re.compile(r"knowledge-base"),
+]
+# ② 硬编码 nodeId（nodeId 一律由 crwu-dws 运行时解析；技能内只允许描述性提及，不允许赋值）
+_LIVE_NODEID_ASSIGN_RE = re.compile(r"nodeId\s*[:=]\s*\S")
+
+
+def _is_prohibition_note(line: str) -> bool:
+    """纪律文本（"禁止…字面/三不写"等）自身可含被禁字面，跳过误报。"""
+    return ("禁止" in line or "不写" in line) and any(
+        w in line for w in ("字面", "三不写", "lint", "红线", "协议", "硬编码"))
+
+
+def live_protocol_lint(skill_root: str, forbid_literals):
+    """实时引用协议 lint：crwu-audit 族技能内不得出现 ①本地 KB 根路径/根常量字面
+    （CRWU_KB_ROOT=、~/.crwu/、knowledge-base）②nodeId 硬编码赋值 ③--forbid-literal 指定的
+    知识库名称字面。返回 (errors, warns)。"""
+    errors, warns = [], []
+    targets = []
+    if os.path.isdir(skill_root):
+        for d in sorted(os.listdir(skill_root)):
+            if d.startswith(AUDIT_DIR_PREFIXES):
+                targets.append(os.path.join(skill_root, d))
+        if not targets and os.path.basename(skill_root).startswith(AUDIT_DIR_PREFIXES):
+            targets.append(skill_root)
+    elif os.path.basename(skill_root).startswith(AUDIT_DIR_PREFIXES):
+        targets.append(skill_root)
+    for root in targets:
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for fn in sorted(filenames):
+                if not fn.endswith(".md"):
+                    continue
+                p = os.path.join(dirpath, fn)
+                rel = os.path.relpath(p, skill_root)
+                with open(p, encoding="utf-8") as fh:
+                    for lineno, line in enumerate(fh, start=1):
+                        line = line.rstrip("\n")
+                        if _is_prohibition_note(line):
+                            continue
+                        for rx in _LIVE_NO_ROOT_RES:
+                            if rx.search(line):
+                                errors.append(
+                                    f"{rel}:{lineno} 实时协议禁止本地 KB 根字面：{rx.pattern}")
+                                break
+                        if _LIVE_NODEID_ASSIGN_RE.search(line):
+                            errors.append(f"{rel}:{lineno} 禁止硬编码 nodeId（由 crwu-dws 运行时解析）")
+                        for lit in forbid_literals or []:
+                            if lit and lit in line:
+                                errors.append(f"{rel}:{lineno} 禁止知识库名称字面：{lit}")
     return errors, warns
 
 
@@ -461,6 +526,9 @@ def cmd_validate(args):
             e2, w2 = skill_path_problems(os.path.abspath(sr), root)
             errors += e2
             warns += w2
+            e3, w3 = live_protocol_lint(os.path.abspath(sr), args.forbid_literal)
+            errors += e3
+            warns += w3
     print("== validate 结果 ==")
     for w in warns:
         print("  [warn ] " + w)
@@ -658,9 +726,11 @@ def main():
     p_index = sub.add_parser("index", help="从 md 生成/刷新 kb-index.jsonl")
     p_index.set_defaults(fn=cmd_index)
 
-    p_v = sub.add_parser("validate", help="索引新鲜度/编号唯一/发布字段/词表/技能引用路径校验")
+    p_v = sub.add_parser("validate", help="索引新鲜度/编号唯一/发布字段/词表/技能引用路径校验/实时协议 lint")
     p_v.add_argument("--skill-root", action="append", help="额外扫描的引用目录（如 crwu-ai/skills），可多次")
     p_v.add_argument("--no-vocab", action="store_true", help="跳过词表 warn 检查")
+    p_v.add_argument("--forbid-literal", action="append", default=[], metavar="字面",
+                     help="实时协议 lint：禁止出现的知识库名称等字面（可多次；根路径/nodeId 检查默认只对 crwu-audit* 目录生效）")
     p_v.set_defaults(fn=cmd_validate)
 
     p_r = sub.add_parser("resolve", help="按 id 定位 文件/行号/状态/hash")

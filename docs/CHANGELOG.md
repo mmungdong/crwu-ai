@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-08 · docs · crwu-dws v0.4 + crwu-audit 族实时引用协议改造（R1–R5：目录可缓存、正文零缓存、清单驱动、实时下载、编号+层级路径寻址）
+
+- 影响：`docs/design-audit-live-kb-protocol.md`（新，v0.2 定稿）、crwu-audit 族 13 份技能文件（`crwu-audit` SKILL/refs 04/99、`crwu-audit-realestate` SKILL/refs00、`crwu-audit-realestate-rent` SKILL/refs00、`crwu-audit-datacheck` SKILL/refs00、`crwu-audit-optimize` SKILL/refs 00-02：源仓与 ~/.skills-manager/skills 真身双份同步，.dsh/.workbuddy 软链视图）、`crwu-dws` SKILL.md+refs 02（v0.4：M2-A 按清单实时下载/M2-B 全量镜像、M3 路径寻址、node-index 全路径键 by_path）、`tools/kb/kb_tool.py`+README（validate 实时协议 lint）、`skills/README.md`、`docs/design-crwu-dws.md`（v0.4 登记）、`docs/design-crwu-audit-skills.md`（残留清理）
+- 说明：按用户口径（正文文件零缓存、每次审核实时下载、下载清单=crwu-audit 路由/子技能装配产出）落地实时引用协议——audit 族技能删除"KB 根（CRWU_KB_ROOT=~/.crwu/knowledge/knowledge-base）"根常量句与 `KB/…` 根相对引用，改为 RULE/CHK 编号 + **库内层级路径**寻址（三不写：知识库名称/本地根路径字面/nodeId 硬编码；nodeId 每次由 crwu-dws 动态解析）；引用正文一律经 crwu-dws 按**本次审核文件清单**实时下载（M2-A，逐文件 exportedAt，出处=本次下载文件:行号+exportedAt；清单外零下载；M2-B 全量镜像仅显式留档）；门禁判定改为实时下载《待人工发布清单-*.md》+文件头 release/confidence 标注（试点 `[依据待发布]` 语义不变）；下载不可得→显式报告，禁止读本地静态副本冒充实时；kb_tool validate 增实时协议 lint（`--skill-root` 扫 crwu-audit* 目录：禁 CRWU_KB_ROOT=/~/.crwu//knowledge-base 字面与 nodeId 赋值，`--forbid-literal` 禁库名；纪律文本自动豁免）；本地静态根降级为 维护/发布登记/离线归档（不冒充实时）；运行时部署表述更正为真身 ~/.skills-manager/skills（.dsh/.workbuddy 软链）
+- 未新增/修改 crwu CLI 命令
+
+---
+
 ## 2026-09-08 · docs · crwu-dws v0.3.1：新增缓存名一致性清理层（缓存库名 ≠ skill 目标库名 → 先清理缓存、在线重下远程目录结构）
 
 - 影响：`skills/crwu-dws/SKILL.md`（新增 §5.0 缓存名一致性校验与清理层，M1/M3 用缓存前置；frontmatter/§1/§2/§8/§10 同步口径）、`skills/crwu-dws/references/02-缓存与兜底查找规范.md`（v1.1：新增 §2 缓存身份与名一致性清理，原 §2–6 顺移为 §3–7，含正文红线/报告口径指针修正）、`skills/crwu-dws/references/00-目录快照schema.md`（引用指针随 §2→§3、§5→§6 更新 + §6 身份说明）、`docs/design-crwu-dws.md`（v0.3.1：新增 P3-M0 清理层流程、决策 D12、验收 T13、演进项 5）、`skills/README.md`（总表行+独立段落）（源仓与 ~/.skills-manager/skills/crwu-dws 运行时双份同步）
