@@ -44,7 +44,10 @@ description: >-
    route_profile.complexity{flow, reason}，预装 财务异常扫描/收益法·资产基础法方法专项/证据验证
    等模块提示（V2.2 步骤 4 装配）；
 5. **方法（路由阶段从文件提取，必须走真实读取链路）**：前置三步——① 下载附件
-   （`crwu h3yun file download --schema <code> --id <recordId> --out <dir>`）；② 转文本
+   （`crwu h3yun file download --schema <code> --id <recordId> --out <dir>`）；
+   **源材料下载排除复核意见类附件**：一级/二级/三级/四级复核意见、底稿审核意见、外审意见、答复文件
+   **一律不下载**——它们不属于审核源材料，留待步骤 10 审核完成后单独下载比对，审核阶段不得读取、
+   不得据此出意见；② 转文本
    （先 `file` 识别：旧版 .doc OLE → 本机 `textutil -convert txt`；.docx/.pdf/.xlsx 用现成工具，
    **先探测本机可用工具再下结论**）；③ grep/read 定位 文件·章节/页/行号，命中原文后确认
    `methods[]`（逐一标 role：采用-作结论 / 采用-未作结论 / 测算-参考，以报告“选用方法”口径判定，
