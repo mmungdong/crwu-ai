@@ -81,7 +81,7 @@ metadata:
 输入：本次审核文件清单 = 层级路径列表 paths[]（`<目录>/<文档>.md` 或目录级 `<目录>/`，来自 crwu-audit 路由/子技能装配路径表；调用方也可直接给路径清单）。
 1. 建 `<案例目录>/knowledge/`；按清单逐条处理（顺序、不并发）：
    - **定位**：目录缓存 path 键命中 → 取 nodeId（快路径，不发起在线遍历）；未命中/缓存缺失 → 在线 P1+P2 全量遍历并原子更新缓存 → 重查；仍无该路径 → 记 failures（"清单项在库内不存在：<路径>"），继续后续项；
-   - 目录级清单项 → 展开为该目录下全部 adoc（folder 递归），展开内容如实记账；
+   - 目录级清单项 → 展开为该目录下**全部**文档（folder 递归至无子目录）并逐一实时下载；目录内不得按“本次只用其中某文件/某段”挑选下载（“按文件/按段定位”仅属下载后的阅读），展开内容如实记账；
 2. **实时下载**：每个 adoc（串行）：`dws doc +export --node <nodeId> --export-format markdown`，回执 `localPath`+`sizeBytes>0` 即终态；移动为 `<案例目录>/knowledge/<同构层级路径>.md`（同 nodeId 已存在 → 原位覆盖=更新；异 nodeId 同名 → 追加 `-<nodeId前8>`）；
 3. 记账 `.crwu-manifest.jsonl`（每文件 entry：nodeId/name/type/folderPath/localPath/**exportedAt**/evidence；失败 → failure 行不中断；认证类系统性错误 → 停止，读 dingtalk-shared）；
 4. 收尾写入 `.crwu-directory.json`（目录快照副本）；摘要：成功 N / 失败 F（逐项原因）+ **清单外零下载**声明 + 产物路径。

@@ -9,6 +9,12 @@
 
 ---
 
+## 2026-09-08 · docs · audit 族知识库引用统一到目录级：目录级引用 = 下载该目录**全部**文档（folder 递归），禁止按“本次只用某文件/某段”挑选
+
+- 影响：三份 `00-KB装配表.md`（`crwu-audit-realestate-rent` / `crwu-audit-realestate` / `crwu-audit-datacheck`：装配表路径键统一为目录级并加“目录级引用语义”注记，原文件级/取段键合并为所在目录，如 CHK 清单→`06-规则库/清单-M-市场法/`、`清单-M-成本法/`，契约→`00-总纲/执行契约/`，校准/治理→`00-总纲/治理/`，勾稽口径两文件合并为 `06-规则库/M-数据对齐-勾稽与一致性/`）、`crwu-audit`/`crwu-audit-realestate`/`crwu-audit-realestate-rent`/`crwu-audit-datacheck` SKILL 正文引用句（契约/清单/校准路径改为目录级并注明全量下载）、`crwu-dws/SKILL.md` §6.2（目录级清单项 → 该目录**全部**文档逐一实时下载，目录内不得挑选）、`docs/design-audit-live-kb-protocol.md` §4（补“目录级清单项语义”）
+- 说明：知识库内容调整（全部条目发布、结构/治理文件结项改名）后，按用户口径把技能侧“具体引用目录”收敛为目录级寻址并统一下载语义——引用文件夹 = 展开该目录全部内容（folder 递归至无子目录）逐文档实时导出，manifest 逐文件记账；“按文件/按段定位”仅指下载后的定位阅读，不改变下载集合。维护对照类单文件键（`crwu-audit-optimize` refs/00 的编辑落点清单等）保留文件级不变；内嵌“要审什么”概述正文本轮不动（另立项收敛）。
+- 回归：`kb_tool.py validate --skill-root` error=0 warn=0；未新增/修改 crwu CLI 命令
+
 ## 2026-09-08 · docs · 移除"人工审核待发布/试点门禁"全链路（新口径：知识库文档即权威——装配/路由命中文件按库内层级路径经 crwu-dws 实时下载后**下载即审**，无发布/试点状态判定与 `[依据待发布]` 标注）
 
 - 影响：crwu-audit 族技能/refs（`crwu-audit` SKILL §2 步骤9 + refs 04/99、`crwu-audit-realestate` SKILL + refs00、`crwu-audit-realestate-rent` SKILL + refs00、`crwu-audit-datacheck` SKILL、`crwu-audit-optimize` SKILL + refs 00/01/02：删除 门禁透传/A 发布门禁/试点模式/待人工发布清单/release 状态行/curated_by/reviewed_on/发布登记 等判定语义，装配表"发布门禁"整行删除）；设计文档三份（`design-crwu-audit-skills.md`、`design-crwu-dws.md`、`design-audit-live-kb-protocol.md`：口径改写，协议决策 B 标记 ❌ 已废止）；`skills/README.md`、`skills/crwu-dws/SKILL.md` + refs 01 口径行（CRWU_KB_ROOT 一律"仅维护/离线归档"）；`tools/kb/kb_tool.py` + README（validate 删除"已发布条目须带 curated_by/reviewed_on"检查；assemble 输出"发布门禁/试点模式"段 → "装配说明（无发布门禁：下载即审）"；release 子命令=状态标注信息口径；docstring/注释同步）
