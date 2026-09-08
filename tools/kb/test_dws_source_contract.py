@@ -8,7 +8,7 @@ ACTIVE_CONTRACT_FILES = [
     "skills/README.md",
     "skills/crwu-dws/SKILL.md",
     "skills/crwu-dws/references/00-目录快照schema.md",
-    "skills/crwu-dws/references/01-镜像与manifest规范.md",
+    "skills/crwu-dws/references/01-审核下载与manifest规范.md",
     "skills/crwu-dws/references/02-缓存与兜底查找规范.md",
     "skills/crwu-audit/SKILL.md",
     "skills/crwu-audit/references/04-待建子技能提案.md",
