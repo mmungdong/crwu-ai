@@ -29,11 +29,11 @@ OBSOLETE_REFERENCE_FILES = (
 REQUIRED_ROUTER_TERMS = (
     "SeqNo",
     "ObjectId",
-    "scope_tags",
-    "asset_tags",
-    "business_tags",
-    "method_tags",
-    "overlay_tags",
+    "scope_types[]",
+    "asset_types[]",
+    "business_types[]",
+    "methods[]",
+    "overlays[]",
     "review_risk_class",
     "materiality",
     "skills_to_load",
@@ -46,25 +46,32 @@ REQUIRED_ROUTER_TERMS = (
     "08-union-dispatch-rules.md",
 )
 
-REGISTRY_HEADER = ("axis", "skill", "layer", "relationship", "status/load behavior")
+REGISTRY_HEADER = ("axis", "label", "skill", "status", "load behavior")
 
 EXPECTED_REGISTRY_ROWS = (
-    ("scope", "scope-valuation", "scope", "independent", "union"),
-    ("asset", "asset-realestate", "asset", "independent", "union"),
-    ("business", "business-rent", "business", "asset-realestate", "intersect"),
-    ("method", "method-income", "method", "independent", "union"),
-    ("overlay", "overlay-state-owned", "overlay", "independent", "union"),
-    ("fallback", "fallback-gap", "fallback", "all axes miss", "record gap"),
+    ("scope", "企业价值", "crwu-audit-scope-enterprise-value", "pending", "record gap"),
+    ("asset", "房地产", "crwu-audit-asset-realestate", "available", "load"),
+    ("asset", "设备", "crwu-audit-asset-equipment", "pending", "record gap"),
+    ("asset", "无形资产", "crwu-audit-asset-intangible", "pending", "record gap"),
+    ("business", "租赁", "crwu-audit-business-rent", "available", "load"),
+    ("business", "清算", "crwu-audit-business-liquidation", "pending", "record gap"),
 )
 
-LEGACY_SKILL_NAMES = {"crwu-audit-realestate", "crwu-audit-realestate-rent"}
+LEGACY_REGISTRY_SKILL = "crwu-audit-realestate-rent"
 
 
 def _markdown_cells(line):
     stripped = line.strip()
     if "|" not in stripped:
         return None
-    return tuple(cell.strip().casefold() for cell in stripped.strip("|").split("|"))
+    cells = []
+    for raw_cell in stripped.strip("|").split("|"):
+        cell = raw_cell.strip()
+        inline_code = re.fullmatch(r"`([^`]*)`", cell)
+        if inline_code:
+            cell = inline_code.group(1).strip()
+        cells.append(cell.casefold())
+    return tuple(cells)
 
 
 def _is_markdown_separator(cells):
@@ -133,35 +140,51 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
         rules_text = rules_path.read_text(encoding="utf-8")
-
-        self.assertRegex(
+        algorithm = re.search(
+            r"\bskills_to_load\s*=\s*stable_unique\s*\((?P<arguments>[\s\S]*?)\)",
             rules_text,
-            r"\bskills_to_load\s*=\s*stable_unique\s*\(",
+        )
+
+        self.assertIsNotNone(
+            algorithm,
             "union dispatch rules must define an executable stable_unique load algorithm",
         )
+        arguments = algorithm.group("arguments")
+        required_inputs = (
+            "scope_skills",
+            "asset_skills",
+            "business_skills",
+            "method_skills",
+            "overlay_skills",
+            "public_skills",
+        )
+        missing = [
+            name
+            for name in required_inputs
+            if re.search(rf"\b{re.escape(name)}\b", arguments) is None
+        ]
+
+        self.assertEqual([], missing, f"stable union algorithm is missing inputs: {missing}")
 
     def test_union_dispatch_rules_load_four_skills_for_realestate_liquidation_auction(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
         rules_text = rules_path.read_text(encoding="utf-8")
-        scenario = re.search(r"房地产清算后拍卖处置(?P<body>[\s\S]{0,800})", rules_text)
+        scenario_start = rules_text.find("房地产清算后拍卖处置")
 
-        self.assertIsNotNone(
-            scenario,
+        self.assertGreaterEqual(
+            scenario_start,
+            0,
             "union dispatch rules must include the realestate liquidation auction scenario",
         )
-        scenario_body = scenario.group("body")
+        scenario_body = rules_text[scenario_start : scenario_start + 1200]
         expected_skills = (
-            "asset-realestate",
-            "business-liquidation",
-            "business-disposal",
-            "business-auction",
+            "crwu-audit-asset-realestate",
+            "crwu-audit-business-liquidation",
+            "crwu-audit-business-disposal",
+            "crwu-audit-business-auction",
         )
-        missing = [
-            skill
-            for skill in expected_skills
-            if re.search(rf"(?<![\w-]){re.escape(skill)}(?![\w-])", scenario_body) is None
-        ]
+        missing = [skill for skill in expected_skills if skill not in scenario_body]
 
         self.assertEqual(
             [],
@@ -195,11 +218,13 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             f"registry must contain the Markdown header: {' | '.join(REGISTRY_HEADER)}",
         )
         missing = [row for row in EXPECTED_REGISTRY_ROWS if row not in registry_rows]
-        registered_skills = {row[1] for row in registry_rows}
-        legacy_skills = sorted(LEGACY_SKILL_NAMES.intersection(registered_skills))
 
         self.assertEqual([], missing, f"skill registry is missing required relationship rows: {missing}")
-        self.assertEqual([], legacy_skills, f"legacy combined skills remain registered: {legacy_skills}")
+        self.assertNotIn(
+            LEGACY_REGISTRY_SKILL,
+            registry_text.casefold(),
+            f"legacy combined skill remains registered: {LEGACY_REGISTRY_SKILL}",
+        )
 
 
 if __name__ == "__main__":
