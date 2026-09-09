@@ -1,7 +1,7 @@
 # 输入与 route_profile
 
 | 版本 | v1.0 | 状态 | 2026-09-09 多维路由定稿 | 维护 | 输入字段与画像 schema 唯一事实源 |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- |
 
 ## 输入字段
 
@@ -78,7 +78,7 @@
 }
 ```
 
-`source/evidence/location` 是不可拆分的溯源三元组：`source` 说明来自记录字段、报告文件或名称推断，`evidence` 保留实际字段值或原文，`location` 给出字段键或文件·章节/页/行号；文件未读取时 `location=null`，不得伪造。企业价值范围下的 `asset_types[]` 另必须包含 `materiality: key|non-key|unknown`，并保留判定理由。字段直读或真实报告原文为高置信度；报告名称推断为中或低置信度；来源冲突、弱信号或 `materiality=unknown` 时 `review_required=true`。
+`source/evidence/location` 是不可拆分的数组三元组：`source[]` 说明来自记录字段、报告文件或名称推断，`evidence[]` 保留实际字段值或原文，`location[]` 给出字段键或文件·章节/页/行号；文件未读取时用 `evidence=["未抽验（文件未读取）"]`、`location=[]`，不得伪造。企业价值范围下的 `asset_types[]` 另必须包含 `materiality: key|non-key|unknown`，并保留判定理由。字段直读或真实报告原文为高置信度；报告名称推断为中或低置信度；来源冲突、弱信号或 `materiality=unknown` 时 `review_required=true`。
 
 ## 文件级读取与溯源
 
@@ -86,18 +86,20 @@
 
 1. 用真实 schema code 和 `ObjectId` 下载附件，并确认文件存在且字节数非零。
 2. 先用 `file` 识别格式：旧 `.doc` OLE 可用 `textutil -convert txt`；`.docx` 读 OOXML；`.pdf` 用文本提取工具；`.xlsx/.xls` 用相应表格工具。先探测现有工具，不得凭印象宣称不可读。
-3. 在文件中定位原文，为文件级字段回填 `source`、`evidence` 与 `location`（方法项可使用同义字段 `source_loc`，值仍为文件·章节/页/行号）。没有定位不得用于冲突定论。
+3. 在文件中定位原文，为文件级字段回填数组 `source`、`evidence` 与 `location`。没有定位不得用于冲突定论。
 4. 文件未下载或不可读时，字段显式标记 `未抽验（文件未读取）`，不填定位。
 
 附件名只能标记为提示或待抽验，不能据此表述“已采用某法”。严禁从氚云字段、附件名、行业经验补写报告原文，或编造章节、页码、行号。
 
 ## 方法角色概要
 
-`methods[]` 保留报告披露/采用的全部方法，每项使用 `role=采用-作结论|采用-未作结论|测算-参考`；`conclusion_method` 单独保留结论所用方法。详细判定与多方法检查见 [05-method-classification.md](05-method-classification.md)。
+`methods[]` 保留报告披露/采用的全部方法。每项严格使用 00 的通用标签 schema：canonical 方法写入 `type`，`source/evidence/location` 均为数组，并保留 `confidence/review_required`；方法项额外使用 `role=采用-作结论|采用-未作结论|测算-参考`。`conclusion_method` 单独保留结论所用方法并引用相同 canonical `type` 和证据结构。详细判定与多方法检查见 [05-method-classification.md](05-method-classification.md)。
 
 ## KB 装配输入
 
-知识库装配直接消费正式五轴 `scope_types[]/asset_types[]/business_types[]/methods[]/overlays[]`，以及价值类型、报告形态、基准日等必要 `route_profile` 字段。装配条件必须映射到这些正式字段，不生成旧单一角度或兼容分发键，也不得用派生键取代、压缩或删除任何轴标签。
+五轴 `route_profile` 是新 router 的唯一画像契约。当前 `tools/kb/kb_tool.py assemble` 仍是 legacy 装配器：其 route profile 转换只理解旧 `object.object_class`、`methods[].method` 与 `scenario`，不理解正式五轴；禁止把新五轴画像直接传给它，以免维度静默漏装。
+
+在装配器完成原生多轴支持前，命中的 available 叶子 skill 必须按自身 references 中声明的真实 DWS 路径执行实时下载和材料准备。确需调用 legacy assemble 时，只有存在明确、经验证且不丢失五轴标签的适配器才可继续；没有适配器则阻断该装配步骤并记录能力缺口。router 不得为兼容而生成任何旧画像键。
 
 ## Excel 隐藏数据隔离
 

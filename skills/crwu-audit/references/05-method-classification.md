@@ -1,7 +1,7 @@
 # 评估方法分类
 
 | 版本 | v1.0 | 状态 | 2026-09-09 定稿 | 维护 | `methods[]` 与 `conclusion_method` 唯一事实源 |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- |
 
 ## 多标签方法词表
 
@@ -32,29 +32,29 @@
 
 ## 结论方法
 
-`conclusion_method` 与 `methods[]` 分开记录：
+`conclusion_method` 与 `methods[]` 分开记录，并使用与通用标签一致的证据结构：每个结论方法对象都包含 canonical `type`、数组 `source/evidence/location`、`confidence/review_required`。
 
-- 单一方法作结论时，记录该 canonical 方法及结论章节证据。
-- 多方法加权、综合或区间作结论时，按报告原文记录全部参与结论的方法、权重或综合方式，不虚构单一结论方法。
+- 单一方法作结论时，`conclusion_method` 为一个证据对象，其 `type` 必须与对应 `methods[].type` 完全一致。
+- 多方法加权、综合或区间作结论时，`conclusion_method` 使用证据对象数组，按报告原文逐项记录全部参与结论的 canonical `type`、权重或综合方式，不虚构单一结论方法。
 - 报告未明确结论取值来源时，`conclusion_method=null`，加入材料缺口并人工复核。
-- `conclusion_method` 中出现的方法必须能在 `methods[]` 找到对应项，且其角色为 `采用-作结论`。
+- `conclusion_method` 中每个 `type` 必须能在 `methods[].type` 找到对应项，且其角色为 `采用-作结论`。
 
 方法专项审核至少覆盖：全部采用方法是否披露、结论方法选择理由是否说明、各法结果差异是否分析、差异较大是否解释，以及报告/说明/明细表的方法口径是否一致。
 
-## source-location 契约
+## 方法证据契约
 
-方法和结论方法只允许由真实读取的文件确认。每项必须保留 `source/evidence/source_loc`：
+方法和结论方法只允许由真实读取的文件确认。`methods[]` 每项在通用标签 schema 上增加 `role`：
 
 ```jsonc
 {
-  "method": "收益法",
+  "type": "收益法",
   "role": "采用-未作结论",
-  "source": "评估报告文件",
-  "evidence": "本次评估采用资产基础法和收益法……最终采用资产基础法结果",
-  "source_loc": "评估说明·评估方法选择与结论章节(L730-748)",
+  "source": ["评估报告文件"],
+  "evidence": ["本次评估采用资产基础法和收益法……最终采用资产基础法结果"],
+  "location": ["评估说明·评估方法选择与结论章节(L730-748)"],
   "confidence": "high",
   "review_required": false
 }
 ```
 
-未下载、不可读或未定位时，只能写 `未抽验（文件未读取）`，`source_loc=null`，不得用于 ROUTE 冲突定论。严禁凭记录字段、附件名、行业经验补写方法原文，或编造章节、页码、行号。文件下载、格式转换、隐藏数据隔离和定位前置按 [00-input-and-route-profile.md](00-input-and-route-profile.md) 执行。
+`conclusion_method` 的对象使用同一 `type/source/evidence/location/confidence/review_required` 结构，不再使用 `method`、标量来源字段或位置别名。未下载、不可读或未定位时，只能写 `evidence=["未抽验（文件未读取）"]`、`location=[]`，不得用于 ROUTE 冲突定论。严禁凭记录字段、附件名、行业经验补写方法原文，或编造章节、页码、行号。文件下载、格式转换、隐藏数据隔离和定位前置按 [00-input-and-route-profile.md](00-input-and-route-profile.md) 执行。
