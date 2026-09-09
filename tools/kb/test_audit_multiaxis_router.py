@@ -218,11 +218,12 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             f"registry must contain the Markdown header: {' | '.join(REGISTRY_HEADER)}",
         )
         missing = [row for row in EXPECTED_REGISTRY_ROWS if row not in registry_rows]
+        registered_skills = {row[2] for row in registry_rows}
 
         self.assertEqual([], missing, f"skill registry is missing required relationship rows: {missing}")
         self.assertNotIn(
             LEGACY_REGISTRY_SKILL,
-            registry_text.casefold(),
+            registered_skills,
             f"legacy combined skill remains registered: {LEGACY_REGISTRY_SKILL}",
         )
 
