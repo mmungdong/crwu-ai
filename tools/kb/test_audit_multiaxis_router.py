@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -35,6 +36,7 @@ REQUIRED_ROUTER_TERMS = (
     "overlay_tags",
     "review_risk_class",
     "materiality",
+    "skills_to_load",
     "02-scope-classification.md",
     "03-asset-classification.md",
     "04-business-classification.md",
@@ -44,13 +46,51 @@ REQUIRED_ROUTER_TERMS = (
     "08-union-dispatch-rules.md",
 )
 
-REQUIRED_REGISTRY_PREFIXES = (
-    "scope-",
-    "asset-",
-    "business-",
-    "method-",
-    "overlay-",
+REGISTRY_HEADER = ("axis", "skill", "layer", "relationship", "status/load behavior")
+
+EXPECTED_REGISTRY_ROWS = (
+    ("scope", "scope-valuation", "scope", "independent", "union"),
+    ("asset", "asset-realestate", "asset", "independent", "union"),
+    ("business", "business-rent", "business", "asset-realestate", "intersect"),
+    ("method", "method-income", "method", "independent", "union"),
+    ("overlay", "overlay-state-owned", "overlay", "independent", "union"),
+    ("fallback", "fallback-gap", "fallback", "all axes miss", "record gap"),
 )
+
+LEGACY_SKILL_NAMES = {"crwu-audit-realestate", "crwu-audit-realestate-rent"}
+
+
+def _markdown_cells(line):
+    stripped = line.strip()
+    if "|" not in stripped:
+        return None
+    return tuple(cell.strip().casefold() for cell in stripped.strip("|").split("|"))
+
+
+def _is_markdown_separator(cells):
+    return all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
+
+
+def _registry_data_rows(text):
+    lines = text.splitlines()
+    for header_index, line in enumerate(lines):
+        if _markdown_cells(line) != REGISTRY_HEADER:
+            continue
+
+        rows = []
+        for candidate in lines[header_index + 1 :]:
+            cells = _markdown_cells(candidate)
+            if cells is None:
+                if rows:
+                    break
+                continue
+            if len(cells) != len(REGISTRY_HEADER):
+                break
+            if _is_markdown_separator(cells):
+                continue
+            rows.append(cells)
+        return rows
+    return None
 
 
 class AuditMultiaxisRouterContractTest(unittest.TestCase):
@@ -79,18 +119,54 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
 
         self.assertEqual([], missing, f"root router is missing contract terms: {missing}")
 
-    def test_root_router_loads_the_union_of_every_matched_axis(self):
+    def test_root_router_rejects_legacy_level_routing(self):
         router_path = AUDIT_SKILL_ROOT / "SKILL.md"
         self.assertTrue(router_path.is_file(), f"missing root router: {router_path}")
         router_text = router_path.read_text(encoding="utf-8")
-        required_terms = ("各维度", "并集", "同时加载")
 
-        missing = [term for term in required_terms if term not in router_text]
+        self.assertIsNone(
+            re.search(r"\bL[12]\b", router_text, flags=re.IGNORECASE),
+            "root router must not retain the active L1/L2 routing model",
+        )
+
+    def test_union_dispatch_rules_define_stable_unique_algorithm(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+
+        self.assertRegex(
+            rules_text,
+            r"\bskills_to_load\s*=\s*stable_unique\s*\(",
+            "union dispatch rules must define an executable stable_unique load algorithm",
+        )
+
+    def test_union_dispatch_rules_load_four_skills_for_realestate_liquidation_auction(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+        scenario = re.search(r"房地产清算后拍卖处置(?P<body>[\s\S]{0,800})", rules_text)
+
+        self.assertIsNotNone(
+            scenario,
+            "union dispatch rules must include the realestate liquidation auction scenario",
+        )
+        scenario_body = scenario.group("body")
+        expected_skills = (
+            "asset-realestate",
+            "business-liquidation",
+            "business-disposal",
+            "business-auction",
+        )
+        missing = [
+            skill
+            for skill in expected_skills
+            if re.search(rf"(?<![\w-]){re.escape(skill)}(?![\w-])", scenario_body) is None
+        ]
 
         self.assertEqual(
             [],
             missing,
-            f"root router must take the union of matched axes and load them together: {missing}",
+            f"realestate liquidation auction scenario is missing nearby skills: {missing}",
         )
 
     def test_axis_named_leaf_skills_replace_legacy_combined_skills(self):
@@ -112,10 +188,18 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         registry_path = AUDIT_SKILL_ROOT / "references/07-skill-registry.md"
         self.assertTrue(registry_path.is_file(), f"missing skill registry: {registry_path}")
         registry_text = registry_path.read_text(encoding="utf-8")
+        registry_rows = _registry_data_rows(registry_text)
 
-        missing = [prefix for prefix in REQUIRED_REGISTRY_PREFIXES if prefix not in registry_text]
+        self.assertIsNotNone(
+            registry_rows,
+            f"registry must contain the Markdown header: {' | '.join(REGISTRY_HEADER)}",
+        )
+        missing = [row for row in EXPECTED_REGISTRY_ROWS if row not in registry_rows]
+        registered_skills = {row[1] for row in registry_rows}
+        legacy_skills = sorted(LEGACY_SKILL_NAMES.intersection(registered_skills))
 
-        self.assertEqual([], missing, f"skill registry is missing axis prefixes: {missing}")
+        self.assertEqual([], missing, f"skill registry is missing required relationship rows: {missing}")
+        self.assertEqual([], legacy_skills, f"legacy combined skills remain registered: {legacy_skills}")
 
 
 if __name__ == "__main__":
