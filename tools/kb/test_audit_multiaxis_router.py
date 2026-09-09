@@ -28,16 +28,20 @@ OBSOLETE_REFERENCE_FILES = (
 REQUIRED_ROUTER_TERMS = (
     "SeqNo",
     "ObjectId",
-    "scope_types",
-    "asset_types",
-    "business_types",
-    "method_types",
-    "overlay_types",
+    "scope_tags",
+    "asset_tags",
+    "business_tags",
+    "method_tags",
+    "overlay_tags",
     "review_risk_class",
     "materiality",
-    "asset-realestate",
-    "business-rent",
-    "并集",
+    "02-scope-classification.md",
+    "03-asset-classification.md",
+    "04-business-classification.md",
+    "05-method-classification.md",
+    "06-overlay-classification.md",
+    "07-skill-registry.md",
+    "08-union-dispatch-rules.md",
 )
 
 REQUIRED_REGISTRY_PREFIXES = (
@@ -66,7 +70,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
 
         self.assertEqual([], remaining, f"obsolete combined references remain: {remaining}")
 
-    def test_root_router_declares_multiaxis_profile_and_union_dispatch(self):
+    def test_root_router_declares_multiaxis_profile_and_reference_set(self):
         router_path = AUDIT_SKILL_ROOT / "SKILL.md"
         self.assertTrue(router_path.is_file(), f"missing root router: {router_path}")
         router_text = router_path.read_text(encoding="utf-8")
@@ -74,6 +78,20 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         missing = [term for term in REQUIRED_ROUTER_TERMS if term not in router_text]
 
         self.assertEqual([], missing, f"root router is missing contract terms: {missing}")
+
+    def test_root_router_loads_the_union_of_every_matched_axis(self):
+        router_path = AUDIT_SKILL_ROOT / "SKILL.md"
+        self.assertTrue(router_path.is_file(), f"missing root router: {router_path}")
+        router_text = router_path.read_text(encoding="utf-8")
+        required_terms = ("各维度", "并集", "同时加载")
+
+        missing = [term for term in required_terms if term not in router_text]
+
+        self.assertEqual(
+            [],
+            missing,
+            f"root router must take the union of matched axes and load them together: {missing}",
+        )
 
     def test_axis_named_leaf_skills_replace_legacy_combined_skills(self):
         required_leaf_files = (
