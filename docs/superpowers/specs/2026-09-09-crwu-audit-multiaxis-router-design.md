@@ -208,6 +208,7 @@ skills/crwu-audit/
     ├── 07-skill-registry.md
     ├── 08-union-dispatch-rules.md
     ├── 09-review-risk-classification.md
+    ├── 10-capability-gap-proposal.md
     └── 99-maintenance.md
 ```
 
@@ -328,7 +329,7 @@ skills/crwu-audit-asset-realestate/
 - 业务技能按并集同时加载，例如清算、处置和拍卖同时执行。
 - 企业价值叠加所有实际参与估值的资产技能；非重点资产保留标签并说明。
 - 资产技能统一使用 `asset-*` 前缀。
-- 企业价值使用 `scope-*` 前缀。
+- 企业价值使用 `scope-*` 前~/code/github/mungdong/crwu-ai/skills缀。
 - 分类、注册和装配参考信息下沉到 `references/`。
 - `SKILL.md` 保持入口化和指针化。
 - `crwu-audit-realestate-rent` 直接删除，不提供兼容入口。
