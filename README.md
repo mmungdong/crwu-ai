@@ -45,12 +45,14 @@ The first production vertical is **H3Yun (氚云) employee-scope data access**:
 
 ```bash
 # Prerequisites: Go 1.24+, GNU Make
-make build          # writes ./bin/crwu
-./bin/crwu version
+make build          # writes macOS ./bin/darwin/crwu and Windows ./bin/windows/crwu.exe
+./bin/darwin/crwu version
 make test
 ```
 
-Binaries land only in `bin/` (`make clean` removes them). No configuration
+`make build` produces both a macOS and a Windows binary, one per platform
+subdirectory under `bin/` (`make clean` removes them); `make build-mac` and
+`make build-win` build a single platform. No configuration
 file is required; optional `H3YUN_BASE_URL` overrides the H3Yun console origin
 for testing.
 
@@ -59,8 +61,8 @@ for testing.
 **1 · Let the employee log in themselves — no DevTools needed**
 
 ```bash
-./bin/crwu h3yun session login       # opens a browser; employee scans with DingTalk
-./bin/crwu h3yun session status      # who, which engine, time-to-expiry
+./bin/darwin/crwu h3yun session login       # opens a browser; employee scans with DingTalk
+./bin/darwin/crwu h3yun session status      # who, which engine, time-to-expiry
 ```
 
 `crwu` reads the session token straight from the browser into the local
@@ -70,18 +72,18 @@ keyring — it is never printed or shared with the AI host. A DevTools-based
 **2 · Browse the workspace as that employee**
 
 ```bash
-./bin/crwu h3yun apps list
-./bin/crwu h3yun apps children --app <appCode>
-./bin/crwu h3yun forms search --keyword <name>
+./bin/darwin/crwu h3yun apps list
+./bin/darwin/crwu h3yun apps children --app <appCode>
+./bin/darwin/crwu h3yun forms search --keyword <name>
 ```
 
 **3 · Read records and pull attachments**
 
 ```bash
-./bin/crwu h3yun records list   --schema <schemaCode> [--keyword <kw>] [--filter "Status = 1 and Name Contains '测试'"]
-./bin/crwu h3yun records get    --schema <schemaCode> --id <recordId>
-./bin/crwu h3yun files list     --schema <schemaCode> --id <recordId>
-./bin/crwu h3yun file download  --schema <schemaCode> --id <recordId> --out ./files
+./bin/darwin/crwu h3yun records list   --schema <schemaCode> [--keyword <kw>] [--filter "Status = 1 and Name Contains '测试'"]
+./bin/darwin/crwu h3yun records get    --schema <schemaCode> --id <recordId>
+./bin/darwin/crwu h3yun files list     --schema <schemaCode> --id <recordId>
+./bin/darwin/crwu h3yun file download  --schema <schemaCode> --id <recordId> --out ./files
 ```
 
 > 🔒 **Where do credentials live?** Only in the OS credential store
@@ -202,7 +204,7 @@ tests/                          cross-package tests
 
 ```bash
 make fmt     # gofmt
-make build   # writes ./bin/crwu
+make build   # writes ./bin/darwin/crwu (macOS) and ./bin/windows/crwu.exe (Windows)
 make test
 ```
 

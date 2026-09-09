@@ -17,7 +17,8 @@
 
 ## 2. 环境与前置
 
-- 需要已构建的二进制 `./bin/crwu`（构建：仓库内 `make build`）或绝对路径 `/tmp/crwu` 等。
+- 需要已构建的二进制 `./bin/darwin/crwu`（macOS，构建：仓库内 `make build`；
+  Windows 产物为 `./bin/windows/crwu.exe`）或绝对路径 `/tmp/crwu` 等。
 - 可选环境变量：
 
 | 变量 | 作用 | 默认 |

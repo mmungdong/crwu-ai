@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-09 · refactor · `make build` 跨平台产出：macOS 与 Windows 二进制按平台子目录落入 `bin/`
+
+- 影响：根目录 `Makefile`（`build` = `build-mac` + `build-win`；新增
+  `bin/darwin/crwu`（macOS，架构默认跟随构建机，`DARWIN_ARCH` 可覆盖）与
+  `bin/windows/crwu.exe`（Windows，架构默认 amd64，`WINDOWS_ARCH` 可覆盖）；
+  macOS 侧 CGO 开启、Windows 侧纯 Go 交叉编译）、`README.md`、
+  `README.zh-CN.md`、`docs/cli-manual.md`、`skills/h3yun-query/SKILL.md`
+  （仓库内产物路径由 `./bin/crwu` 改为 `./bin/darwin/crwu` /
+  `./bin/windows/crwu.exe`）。
+- 说明：`make build` 一次产出 mac 与 win 两种格式二进制，便于分发；仍只写
+  `bin/`，`make clean` 全清；`make build-mac` / `make build-win` 单平台构建。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
 ## 2026-09-08 · feat · 新增 crwu-init 技能：crwu 环境初始化 / skills 安装 / 更新分发器
 
 - 影响：新增 `skills/crwu-init/SKILL.md` + `references/agent-skill-dirs.md`；`skills/README.md` 技能表登记。

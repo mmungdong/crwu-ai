@@ -42,12 +42,14 @@ CRWU 是一个 **Go 命令行工具集**，为 AI 宿主——WorkBuddy、DeepSe
 
 ```bash
 # 前置：Go 1.24+、GNU Make
-make build          # 产出 ./bin/crwu
-./bin/crwu version
+make build          # 产出 macOS ./bin/darwin/crwu 与 Windows ./bin/windows/crwu.exe
+./bin/darwin/crwu version
 make test
 ```
 
-产物只写入 `bin/`（`make clean` 可清空）。开始使用**无需配置文件**；可选
+`make build` 在 `bin/` 下按平台子目录分别产出 macOS 与 Windows 两种二进制
+（`make clean` 可清空）；`make build-mac`、`make build-win` 可单独构建单平台。
+开始使用**无需配置文件**；可选
 环境变量 `H3YUN_BASE_URL` 可在测试时覆盖氚云控制台地址。
 
 ## 🔑 员工使用流程
@@ -55,8 +57,8 @@ make test
 **① 员工自助登录（无需 DevTools）**
 
 ```bash
-./bin/crwu h3yun session login       # 自动开浏览器，员工用钉钉扫码
-./bin/crwu h3yun session status      # 是谁、哪个引擎、剩余有效期
+./bin/darwin/crwu h3yun session login       # 自动开浏览器，员工用钉钉扫码
+./bin/darwin/crwu h3yun session status      # 是谁、哪个引擎、剩余有效期
 ```
 
 会话令牌由 `crwu` 直接从浏览器读入本机 keyring——不打印、不发给 AI 宿主。
@@ -65,18 +67,18 @@ make test
 **② 以该员工身份浏览工作台**
 
 ```bash
-./bin/crwu h3yun apps list
-./bin/crwu h3yun apps children --app <应用编码>
-./bin/crwu h3yun forms search --keyword <名称>
+./bin/darwin/crwu h3yun apps list
+./bin/darwin/crwu h3yun apps children --app <应用编码>
+./bin/darwin/crwu h3yun forms search --keyword <名称>
 ```
 
 **③ 读取记录并下载附件**
 
 ```bash
-./bin/crwu h3yun records list    --schema <表单编码> [--keyword <关键词>] [--filter "Status = 1 and Name Contains '测试'"]
-./bin/crwu h3yun records get     --schema <表单编码> --id <记录ID>
-./bin/crwu h3yun files list      --schema <表单编码> --id <记录ID>
-./bin/crwu h3yun file download   --schema <表单编码> --id <记录ID> --out ./附件
+./bin/darwin/crwu h3yun records list    --schema <表单编码> [--keyword <关键词>] [--filter "Status = 1 and Name Contains '测试'"]
+./bin/darwin/crwu h3yun records get     --schema <表单编码> --id <记录ID>
+./bin/darwin/crwu h3yun files list      --schema <表单编码> --id <记录ID>
+./bin/darwin/crwu h3yun file download   --schema <表单编码> --id <记录ID> --out ./附件
 ```
 
 > 🔒 **凭证存在哪里？** 只存本机 OS 凭据存储（`internal/platform/h3yuncreds`）
@@ -195,7 +197,7 @@ tests/                          跨包测试
 
 ```bash
 make fmt     # gofmt
-make build   # 产出 ./bin/crwu
+make build   # 产出 ./bin/darwin/crwu（macOS）与 ./bin/windows/crwu.exe（Windows）
 make test
 ```
 
