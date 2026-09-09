@@ -95,9 +95,9 @@
 
 `methods[]` 保留报告披露/采用的全部方法，每项使用 `role=采用-作结论|采用-未作结论|测算-参考`；`conclusion_method` 单独保留结论所用方法。详细判定与多方法检查见 [05-method-classification.md](05-method-classification.md)。
 
-## KB scenario 装配兼容
+## KB 装配输入
 
-多轴路由以五个正式数组字段为准，不恢复旧的单一 canonical 角度。若知识库装配清单声明 `dims.scenario`，在路由完成后另生成 `kb_profile.scenario`，其值必须来自实时下载的标签词典/装配表受控值；例如租赁业务可映射 `经营性物业出租`。`scenario` 必须与 `methods` 一并传给 `kb_tool.py assemble`，否则场景筛选可能静默失效。该兼容键只影响 KB 规则筛选，不得取代或删除 `business_types[]` 中的任何标签。
+知识库装配直接消费正式五轴 `scope_types[]/asset_types[]/business_types[]/methods[]/overlays[]`，以及价值类型、报告形态、基准日等必要 `route_profile` 字段。装配条件必须映射到这些正式字段，不生成旧单一角度或兼容分发键，也不得用派生键取代、压缩或删除任何轴标签。
 
 ## Excel 隐藏数据隔离
 
