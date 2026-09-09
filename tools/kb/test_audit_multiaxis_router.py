@@ -4,7 +4,8 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AUDIT_SKILL_ROOT = REPO_ROOT / "skills/crwu-audit"
+SKILLS_ROOT = REPO_ROOT / "skills"
+AUDIT_SKILL_ROOT = SKILLS_ROOT / "crwu-audit"
 
 EXPECTED_REFERENCE_FILES = (
     "00-input-and-route-profile.md",
@@ -19,11 +20,6 @@ EXPECTED_REFERENCE_FILES = (
     "09-review-risk-classification.md",
     "10-capability-gap-proposal.md",
     "99-maintenance.md",
-)
-
-OBSOLETE_REFERENCE_FILES = (
-    "03-业务风险分类判定.md",
-    "04-待建子技能提案.md",
 )
 
 REQUIRED_ROUTER_TERMS = (
@@ -103,19 +99,16 @@ def _registry_data_rows(text):
 class AuditMultiaxisRouterContractTest(unittest.TestCase):
     def test_multiaxis_router_reference_set_exists(self):
         references_root = AUDIT_SKILL_ROOT / "references"
-        missing = [
-            name for name in EXPECTED_REFERENCE_FILES if not (references_root / name).is_file()
-        ]
+        expected = set(EXPECTED_REFERENCE_FILES)
+        actual = {path.name for path in references_root.glob("*.md")}
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
 
-        self.assertEqual([], missing, f"missing multiaxis router references: {missing}")
-
-    def test_obsolete_combined_references_are_removed(self):
-        references_root = AUDIT_SKILL_ROOT / "references"
-        remaining = [
-            name for name in OBSOLETE_REFERENCE_FILES if (references_root / name).exists()
-        ]
-
-        self.assertEqual([], remaining, f"obsolete combined references remain: {remaining}")
+        self.assertEqual(
+            expected,
+            actual,
+            f"multiaxis router reference set mismatch: missing={missing}, extra={extra}",
+        )
 
     def test_root_router_declares_multiaxis_profile_and_reference_set(self):
         router_path = AUDIT_SKILL_ROOT / "SKILL.md"
@@ -206,6 +199,26 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
 
         self.assertEqual([], missing, f"missing axis-named leaf skills: {missing}")
         self.assertEqual([], remaining, f"legacy combined skill directories remain: {remaining}")
+
+    def test_active_contracts_do_not_reference_deleted_combined_skill(self):
+        active_paths = (
+            SKILLS_ROOT / "README.md",
+            AUDIT_SKILL_ROOT / "SKILL.md",
+            SKILLS_ROOT / "crwu-audit-asset-realestate/SKILL.md",
+            SKILLS_ROOT / "crwu-audit-business-rent/SKILL.md",
+        )
+        forbidden_skill = "crwu-audit-realestate-rent"
+        violations = [
+            str(path.relative_to(REPO_ROOT))
+            for path in active_paths
+            if path.is_file() and forbidden_skill in path.read_text(encoding="utf-8")
+        ]
+
+        self.assertEqual(
+            [],
+            violations,
+            f"active contracts still reference {forbidden_skill}: {violations}",
+        )
 
     def test_skill_registry_names_every_dispatch_axis(self):
         registry_path = AUDIT_SKILL_ROOT / "references/07-skill-registry.md"
