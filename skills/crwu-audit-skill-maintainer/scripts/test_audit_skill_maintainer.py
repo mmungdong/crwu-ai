@@ -10,15 +10,13 @@ import textwrap
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]  # skills/<skill>/scripts/<file>
-CHECKER = (
-    REPO_ROOT
-    / "skills"
-    / "crwu-audit-skill-maintainer"
-    / "scripts"
-    / "check_audit_skill_mappings.py"
-)
-MAINTAINER_SKILL = CHECKER.parents[1]
+# 源仓契约测试：据本文件位置上溯定位 skills 根与源仓根（不硬编码仓库布局）。
+# 校验对象是本技能脚本 + 完整技能树，运行时不需要本测试。
+SKILLS_ROOT = Path(__file__).resolve().parents[2]  # skills/<skill>/scripts/<file> → skills 根
+REPO_ROOT = SKILLS_ROOT.parent                     # 源仓根（--repo-root / 真实仓库回归用）
+SCRIPTS_DIR = Path(__file__).resolve().parent
+CHECKER = SCRIPTS_DIR / "check_audit_skill_mappings.py"
+MAINTAINER_SKILL = SCRIPTS_DIR.parent
 
 COMPLETE_TREE = """
 - 📁 01-业务路线/
@@ -463,8 +461,116 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
                 report["catalog"]["generated_at"],
             )
 
+    def _kb_tool(self):
+        module_path = SCRIPTS_DIR / "kb_tool.py"
+        spec = importlib.util.spec_from_file_location("kb_tool_for_selfcontainment", module_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_repo_reference_lint_flags_repo_directories_in_skill_content(self):
+        """技能正文不得引用代码仓库目录：技能以副本安装时这些路径不存在。"""
+        cases = [
+            ("docs", "参考 `docs/design-crwu-dws.md` 的设计口径。"),
+            ("tools", "运行 `tools/kb/kb_tool.py validate`。"),
+            ("bin", "用 `./bin/darwin/crwu` 登录。"),
+            ("docs", "见 `../docs/x.md`。"),
+            ("cmd", "源码在 `cmd/crwu` 下。"),
+            ("internal", "实现见 `internal/platform`。"),
+            ("Makefile", "构建走 `Makefile`。"),
+            ("skills/<skill>/", "调用 `skills/crwu-dws/scripts/x.py`。"),
+        ]
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            for index, (_label, body) in enumerate(cases):
+                skill = root / f"crwu-demo-{index}"
+                _write(skill / "SKILL.md", f"---\nname: crwu-demo-{index}\n---\n\n{body}\n")
+
+            errors, _warnings = module.repo_reference_lint(str(root))
+
+            self.assertEqual(len(cases), len(errors), errors)
+            for label, _body in cases:
+                self.assertTrue(
+                    any(label in error for error in errors),
+                    f"{label} 未被 lint 拦下：{errors}",
+                )
+
+    def test_repo_reference_lint_ignores_system_paths_and_urls(self):
+        """shebang 的 /usr/bin/env 与外部文档 URL 不是仓库目录，不得误报。"""
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            skill = root / "crwu-demo"
+            _write(
+                skill / "SKILL.md",
+                "---\nname: crwu-demo\n---\n\n# demo\n"
+                "外部文档：https://www.example.com/docs/cli/skills\n",
+            )
+            _write(skill / "scripts" / "tool.py", '#!/usr/bin/env python3\nprint("ok")\n')
+
+            errors, _warnings = module.repo_reference_lint(str(root))
+
+            self.assertEqual([], errors)
+
+    def test_repo_reference_lint_flags_links_escaping_the_skill_directory(self):
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            _write(
+                root / "crwu-demo/SKILL.md",
+                "---\nname: crwu-demo\n---\n\n见 [手册](../../docs/cli-manual.md)。\n",
+            )
+
+            errors, _warnings = module.repo_reference_lint(str(root))
+
+            self.assertEqual(1, len(errors), errors)
+            self.assertIn("逃出技能目录", errors[0])
+
+    def test_repo_reference_lint_exempts_declared_source_repo_tests(self):
+        """声明为源仓契约测试/源仓维护工具的脚本可定位源仓（运行时不需要它们）。"""
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            skill = root / "crwu-demo"
+            _write(skill / "SKILL.md", "---\nname: crwu-demo\n---\n\n# demo\n")
+            _write(
+                skill / "scripts" / "test_contract.py",
+                '"""源仓契约测试：只在源仓维护时运行。"""\n'
+                'REPO_ROOT = 1\n'
+                'DOC = "docs/design-x.md"\n',
+            )
+            _write(skill / "scripts" / "tool.py", '"""源仓维护工具。"""\nDOC = "docs/x.md"\n')
+
+            errors, _warnings = module.repo_reference_lint(str(root))
+
+            self.assertEqual([], errors)
+
+    def test_repo_reference_lint_skips_skill_root_documents(self):
+        """skills 根的 AGENTS.md / README.md 是源仓文档，不是技能。"""
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            _write(root / "README.md", "见 `docs/design-x.md`。\n")
+            _write(root / "AGENTS.md", "见 `skills/crwu-demo/SKILL.md`。\n")
+            _write(root / "crwu-demo/SKILL.md", "---\nname: crwu-demo\n---\n\n# demo\n")
+
+            errors, _warnings = module.repo_reference_lint(str(root))
+
+            self.assertEqual([], errors)
+
+    def test_every_skill_is_self_contained(self):
+        """真实仓库回归：每个技能都不得引用代码仓库目录。"""
+        module = self._kb_tool()
+
+        errors, _warnings = module.repo_reference_lint(str(SKILLS_ROOT))
+
+        self.assertEqual([], errors)
+
     def test_maintainer_skill_passes_live_source_protocol_lint(self):
-        module_path = REPO_ROOT / "skills/crwu-audit-skill-maintainer/scripts/kb_tool.py"
+        module_path = SCRIPTS_DIR / "kb_tool.py"
         spec = importlib.util.spec_from_file_location("kb_tool_for_test", module_path)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)

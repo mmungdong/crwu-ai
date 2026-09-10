@@ -3,7 +3,7 @@
 ## 检查器
 
 ```bash
-python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
+python3 scripts/check_audit_skill_mappings.py \
   --repo-root <source-repo> \
   --catalog <目录树、snapshot 或 node-index> \
   --format text
@@ -53,9 +53,9 @@ python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
 - `REGISTRY_LABEL_NOT_IN_CATALOG` 只针对 `available` 行；`pending` 行的目录缺失属于正常中间态。
 - 重复 registry 行只按一条主张校验，避免同一问题重复计数。
 
-路径键检查范围：`skills/crwu-audit*` 全部 `.md` 的**反引号内容**（技能约定寻址键写在反引号里）；只判断**本次目录已捕获的顶层容器**下的键——局部快照不会被误读为"另一轴全失效"。含 `…`／`*`／`<>`／`某`／`待建`／`不存在`／`省略` 的写法视为示例，不检查。
+路径键检查范围：skills 根下 `crwu-audit*` 技能目录全部 `.md` 的**反引号内容**（技能约定寻址键写在反引号里）；只判断**本次目录已捕获的顶层容器**下的键——局部快照不会被误读为"另一轴全失效"。含 `…`／`*`／`<>`／`某`／`待建`／`不存在`／`省略` 的写法视为示例，不检查。
 
-`--emit-map` 的幂等要求：校准表 `07-kb-skill-map.md` 自身就在扫描范围内，因此它写出的「库内路径键健康」诊断表**不得给未命中键加反引号**（否则下一轮会把这张表当成本文件的新漂移，并把别的技能的漂移重复记到维护器名下）。回归见 `skills/crwu-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py::test_emitted_calibration_table_does_not_become_drift`。
+`--emit-map` 的幂等要求：校准表 `07-kb-skill-map.md` 自身就在扫描范围内，因此它写出的「库内路径键健康」诊断表**不得给未命中键加反引号**（否则下一轮会把这张表当成本文件的新漂移，并把别的技能的漂移重复记到维护器名下）。回归见本技能 `scripts/test_audit_skill_maintainer.py::test_emitted_calibration_table_does_not_become_drift`。
 
 `--format json` 的 stdout 纯净：报告是 stdout 上的唯一对象；`--emit-map` 的"校准表已更新"通知在该模式下走 stderr，便于调用方直接解析。
 
@@ -64,11 +64,13 @@ python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
 ## 新 Skill 验证
 
 ```bash
-python3 skills/crwu-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
-python3 <skill-creator>/scripts/quick_validate.py skills/crwu-audit-skill-maintainer
-python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
-python3 skills/crwu-dws/scripts/test_dws_source_contract.py
-python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
+# 以下命令在技能目录内执行（`scripts/` = 本技能自带脚本）；跨技能脚本用安装根寻址
+SKILLS_ROOT=<本技能所安装到的 skills 根>
+python3 scripts/test_audit_skill_maintainer.py
+python3 <skill-creator>/scripts/quick_validate.py <本技能目录>
+python3 "$SKILLS_ROOT/crwu-audit/scripts/test_audit_multiaxis_router.py"
+python3 "$SKILLS_ROOT/crwu-dws/scripts/test_dws_source_contract.py"
+python3 scripts/kb_tool.py validate --skill-root "$SKILLS_ROOT"
 git diff --check
 ```
 

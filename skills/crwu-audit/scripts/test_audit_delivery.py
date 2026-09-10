@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """AuditResult 校验与 HTML 渲染的契约测试（送达规范 v1.0）。
 
-运行：python3 skills/crwu-audit/scripts/test_audit_delivery.py
+运行：在技能目录内 `python3 scripts/test_audit_delivery.py`
+本测试**自洽**：只依赖本技能 `scripts/` 内的脚本、schema 与样例，可随技能一起安装。
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import audit_delivery as delivery  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parents[3]  # skills/<skill>/scripts/<file>
 MODULE_PATH = Path(__file__).resolve().parent / "audit_delivery.py"
 SAMPLE_PATH = Path(__file__).resolve().parent / "examples" / "audit-result.sample.json"
 

@@ -7,7 +7,7 @@ description: >-
   H0（强制）：人工隐藏区（表 sheet / 行 / 列 / 折叠分组）在审核时必须整体跳过——引擎与 Agent
   不得读取、解析或输出其中任何单元格内容，不得对其产生 C1–C6 差异或审核意见；合计等勾稽只按可见区核。
   只做数据核对，不下价值判断；解析失败必须明示"该表未核"。由 crwu-audit 在材料含测算表时叠加
-  调用；禁止脱离编排据其输出下审核判断（用户明确只要数据核对差异清单时可独立执行）。设计见 docs/design-crwu-audit-skills.md（跨方向能力）。
+  调用；禁止脱离编排据其输出下审核判断（用户明确只要数据核对差异清单时可独立执行）。设计口径见 `crwu-audit/references/12-leaf-common-contract.md` 与 `crwu-audit-optimize/references/00`（跨方向能力）。
 ---
 
 # crwu-audit-datacheck（表格/数据勾稽 · 能力型）

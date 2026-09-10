@@ -1,7 +1,7 @@
 # CRWU 审核意见交付工具（AuditResult 校验 + 单文件 HTML 渲染）
 
 本目录实现《CRWU 审核意见 HTML 送达规范 v1.0》的**机器可校验 Schema**、**校验器**与**确定性 renderer**。
-规范正文（唯一事实源）：`skills/crwu-audit/references/11-html-delivery-spec.md`。
+规范正文（唯一事实源）：本技能 `references/11-html-delivery-spec.md`。
 
 | 文件 | 作用 | 对应规范 |
 | --- | --- | --- |
@@ -14,19 +14,19 @@
 
 ```bash
 # 阶段一冻结指纹（写入 AuditResult.phaseControl.phase1Digest）
-python3 skills/crwu-audit/scripts/audit_delivery.py digest <冻结快照.json>
+python3 scripts/audit_delivery.py digest <冻结快照.json>
 
 # 交付校验（渲染前）
-python3 skills/crwu-audit/scripts/audit_delivery.py validate skills/crwu-audit/scripts/examples/audit-result.sample.json
+python3 scripts/audit_delivery.py validate scripts/examples/audit-result.sample.json
 
 # 渲染自包含单文件 HTML（送达员工的唯一交付件；内置渲染后自检）
-python3 skills/crwu-audit/scripts/audit_delivery.py render skills/crwu-audit/scripts/examples/audit-result.sample.json --out 审核意见.PRJ-2026-0001.html
+python3 scripts/audit_delivery.py render scripts/examples/audit-result.sample.json --out 审核意见.PRJ-2026-0001.html
 
 # 校验渲染后状态（要求 fileTrace 摘要已回填）
-python3 skills/crwu-audit/scripts/audit_delivery.py validate <rendered.json> --rendered
+python3 scripts/audit_delivery.py validate <rendered.json> --rendered
 
 # 契约测试
-python3 skills/crwu-audit/scripts/test_audit_delivery.py
+python3 scripts/test_audit_delivery.py
 ```
 
 退出码：`0` 通过；`1` 校验失败（错误逐条打印到 stderr，且**拒绝渲染**）。
@@ -34,7 +34,7 @@ python3 skills/crwu-audit/scripts/test_audit_delivery.py
 ## 编排层接入（脚本映射）
 
 调用者唯一：`crwu-audit` 编排层（router）。叶子不得调用校验器/渲染器，也不得生成页面或定义最终字段。
-规范口径见 `skills/crwu-audit/references/11-html-delivery-spec.md` §14.1。
+规范口径见本技能 `references/11-html-delivery-spec.md` §14.1。
 
 | 编排阶段 | 命令 | 失败处理 |
 | --- | --- | --- |

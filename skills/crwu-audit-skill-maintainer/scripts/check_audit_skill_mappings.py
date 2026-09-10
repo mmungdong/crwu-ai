@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only inventory checker for crwu-audit asset and business skills."""
+"""Read-only inventory checker for crwu-audit asset and business skills.
+
+源仓维护工具：以 `--repo-root <源仓>` 定位技能树（skills/ 下的 crwu-audit 族），
+用于源仓一致性盘点与门禁，运行时不需要它。
+"""
 
 from __future__ import annotations
 
@@ -1565,7 +1569,7 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
         "## 库内路径键健康（公共轴也查）",
         "",
         (
-            f"检查 {path_keys.get('checked', 0)} 个寻址键（扫描 `skills/crwu-audit*` 全部 .md 的反引号库内路径）："
+            f"检查 {path_keys.get('checked', 0)} 个寻址键（扫描 audit 族技能目录内全部 .md 的反引号库内路径）："
             + ("**全部命中本次目录**" if not key_issues else f"**{len(key_issues)} 个未命中**")
         ),
         "",
@@ -1575,7 +1579,7 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
             "| Skill | 路径键 |",
             "| --- | --- |",
             # Deliberately NOT backticked: this calibration table is itself inside the scanned
-            # `skills/crwu-audit*` tree, so backticking a missing key here would make the next
+            # audit-family skill tree, so backticking a missing key here would make the next
             # run report the diagnostic table as fresh drift of this very file (non-idempotent).
             *[f"| `{i['skill']}` | {i['key']} |" for i in key_issues],
             "",

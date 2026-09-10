@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://crwu.local/schema/audit-result/1.0.0",
   "title": "AuditResult",
-  "description": "CRWU 审核意见送达规范 v1.0 §9 统一 AuditResult JSON 数据结构（机器可校验 Schema；语义重算规则见 skills/crwu-audit/scripts/audit_delivery.py 与规范 §9.4）。",
+  "description": "CRWU 审核意见送达规范 v1.0 §9 统一 AuditResult JSON 数据结构（机器可校验 Schema；语义重算规则见同目录 audit_delivery.py 与规范 §9.4）。",
   "type": "object",
   "required": [
     "schemaVersion",

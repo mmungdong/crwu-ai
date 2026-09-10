@@ -9,6 +9,17 @@
 
 ---
 
+## 2026-09-10 · fix(skills) · 技能全面自洽化：不再引用代码仓库目录，并加机器门禁
+
+- **问题**：技能正文与技能内脚本仍在引用**代码仓库**的位置——`docs/design-*.md`（设计依据）、`docs/cli-manual.md`（CLI 手册）、`./bin/darwin/crwu`（构建产物）、`docs/CHANGELOG.md`/`skills/README.md`（源仓登记），以及以仓库根为前缀的跨技能脚本路径 `skills/<技能>/scripts/…`。技能以副本安装到 agent skills 根后这些路径全部不存在：`h3yun-query` 的手册链接直接失效，跨技能命令也按错误位置寻址。
+- **技能正文（12 文件）改为自洽写法**：设计依据/口径写回本技能 `references/`；跨技能脚本改称「`<技能名>` 技能的 `scripts/<file>`」、命令用 `python3 "$SKILLS_ROOT/<技能名>/scripts/<file>"`；CLI 用法与字段统一以 `crwu scheme`（运行时命令目录）为准，`crwu` 用 PATH 命令而非 `./bin/<平台>/crwu`；源仓登记动作改为功能性表述（源仓设计文档/技能清单/变更纪要）。
+- **技能内脚本（4 个契约测试 + 检查器 + 2 个 README）**：定位 skills 根与源仓根一律由 `__file__` 上溯推导（新增 `SKILLS_ROOT`，`REPO_ROOT = SKILLS_ROOT.parent`），不再硬编码仓库布局；三个测试去掉 `REPO_ROOT / "skills"` 与 `"skills/…"` 字面契约键；`test_audit_delivery.py` 本自洽，删掉未用的 `REPO_ROOT`。
+- **唯一保留的仓库耦合**：`test_dws_source_contract.py` 需要校验两条源仓设计文档——现单列为 `PINNED_SOURCE_REPO_FILES`，并在 `docs/` 不存在（已安装副本）时**显式 skip**（新增 `test_source_repo_docs_are_optional_outside_the_source_repo`），不静默通过也不误报失败。
+- **机器门禁（新增）**：`kb_tool.py` 增加「技能自洽性 lint」`repo_reference_lint` 并接入 `validate` —— 拦截技能目录内 `docs/`、`tools/`、`cmd/`、`internal/`、`bin/`、`Makefile`、`go.mod`、`skills/<技能>/` 及逃出技能目录的相对链接；只扫描真正的技能目录（skills 根的 `AGENTS.md`/`README.md` 是源仓文档，不算技能）；剔除 shebang 的系统路径与外部 URL 误报；支持 `# lint-self`（规则定义行）与文件头声明「源仓契约测试 / 源仓维护工具」两类豁免。
+- **回归测试**：`test_audit_skill_maintainer.py` 新增 6 例（仓库目录拦截 8 种写法、逃出技能目录的链接、源仓契约测试豁免、skills 根文档跳过、系统路径/URL 不误报、**真实仓库每个技能都自洽**），57 → 63 项全绿。
+- **规范沉淀**：`skills/AGENTS.md` §「Skill 自带脚本」扩写为 §「技能自洽性：不得引用代码仓库（硬规则）」——不得引用清单、正确写法对照表、脚本归属与目录内聚、两类例外（外部工具 / 源仓契约测试）、迁移与校验；根 `AGENTS.md` 指引同步。
+- **验证**：`kb_tool.py validate --skill-root skills` error=0/warn=0（自洽性 lint 生效）；四个套件全绿；映射检查器 error=0/warning=0；`git diff --check` 通过。
+
 ## 2026-09-10 · refactor(skills) · 技能依赖的脚本全部收进各技能 scripts/，并确立"Skill 自带脚本"规范
 
 - **问题**：技能正文要求执行的脚本散在 `skills/` 之外——`tools/audit/`（5 件：`audit_delivery.py` + `audit_result.schema.json` + `examples/` + `README.md` + `test_audit_delivery.py`）与 `tools/kb/`（5 件：`kb_tool.py` + `README.md` + 三个契约测试）。`crwu-audit` 的 SKILL.md 甚至自述"部署环境未含 `tools/audit/`（技能以副本安装）时记 capability gap"——即该技能**强制要求的 HTML 交付链路在独立安装时结构性不可用**；`kb_tool.py` 亦被写成"可执行路径由部署环境注入"。技能以副本安装时这些脚本整体缺失。

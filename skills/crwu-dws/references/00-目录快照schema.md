@@ -1,8 +1,8 @@
 # crwu-dws references/00 —— 目录快照 schema / 渲染规则（M1/M2/M3 共用）
 
 > 版本 v2（2026-09-08，随 crwu-dws v0.3：落点迁移到目录缓存层 + M3 支持）。
-> 本文档随技能安装（源仓 `skills/crwu-dws/references/00-目录快照schema.md` 与运行时双份）；
-> 改前先读 `docs/design-crwu-dws.md`（§6 缓存与实时性模型、§10 D8–D11）。
+> 本文档随技能安装（源仓与运行时双份）；
+> 改前先读本技能 `SKILL.md` §5–§6（缓存与实时性模型）与 `references/02`。
 
 ## 1. 用途
 

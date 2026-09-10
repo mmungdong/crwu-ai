@@ -2,7 +2,7 @@
 
 > 定位：审核技能族的**只读**静态校验工具（引用卫生 + 实时引用协议 lint）。
 > 本工具归口本技能，**随技能安装**（本目录即技能内 `scripts/`），被 `crwu-audit-optimize`、
-> `crwu-audit-datacheck` 等按 `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py` 路径引用。
+> `crwu-audit-datacheck` 等按「`crwu-audit-skill-maintainer` 技能的 `scripts/kb_tool.py`」引用。
 
 ## 为什么存在
 
@@ -21,10 +21,10 @@
 
 ```bash
 # 源仓技能：引用卫生 + 实时协议 lint（禁止本地知识库根常量与根路径字面、禁止硬编码 nodeId，crwu-audit* 目录从严）
-python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
+python3 scripts/kb_tool.py validate --skill-root <skills 安装根>
 
 # 追加禁止知识库名称字面（作用于该 root；crwu-dws 自带默认库名，勿对其目录加库名）
-python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills --forbid-literal 中瑞世联
+python3 scripts/kb_tool.py validate --skill-root <skills 安装根> --forbid-literal 中瑞世联
 ```
 
 ## 子命令
@@ -49,7 +49,7 @@ python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-r
   细分对象与子业务在已下载目录包内二次选用，不各建技能。
 
 映射一致性（registry ↔ classification ↔ 真实技能目录 ↔ 最新知识库目录）
-由 `skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py` 校验。
+由本技能 `scripts/check_audit_skill_mappings.py` 校验。
 
 ## 校验口径要点
 

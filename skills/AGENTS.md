@@ -54,17 +54,45 @@
 - 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-audit-optimize` 只给根因与最低改动集，**交接** `crwu-audit-skill-maintainer` 执行；交接不继承修改授权。
 - 现状速查：读 `crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
 
-## Skill 自带脚本（`scripts/`）
+## 技能自洽性：不得引用代码仓库（硬规则）
 
-**硬规则：技能依赖的脚本一律放在该技能自己的 `scripts/` 下，随技能一起安装；技能正文不得把 `skills/` 之外的仓库路径当作可执行依赖。**
+**每个技能必须以副本独立安装后可用。凡技能运行时要用到的内容，都必须在技能目录内；技能目录之外的一切（仓库目录、仓根文件、其他仓库路径）在安装后都不存在。**
 
-- **适用范围**：凡技能正文（`SKILL.md`、`references/*`）要求执行的脚本，以及它们的契约测试、schema、样例数据与说明文档——例如送达渲染/校验器、契约测试、映射检查器。
-- **禁止**：技能里以 `tools/…`、`scripts/…`、`docs/…` 等 `skills/` 之外的路径作为"要运行的脚本"；也不得把脚本写成"由部署环境注入可执行路径"——技能以副本安装时会整体缺失。
-- **归属**：脚本归口到**唯一**负责它的技能。跨技能共用的脚本由归口技能持有，其他技能以仓库根相对路径引用（如 `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py`）并注明归口技能。当前实现：`audit_delivery.py`（+schema/examples）归口 `crwu-audit`；`kb_tool.py` 归口 `crwu-audit-skill-maintainer`；三个契约测试分归被测技能的 `scripts/`。
-- **目录内聚**：脚本与其 `README.md`、schema、`examples/`、`test_*.py` 同目录安置，测试随脚本同批移动。
-- **外部依赖**：确由部署方/第三方提供、本仓不持有的工具（如 `pull_全量画像.py`）不算违反本规则，但技能内必须显式写明"本仓不提供、不随技能安装"，不得描述成技能资产。
-- **迁移纪律**：搬迁脚本同批完成——① 脚本内路径常量（如测试的 `REPO_ROOT` 由 `parents[2]` 改 `parents[3]`）；② 所有**现行**引用点（技能正文、`references`、本文件、`skills/README.md`、`docs/design-*.md`）；③ 新 CHANGELOG 条目。带日期的**历史记录**（`docs/CHANGELOG.md` 旧条目、`docs/review-*`、`docs/superpowers/plans|specs/*`）不回改，保持原样。
-- **一致性校验**：脚本进入 `skills/` 后一并受引用卫生与实时协议 lint 约束，其自带 README 也不得出现本地知识库根字面等被禁写法；移动完成后 `python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills` 必须 error=0。
+### 1 不得引用的对象
+
+技能目录（`skills/<skill>/`，含 `SKILL.md`、`references/*`、`scripts/*`）内**不得出现**下列引用：
+
+- 仓库目录路径：`docs/`、`tools/`、`cmd/`、`internal/`、`bin/`（含 `./bin/darwin/crwu` 之类的构建产物写法）；
+- 仓根文件：`Makefile`、`go.mod` 等；
+- 逃出技能目录的相对链接：`[x](../../docs/…)`、`../docs/…` 等；
+- 以仓库根为前缀的跨技能路径写法：`skills/<技能>/…`（技能之间是"同级安装"，不是仓库子树）。
+
+### 2 正确写法
+
+| 想表达 | 写法 |
+| --- | --- |
+| 需要解释、口径、设计依据 | 写进**本技能 `references/`**；不要把 `docs/design-*.md` 当运行时读物 |
+| 需要运行脚本 | 放**本技能 `scripts/`**，命令写作技能内相对路径 `python3 scripts/<file>`（并说明在技能目录内执行） |
+| 调用别的技能的脚本 | 写「`<技能名>` 技能的 `scripts/<file>`」，命令用 `python3 "$SKILLS_ROOT/<技能名>/scripts/<file>"`（`SKILLS_ROOT` = 本技能所安装到的 skills 根） |
+| CLI 用法与字段 | 以 `crwu scheme`（运行时命令目录）为准，用 PATH 中的 `crwu` 命令；不要指向仓库里的手册文件 |
+| 脚本内定位 skills 根 | 只能由 `__file__` 上溯推导（`Path(__file__).resolve().parents[N]`），不得硬编码仓库布局 |
+| 变更登记（源仓维护动作） | 用功能性表述（源仓的设计文档、技能清单、变更纪要），不写仓库路径 |
+
+### 3 脚本归属与目录内聚
+
+- 脚本归口到**唯一**负责它的技能，随技能安装；当前实现：`audit_delivery.py`（+schema/examples）归口 `crwu-audit`；`kb_tool.py` 归口 `crwu-audit-skill-maintainer`；三个契约测试归被测技能的 `scripts/`。
+- 脚本与其 `README.md`、schema、`examples/`、`test_*.py` 同目录安置，测试随脚本同批移动。
+- 不得把脚本写成"由部署环境注入可执行路径"。
+
+### 4 例外（仅此两类）
+
+- **外部工具**：确由部署方/第三方提供、本仓不持有的工具（如 `pull_全量画像.py`），技能内必须写明"本仓不提供、不随技能安装"，不得描述成技能资产。
+- **源仓契约测试/源仓维护工具**：只在源仓维护时运行、运行时不需要的 `.py`，可在文件头 30 行内声明「源仓契约测试」或「源仓维护工具」后定位源仓；其中对源仓文档（`docs/…`）的断言在文档缺失（已安装副本）时**必须显式 skip**。此类文件不得被 `SKILL.md` 当作运行时步骤引用。
+
+### 5 迁移与校验
+
+- 搬迁或改写时同批完成：① 脚本内路径常量（如测试的 `REPO_ROOT`/`SKILLS_ROOT` 由 `__file__` 上溯推导）；② 所有**现行**引用点（技能正文、`references`、本文件、`skills/README.md`、源仓设计文档）；③ 新 CHANGELOG 条目。带日期的**历史记录**（变更纪要旧条目、评审记录、`docs/superpowers/plans|specs/*`）**不回改**。
+- **机器门禁**：`python3 <skills 根>/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <skills 根>` 必须 error=0 —— 其中的"技能自洽性 lint"会按上表拦截仓库目录引用（技能正文与技能内脚本都在扫描范围；`skills` 根的 `AGENTS.md`/`README.md` 是源仓文档，不算技能）。
 
 ## Skill 与 references 分工
 

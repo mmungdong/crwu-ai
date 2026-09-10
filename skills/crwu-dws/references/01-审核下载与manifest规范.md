@@ -1,7 +1,7 @@
 # crwu-dws references/01 —— M2 审核下载与 manifest 规范
 
 > 版本 v3（2026-09-08）：钉钉是知识正文唯一来源；M2 仅按本次审核清单下载，支持单文件与目录条目。
-> 本文档随技能安装；改前先读 `docs/design-crwu-dws.md` 与 references/00。
+> 本文档随技能安装；改前先读 references/00 与 references/02。
 
 ## 1. 目标布局
 

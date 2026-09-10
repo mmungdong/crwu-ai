@@ -184,6 +184,87 @@ def live_protocol_lint(skill_root: str, forbid_literals):
     return errors, warns
 
 
+# ---------------- 技能自洽性 lint（2026-09-10：技能不得引用代码仓库目录） ----------------
+
+# 技能以副本安装（各技能同级放于 agent skills 根下）时必须能独立工作：
+# 运行时内容里出现仓库目录/仓根文件引用 → 安装后一律不存在。
+# 注意：路径名在此按"目录名 + 分隔符"拼装，避免本段定义被自身规则匹配。
+_REPO_DIR_NAMES = ["docs", "tools", "cmd", "internal", "bin"]
+_REPO_ROOT_FILES = ["Makefile", "go.mod"]  # lint-self: 规则定义本身，非技能内容
+# 允许 `./`、`../` 前缀（相对写法同样要拦）；先剔除系统路径与 URL 再匹配，避免误报。
+_REPO_PREFIX = r"(?<![\w/-])(?:\.{1,2}/)*"  # lint-self: 规则定义本身
+# shebang 等系统路径、文档链接里的 URL 不是仓库目录
+_SAFE_BEFORE_MATCH = (
+    (re.compile(r"https?://\S+"), " "),
+    (re.compile(r"/usr/(?:local/)?bin/"), " "),  # lint-self: 规则定义本身
+)
+_REPO_REF_PATTERNS = [(name, re.compile(_REPO_PREFIX + re.escape(name) + r"/"))
+                      for name in _REPO_DIR_NAMES] + \
+                     [(name, re.compile(_REPO_PREFIX + re.escape(name) + r"(?![\w.-])"))
+                      for name in _REPO_ROOT_FILES] + \
+                     [("skills/<skill>/", re.compile(_REPO_PREFIX + r"skills/crwu-[a-z0-9]+[a-z0-9-]*/"))]
+# 逃出技能目录的相对链接（技能目录之外的上级路径）  # lint-self: 规则定义本身
+_ESCAPE_LINK_RE = re.compile(r"\]\((?:\.\./){2,}")
+# 源仓契约测试：只在源仓维护时运行，允许定位源仓；文件头 30 行内声明即可豁免。
+_SOURCE_REPO_TEST_MARKERS = ("源仓契约测试", "源仓维护工具")
+
+
+def _is_source_repo_test(lines) -> bool:
+    return any(marker in line for line in lines[:30] for marker in _SOURCE_REPO_TEST_MARKERS)
+
+
+def repo_reference_lint(skill_root: str):
+    """技能自洽性 lint：技能目录内的 .md 与 .py 不得引用代码仓库目录/仓根文件。
+
+    豁免：文件头 30 行内声明「源仓契约测试」或「源仓维护工具」的 .py（只在源仓维护时运行，
+    运行时不需要）；含「禁止/不写…字面」等纪律词或"已废止"说明的行；以及带 `# lint-self:`
+    标记的行（规则定义本身）。
+    返回 (errors, warns)。
+    """
+    errors, warns = [], []
+    root = os.path.abspath(skill_root)
+    if not os.path.isdir(root):
+        return errors, warns
+    # 只审"技能"：skills 根本身与其下的源仓级文档（AGENTS.md / README.md）不是技能。
+    if os.path.isfile(os.path.join(root, "SKILL.md")):
+        skill_dirs = [root]
+    else:
+        skill_dirs = [
+            os.path.join(root, name)
+            for name in sorted(os.listdir(root))
+            if os.path.isfile(os.path.join(root, name, "SKILL.md"))
+        ]
+    for skill_dir in skill_dirs:
+      for dirpath, _dirnames, filenames in os.walk(skill_dir):
+        for fn in sorted(filenames):
+            if not (fn.endswith(".md") or fn.endswith(".py")):
+                continue
+            p = os.path.join(dirpath, fn)
+            rel = os.path.relpath(p, root)
+            with open(p, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            if fn.endswith(".py") and _is_source_repo_test(lines):
+                continue
+            for lineno, line in enumerate(lines, start=1):
+                if "# lint-self:" in line:
+                    continue
+                if _is_prohibition_note(line) or _is_retirement_note(line):
+                    continue
+                scrubbed = line
+                for safe_rx, replacement in _SAFE_BEFORE_MATCH:
+                    scrubbed = safe_rx.sub(replacement, scrubbed)
+                if _ESCAPE_LINK_RE.search(line):
+                    errors.append(f"{rel}:{lineno} 技能内不得出现逃出技能目录的相对链接")
+                    continue
+                for label, rx in _REPO_REF_PATTERNS:
+                    if rx.search(scrubbed):
+                        errors.append(
+                            f"{rel}:{lineno} 技能不得引用代码仓库目录/文件：{label}"
+                            "（技能以副本安装时不存在；改用技能内 references、同技能 scripts/，"
+                            "或 $SKILLS_ROOT/<技能>/scripts/… 形式的跨技能引用）")
+    return errors, warns
+
+
 # ---------------- CLI ----------------
 
 def cmd_validate(args):
@@ -199,6 +280,9 @@ def cmd_validate(args):
         e3, w3 = live_protocol_lint(root, args.forbid_literal)
         errors += e3
         warns += w3
+        e4, w4 = repo_reference_lint(root)
+        errors += e4
+        warns += w4
     print("== validate 结果 ==")
     for w in warns:
         print("  [warn ] " + w)

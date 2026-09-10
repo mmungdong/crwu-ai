@@ -2,15 +2,15 @@
 """CRWU 审核意见交付工具：AuditResult 校验 + 单文件 HTML 渲染。
 
 实现《CRWU 审核意见 HTML 送达规范 v1.0》
-（正文：skills/crwu-audit/references/11-html-delivery-spec.md）：
+（正文：本技能 references/11-html-delivery-spec.md）：
 
 - AuditResult JSON 是唯一事实源；HTML 仅如实呈现，不新增/删除/合并/改写任何结论；
 - 校验覆盖 §9.4 关键校验规则 + §11.1 门禁 + §12.2 维护红线（敏感信息扫描）；
 - 渲染输出自包含单文件 HTML（内嵌 CSS、无外链资源、A4 可打印、专业审核轨迹默认折叠）。
 
 用法：
-    python3 skills/crwu-audit/scripts/audit_delivery.py validate <audit-result.json> [--rendered]
-    python3 skills/crwu-audit/scripts/audit_delivery.py render   <audit-result.json> --out <opinion.html>
+    python3 scripts/audit_delivery.py validate <audit-result.json> [--rendered]
+    python3 scripts/audit_delivery.py render   <audit-result.json> --out <opinion.html>
 退出码：0 成功；1 校验失败（错误打印到 stderr）。
 """
 

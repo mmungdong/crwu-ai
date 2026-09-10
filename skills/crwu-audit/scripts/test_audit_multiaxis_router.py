@@ -3,8 +3,10 @@ import re
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]  # skills/<skill>/scripts/<file>
-SKILLS_ROOT = REPO_ROOT / "skills"
+# 源仓契约测试：据本文件位置上溯定位 skills 根（不硬编码仓库布局）。
+# 运行时不需要本测试；已安装的技能副本内缺少同级技能时会显式 skip。
+SKILLS_ROOT = Path(__file__).resolve().parents[2]  # skills/<skill>/scripts/<file> → skills 根
+REPO_ROOT = SKILLS_ROOT.parent                     # 源仓根（仅用于相对路径展示）
 AUDIT_SKILL_ROOT = SKILLS_ROOT / "crwu-audit"
 
 EXPECTED_REFERENCE_FILES = (
@@ -193,10 +195,10 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         )
 
     def test_axis_named_leaf_skills_replace_legacy_combined_skills(self):
-        asset_leaf = REPO_ROOT / "skills/crwu-audit-asset-realestate/SKILL.md"
+        asset_leaf = SKILLS_ROOT / "crwu-audit-asset-realestate/SKILL.md"
         obsolete_skill_dirs = (
-            REPO_ROOT / "skills/crwu-audit-realestate",
-            REPO_ROOT / "skills/crwu-audit-realestate-rent",
+            SKILLS_ROOT / "crwu-audit-realestate",
+            SKILLS_ROOT / "crwu-audit-realestate-rent",
         )
         remaining = [str(path.relative_to(REPO_ROOT)) for path in obsolete_skill_dirs if path.exists()]
 
@@ -335,7 +337,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         # Registry<->reality hygiene (a retired-prefix row still marked `available`, or an
         # available row whose skill directory does not exist) is owned by the skill
         # maintainer mapping checker, which reports it with per-row evidence:
-        #   python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
+        #   python3 <skills 根>/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
         #   -> LEGACY_BUSINESS_PREFIX / AVAILABLE_SKILL_DIRECTORY_MISSING / REGISTRY_LABEL_NOT_IN_CATALOG
         # It is deliberately not duplicated here, so the in-flight migration has one owner.
 
