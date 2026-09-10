@@ -54,6 +54,18 @@
 - 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-audit-optimize` 只给根因与最低改动集，**交接** `crwu-audit-skill-maintainer` 执行；交接不继承修改授权。
 - 现状速查：读 `crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
 
+## Skill 自带脚本（`scripts/`）
+
+**硬规则：技能依赖的脚本一律放在该技能自己的 `scripts/` 下，随技能一起安装；技能正文不得把 `skills/` 之外的仓库路径当作可执行依赖。**
+
+- **适用范围**：凡技能正文（`SKILL.md`、`references/*`）要求执行的脚本，以及它们的契约测试、schema、样例数据与说明文档——例如送达渲染/校验器、契约测试、映射检查器。
+- **禁止**：技能里以 `tools/…`、`scripts/…`、`docs/…` 等 `skills/` 之外的路径作为"要运行的脚本"；也不得把脚本写成"由部署环境注入可执行路径"——技能以副本安装时会整体缺失。
+- **归属**：脚本归口到**唯一**负责它的技能。跨技能共用的脚本由归口技能持有，其他技能以仓库根相对路径引用（如 `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py`）并注明归口技能。当前实现：`audit_delivery.py`（+schema/examples）归口 `crwu-audit`；`kb_tool.py` 归口 `crwu-audit-skill-maintainer`；三个契约测试分归被测技能的 `scripts/`。
+- **目录内聚**：脚本与其 `README.md`、schema、`examples/`、`test_*.py` 同目录安置，测试随脚本同批移动。
+- **外部依赖**：确由部署方/第三方提供、本仓不持有的工具（如 `pull_全量画像.py`）不算违反本规则，但技能内必须显式写明"本仓不提供、不随技能安装"，不得描述成技能资产。
+- **迁移纪律**：搬迁脚本同批完成——① 脚本内路径常量（如测试的 `REPO_ROOT` 由 `parents[2]` 改 `parents[3]`）；② 所有**现行**引用点（技能正文、`references`、本文件、`skills/README.md`、`docs/design-*.md`）；③ 新 CHANGELOG 条目。带日期的**历史记录**（`docs/CHANGELOG.md` 旧条目、`docs/review-*`、`docs/superpowers/plans|specs/*`）不回改，保持原样。
+- **一致性校验**：脚本进入 `skills/` 后一并受引用卫生与实时协议 lint 约束，其自带 README 也不得出现本地知识库根字面等被禁写法；移动完成后 `python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills` 必须 error=0。
+
 ## Skill 与 references 分工
 
 以下总则仅适用于 `crwu-audit-asset-*` 与 `crwu-audit-biz-*` 审核叶子的 `SKILL.md` 和所有 references 中的知识装配内容，不扩大为对 `skills/` 下其他 Skill 的全局禁令：不得保存或硬编码知识库名称、个人绝对路径、本地正文路径、`nodeId` 常量值；不得逐字复制任何知识库正文。知识装配只允许保存 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
@@ -79,7 +91,7 @@
 - 受影响的设计文档、`skills/README.md`、变更记录和测试已同步；
 - 受影响 Skill 通过 skill-creator 的 `quick_validate.py`；
 - router contract 与 DWS source contract 通过；
-- `python3 tools/kb/kb_tool.py validate --skill-root skills` 通过。若处于经批准的分阶段迁移，因已知后续同步暂不能通过，必须记录实际命令、失败项和待同步内容，不得把该状态宣称为完整可用；
+- `python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills` 通过。若处于经批准的分阶段迁移，因已知后续同步暂不能通过，必须记录实际命令、失败项和待同步内容，不得把该状态宣称为完整可用；
 - **映射检查器对本次最新目录 error=0**：`python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py --repo-root . --catalog <本次 crwu-dws 快照> --max-age-hours <H>` —— 覆盖一级根精确匹配、轴前缀、registry/classification 一致性、遗留命名、**库内路径键存在性（含公共轴）**；warning 需逐条判断并注明理由；
 - **校准表已刷新**：`--emit-map skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md`，并在其「内容级校准备注」区写明本次正文核对结论与缺口（未下载正文时如实写"未核"，不得留空冒充合格）；
 - 新增叶子已引用 `crwu-audit/references/12-leaf-common-contract.md` 且未复述共同规则；
@@ -90,10 +102,10 @@
 常用契约命令：
 
 ```bash
-python3 tools/kb/test_audit_skill_maintainer.py
-python3 tools/kb/test_audit_multiaxis_router.py
-python3 tools/kb/test_dws_source_contract.py
-python3 tools/kb/kb_tool.py validate --skill-root skills
+python3 skills/crwu-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
+python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
+python3 skills/crwu-dws/scripts/test_dws_source_contract.py
+python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
 # 映射与路径键一致性（需本次 crwu-dws 快照；--emit-map 同步校准表）
 python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
   --repo-root . --catalog <快照> --max-age-hours 2 \

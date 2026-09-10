@@ -14,6 +14,7 @@ This repository contains AI-related tools, including Skills and MCP servers.
 
 - Prefer small, focused tools with a single clear responsibility.
 - Keep Skills, MCP servers, and their supporting files in clearly separated directories.
+- Keep every script a Skill depends on inside that Skill's own `scripts/` directory (with its tests, schemas, examples and README), so the Skill works when installed as a copy; never point a Skill at a script elsewhere in the repo as a runnable dependency, and never rely on a deployment-injected executable path. Cross-Skill shared scripts live in their owning Skill's `scripts/` and are referenced by repo-relative path. Tools that genuinely ship outside this repo (deployment-side scripts) are allowed only if the Skill states they are not provided with it. See `skills/AGENTS.md` §「Skill 自带脚本（`scripts/`）」 for the full rule and migration checklist.
 - Treat MCP and CLI as transports, integrations (H3Yun web session, H3Yun agent MCP) as providers, and application services as their shared orchestration boundary. No provider integration imports another.
 - Use descriptive, consistent names for directories, commands, tools, and configuration fields.
 - Document installation, configuration, required environment variables, and usage alongside each tool.

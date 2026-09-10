@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-10 · refactor(skills) · 技能依赖的脚本全部收进各技能 scripts/，并确立"Skill 自带脚本"规范
+
+- **问题**：技能正文要求执行的脚本散在 `skills/` 之外——`tools/audit/`（5 件：`audit_delivery.py` + `audit_result.schema.json` + `examples/` + `README.md` + `test_audit_delivery.py`）与 `tools/kb/`（5 件：`kb_tool.py` + `README.md` + 三个契约测试）。`crwu-audit` 的 SKILL.md 甚至自述"部署环境未含 `tools/audit/`（技能以副本安装）时记 capability gap"——即该技能**强制要求的 HTML 交付链路在独立安装时结构性不可用**；`kb_tool.py` 亦被写成"可执行路径由部署环境注入"。技能以副本安装时这些脚本整体缺失。
+- **迁移（`git mv` 保留历史）**：`tools/audit/*` → `skills/crwu-audit/scripts/`（含 `examples/`）；`tools/kb/kb_tool.py` + `README.md` → `skills/crwu-audit-skill-maintainer/scripts/`（跨技能共用脚本归口维护器）；`test_audit_multiaxis_router.py` → `skills/crwu-audit/scripts/`；`test_dws_source_contract.py` → `skills/crwu-dws/scripts/`；`test_audit_skill_maintainer.py` → `skills/crwu-audit-skill-maintainer/scripts/`（随被测脚本）；`tools/` 目录已清空移除。
+- **脚本内常量**：四个测试的 `REPO_ROOT` 由 `parents[2]` 改 `parents[3]`（新层级 `skills/<skill>/scripts/<file>`）；`kb_tool.py` 的两处引用改指新位置；`audit_delivery.py` / `schema` / `README` 内示例命令与样例路径同步。
+- **暴露出的一处真实违规**：`kb_tool.py` 的 README 移入 `skills/` 后立即被自身的引用卫生 lint 判为 error（含已废止的本地知识库根常量、根路径字面与本地根相对引用写法，共 5 处）。已按"技能内不得写这些字面"改写该 README——这恰好印证规则的必要性：它在 `tools/` 下时不受 lint 约束。
+- **现行文档同步**：`crwu-audit/SKILL.md`（步骤 11/14：脚本随技能安装，仅当副本缺 `scripts/` 时记 gap）、`crwu-audit/references/11-html-delivery-spec.md`、`crwu-audit-optimize`（SKILL.md + references/00/01/02）、`crwu-audit-skill-maintainer/references/05`、`crwu-audit-datacheck/references/00-KB装配表.md`、`skills/AGENTS.md`、`skills/README.md`、`docs/design-crwu-audit-skills.md`。带日期的历史记录（本文件旧条目、`docs/review-*`、`docs/superpowers/plans|specs/*`）按约定**不回改**。
+- **规范沉淀**：`skills/AGENTS.md` 新增 §「Skill 自带脚本（`scripts/`）」——硬规则（技能依赖的脚本必须在自身 `scripts/` 内随技能安装）、归属唯一性与跨技能引用方式、目录内聚（README/schema/examples/test 同目录）、外部依赖的例外写法、迁移纪律（路径常量 + 全部现行引用点 + CHANGELOG，历史记录不回改）与校验要求；根 `AGENTS.md` Development Guidelines 增一条指引。当前无例外项（`pull_全量画像.py` 属部署方外部工具，已在技能内标明本仓不提供）。
+- **验证**：四个契约测试在新位置全绿（`test_audit_delivery` / `test_audit_multiaxis_router` / `test_dws_source_contract` / `test_audit_skill_maintainer`）；`kb_tool.py validate --skill-root skills` error=0/warn=0；映射检查器 error=0/warning=0；`git diff --check` 通过。
+
 ## 2026-09-10 · fix(skills) · 知识库今日改版后同步 8 个业务叶子与 optimize 指针，并修两处映射检查器缺陷
 
 - **触发**：知识库当日（2026-09-10）改版——8 个一级业务目录补齐 `共同审核点`、27 个子业务 `01-业务通用审核要点` 由「必检项待补」改为真实内容、新增 `合并对价分摊`、`股权比例变动`/`其他目的` 补要点、清理 `01-业务路线/TODO/`、移除 `00-总纲/目录地图`。技能文本仍停留在旧状态（7 个业务叶子写着"一级根未提供 `共同审核点`（不记缺口）"、全部子业务标「待补」），属典型的"知识库已改、技能没跟"。
