@@ -1,5 +1,7 @@
-import json
+import datetime
 import importlib.util
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -480,6 +482,72 @@ def _codes(report: dict) -> set[str]:
 
 def _findings(report: dict, code: str) -> list[dict]:
     return [item for item in report["findings"] if item["code"] == code]
+
+
+# ---- 真实 crwu-dws 产物（不是探针自造的 fixture） ----
+DWS_CACHE_ROOT = Path.home() / ".crwu" / "knowledge" / "dws-dir-cache"
+LIVE_CATALOG_FORMS = ("目录快照.json", "node-index.json", "目录树.md")
+AUDIT_FAMILY_ROOTS = ("01-业务路线/", "02-资产类型/")
+# `crwu-dws` declares this as its default target knowledge base; the audit skills deliberately
+# never name it, so the identity binding lives here (test-side only) instead of in a skill.
+AUDIT_KB_NAME = "中瑞世联评估审核知识库"
+
+
+def _cache_capture_time(directory: Path) -> str:
+    """`last_successful_at` from the cache identity file; empty when unreadable."""
+    try:
+        meta = json.loads((directory / ".cache-meta.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    value = meta.get("last_successful_at")
+    return value if isinstance(value, str) else ""
+
+
+def _cache_space_name(directory: Path) -> str:
+    """`space.name` from the cache identity file; empty when unreadable."""
+    try:
+        meta = json.loads((directory / ".cache-meta.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    space = meta.get("space")
+    if not isinstance(space, dict):
+        return ""
+    name = space.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _live_cache_dirs() -> list[Path]:
+    """Real crwu-dws directory caches of the audit knowledge base, newest capture first.
+
+    An explicit `CRWU_DWS_CACHE_DIR` (one cache directory) or `CRWU_DWS_SNAPSHOT` (one snapshot
+    file, whose directory is used) is honoured as given — pointing it at another knowledge base
+    is a real failure, not something to skip. Automatic discovery only accepts caches whose
+    `.cache-meta.json` identifies the audit knowledge base, and never returns a directory
+    without a `目录快照.json`, so a stale or unrelated cache makes the live regressions skip
+    cleanly instead of failing or erroring.
+    """
+    override_dir = os.environ.get("CRWU_DWS_CACHE_DIR")
+    if override_dir:
+        candidates = [Path(override_dir).expanduser()]
+    else:
+        override_file = os.environ.get("CRWU_DWS_SNAPSHOT")
+        if override_file:
+            candidates = [Path(override_file).expanduser().parent]
+        elif DWS_CACHE_ROOT.is_dir():
+            candidates = [
+                entry
+                for entry in DWS_CACHE_ROOT.iterdir()
+                if entry.is_dir() and _cache_space_name(entry) == AUDIT_KB_NAME
+            ]
+        else:
+            candidates = []
+    dirs = [entry for entry in candidates if (entry / "目录快照.json").is_file()]
+    return sorted(dirs, key=_cache_capture_time, reverse=True)
+
+
+def _is_audit_family_catalog(paths: tuple[str, ...]) -> bool:
+    """True when the parsed catalog actually carries the audit family's first-level roots."""
+    return all(any(path.startswith(root) for path in paths) for root in AUDIT_FAMILY_ROOTS)
 
 
 def run_checker(repo: Path, catalog: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -1207,21 +1275,62 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertEqual([], _findings(report, "KB_PATH_KEY_NOT_IN_CATALOG"))
 
     def test_real_repository_library_path_keys_exist(self):
-        """Regression: this repo's audit-family address keys must resolve in the live catalog."""
-        catalog = Path("/tmp/audit-live/目录快照.json")
-        if not catalog.is_file():
-            self.skipTest("live DWS snapshot not available")
+        """Regression: this repo's audit-family address keys must resolve in the live catalog.
 
-        report = json.loads(run_checker(REPO_ROOT, catalog).stdout)
+        Reads the real `crwu-dws` directory cache; a hand-made probe snapshot is not accepted
+        as evidence (that is what hid the authoritative-schema drift). A cache belonging to a
+        different knowledge base is skipped, not reported as a skill drift.
+        """
+        for directory in _live_cache_dirs():
+            catalog = directory / "目录快照.json"
+            report = json.loads(run_checker(REPO_ROOT, catalog).stdout)
+            if not _is_audit_family_catalog(tuple(report["catalog"]["paths"])):
+                continue
 
-        path_codes = sorted(
-            {
-                item["code"]
-                for item in report["findings"]
-                if item["code"].startswith("KB_PATH_KEY")
-            }
-        )
-        self.assertEqual([], path_codes, str(_findings(report, "KB_PATH_KEY_NOT_IN_CATALOG")))
+            path_codes = sorted(
+                {
+                    item["code"]
+                    for item in report["findings"]
+                    if item["code"].startswith("KB_PATH_KEY")
+                }
+            )
+            self.assertEqual([], path_codes, str(_findings(report, "KB_PATH_KEY_NOT_IN_CATALOG")))
+            return
+        self.skipTest("no live DWS cache for the audit knowledge base is available")
+
+    def test_live_cache_artifact_forms_agree_on_the_same_tree(self):
+        """Every artifact crwu-dws writes for one cache must parse to the same path set.
+
+        Regression for the field-shape drift class: `目录快照.json` (flat + `parentFolderId`,
+        snake_case capture time, top-level `complete`), `node-index.json` (camelCase `byPath`
+        typed per entry) and `目录树.md` (slash/dash indented tree) must all yield one tree.
+        """
+        for directory in _live_cache_dirs():
+            forms = [
+                directory / name
+                for name in LIVE_CATALOG_FORMS
+                if (directory / name).is_file()
+            ]
+            if len(forms) < 2:
+                continue
+            parsed: dict[str, tuple[str, ...]] = {}
+            for form in forms:
+                report = json.loads(run_checker(REPO_ROOT, form).stdout)
+                parsed[form.name] = tuple(report["catalog"]["paths"])
+            if not _is_audit_family_catalog(parsed[forms[0].name]):
+                continue
+
+            self.assertEqual(
+                1,
+                len(set(parsed.values())),
+                {name: len(paths) for name, paths in parsed.items()},
+            )
+            # The mandated freshness gate must also pass on the authoritative snapshot.
+            live = forms[0]
+            report = json.loads(run_checker(REPO_ROOT, live, "--max-age-hours", "24").stdout)
+            self.assertNotIn("CATALOG_NOT_LIVE", _codes(report))
+            return
+        self.skipTest("no live DWS cache with multiple artifact forms is available")
 
     def test_real_dws_artifact_shapes_normalize_identically(self):
         """The three shapes crwu-dws actually emits must agree on the same knowledge tree."""
@@ -1411,6 +1520,141 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
 
             self.assertIs(False, report["catalog"]["complete"])
             self.assertEqual(["02-资产类型/"], report["catalog"]["paths"])
+
+
+class CrwuDwsArtifactShapeTest(unittest.TestCase):
+    """Every shape `crwu-dws` actually writes must load with the same 263-path-equivalent tree.
+
+    Regression: the checker previously read only camelCase capture time (`fetchedAt`), only
+    `stats.complete`, and inferred folder-ness from a trailing `/` on node-index keys. Real
+    crwu-dws artifacts use `fetched_at` / top-level `complete` / `byPath` entries typed as
+    `folder`, so a schema-conformant fixture passed while the live artifact was rejected.
+    """
+
+    def setUp(self):
+        self.now = datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat()
+
+    def test_dir_snapshot_snake_case_time_and_top_level_complete(self):
+        with tempfile.TemporaryDirectory() as temp:
+            catalog = Path(temp) / "目录快照.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema": "crwu.kb-dir-snapshot.v1",
+                        "fetched_at": self.now,
+                        "complete": True,
+                        "truncated": False,
+                        "stats": {"total": 3, "folders": 2, "docs": 1, "maxDepth": 3},
+                        "evidence": {"foldersVisited": 2, "pages": []},
+                        "nodes": [
+                            {"nodeId": "r", "name": "02-资产类型", "type": "folder", "parentFolderId": None},
+                            {"nodeId": "c", "name": "01-房地产", "type": "folder", "parentFolderId": "r"},
+                            {
+                                "nodeId": "d",
+                                "name": "02-评估审核条目",
+                                "type": "file",
+                                "parentFolderId": "c",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            report = json.loads(run_checker(REPO_ROOT, catalog, "--max-age-hours", "1").stdout)
+
+            self.assertEqual(
+                ["02-资产类型/", "02-资产类型/01-房地产/", "02-资产类型/01-房地产/02-评估审核条目"],
+                report["catalog"]["paths"],
+            )
+            self.assertIs(True, report["catalog"]["complete"])
+            self.assertNotIn("CATALOG_NOT_LIVE", _codes(report))
+            self.assertNotIn("CATALOG_STALE", _codes(report))
+
+    def test_truncated_snapshot_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as temp:
+            catalog = Path(temp) / "目录快照.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema": "crwu.kb-dir-snapshot.v1",
+                        "fetched_at": self.now,
+                        "complete": True,
+                        "truncated": True,
+                        "nodes": [{"nodeId": "r", "name": "02-资产类型", "type": "folder"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            report = json.loads(run_checker(REPO_ROOT, catalog).stdout)
+
+            self.assertIs(False, report["catalog"]["complete"])
+
+    def test_node_index_by_path_uses_entry_type_for_folder_ness(self):
+        with tempfile.TemporaryDirectory() as temp:
+            catalog = Path(temp) / "node-index.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema": "crwu.kb-node-index.v1",
+                        "fetched_at": self.now,
+                        "byNodeId": {},
+                        "byPath": {
+                            "02-资产类型": {"nodeId": "r", "type": "folder", "depth": 1},
+                            "02-资产类型/01-房地产": {"nodeId": "c", "type": "folder", "depth": 2},
+                            "02-资产类型/01-房地产/02-评估审核条目": {
+                                "nodeId": "d",
+                                "type": "file",
+                                "depth": 3,
+                            },
+                        },
+                        "byName": {},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            report = json.loads(run_checker(REPO_ROOT, catalog, "--max-age-hours", "1").stdout)
+
+            self.assertEqual(
+                ["02-资产类型/", "02-资产类型/01-房地产/", "02-资产类型/01-房地产/02-评估审核条目"],
+                report["catalog"]["paths"],
+            )
+            self.assertNotIn("CATALOG_NOT_LIVE", _codes(report))
+            # A folder key written without a trailing slash must not become a file.
+            self.assertEqual([], _findings(report, "KB_PATH_KEY_HAS_EXPORT_SUFFIX"))
+
+    def test_slash_form_directory_tree_is_parsed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            catalog = Path(temp) / "目录树.md"
+            catalog.write_text(
+                textwrap.dedent(
+                    f"""\
+                    # 中瑞世联评估审核知识库 · 目录树
+
+                    - fetched_at: {self.now}
+                    - workspaceId: dN0G7aREV8l6MXWY
+                    - 节点 3（folder 2 / doc 1）· 最大深度 3
+
+                    / 02-资产类型
+                      / 01-房地产
+                        - 02-评估审核条目
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            report = json.loads(run_checker(REPO_ROOT, catalog, "--max-age-hours", "1").stdout)
+
+            self.assertEqual(
+                ["02-资产类型/", "02-资产类型/01-房地产/", "02-资产类型/01-房地产/02-评估审核条目"],
+                report["catalog"]["paths"],
+            )
+            self.assertNotIn("CATALOG_NOT_LIVE", _codes(report))
 
 
 if __name__ == "__main__":

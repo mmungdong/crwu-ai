@@ -38,7 +38,7 @@
 | 引用纪律 | **A-** | 9 叶子 + router 无知识库名 / 绝对路径 / 字面正文 / `nodeId` 常量；56 条库内路径 100% 命中 |
 | 实施完整度 | **B-** | 契约 12 条中多条未在叶子落地（见 §5） |
 | 内容支撑度 | **C** | 房地产对象层真实；业务 / 方法 / 监管三轴实质空缺；旗舰场景清单被下架 |
-| 门禁可信度 | **D** | 治理已把「映射检查器 error=0」列为硬门禁，但该检查器对真实知识库快照误报 error 105 / warning 9（9 个一级根全判「已不存在」）→ **门禁当前不可通过**；校准表亦系对代理快照生成（见 §6） |
+| 门禁可信度 | **B** | 映射检查器对真实快照误报 error 105 的缺陷已修；本轮补齐 4 处同类形态漂移（时间字段、顶层 `complete`、camelCase `byPath`、`/`·`-` 缩进目录树），**三种真实 `crwu-dws` 产物均 error 0 / warning 2 且通过 `--max-age-hours`**，校准表已按真实快照重跑，真实仓库回归已改为读权威缓存并新增形态一致性断言（44 项测试） |
 
 ---
 
@@ -295,9 +295,9 @@ crwu-audit Skill 映射盘点
 
 warning 2 = `股权比例变动`、`其他目的` 两个空目录的 `BUSINESS_SUBROUTE_REVIEW_MISSING`（真实缺口）。
 
-### 6.2 残余缺陷：`--max-age-hours` 新鲜度门禁仍不可通过（**待修**）
+### 6.2 同类残余：`--max-age-hours` 新鲜度门禁（**本轮已修**）
 
-`skills/AGENTS.md` 给出的门禁命令带 `--max-age-hours <H>`，实测**报 error**：
+`skills/AGENTS.md` 给出的门禁命令带 `--max-age-hours <H>`，修复前实测报 error：
 
 ```
 $ ... --catalog <真实快照> --max-age-hours 2
@@ -306,8 +306,8 @@ $ ... --catalog <真实快照> --max-age-hours 2
         refresh the directory through crwu-dws before drawing routing conclusions
 ```
 
-**根因（同一类字段漂移，修复时漏掉）**：`load_catalog` 两处分支都读 `data.get("fetchedAt")`
-（脚本 `:272`、`:280`），而真实落盘字段是 **`fetched_at`**：
+**根因（同一类字段漂移）**：`load_catalog` 两处分支都读 `data.get("fetchedAt")`，
+而真实落盘字段是 **`fetched_at`**：
 
 | 文件 | schema | 时间字段 |
 | --- | --- | --- |
@@ -315,62 +315,62 @@ $ ... --catalog <真实快照> --max-age-hours 2
 | 真实 `node-index.json` | `crwu.kb-node-index.v1` | **`fetched_at`** = `2026-09-10T14:18:56+08:00` |
 | 代理快照 `/tmp/audit-live/目录快照.json` | `crwu.kb-dir-snapshot.v1` | `fetchedAt` = `2026-09-10T14:06:27+08:00` |
 
-→ 检查器只能读到代理快照的时间，**读不到真实快照的抓取时间**，新鲜度判定必然落空。
-修法同 `_parent_link`：加一个 `_capture_time()` 兼容 `fetchedAt` / `fetched_at` / `generated_at` /
-`built_from_snapshot_at`。**在修好之前，AGENTS.md 那条门禁命令仍不可通过。**
+**顺带查出同类的另外三处形态漂移**（同一根因：检查器的形状预期对着测试 fixture，而不是真实产物）：
 
-### 6.3 校准表仍是代理快照产物（需重跑刷新）
+| # | 漂移 | 修复前症状 |
+| --- | --- | --- |
+| 1 | 时间字段 `fetchedAt` vs `fetched_at` | `--max-age-hours` 报 `CATALOG_NOT_LIVE` |
+| 2 | 完整性标志只在顶层 `complete`/`truncated`，不在 `stats.complete` | `complete` 恒为 `None`（完整性未知） |
+| 3 | `node-index.json` 用 camelCase `byPath`/`byNodeId`，且键**不带尾斜杠**、靠条目 `type` 判目录 | `--catalog node-index.json` 直接报 `node index nodes must be an object`，无法加载 |
+| 4 | 真实 `目录树.md` 用 `/ <folder>` + `- <doc>` 缩进格式（头部还有 `- fetched_at:` 元数据行） | `--catalog 目录树.md` 报 `catalog is neither supported JSON nor a pasted Markdown directory tree` |
 
-`skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（治理要求随门禁刷新的校准表）记录：
+**修复（本轮，已执行）**：新增 `_capture_time()` 兼容 `fetched_at`/`fetchedAt`/`generated_at`/
+`built_from_snapshot_at`；`_snapshot_is_complete()` 增加顶层 `complete` 与 `truncated` 分支；
+`_paths_from_node_index()` 支持两套命名并对 `byPath` 按条目 `type` 判目录；
+新增 `_parse_slash_tree()` 解析真实 `/`·`-` 缩进树；`load_catalog` 四个分支统一走 `_capture_time`。
+测试 39 → **43 项**（新增 `CrwuDwsArtifactShapeTest`：四类真实形态各自断言路径集、完整性与新鲜度门禁）。
 
-| 校准项 | 值 |
-| --- | --- |
-| 校准时间 | `2026-09-10T14:34:48+08:00` |
-| **知识库目录抓取时间** | **`2026-09-10T14:06:27+08:00`** |
-| 目录输入形态 | `crwu.kb-dir-snapshot.v1` |
-| 目录节点数 / 完整性 | 263 / complete=true |
-| 本次 error / warning / 建议 | **0 / 2 / 0** |
-| 库内路径键健康 | 「检查 81 个寻址键…**全部命中本次目录**」 |
+**复验（真实 `~/.crwu/knowledge/dws-dir-cache/…` 三种产物，均带 `--max-age-hours 2`）**：
 
-`14:06:27` 正是**代理快照**（手写探针 `fetch.py`/`traverse.py`/`gen.py` 生成）的 `fetchedAt`，
-真实 `crwu-dws` 刷新是 **`14:18:56`**（晚 12 分钟，字段为 `parentFolderId`）。
-即：**校准表是对代理快照生成的**，其 `error 0` 与「全部命中」两个结论在真实快照上当时都不成立。
-主体缺陷修复后，真实快照已可产出同样结论（error 0 / warning 2），
-但**校准表本身尚未按真实快照重跑刷新**，其「目录抓取时间」应更新为真实时间戳。
+| `--catalog` | schema | 解析路径 | error / warning |
+| --- | --- | --- | --- |
+| `目录快照.json` | `crwu.kb-dir-snapshot.v1` | 263 | **0 / 2** ✅ |
+| `node-index.json` | `crwu.kb-node-index.v1` | 263 | **0 / 2** ✅ |
+| `目录树.md` | `markdown-tree` | 263 | **0 / 2** ✅ |
 
-### 6.4 仍需保留的回归要求
+### 6.3 校准表已按真实快照重跑（**本轮已执行**）
 
-- `tools/kb/test_audit_skill_maintainer.py` 的真实快照回归此前**硬编码 `/tmp/audit-live/目录快照.json`**
-  （代理文件）——这正是主体缺陷长期未被发现的原因。修复后测试增至 39 项，
-  但**建议改为可配置/可自动发现真实缓存路径**，避免再次只在代理 schema 上验证。
-- `tools/kb/test_dws_source_contract.py` 的 `ACTIVE_CONTRACT_FILES` 共 23 项，
-  其中叶子文件仅 **4 项**（asset-realestate 的 `SKILL.md` 与 `01-kb-assembly.md`、
-  biz-asset-operation 的 `SKILL.md` 与 `02-review-focus.md`），而叶子文件总数为 **36**
-  （9 个 `SKILL.md` + 27 个 reference）。一级根断言只是 `"directory" in text and "true" in text`
-  的子串检查，asset 叶子多登记 4 个跨轴键照样通过。
+`skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md` 此前记录的「知识库目录抓取时间」
+是 `2026-09-10T14:06:27`——**代理快照**（手写探针 `fetch.py`/`traverse.py`/`gen.py`）的 `fetchedAt`，
+而非真实 `crwu-dws` 的 `14:18:56`。已用真实快照 `--emit-map` 重跑，校准表现状：
 
----
-即：**9 个一级根本全部存在**（已用 `node-index.json` 的 `byPath` 键与 `目录树.md` 独立核对），
-检查器却报「一级资产 0 / 一级业务 0」，并把解析出的 catalog 路径压缩到 188 条（实际 263 节点）。
-**后果：按新治理，任何新能力都过不了这道硬门禁**——要么门禁被绕过，要么继续用代理快照（见下）。
+| 校准项 | 修复前 | **重跑后** |
+| --- | --- | --- |
+| 校准时间 | `14:34:48` | `15:18:14` |
+| **知识库目录抓取时间** | `14:06:27`（代理） | **`14:18:56`（真实）** |
+| 目录节点数 / 完整性 | 263 / complete=true | 263 / **complete=true**（真实顶层 `complete`） |
+| 本次 error / warning / 建议 | 0 / 2 / 0 | 0 / 2 / 0 |
+| 库内路径键健康 | 检查 81 个寻址键 | 检查 **98** 个寻址键，全部命中 |
 
-**根因**：`_paths_from_flat_nodes` 用 `cursor.get("parentId")` 回溯父链，
-真实快照字段为 **`parentFolderId`** → 所有节点塌成根路径。
+手写「内容级校准备注」区与追加式「校准历史」区均由工具保留（历史保留上一行），未被覆盖。
 
-**验证**：复制快照并仅补 `n['parentId'] = n.get('parentFolderId')` 后重跑，
-结果立即变为：
+### 6.4 回归要求（**本轮已加固**）
 
-```
-一级资产 1 / 一级业务 8 / 错误 0 / 警告 2 / 建议 0
-```
-
-warning 2 正是 `股权比例变动`、`其他目的` 两个空目录的 `BUSINESS_SUBROUTE_REVIEW_MISSING`
-——与 `docs/CHANGELOG.md` 记录的「error 30 → 0、warning 2」形态吻合（该记录的数字对应加入业务轴
-8 个叶子之前的状态），证明这是**字段漂移导致的假阳性**，而非技能真的漂移。
-
-附带症状（修复后仅剩时间字段一项未处理）：`fetchedAt` 与实际的 `fetched_at` 不一致（见 §6.2）、
-`evidence` 期望「回执数组」而实际是对象（`_snapshot_is_complete` 恒返回 `None`）、
-`complete` 实际在顶层而不在 `stats.complete`（后两项已随修复处理）。
+- **真实仓库回归已改为读权威产物**（本轮）。原 `test_real_repository_library_path_keys_exist`
+  硬编码 `/tmp/audit-live/目录快照.json`（探针产物），是权威 schema 漂移长期未被发现的原因。现改为：
+  - **自动发现**：扫描 `~/.crwu/knowledge/dws-dir-cache/` 下 `.cache-meta.json.space.name`
+    等于 crwu-dws 默认目标库的缓存目录，取 `目录快照.json`（`last_successful_at` 最新者优先）；
+    库身份常量只存在于测试侧，不进入任何技能；
+  - **可覆盖**：`CRWU_DWS_CACHE_DIR`（整目录）或 `CRWU_DWS_SNAPSHOT`（单文件）用于 CI 重放；
+  - **无缓存时干净 skip**，跨库/空目录不会误报为技能漂移；显式指向别的库则如实失败。
+- **新增同名形态一致性回归**（本轮）`test_live_cache_artifact_forms_agree_on_the_same_tree`：
+  同一缓存目录下的 `目录快照.json` / `node-index.json` / `目录树.md` 必须解析出**同一路径集**
+  （数量与集合都比对），并断言权威快照能过 `--max-age-hours`。这是 §6.2 那类形态漂移的直接护栏。
+- `test_dws_source_contract.py` 的覆盖已到位（`PINNED_CONTRACT_FILES + _leaf_files()` 动态枚举
+  `crwu-audit-asset-*` / `crwu-audit-biz-*` 下全部 `.md`，共 59 项、覆盖全部 36 个叶子文件；
+  一级根断言改为解析装配表行：恰好一行 `request_kind=directory`、`kb_root` 属本轴、
+  `recursive`/`required` 为 `true`）。**残留**：asset 叶子 `01-kb-assembly.md:41-44` 的 4 个
+  跨轴共享依赖键不在该断言范围内（它只统计 `request_kind=directory` 的行），仍不被拦截。
 
 ---
 
@@ -388,7 +388,7 @@ warning 2 正是 `股权比例变动`、`其他目的` 两个空目录的 `BUSIN
 | 对象层 | ✅ 真实：权属 / 实物·权益·区位 / 用途管制 / 最优利用 / 房地设备界面 / 方法适用性接口 / 三区一致性（`RULE-01-02-543~578`） |
 | 通用披露 | ✅ 真实（`RULE-01-02-251~279`，目前经 asset 叶子捎带） |
 | 方法 | ⚠️ 仅准则层（`RULE-01-02-281~305`），**无市场法专项清单** |
-| 业务 | ❌ §一 待补；可用的是 §二 30 条历史问题（需先改口径才用得上） |
+| 业务 | ⚠️ §一 必检项全为「待补」（合规记 gap）；可用的是 §二 30 条历史问题，但频次信号未进技能 |
 | 监管 | ❌ pending，且库内该目录只有 README |
 | 表格 | ✅ datacheck C1–C6 + H0 完整 |
 
@@ -426,37 +426,36 @@ warning 2 正是 `股权比例变动`、`其他目的` 两个空目录的 `BUSIN
 
 | 编号 | 问题 | 落点 |
 | --- | --- | --- |
-| P0-1 | **硬门禁不可通过**：治理已要求「映射检查器对本次最新目录 error=0」，但该检查器对真实 `crwu-dws` 快照报 error 105；测试与校准表均系代理快照产物 | `skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py`（`_paths_from_flat_nodes` 等快照字段解析）、`tools/kb/test_audit_skill_maintainer.py:1211`、`references/07-kb-skill-map.md` |
-| P0-2 | 通用披露层无归属 | `crwu-audit/references/07-skill-registry.md`（`public` 轴）、router 步骤 9、`crwu-audit-asset-realestate/references/01-kb-assembly.md:41-44` |
-| P0-3 | CHK-MKT-001~014 / CHK-CST-001~012 清单孤儿 | `06-规则库/清单-M-市场法/`、`清单-M-成本法/` 重新认领 |
-
-> P0-1 排在最前：门禁不可通过时，其余修复都无法按治理要求被验证与标 `available`。
+| ~~P0-1~~ | ~~硬门禁不可通过（快照字段漂移）~~ → **已修**（`b4f2350` 修主体；本轮补 `_capture_time()` / 顶层 `complete` / camelCase `byPath` / `/`·`-` 缩进树，三种真实产物均 error 0 且过新鲜度门禁） | 已完成，见 §6.1–§6.2 |
+| ~~P0-4~~ | ~~校准表按真实快照重跑~~ → **已执行**（抓取时间更新为真实 `14:18:56`，寻址键 81 → 98 全部命中） | 已完成，见 §6.3 |
+| P0-1 | 通用披露层无归属 | `crwu-audit/references/07-skill-registry.md`（`public` 轴）、router 步骤 9、`crwu-audit-asset-realestate/references/01-kb-assembly.md:41-44` |
+| P0-2 | CHK-MKT-001~014 / CHK-CST-001~012 清单孤儿 | `06-规则库/清单-M-市场法/`、`清单-M-成本法/` 重新认领 |
 
 ### P1
 
 | 编号 | 问题 | 落点 |
 | --- | --- | --- |
-| P1-4 | 业务轴真实信号的**频次/项目数未进技能**（560 条历史问题等权对待，无法排序分诊） | 8 个 `crwu-audit-biz-*/references/02-review-focus.md`（内容层改动，归口 `crwu-audit-optimize`） |
-| P1-5 | 业务轴粒度：8 个技能彼此无不同清单，8× 维护成本换 0 增量能力（是否合并属治理决策） | `skills/AGENTS.md`、8 个 `crwu-audit-biz-*`、registry、映射检查器 |
-| P1-6 | method / overlay 轴 registry 标签与库目录语义不对齐 | `07-skill-registry.md`、`04-business-classification.md`、`03-asset-classification.md` |
-| P1-7 | 叶子契约缺口：`selected_relative_paths`、输出自检、三分区、asset 叶子共用层先行、悬空键 `REAL_ESTATE_OBJECT`、`expected_structure` 非字面节点名（违反治理明文「一级根/寻址键逐字」）、叶子复述共同规则 | 9 个叶子 `SKILL.md` + `references/` |
-| P1-8 | 叶子 → AuditResult 字段映射缺失 | `11-html-delivery-spec.md` §13.1 |
-| P1-9 | 契约字段无接口对端（`request_kind`/`recursive`/`required`） | 9 个叶子 `01-kb-assembly.md` 与 `crwu-dws` manifest 规范 |
-| P1-10 | 契约测试覆盖不足（36 个叶子文件仅 4 个在禁词扫描内；一级根断言为子串检查） | `tools/kb/test_dws_source_contract.py` |
+| P1-3 | 业务轴真实信号的**频次/项目数未进技能**（560 条历史问题等权对待，无法排序分诊） | 8 个 `crwu-audit-biz-*/references/02-review-focus.md`（内容层改动，归口 `crwu-audit-optimize`） |
+| P1-4 | 业务轴粒度：8 个技能彼此无不同清单，8× 维护成本换 0 增量能力（是否合并属治理决策） | `skills/AGENTS.md`、8 个 `crwu-audit-biz-*`、registry、映射检查器 |
+| P1-5 | method / overlay 轴 registry 标签与库目录语义不对齐 | `07-skill-registry.md`、`04-business-classification.md`、`03-asset-classification.md` |
+| P1-6 | 叶子契约缺口：`selected_relative_paths`、输出自检、三分区、asset 叶子共用层先行、悬空键 `REAL_ESTATE_OBJECT`、`expected_structure` 非字面节点名（违反治理明文「一级根/寻址键逐字」）、叶子复述共同规则 | 9 个叶子 `SKILL.md` + `references/` |
+| P1-7 | 叶子 → AuditResult 字段映射缺失 | `11-html-delivery-spec.md` §13.1 |
+| P1-8 | 契约字段无接口对端（`request_kind`/`recursive`/`required`） | 9 个叶子 `01-kb-assembly.md` 与 `crwu-dws` manifest 规范 |
+| P1-9 | 跨轴共享依赖键不被一级根断言拦截（asset 叶子 4 个键） | `tools/kb/test_dws_source_contract.py` |
 
 ### P2（杂项）
 
 | 编号 | 问题 | 落点 |
 | --- | --- | --- |
-| P2-11 | 已下架技能 `rent` 残留 3 处 | `crwu-audit-datacheck/SKILL.md:36`、`:83`、`references/00-KB装配表.md:20` |
-| P2-12 | 历史项目名 `泰和里` 写入「检查维度」 | `crwu-audit-biz-financing-debt/references/02-review-focus.md:18` |
-| P2-13 | 契约编号漂移（写「契约 04」，实际为 `03-审核统计与台账规范`） | `crwu-audit/SKILL.md:60` |
-| P2-14 | `crwu-audit-optimize` 仍用旧画像词（`object_type` / `scenario` / `stage` / `report_type` / `dims` / `角度`），词表落点仍指向 `crwu-audit references/00、01`（`01-audit-angles-catalog.md` 已不存在） | `crwu-audit-optimize/SKILL.md:79`、`references/00`、`references/01` |
-| P2-15 | 引用了不存在的 `docs/design-crwu-dws.md §10 决策点 D8–D12`（该文档 §10 为「验收用例」） | `crwu-dws/SKILL.md:29`、`references/00:5`、`references/02:5` |
-| P2-16 | 业务叶子历史条数（30 / 26 / 15 / 3 / 2 / 14）声称「数据驱动」但无来源、不可复现 | 8 个 `crwu-audit-biz-*/references/02-review-focus.md` |
-| P2-17 | `docs/CHANGELOG.md:111` 写 `02-资产类型/房地产/`，叶子与实库为 `02-资产类型/01-房地产/` | `docs/CHANGELOG.md` |
-| P2-18 | `crwu-audit-datacheck` 的 references 文件名为 `00-KB装配表.md`，与治理推荐的 `01-kb-assembly.md` 命名不一致（其不属 asset/biz 叶子，可豁免，但 router 步骤 9 需同时收两种命名） | `crwu-audit-datacheck/references/` |
-| P2-19 | 叶子标题层未把「§一 缺口」与「§二 可用」分开陈述 | 8 个 `crwu-audit-biz-*/references/02-review-focus.md` |
+| P2-10 | 已下架技能 `rent` 残留 3 处 | `crwu-audit-datacheck/SKILL.md:36`、`:83`、`references/00-KB装配表.md:20` |
+| P2-11 | 历史项目名 `泰和里` 写入「检查维度」 | `crwu-audit-biz-financing-debt/references/02-review-focus.md:18` |
+| P2-12 | 契约编号漂移（写「契约 04」，实际为 `03-审核统计与台账规范`） | `crwu-audit/SKILL.md:60` |
+| P2-13 | `crwu-audit-optimize` 仍用旧画像词（`object_type` / `scenario` / `stage` / `report_type` / `dims` / `角度`），词表落点仍指向 `crwu-audit references/00、01`（`01-audit-angles-catalog.md` 已不存在） | `crwu-audit-optimize/SKILL.md:79`、`references/00`、`references/01` |
+| P2-14 | 引用了不存在的 `docs/design-crwu-dws.md §10 决策点 D8–D12`（该文档 §10 为「验收用例」） | `crwu-dws/SKILL.md:29`、`references/00:5`、`references/02:5` |
+| P2-15 | 业务叶子历史条数（30 / 26 / 15 / 3 / 2 / 14）声称「数据驱动」但无来源、不可复现 | 8 个 `crwu-audit-biz-*/references/02-review-focus.md` |
+| P2-16 | `docs/CHANGELOG.md:111` 写 `02-资产类型/房地产/`，叶子与实库为 `02-资产类型/01-房地产/` | `docs/CHANGELOG.md` |
+| P2-17 | `crwu-audit-datacheck` 的 references 文件名为 `00-KB装配表.md`，与治理推荐的 `01-kb-assembly.md` 命名不一致（其不属 asset/biz 叶子，可豁免，但 router 步骤 9 需同时收两种命名） | `crwu-audit-datacheck/references/` |
+| P2-18 | 叶子标题层未把「§一 缺口」与「§二 可用」分开陈述 | 8 个 `crwu-audit-biz-*/references/02-review-focus.md` |
 
 ---
 
@@ -475,20 +474,30 @@ python3 tools/audit/test_audit_delivery.py             # 24 tests OK
 # 库内路径解析：56 条路径逐条对照 node-index 的 byPath 键
 # 快照：~/.crwu/knowledge/dws-dir-cache/中瑞世联评估审核知识库/{目录快照.json,node-index.json}
 
-# 映射检查器对真实快照（当前误报 error 105 / warning 9）
-python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
-  --repo-root . --catalog "<快照目录>/目录快照.json" --format text
+# 映射检查器 —— 三种真实 crwu-dws 产物 + 治理指定的新鲜度门禁，均已通过
+KB=~/.crwu/knowledge/dws-dir-cache/中瑞世联评估审核知识库
+for c in 目录快照.json node-index.json 目录树.md; do
+  python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
+    --repo-root . --catalog "$KB/$c" --max-age-hours 2 --format text
+  # → 一级资产 1 / 一级业务 8 / 错误 0 / 警告 2 / 建议 0   （三种形态均解析 263 条路径）
+done
 
-# 证明为字段漂移：复制快照并补 parentId 别名后重跑 → 错误 0 / 警告 2
+# 校准表按真实快照刷新（保留人工「内容级校准备注」与追加式「校准历史」）
+python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
+  --repo-root . --catalog "$KB/目录快照.json" --max-age-hours 2 \
+  --emit-map skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md
+
+# 修复前的复现（记录缺陷形态）：未修复版本对同一真实快照报 error 105 / warning 9，
+# 且 `--max-age-hours` 报 CATALOG_NOT_LIVE；node-index / 目录树 两种形态直接无法加载
 ```
 
 **统计口径**：一级根 9 个；叶子文件 36 个（9 `SKILL.md` + 27 reference）；
 库内路径键 56 条（100% 命中）；业务轴正文 24 个文件 / 258 KB / 560 条历史问题；
 `待补` / `TODO` / `占位` 命中 43 行（全部集中在业务轴 8 个叶子，asset 叶子 0 行）。
 
-**门禁/校准证据**：`07-kb-skill-map.md` 记录校准时间 `14:34:48`、目录抓取时间 `14:06:27`、
-`error/warning = 0/2`、「检查 81 个寻址键…全部命中」；该抓取时间对应代理快照
-（`/tmp/audit-live/目录快照.json`），真实 `crwu-dws` 刷新为 `14:18:56`。
+**门禁/校准证据**：三种真实 `crwu-dws` 产物（`目录快照.json` / `node-index.json` / `目录树.md`）
+均解析 263 条路径、`error 0 / warning 2`，且通过 `--max-age-hours 2`；
+校准表已按真实快照（抓取时间 `14:18:56`）重跑，检查 98 个寻址键全部命中（§6.2、§6.3）。
 
 ---
 

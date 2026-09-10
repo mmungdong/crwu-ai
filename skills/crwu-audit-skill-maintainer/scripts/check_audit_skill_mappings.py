@@ -125,7 +125,17 @@ def _is_ignored_label(name: str) -> bool:
     return normalized == "todo" or normalized.endswith("- todo")
 
 
+# `crwu-dws` writes its `目录树.md` as `/ <folder>` and `- <doc>` with indentation as
+# depth. Header lines (`- fetched_at: …`) precede the first folder and are metadata, not nodes.
+SLASH_TREE_LINE = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>[/-])\s+(?P<name>\S.*?)\s*$")
+
+
 def _parse_markdown_tree(text: str) -> tuple[str, ...]:
+    """A pasted directory tree, in either published form (icon tree first, then slash tree)."""
+    return _parse_icon_tree(text) or _parse_slash_tree(text)
+
+
+def _parse_icon_tree(text: str) -> tuple[str, ...]:
     paths: set[str] = set()
     folders: list[str] = []
     bullet = re.compile(
@@ -143,6 +153,34 @@ def _parse_markdown_tree(text: str) -> tuple[str, ...]:
         folders = folders[:level]
         full = "/".join([*folders, clean_name])
         normalized = _normalize_path(full, folder=is_folder)
+        if normalized:
+            paths.add(normalized)
+        if is_folder:
+            folders.append(clean_name)
+    return tuple(sorted(paths))
+
+
+def _parse_slash_tree(text: str) -> tuple[str, ...]:
+    """`crwu-dws` `目录树.md`: `/ <folder>` / `- <doc>`, indentation = folder depth."""
+    paths: set[str] = set()
+    folders: list[str] = []
+    started = False
+    for line in text.splitlines():
+        match = SLASH_TREE_LINE.match(line)
+        if not match:
+            continue
+        is_folder = match.group("marker") == "/"
+        if not started:
+            if not is_folder:
+                continue  # metadata block before the first folder line
+            started = True
+        indent = match.group("indent").replace("\t", "  ")
+        level = len(indent) // 2
+        clean_name = match.group("name").strip().rstrip("/").strip()
+        if not clean_name:
+            continue
+        folders = folders[:level]
+        normalized = _normalize_path("/".join([*folders, clean_name]), folder=is_folder)
         if normalized:
             paths.add(normalized)
         if is_folder:
@@ -214,11 +252,63 @@ def _paths_from_snapshot_nodes(nodes: Iterable[object]) -> Iterable[str]:
     return _paths_from_flat_nodes(node_list)
 
 
-def _paths_from_node_index(nodes: object) -> Iterable[str]:
-    """DWS node index: nodeId -> node, each node already carrying a full library path."""
-    if not isinstance(nodes, dict):
-        raise ValueError("node index nodes must be an object")
-    for value in nodes.values():
+# Capture-time field names vary by producer. `crwu-dws` writes snake_case
+# (`fetched_at`, `built_from_snapshot_at`); the older flat probe wrote camelCase
+# (`fetchedAt`); the catalog snapshot form uses `generated_at`. All are accepted so a
+# real crwu-dws artifact is never rejected as "carries no readable capture time".
+CAPTURE_TIME_FIELDS = (
+    "fetched_at",
+    "fetchedAt",
+    "generated_at",
+    "generatedAt",
+    "built_from_snapshot_at",
+    "builtFromSnapshotAt",
+)
+
+
+def _capture_time(data: dict, *fields: str) -> str | None:
+    """First non-empty capture timestamp among `fields` (default: all known aliases)."""
+    for field in fields or CAPTURE_TIME_FIELDS:
+        value = data.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _paths_from_node_index(data: dict, nodes: object = None) -> Iterable[str]:
+    """Node index in either naming convention.
+
+    `crwu-dws` writes camelCase maps (`byNodeId` / `byPath` / `byName`) keyed by nodeId;
+    `crwu-dws/references/02` documents the snake_case form (`by_node_id` / `by_path`).
+    `byPath` keys already are full library paths, so they win when present. Folder-ness comes
+    from the entry's `type` (the camelCase form carries no trailing `/` on folder keys).
+    """
+    for key in ("byPath", "by_path"):
+        by_path = data.get(key)
+        if isinstance(by_path, dict) and by_path:
+            for raw_key, value in by_path.items():
+                is_folder: bool | None = None
+                if isinstance(value, dict) and isinstance(value.get("type"), str):
+                    is_folder = value["type"] == "folder"
+                elif str(raw_key).endswith("/"):
+                    is_folder = True
+                normalized = _normalize_path(str(raw_key), folder=is_folder)
+                if normalized:
+                    yield normalized
+            return
+    for key in ("byNodeId", "by_node_id"):
+        by_node = data.get(key)
+        if isinstance(by_node, dict) and by_node:
+            yield from _paths_from_node_values(by_node)
+            return
+    if isinstance(nodes, dict) and nodes:
+        yield from _paths_from_node_values(nodes)
+        return
+    raise ValueError("node index carries no readable byPath/byNodeId/nodes map")
+
+
+def _paths_from_node_values(by_node: dict) -> Iterable[str]:
+    for value in by_node.values():
         if not isinstance(value, dict):
             continue
         raw_path = value.get("path")
@@ -230,12 +320,17 @@ def _paths_from_node_index(nodes: object) -> Iterable[str]:
 def _snapshot_is_complete(data: dict) -> bool | None:
     """A snapshot is only usable as path truth when every page came back.
 
-    `stats.complete` is the authoritative flag (`crwu-dws/references/00` §3); a non-empty
-    `failures` list always wins; a legacy top-level `evidence[]` receipt list is the fallback.
+    A non-empty `failures` list always wins. Then, in order: a top-level `complete`
+    boolean (`crwu-dws` writes it there, alongside `truncated`), `stats.complete`
+    (`crwu-dws/references/00` §3), and finally a legacy top-level `evidence[]` receipt list.
     """
     failures = data.get("failures")
     if isinstance(failures, list) and failures:
         return False
+    if data.get("truncated") is True:
+        return False
+    if isinstance(data.get("complete"), bool):
+        return data["complete"]
     stats = data.get("stats")
     if isinstance(stats, dict) and isinstance(stats.get("complete"), bool):
         return stats["complete"]
@@ -258,7 +353,7 @@ def load_catalog(path: Path) -> Catalog:
         paths = _parse_markdown_tree(text)
         if not paths:
             raise ValueError("catalog is neither supported JSON nor a pasted Markdown directory tree")
-        captured = re.search(r"抓取时间\s*[：:]\s*([^\s]+)", text)
+        captured = re.search(r"(?:抓取时间|fetched_at|fetchedAt)\s*[：:]\s*([^\s]+)", text)
         generated_at = captured.group(1) if captured else None
         return Catalog("markdown-tree", generated_at, None, paths)
 
@@ -269,20 +364,18 @@ def load_catalog(path: Path) -> Catalog:
         nodes = data.get("nodes")
         if not isinstance(nodes, list):
             raise ValueError("directory snapshot nodes must be a list")
-        fetched_at = data.get("fetchedAt")
         return Catalog(
             DIR_SNAPSHOT_SCHEMA,
-            fetched_at if isinstance(fetched_at, str) else None,
+            _capture_time(data),
             _snapshot_is_complete(data),
             tuple(sorted(set(_paths_from_snapshot_nodes(nodes)))),
         )
     if schema == KB_NODE_INDEX_SCHEMA:
-        fetched_at = data.get("fetchedAt")
         return Catalog(
             KB_NODE_INDEX_SCHEMA,
-            fetched_at if isinstance(fetched_at, str) else None,
-            None,
-            tuple(sorted(set(_paths_from_node_index(data.get("nodes"))))),
+            _capture_time(data),
+            _snapshot_is_complete(data),
+            tuple(sorted(set(_paths_from_node_index(data, data.get("nodes"))))),
         )
     if schema == SNAPSHOT_SCHEMA:
         nodes = data.get("nodes")
@@ -291,22 +384,16 @@ def load_catalog(path: Path) -> Catalog:
         stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
         return Catalog(
             SNAPSHOT_SCHEMA,
-            data.get("generated_at") if isinstance(data.get("generated_at"), str) else None,
+            _capture_time(data, "generated_at", "generatedAt"),
             stats.get("complete") if isinstance(stats.get("complete"), bool) else None,
             tuple(sorted(set(_walk_snapshot(nodes)))),
         )
     if schema == NODE_INDEX_SCHEMA:
-        by_path = data.get("by_path")
-        if not isinstance(by_path, dict):
-            raise ValueError("node index by_path must be an object")
-        paths = tuple(sorted({_normalize_path(str(key), folder=str(key).endswith("/")) for key in by_path}))
         return Catalog(
             NODE_INDEX_SCHEMA,
-            data.get("built_from_snapshot_at")
-            if isinstance(data.get("built_from_snapshot_at"), str)
-            else None,
-            None,
-            tuple(path for path in paths if path),
+            _capture_time(data, "built_from_snapshot_at", "builtFromSnapshotAt", "fetched_at", "fetchedAt"),
+            _snapshot_is_complete(data),
+            tuple(sorted(set(_paths_from_node_index(data)))),
         )
     raise ValueError(f"unsupported catalog schema: {schema!r}")
 
