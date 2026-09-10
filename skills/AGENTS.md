@@ -28,15 +28,17 @@
 
 ## Skill 与 references 分工
 
-`SKILL.md` 与 `references/` 下所有文件共同遵守以下总则：均不得写知识库名称、个人绝对路径、本地下载或缓存正文路径、`nodeId`；不得逐字复制任何知识库正文。凡需沉淀知识库相关信息，只允许写 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
+以下总则仅适用于 `crwu-audit-asset-*` 与 `crwu-audit-business-*` 审核叶子的 `SKILL.md` 和所有 references 中的知识装配内容，不扩大为对 `skills/` 下其他 Skill 的全局禁令：不得保存或硬编码知识库名称、个人绝对路径、本地正文路径、`nodeId` 常量值；不得逐字复制任何知识库正文。知识装配只允许保存 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
+
+上述限制不禁止使用 `nodeId` 协议字段名。`crwu-dws` 的操作、协议与 schema 文档可以定义该字段，运行时 manifest 和输出也可以携带其值，但该值必须来自本次 `crwu-dws` 实际返回，且不得写回任何 Skill source。
 
 `SKILL.md` 保持入口化，只包含职责边界、输入、必读 reference、执行步骤和输出门禁；资产或业务叶子 `SKILL.md` 必须明确“仅经 `crwu-audit` 编排调用、禁止单独调用”。详细分类、装配映射和审核要点放入本 Skill 的 `references/`，推荐最小结构如下：
 
 - `00-applicability.md`：canonical label 的适用、排除和边界条件。
-- `01-kb-assembly.md`：只记录 RULE/CHK 编号与钉钉库内层级路径寻址键。禁止写知识库名称、个人绝对路径、本地正文缓存路径或 `nodeId`，也不得复制规则正文；目录或文件名变更时必须同步更新。
+- `01-kb-assembly.md`：只记录 RULE/CHK 编号与钉钉库内层级路径寻址键。禁止保存或硬编码知识库名称、个人绝对路径、本地正文路径或 `nodeId` 常量值，也不得逐字复制知识库正文；目录或文件名变更时必须同步更新。
 - `02-review-focus.md`：基于本次真实读取资料整理的结构化审核要点与映射。不得逐字复制知识库正文；每个要点必须回指 RULE/CHK 编号和库内层级路径。
 
-可按需增加其他 reference，但每个文件必须有单一职责，且不得成为知识库正文副本。实际运行审核时仍须通过 `crwu-dws` 重新下载正文，最终出处使用“本次下载文件:行号 + `exportedAt`”；reference 中的映射不能替代本次下载证据。
+可按需增加其他 reference，但每个文件必须有单一职责，且不得成为知识库正文副本。实际运行审核时仍须通过 `crwu-dws` 重新下载正文；最终出处至少包含本次下载文件、实际行号、库内路径、本次运行返回的 `nodeId` 和 `exportedAt`。reference 中的映射不能替代本次下载证据，运行时 `nodeId` 值也不得写回 Skill source。
 
 ## available 能力完成门禁
 
@@ -67,6 +69,7 @@ git diff --check
 - [ ] 已核对目录树并形成“本次来源清单”。
 - [ ] 已通过 `crwu-dws` 逐文件实时读取，未使用旧缓存代替正文。
 - [ ] 每个审核要点均可回指 RULE/CHK 和库内层级路径。
+- [ ] 运行审核的最终出处包含本次下载文件、实际行号、库内路径、本次运行返回的 `nodeId` 和 `exportedAt`，且 `nodeId` 值未写回 Skill source。
 - [ ] 分类、registry、Skill、references、文档与测试已同步。
 - [ ] 所有完成门禁已运行并保留结果；缺失或冲突已记录为 pending、gap 或人工确认项。
 - [ ] 提交中不含凭据、下载正文、运行时文件或无关改动。
