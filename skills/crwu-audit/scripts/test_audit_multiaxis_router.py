@@ -106,6 +106,36 @@ def _registry_data_rows(text):
     return None
 
 
+
+# 源仓契约测试所需的完整技能族：安装副本里缺任何一个 → 显式 skip（不失败、不静默通过）。
+_REQUIRED_SIBLINGS = (
+    "crwu-audit",
+    "crwu-audit-asset-realestate",
+    "crwu-audit-biz-asset-operation",
+    "crwu-audit-public-general-standards",
+    "crwu-audit-datacheck",
+    "crwu-audit-optimize",
+    "crwu-audit-skill-maintainer",
+    "crwu-dws",
+)
+
+
+def _requires_skill_tree(test):
+    """源仓契约测试前提：同级技能与源仓文档齐备。
+
+    技能以副本安装时这些内容可能不在（例如只装了单个技能）——此时**显式 skip**，
+    既不当成失败，也不静默通过。运行时不需要本测试。
+    """
+
+    def wrapper(self, *args, **kwargs):
+        missing = [name for name in _REQUIRED_SIBLINGS if not (SKILLS_ROOT / name).is_dir()]
+        if missing:
+            self.skipTest(f"非完整技能树（缺少同级技能 {', '.join(missing)}）：跳过源仓契约测试")
+        return test(self, *args, **kwargs)
+
+    return wrapper
+
+
 class AuditMultiaxisRouterContractTest(unittest.TestCase):
     def test_multiaxis_router_reference_set_exists(self):
         references_root = AUDIT_SKILL_ROOT / "references"
@@ -194,6 +224,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             f"realestate liquidation auction scenario is missing nearby skills: {missing}",
         )
 
+    @_requires_skill_tree
     def test_axis_named_leaf_skills_replace_legacy_combined_skills(self):
         asset_leaf = SKILLS_ROOT / "crwu-audit-asset-realestate/SKILL.md"
         obsolete_skill_dirs = (
@@ -205,6 +236,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         self.assertTrue(asset_leaf.is_file(), f"missing axis-named asset leaf: {asset_leaf}")
         self.assertEqual([], remaining, f"legacy combined skill directories remain: {remaining}")
 
+    @_requires_skill_tree
     def test_leaf_skill_directories_use_axis_prefixes_only(self):
         approved = ("crwu-audit-asset-", "crwu-audit-biz-")
         offenders = sorted(
@@ -268,6 +300,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "router SKILL.md must name the unconditional public skill in its public-capability step",
         )
 
+    @_requires_skill_tree
     def test_public_skill_directory_and_references_exist(self):
         for skill in UNCONDITIONAL_PUBLIC_SKILLS:
             skill_dir = SKILLS_ROOT / skill
@@ -292,6 +325,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
                     f"{skill} is missing required reference: {reference}",
                 )
 
+    @_requires_skill_tree
     def test_active_contracts_do_not_reference_deleted_combined_skill(self):
         active_paths = (
             SKILLS_ROOT / "README.md",

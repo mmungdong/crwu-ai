@@ -142,6 +142,36 @@ def _create_valid_repo(repo: Path) -> None:
     )
 
 
+
+# 源仓契约测试所需的完整技能族：安装副本里缺任何一个 → 显式 skip（不失败、不静默通过）。
+_REQUIRED_SIBLINGS = (
+    "crwu-audit",
+    "crwu-audit-asset-realestate",
+    "crwu-audit-biz-asset-operation",
+    "crwu-audit-public-general-standards",
+    "crwu-audit-datacheck",
+    "crwu-audit-optimize",
+    "crwu-audit-skill-maintainer",
+    "crwu-dws",
+)
+
+
+def _requires_skill_tree(test):
+    """源仓契约测试前提：同级技能与源仓文档齐备。
+
+    技能以副本安装时这些内容可能不在（例如只装了单个技能）——此时**显式 skip**，
+    既不当成失败，也不静默通过。运行时不需要本测试。
+    """
+
+    def wrapper(self, *args, **kwargs):
+        missing = [name for name in _REQUIRED_SIBLINGS if not (SKILLS_ROOT / name).is_dir()]
+        if missing:
+            self.skipTest(f"非完整技能树（缺少同级技能 {', '.join(missing)}）：跳过源仓契约测试")
+        return test(self, *args, **kwargs)
+
+    return wrapper
+
+
 class AuditSkillMaintainerCheckerTest(unittest.TestCase):
     def run_checker(
         self,
@@ -561,6 +591,7 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
 
             self.assertEqual([], errors)
 
+    @_requires_skill_tree
     def test_every_skill_is_self_contained(self):
         """真实仓库回归：每个技能都不得引用代码仓库目录。"""
         module = self._kb_tool()
@@ -569,6 +600,7 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
 
         self.assertEqual([], errors)
 
+    @_requires_skill_tree
     def test_maintainer_skill_passes_live_source_protocol_lint(self):
         module_path = SCRIPTS_DIR / "kb_tool.py"
         spec = importlib.util.spec_from_file_location("kb_tool_for_test", module_path)
@@ -973,6 +1005,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertEqual([], tree_report["findings"])
             self.assertEqual([], index_report["findings"])
 
+    @_requires_skill_tree
     def test_maintainer_documents_treat_the_legacy_prefix_as_migration_only(self):
         offenders = []
         for document in sorted(MAINTAINER_SKILL.rglob("*.md")):
@@ -1278,6 +1311,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertEqual([], _findings(unchecked_report, "CATALOG_STALE"))
             self.assertEqual([], _findings(unchecked_report, "CATALOG_NOT_LIVE"))
 
+    @_requires_skill_tree
     def test_real_repository_routing_layer_is_consistent(self):
         """The live repo's router, references, registry and skill dirs must agree."""
         with tempfile.TemporaryDirectory() as temp:
@@ -1480,6 +1514,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
 
             self.assertEqual([], _findings(report, "KB_PATH_KEY_NOT_IN_CATALOG"))
 
+    @_requires_skill_tree
     def test_real_repository_library_path_keys_exist(self):
         """Regression: this repo's audit-family address keys must resolve in the live catalog.
 
@@ -1504,6 +1539,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             return
         self.skipTest("no live DWS cache for the audit knowledge base is available")
 
+    @_requires_skill_tree
     def test_live_cache_artifact_forms_agree_on_the_same_tree(self):
         """Every artifact crwu-dws writes for one cache must parse to the same path set.
 

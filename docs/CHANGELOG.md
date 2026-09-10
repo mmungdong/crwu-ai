@@ -9,6 +9,13 @@
 
 ---
 
+## 2026-09-10 · docs(skills) · 自洽性规则进根 AGENTS.md，并保证"单独安装的技能测试只通过或 skip"
+
+- **规则上移**：根 `AGENTS.md` 新增 §Skill Self-Containment（会话级常驻规范，先于 skills/AGENTS.md 被读到）——不得引用的四类写法、正确写法清单、两类例外、机器门禁与指向 `skills/AGENTS.md` §「技能自洽性」的完整清单；Development Guidelines 里原长句收敛为一行指针，避免两处漂移。`skills/AGENTS.md` §5 注明两处是同一规则的两个表述、改动需同步。
+- **安装副本不再失败**：三个源仓契约测试原先只声明了"源仓契约测试"，单独安装某技能后仍会因缺少同级技能而失败。现统一加 `_REQUIRED_SIBLINGS` 完整技能族判据与 `@_requires_skill_tree` 守卫：任一必需同级技能不在（即"只装了单个技能"）→ **显式 skip**。判据写死为"任一技能单独安装后，自带测试只能通过或 skip，不得失败"。
+- **实测（模拟单独安装）**：只装 `crwu-audit` → `test_audit_delivery.py` OK、`test_audit_multiaxis_router.py` OK(skipped=4)；只装 `crwu-dws` → `test_dws_source_contract.py` OK(skipped=7)；只装 `crwu-audit-skill-maintainer` → `test_audit_skill_maintainer.py` OK(skipped=6)。源仓内四个套件仍全绿。
+- **验证**：`kb_tool.py validate --skill-root skills` error=0/warn=0；四个套件全绿；映射检查器 error=0/warning=0；`git diff --check` 通过。
+
 ## 2026-09-10 · fix(skills) · 技能全面自洽化：不再引用代码仓库目录，并加机器门禁
 
 - **问题**：技能正文与技能内脚本仍在引用**代码仓库**的位置——`docs/design-*.md`（设计依据）、`docs/cli-manual.md`（CLI 手册）、`./bin/darwin/crwu`（构建产物）、`docs/CHANGELOG.md`/`skills/README.md`（源仓登记），以及以仓库根为前缀的跨技能脚本路径 `skills/<技能>/scripts/…`。技能以副本安装到 agent skills 根后这些路径全部不存在：`h3yun-query` 的手册链接直接失效，跨技能命令也按错误位置寻址。

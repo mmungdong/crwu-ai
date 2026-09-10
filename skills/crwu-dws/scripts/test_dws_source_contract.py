@@ -96,6 +96,36 @@ def _is_retirement_note(line):
     return any(word in line for word in RETIREMENT_NOTE_WORDS)
 
 
+
+# 源仓契约测试所需的完整技能族：安装副本里缺任何一个 → 显式 skip（不失败、不静默通过）。
+_REQUIRED_SIBLINGS = (
+    "crwu-audit",
+    "crwu-audit-asset-realestate",
+    "crwu-audit-biz-asset-operation",
+    "crwu-audit-public-general-standards",
+    "crwu-audit-datacheck",
+    "crwu-audit-optimize",
+    "crwu-audit-skill-maintainer",
+    "crwu-dws",
+)
+
+
+def _requires_skill_tree(test):
+    """源仓契约测试前提：同级技能与源仓文档齐备。
+
+    技能以副本安装时这些内容可能不在（例如只装了单个技能）——此时**显式 skip**，
+    既不当成失败，也不静默通过。运行时不需要本测试。
+    """
+
+    def wrapper(self, *args, **kwargs):
+        missing = [name for name in _REQUIRED_SIBLINGS if not (SKILLS_ROOT / name).is_dir()]
+        if missing:
+            self.skipTest(f"非完整技能树（缺少同级技能 {', '.join(missing)}）：跳过源仓契约测试")
+        return test(self, *args, **kwargs)
+
+    return wrapper
+
+
 class DwsSourceContractTest(unittest.TestCase):
     def test_source_repo_docs_are_optional_outside_the_source_repo(self):
         """源仓文档（docs/）在已安装副本内不存在：显式 skip，不静默通过也不误报失败。"""
@@ -108,11 +138,13 @@ class DwsSourceContractTest(unittest.TestCase):
         else:
             self.skipTest("非源仓环境（无 docs/）：跳过源仓文档契约检查")
 
+    @_requires_skill_tree
     def test_every_active_contract_file_exists(self):
         missing = [str(path) for path in ACTIVE_CONTRACT_FILES if not path.is_file()]
 
         self.assertEqual([], missing, f"active contract list points at missing files: {missing}")
 
+    @_requires_skill_tree
     def test_active_contracts_do_not_offer_local_or_full_mirror_bodies(self):
         violations = []
 
@@ -129,6 +161,7 @@ class DwsSourceContractTest(unittest.TestCase):
 
         self.assertEqual([], violations, "\n".join(violations))
 
+    @_requires_skill_tree
     def test_active_contracts_do_not_reference_a_local_kb_root_relative_path(self):
         """`KB/<rel>` addressed the retired local root; kb_tool owns the precise rule.
 
@@ -159,6 +192,7 @@ class DwsSourceContractTest(unittest.TestCase):
             f"kb_tool validate reported reference violations:\n{result.stdout}{result.stderr}",
         )
 
+    @_requires_skill_tree
     def test_m2_supports_file_directory_and_mixed_manifest_entries(self):
         text = (SKILLS_ROOT / "crwu-dws/SKILL.md").read_text(encoding="utf-8")
         required_terms = [
@@ -174,6 +208,7 @@ class DwsSourceContractTest(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, text)
 
+    @_requires_skill_tree
     def test_asset_and_business_leaves_declare_a_first_level_directory_root(self):
         """Every asset/biz leaf must declare one exact recursive first-level root.
 
@@ -239,6 +274,7 @@ class DwsSourceContractTest(unittest.TestCase):
 
         self.assertEqual([], problems, "\n".join(problems))
 
+    @_requires_skill_tree
     def test_legacy_combined_and_business_prefixed_skills_are_gone(self):
         offenders = sorted(
             path.name
