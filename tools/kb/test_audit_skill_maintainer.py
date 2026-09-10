@@ -1208,7 +1208,16 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertIn("`crwu-audit-biz-asset-operation`", text)
             self.assertIn("CALIBRATION-HISTORY:BEGIN", text)
 
-            # Hand-maintained notes must survive a re-run; history must gain a row.
+            # Hand-maintained notes must survive a re-run; history must gain exactly one row.
+            # The first run's own row is dropped first: identical stamps are deduplicated, so
+            # keeping it would make the expected row count depend on whether the two runs happen
+            # to land in the same wall-clock second (a real flake this test used to have).
+            begin = "<!-- CALIBRATION-HISTORY:BEGIN -->"
+            finish = "<!-- CALIBRATION-HISTORY:END -->"
+            before, rest = text.split(begin)
+            history_block, after = rest.split(finish)
+            kept = [l for l in history_block.splitlines() if not l.startswith("| 20")]
+            text = before + begin + "\n" + "\n".join(kept).strip("\n") + "\n" + finish + after
             text = text.replace(
                 "<!-- CALIBRATION-NOTES:BEGIN -->",
                 "<!-- CALIBRATION-NOTES:BEGIN -->\n人工备注：必检项待补。",
@@ -1224,10 +1233,10 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertIn("人工备注：必检项待补。", refreshed)
             history = refreshed.split("CALIBRATION-HISTORY:BEGIN")[1].split("CALIBRATION-HISTORY:END")[0]
             data_rows = [l for l in history.splitlines() if l.startswith("| 20")]
-            # Older row preserved, new row appended, newest shown first.
+            # Older row preserved, exactly one new row appended, newest shown first.
             self.assertEqual(2, len(data_rows))
-            self.assertIn("2020-01-01", data_rows[0])
-            self.assertNotIn("2020-01-01", data_rows[-1])
+            self.assertIn("2020-01-01", data_rows[-1])
+            self.assertNotIn("2020-01-01", data_rows[0])
 
     def test_calibration_flags_missing_common_layer_and_subroute_coverage(self):
         tree = """
