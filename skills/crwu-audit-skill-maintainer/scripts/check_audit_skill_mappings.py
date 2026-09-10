@@ -29,6 +29,14 @@ AXIS_ROOTS = {
     "asset": "02-资产类型/",
     "business": "01-业务路线/",
 }
+# Report-shape-independent public capabilities. They are deliberately outside the
+# asset/business first-level-root model (their assembly keys live under `06-规则库/`
+# and may be more than one path), so they must not be forced into AXIS_ROOTS.
+PUBLIC_AXIS = "public"
+# Public capabilities are cross-cutting, so they are not held to the asset/business leaf
+# naming (`00-applicability/01-kb-assembly/02-review-focus`). What they must not lack is a
+# declared KB assembly table: without it the skill has no addressable rule material at all.
+PUBLIC_ASSEMBLY_REFERENCES = ("01-kb-assembly.md", "00-KB装配表.md")
 AXIS_SKILL_PREFIX = {
     "asset": "crwu-audit-asset-",
     "business": "crwu-audit-biz-",
@@ -816,6 +824,7 @@ def inspect_repository(
     # Every asset/business registry row is validated, including labels the supplied
     # catalog does not cover: a registry claim must hold on its own.
     audit_rows = [row for row in registry_rows if row.axis in AXIS_ROOTS]
+    public_rows = [row for row in registry_rows if row.axis == PUBLIC_AXIS]
     for (axis, label), rows in sorted(rows_by_key.items()):
         if axis not in AXIS_ROOTS or len(rows) < 2:
             continue
@@ -1115,6 +1124,66 @@ def inspect_repository(
                     label=label,
                     path=str(classification_files[axis]),
                 )
+
+    # Public-axis rows carry report-shape-independent capabilities (report disclosure,
+    # procedure/quality control, tabular reconciliation). They sit outside the asset/business
+    # first-level-root model, so they are validated here instead of in the loop above:
+    # the declared skill directory must exist, match its frontmatter name, and declare a KB
+    # assembly table (either the standard `01-kb-assembly.md` or the cross-cutting
+    # `00-KB装配表.md` used by `crwu-audit-datacheck`). Their assembly path keys are already
+    # covered globally by inspect_path_keys(), which walks every crwu-audit* directory.
+    for row in sorted(
+        {(r.label, r.skill, r.status): r for r in public_rows}.values(),
+        key=lambda r: (r.label, r.skill),
+    ):
+        if not row.skill or row.skill == "—" or row.status != "available":
+            continue
+        public_dir = skills_root / row.skill
+        if not public_dir.is_dir():
+            add_finding(
+                "AVAILABLE_SKILL_DIRECTORY_MISSING",
+                "error",
+                "available public-axis registry skill directory does not exist",
+                axis=row.axis,
+                label=row.label,
+                skill=row.skill,
+            )
+            add_proposal(
+                "repair_skill",
+                row.axis,
+                row.label,
+                skill_name=row.skill,
+                kb_root="",
+            )
+            continue
+        public_frontmatter = _frontmatter_name(public_dir / "SKILL.md")
+        if public_frontmatter != row.skill:
+            add_finding(
+                "SKILL_NAME_MISMATCH",
+                "error",
+                "public-axis skill directory and frontmatter name do not match",
+                axis=row.axis,
+                label=row.label,
+                skill=row.skill,
+                path=str(public_dir / "SKILL.md"),
+            )
+        public_references = public_dir / "references"
+        declared_assembly = [
+            name
+            for name in PUBLIC_ASSEMBLY_REFERENCES
+            if (public_references / name).is_file()
+        ]
+        if not declared_assembly:
+            add_finding(
+                "SKILL_REFERENCE_MISSING",
+                "error",
+                "public-axis skill declares no KB assembly table: "
+                + " or ".join(PUBLIC_ASSEMBLY_REFERENCES),
+                axis=row.axis,
+                label=row.label,
+                skill=row.skill,
+                path=str(public_references),
+            )
 
     # A crwu-audit skill that is neither an axis leaf nor a known non-leaf skill is a
     # leftover combined/legacy skill; register it or migrate it onto a real axis prefix.

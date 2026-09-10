@@ -23,9 +23,9 @@ python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
 | `FIRST_LEVEL_SKILL_PENDING` | warning | 一级能力已登记但未落地；只登记 gap，不建空目录 |
 | `LEGACY_BUSINESS_PREFIX` | error | 制定 `crwu-audit-biz-*` 迁移方案 |
 | `AXIS_PREFIX_MISMATCH` | error | 轴与 Skill 前缀不符；改名或改登记，不得两者都留 |
-| `AVAILABLE_SKILL_DIRECTORY_MISSING` | error | `available` 声明的真实目录不存在；修复或降级状态 |
-| `SKILL_NAME_MISMATCH` | error | 目录名、frontmatter 与 registry 名称不一致 |
-| `SKILL_REFERENCE_MISSING` | error | available Skill 缺少规定 reference |
+| `AVAILABLE_SKILL_DIRECTORY_MISSING` | error | `available` 声明的真实目录不存在；修复或降级状态（含 public 轴行） |
+| `SKILL_NAME_MISMATCH` | error | 目录名、frontmatter 与 registry 名称不一致（含 public 轴行） |
+| `SKILL_REFERENCE_MISSING` | error | available Skill 缺少规定 reference；**public 轴**只要求声明一份 KB 装配表（`01-kb-assembly.md` 或横切能力沿用的 `00-KB装配表.md`），不套用资产/业务叶子的三件套命名 |
 | `REGISTRY_LABEL_DUPLICATE` | error | 一级标签登记多行；合并为恰好一行 |
 | `REGISTRY_LABEL_NOT_IN_CATALOG` | warning | `available` 标签在最新目录中无对应一级目录（改名或失效） |
 | `CLASSIFICATION_LABEL_MISSING` | warning | 一级标签未写入对应 classification |
@@ -48,6 +48,7 @@ python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
 判定边界：
 
 - 每一条资产/业务 registry 行都会被独立校验，即使其 label 不在本次目录快照内；否则目录改名会掩盖 registry 漂移。
+- **公共轴（`public`）行另行校验**：与报告形态无关的公共能力不在 `02-资产类型/` / `01-业务路线/` 一级根模型内，其装配键位于 `06-规则库/` 下且可以多于一个，因此**不适用** `ASSEMBLY_FIRST_LEVEL_ROOT_MISSING`、`ASSEMBLY_FILE_MAPPING`、`AXIS_ROOT_MISMATCH`、`AXIS_PREFIX_MISMATCH` 与 `MAPPING_ROOT_NOT_IN_CATALOG`。适用于它们的是一级目录根之外的完整性检查：目录存在、frontmatter 名一致、声明了一份 KB 装配表；其库内路径键由 `inspect_path_keys` 统一校验（该函数遍历全部 `crwu-audit*` 目录，公共轴天然在内）。
 - `MAPPING_ROOT_NOT_IN_CATALOG`、`AXIS_ROOT_MISMATCH` 和 `REGISTRY_LABEL_NOT_IN_CATALOG` 只在该轴的容器目录（`02-资产类型/`、`01-业务路线/`）已被本次目录捕获时才判定；只抓了一个轴的局部快照不会被误读为另一轴已被删除。
 - `REGISTRY_LABEL_NOT_IN_CATALOG` 只针对 `available` 行；`pending` 行的目录缺失属于正常中间态。
 - 重复 registry 行只按一条主张校验，避免同一问题重复计数。

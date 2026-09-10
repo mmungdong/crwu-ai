@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-10 · feat(skills) · P0-1 通用披露层归属：新增 public 轴通用准则能力，并补公共轴映射门禁
+
+- **问题**：报告通用披露层只作为「其他轴共享依赖」登记在资产叶子 `skills/crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 一处，`07-skill-registry.md` 的 `public` 轴只有表格勾稽，`08-union-dispatch-rules.md` 的 `public_skills` 写死为「仅当存在表格」。对象不是房地产时通用披露层无人装配（设备/企业价值/无形资产场景结构性出不了专业结论）；该登记同时违反 `12-leaf-common-contract.md` §4「方法正文、监管正文与全局契约由 router 其他轴装配，不复制进本轴根映射」。
+- **新增**：`skills/crwu-audit-public-general-standards/`（`SKILL.md` + `references/00-applicability.md` / `01-kb-assembly.md` / `02-review-focus.md`），canonical label `通用准则`，public 轴两个装配根 `06-规则库/02-通用准则-报告与披露/` 与 `06-规则库/03-通用准则-程序与档案/`。原来的「通用披露层」单点扩为**报告披露层 + 程序质控层**，两层各自独立出条目状态。
+- **正文核验（本次经 dws 实时下载，19 份文档）**：报告准则 `RULE-01-02-251~279`（251~260 总则与基本遵循 / 261~279 报告内容与附则，A 级已发布）；程序准则旧版 `RULE-01-02-101~127`；程序准则 2026 版 `RULE-01-02-001~028`；质控指南 2026 `RULE-01-02-401~456`。技能只保留归纳要点 + RULE 编号 + 库内层级路径寻址键，不复制正文。
+- **版本纪律（本次核出的关键判定前提）**：程序准则 2026 版（中评协〔2026〕5 号）与质控指南（中评协〔2026〕6 号）**自 2027-01-01 起施行**，旧版程序准则（中评协〔2018〕36 号）**至 2026-12-31 仍现行** → 2026 年内报告按旧版整段引用，禁止新旧条款混引、禁止以新版新增要求倒查旧版期间报告；六处新旧差异（程序环节 7→9、程序缺失处理、内部审核→分级审核、出具前再审核、业务报备、涉密档案）已在技能内逐条登记。
+- **内容缺口如实登记（不补造）**：机构质控旧版（中评协〔2017〕46 号）未精编 → 2026 年内机构质控对照无现行依据；利用专家工作准则（中评协〔2017〕35 号）精编待办，仅有索引卡；报告准则重构期待跟踪；声明要素条目数在规则条目与模板参考文件间表述不一致（六项/七项）列为待核项。
+- **改动（源仓）**：`crwu-audit/references/07-skill-registry.md`（新增 public 行）、`08-union-dispatch-rules.md`（`public_skills` 改为「恒含通用准则 + 条件含 datacheck」，并新增「设备类报废物资残余价值评估」稳定并集示例）、`crwu-audit/SKILL.md` 步骤 7（公共能力按各自触发条件独立求值）；`crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 由 4 个跨轴键收敛为 1 个（删 `REPORT_DISCLOSURE_GENERAL`/`EXECUTION_CONTRACT`/`CALIBRATION_BACKTEST`，`VALUATION_METHOD_INTERFACE` 标注为待剥离过渡登记，避免方法准则层回归）。
+- **门禁补盲（同批）**：`skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py` 此前 `audit_rows` 只取 `AXIS_ROOTS`（asset/business）行、`skill_dirs` 只按 asset/biz 前缀收目录，公共轴不受映射门禁保护。新增 `PUBLIC_AXIS` 独立校验分支：目录存在、frontmatter 名一致、声明一份 KB 装配表（`01-kb-assembly.md` 或横切能力沿用的 `00-KB装配表.md`），不套用一级根/轴前缀规则；库内路径键仍由 `inspect_path_keys` 统一校验。`references/05-validation-and-delivery.md` 同步 finding 语义与判定边界。
+- **测试**：`tools/kb/test_audit_skill_maintainer.py` 44 → **50 项**（新增 `PublicAxisMappingTest`：公共技能目录缺失 / 装配表缺失 / frontmatter 不一致 / 多根装配不被套用一级根模型 / 路径键按目录校验 / 横切装配表命名被接受）；`tools/kb/test_audit_multiaxis_router.py` 9 → **11 项**（新增无条件公共技能表达式断言、公共技能目录与门禁断言，并把新技能加入轴前缀白名单）；`tools/kb/test_dws_source_contract.py` 把公共轴 4 个文件显式 pin 进 `PINNED_CONTRACT_FILES`（`_leaf_files()` 只枚举 asset/biz，公共轴否则完全不被覆盖）。
+- **验证**：`kb_tool.py validate --skill-root skills` → warn=0 / error=0；映射检查器对真实 `crwu-dws` 三种产物（`目录快照.json` / `node-index.json` / `目录树.md`，均带 `--max-age-hours 2`）→ **错误 0 / 警告 2**（基线 warning 2 保持不变，为 `股权比例变动`、`其他目的` 两个库侧空子业务）；`test_audit_delivery.py` 24 项通过；校准表已用真实快照 `--emit-map` 刷新。
+- **同步登记**：`docs/design-crwu-audit-skills.md` §4 能力树 + §7.3 + §8、`skills/README.md`（技能表新增一行；并修正其中带 `.md` 后缀的寻址键示例——治理明文禁止，检查器会报 `KB_PATH_KEY_HAS_EXPORT_SUFFIX`）。
+- **不做项**：方法轴落地与「清单-M-市场法 / 清单-M-成本法」两个孤儿清单的认领（P0-2，需先定方法轴根模型：根 = `03-评估方法/`）；`04-监管覆盖` 五目录；资产轴其余 7 个 `pending` 能力；运行时技能同步（由部署方 skills 管理机制负责）。
+- 未新增/修改 crwu CLI 命令。
+
 ## 2026-09-10 · fix · 补齐快照解析的四处形态漂移：真实 crwu-dws 的三种产物与新鲜度门禁全部通过
 
 - **问题（上一轮修复的遗漏）**：上一轮修好了 `parentFolderId` / 嵌套 `children` / `stats.complete`，但仍按**测试 fixture 的形状**读字段，真实 `crwu-dws` 落盘产物继续不通过。实测三类残留：

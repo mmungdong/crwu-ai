@@ -1,6 +1,6 @@
 # crwu-audit 技能族设计（分轴并集路由 v0.4）
 
-| 版本 | v0.4（分轴并集路由；§1–§4/§6 的 L0/L1/L2 分层模型为历史记录，当前模型见 §7.1） | 日期 | 2026-09-10 | 状态 | 已实现：总路由 crwu-audit（references 运行材料）+ asset-realestate + datacheck；`crwu-audit-realestate-rent` 已于 2026-09-10 下架（资产×业务组合模型废止） |
+| 版本 | v0.4（分轴并集路由；§1–§4/§6 的 L0/L1/L2 分层模型为历史记录，当前模型见 §7.1） | 日期 | 2026-09-10 | 状态 | 已实现：总路由 crwu-audit（references 运行材料）+ asset-realestate + **public-general-standards** + datacheck；`crwu-audit-realestate-rent` 已于 2026-09-10 下架（资产×业务组合模型废止） |
 | --- | --- | --- | --- | --- |
 | 关联知识库 | 钉钉知识库（crwu-dws 查询解析的默认库；规则/清单正文=唯一来源，按库内层级路径经 crwu-dws 实时下载后**下载即审**；本仓不持有本地知识库根——`CRWU_KB_ROOT` 与 `KB/<相对路径>` 引用已废止；无发布/试点门禁（口径 2026-09-08）；实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md） | | | |
 
@@ -62,6 +62,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 | L1 | ~~crwu-audit-realestate~~ → `crwu-audit-asset-realestate` | 评估报告 × 不动产（房产/商铺/办公/公寓/厂房等，通用不动产逻辑） | `02-资产类型/房地产/` 一级根（递归全量） | ✅（2026-09-10 更名并改一级根装配） |
 | L2 | ~~crwu-audit-realestate-rent~~ | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值） | 组合模型废止；租赁类业务要求改由业务轴 Skill 承载 | ❌ 2026-09-10 下架 |
 | L2 能力 | crwu-audit-datacheck | 跨方向 · 材料含测算/明细/汇总表（任何对象） | M-数据校对口径：C1–C6 差异清单（**仅可见区**；H0：人工隐藏区 sheet/行/列/折叠组 强制跳过、禁读禁报） | ✅ v0.1 |
+| L2 能力（public） | crwu-audit-public-general-standards | 任何报告形态（与对象/业务/方法/监管无关，恒装配） | `06-规则库/02-通用准则-报告与披露/`（`RULE-01-02-251~279`）＋`06-规则库/03-通用准则-程序与档案/`（程序准则旧版 `101~127`、2026 版 `001~028`、质控指南 `401~456`） | ✅ 2026-09-10（P0-1：通用披露层归属 + 同型程序质控层同批认领） |
 | L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值（股权/产权转让、股东变动、收购并购、增资主线） | 企业价值 50 | 🅿️ P1 |
 | L1 | crwu-audit-intangible | 评估报告 × 无形资产 | 知识产权 42；无形资产总纲待精编 | 🅿️ |
 | L1 | crwu-audit-equipment | 评估报告 × 设备/存货等单项资产（含报废残值处置） | 空白（先补 L2+精编）；基线第二大对象 1,882 | 🅿️ P1 |
@@ -144,6 +145,17 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - **知识与能力状态（本次实时核对，抓取 2026-09-10T14:06+08:00）**：8 个一级业务、26 个子业务，24 份 `01-业务通用审核要点` 均有内容，但**必检项要点全部为「待补」**；`01-业务经营/共同审核点` 为 `TODO` 占位；`租赁与租金评估` 的 `02-方法适用索引`/`03-监管适用索引` 为空文档；子业务 `股权比例变动`、`其他目的` 目录内无审核文件。以上均登记为**知识库内容缺口**，不自行补造；技能仍按结构门禁标 `available`，缺口在对应 `02-review-focus.md` 与运行 gap 中如实声明。
 - 映射检查器对本次实时目录的结论：error 30 → **0**、warning 11 → **2**（剩余 2 条即上述缺审核文件的子业务）。
 
+### 7.3 公共轴一等能力与通用准则层（2026-09-10 三次落地）
+
+- **问题（评审 P0-1）**：报告通用披露层只作为「其他轴共享依赖」登记在资产叶子 `crwu-audit-asset-realestate/references/01-kb-assembly.md` 一处；`07-skill-registry.md` 的 `public` 轴只有表格勾稽，`08` 的 `public_skills` 又被写死为「仅当存在表格」。后果：对象不是房地产时**通用披露层无人装配**，设备/企业价值/无形资产等场景结构性出不了专业结论（设计缺口，非部署问题）；同时该登记违反 `12-leaf-common-contract.md` §4「全局执行契约、方法正文、监管正文由 router 的其他轴装配，不复制进本轴的根映射」。
+- **处置**：新增 public 轴叶子 **`crwu-audit-public-general-standards`**（canonical label `通用准则`），两个装配根：`06-规则库/02-通用准则-报告与披露/`（报告披露层）与 `06-规则库/03-通用准则-程序与档案/`（程序质控层）。两层各自独立执行；**与报告形态、对象、业务、方法、监管无关，由 router 步骤 7 无条件写入 `public_skills[]`**。
+- **为什么两层同批**：`03-通用准则-程序与档案/`（18 节点：程序准则 2018/2026 精编条目、质控指南 2026 精编条目及索引卡）此前**全仓零引用**，与 02 属同一类「报告形态无关的通用准则层」缺口；只修 02 会立刻暴露 03 的同型空缺。
+- **版本纪律（本轴特有，正文核验所得）**：程序准则 2026 版（中评协〔2026〕5 号，`RULE-01-02-001~028`）与质控指南（中评协〔2026〕6 号，`RULE-01-02-401~456`）**自 2027-01-01 起施行**；旧版程序准则（中评协〔2018〕36 号，`RULE-01-02-101~127`）**至 2026-12-31 仍现行**。因此 2026 年内报告按旧版整段引用，**禁止新旧条款混引、禁止以新版新增要求倒查旧版期间报告**。
+- **内容缺口（如实登记，不补造）**：机构质控旧版（中评协〔2017〕46 号）未精编 → 2026 年内机构质控对照无现行依据；利用专家工作准则（中评协〔2017〕35 号）精编待办（仅有索引卡，不构成规则条目）；报告准则重构期待跟踪；声明要素条目数在规则条目与模板参考文件间表述不一致（六项/七项）登记为待核项。索引卡类节点一律不作为审核引用依据。
+- **资产叶子同步收敛**：`crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 由 4 个跨轴键收敛为 1 个——删除 `REPORT_DISCLOSURE_GENERAL`（转由本 public 技能恒装配，覆盖面变宽而非收窄）、`EXECUTION_CONTRACT`（与 router 步骤 9 的强制契约并集重复）、`CALIBRATION_BACKTEST`（`00-总纲/治理/` 属维护侧材料，不进运行时依据清单）；`VALUATION_METHOD_INTERFACE` **保留并显式标注为待剥离的过渡登记**，待方法轴（根 = `03-评估方法/`）落地后由其一级共用层接管，删除时机不得早于该轴可用，否则丢失 `RULE-01-02-281~305` 造成回归。
+- **门禁补盲（同批必做）**：映射检查器此前 `audit_rows` 只取 `AXIS_ROOTS`（asset/business）行、`skill_dirs` 只按 asset/biz 前缀收目录，**公共轴不受任何映射门禁保护**。本次为 `public` 轴新增独立校验分支：目录存在、frontmatter 名一致、声明一份 KB 装配表（`01-kb-assembly.md` 或横切能力沿用的 `00-KB装配表.md`），并**不**套用一级根/轴前缀规则；库内路径键仍由遍历全部 `crwu-audit*` 目录的 `inspect_path_keys` 统一校验。测试 44 → **50 项**（新增 `PublicAxisMappingTest` 6 项）、router 契约 9 → **11 项**。
+- **同步登记**：router `SKILL.md` 步骤 7（公共能力按各自触发条件独立求值）、`07-skill-registry.md`、`08-union-dispatch-rules.md`（`public_skills` 表达式 + 设备类残值评估示例）、`skills/README.md`、`crwu-audit-skill-maintainer/references/05`（finding 语义与判定边界）；并修正 `skills/README.md` 中带 `.md` 后缀的寻址键示例（治理明文禁止）。
+
 ## 8. 本期交付
 
 - [x] 本文档 v0.2（分层路由模型）
@@ -151,6 +163,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] `skills/crwu-audit-asset-realestate/SKILL.md`（一级资产 Skill：`02-资产类型/房地产/` 一级根；2026-09-10 由 realestate 更名而来）
 - [x] ~~`skills/crwu-audit-realestate-rent/SKILL.md`~~（L2 商铺租金/经营性物业市值专项）——**2026-09-10 下架**：资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载
 - [x] `skills/crwu-audit-datacheck/SKILL.md`（跨轴数据/表格勾稽能力）
+- [x] `skills/crwu-audit-public-general-standards/`（2026-09-10，P0-1）：公共轴通用准则能力（报告披露层 + 程序质控层），`public` 轴无条件装配；见 §7.3
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
 - [x] `tools/kb/kb_tool.py`：**2026-09-10 收窄**为 `validate --skill-root`（引用卫生 + 实时协议 lint）；随本地知识库根模型废止，删除 index/assemble/query/resolve/release/extract/selftest（装配清单改由叶子 `01-kb-assembly.md` 声明、crwu-dws 实时下载）
 - [x] `skills/crwu-audit-optimize/`（2026-09-07）：族维护/优化入口（反馈→单子画像定位→分桶→拟改文件方案→用户确认→99 流程执行→kb_tool 校验回归；不经 crwu-audit 路由、不产审核判断）

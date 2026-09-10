@@ -51,7 +51,12 @@ REGISTRY_HEADER = ("axis", "label", "skill", "status", "load behavior")
 EXPECTED_REGISTRY_ROWS = (
     ("asset", "房地产", "crwu-audit-asset-realestate", "available", "load"),
     ("asset", "设备", "crwu-audit-asset-equipment", "pending", "record gap"),
+    ("public", "通用准则", "crwu-audit-public-general-standards", "available", "load always"),
 )
+
+# Public-axis capabilities are report-shape independent. Every one of them must be
+# reachable from the union algorithm without depending on any professional axis label.
+UNCONDITIONAL_PUBLIC_SKILLS = ("crwu-audit-public-general-standards",)
 
 DISPATCH_AXES = ("scope", "asset", "business", "method", "overlay", "public")
 
@@ -212,10 +217,78 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
                 "crwu-audit-optimize",
                 "crwu-audit-skill-maintainer",
                 "crwu-audit-datacheck",
+                "crwu-audit-public-general-standards",
             }
         )
 
         self.assertEqual([], offenders, f"crwu-audit leaf directories must use axis prefixes: {offenders}")
+
+    def test_unconditional_public_skills_are_not_conditioned_on_professional_axes(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        router_path = AUDIT_SKILL_ROOT / "SKILL.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        self.assertTrue(router_path.is_file(), f"missing router skill entry: {router_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+        router_text = router_path.read_text(encoding="utf-8")
+
+        public_expression = re.search(
+            r"public_skills\s*=\s*(?P<expression>[\s\S]*?)\n\n",
+            rules_text,
+        )
+
+        self.assertIsNotNone(
+            public_expression,
+            "union dispatch rules must define the public_skills expression",
+        )
+        expression = public_expression.group("expression")
+        for skill in UNCONDITIONAL_PUBLIC_SKILLS:
+            self.assertIn(
+                skill,
+                expression,
+                f"public_skills expression must always include {skill}",
+            )
+            self.assertNotIn(
+                f"{skill}] when",
+                expression,
+                f"{skill} must not be conditioned on materials or professional labels",
+            )
+        self.assertNotIn(
+            "else []",
+            expression.split("crwu-audit-public-general-standards", 1)[0],
+            "unconditional public skills must be declared before any conditional branch",
+        )
+
+        # The router step that builds public_skills must state the unconditional rule too,
+        # otherwise the algorithm and the runnable step can drift apart.
+        self.assertIn(
+            "crwu-audit-public-general-standards",
+            router_text,
+            "router SKILL.md must name the unconditional public skill in its public-capability step",
+        )
+
+    def test_public_skill_directory_and_references_exist(self):
+        for skill in UNCONDITIONAL_PUBLIC_SKILLS:
+            skill_dir = SKILLS_ROOT / skill
+            self.assertTrue(skill_dir.is_dir(), f"missing public-axis skill directory: {skill}")
+            skill_entry = skill_dir / "SKILL.md"
+            self.assertTrue(skill_entry.is_file(), f"missing public-axis SKILL.md: {skill}")
+            entry_text = skill_entry.read_text(encoding="utf-8")
+            self.assertIn(
+                f"name: {skill}",
+                entry_text,
+                f"{skill} frontmatter name must match its directory name",
+            )
+            self.assertIn(
+                "仅经 `crwu-audit` router 编排调用，禁止单独调用",
+                entry_text,
+                f"{skill} must declare the router-only invocation gate",
+            )
+            for reference in ("00-applicability.md", "01-kb-assembly.md", "02-review-focus.md"):
+                reference_path = skill_dir / "references" / reference
+                self.assertTrue(
+                    reference_path.is_file(),
+                    f"{skill} is missing required reference: {reference}",
+                )
 
     def test_active_contracts_do_not_reference_deleted_combined_skill(self):
         active_paths = (

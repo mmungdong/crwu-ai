@@ -39,6 +39,7 @@
 | overlay | 证券 | crwu-audit-overlay-securities | pending | record gap |
 | overlay | 司法 | crwu-audit-overlay-judicial | pending | record gap |
 | overlay | 金融/银行 | crwu-audit-overlay-financial | pending | record gap |
+| public | 通用准则 | crwu-audit-public-general-standards | available | load always |
 | public | 表格勾稽 | crwu-audit-datacheck | available | load when tabular materials exist |
 
 ## 维护约束

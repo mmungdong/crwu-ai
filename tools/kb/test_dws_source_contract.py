@@ -23,6 +23,13 @@ PINNED_CONTRACT_FILES = [
     "skills/crwu-audit-asset-realestate/references/01-kb-assembly.md",
     "skills/crwu-audit-biz-asset-operation/SKILL.md",
     "skills/crwu-audit-biz-asset-operation/references/02-review-focus.md",
+    # Public-axis capabilities are not matched by _leaf_files() (which enumerates only
+    # crwu-audit-asset-* / crwu-audit-biz-*), so they must be pinned explicitly or the
+    # whole public axis would go unchecked.
+    "skills/crwu-audit-public-general-standards/SKILL.md",
+    "skills/crwu-audit-public-general-standards/references/00-applicability.md",
+    "skills/crwu-audit-public-general-standards/references/01-kb-assembly.md",
+    "skills/crwu-audit-public-general-standards/references/02-review-focus.md",
     "skills/crwu-audit-datacheck/SKILL.md",
     "skills/crwu-audit-optimize/SKILL.md",
     "skills/crwu-audit-optimize/references/00-优化规范与文件落点.md",

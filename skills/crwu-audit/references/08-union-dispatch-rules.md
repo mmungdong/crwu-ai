@@ -5,7 +5,7 @@
 
 ## 分发算法
 
-先按 02–06 得到各轴全部标签，再逐项查询 07。`available` 技能加入该轴候选列表；`pending` 或未注册标签按 10 逐标签写 gap；`profile-only` 只保留画像。公共能力由材料条件独立判定。
+先按 02–06 得到各轴全部标签，再逐项查询 07。`available` 技能加入该轴候选列表；`pending` 或未注册标签按 10 逐标签写 gap；`profile-only` 只保留画像。公共能力独立判定，且每个公共能力有各自的触发条件：**通用准则类与报告形态、对象、业务、方法、监管均无关，恒装配**；表格勾稽类按材料是否含表格触发。
 
 ```text
 scope_skills   = available_skills(scope_types[])
@@ -13,7 +13,8 @@ asset_skills   = available_skills(asset_types[])
 business_skills = available_skills(business_types[])
 method_skills  = available_skills(methods[])
 overlay_skills = available_skills(overlays[])
-public_skills  = [crwu-audit-datacheck] when tabular materials exist, else []
+public_skills  = [crwu-audit-public-general-standards]        # 恒装配：报告披露 + 程序质控
+               + [crwu-audit-datacheck] when tabular materials exist
 
 skills_to_load = stable_unique(
   scope_skills +
@@ -68,6 +69,17 @@ skills_to_load = stable_unique(
 ### 设备抵押
 
 画像命中 `asset=设备`、`business=融资与债务`（旧行为词 抵押质押，子业务 `抵押与担保`）。解析为 `crwu-audit-asset-equipment (pending)` 与 `crwu-audit-biz-financing-debt (available)`：前者为 `asset+设备` 记录独立 gap，后者正常加载。如果材料含表格，available 的 `crwu-audit-datacheck` 仍必须加载；不得因为对象技能 pending 而空返。
+
+### 设备类报废物资残余价值评估（国资）
+
+画像命中 `asset=设备`、`business=交易与处置`、`overlay=国资`，材料含测算表。逐标签解析得到：
+
+- `crwu-audit-asset-equipment`：pending，记独立 gap；
+- `crwu-audit-biz-transaction-disposal`：available，加载；
+- `crwu-audit-overlay-state-owned`：pending，记独立 gap；
+- `public_skills`：`crwu-audit-public-general-standards` **恒加入**（报告披露层与程序质控层对任何对象均适用），材料含表格再追加 `crwu-audit-datacheck`。
+
+即对象与监管两层专业能力均缺失时，通用准则层与表格勾稽仍必须加载并产出结果；不得因为专业标签 `pending` 而让 `public_skills` 空返。
 
 ### 企业价值多资产清算
 

@@ -1657,5 +1657,217 @@ class CrwuDwsArtifactShapeTest(unittest.TestCase):
             self.assertNotIn("CATALOG_NOT_LIVE", _codes(report))
 
 
+PUBLIC_AXIS_TREE = """
+- 📁 01-业务路线/
+  - 📁 01-资产经营/
+    - 📁 租赁与租金评估/
+      - 📄 01-业务通用审核要点
+- 📁 02-资产类型/
+  - 📁 01-房地产/
+    - 📁 01-共性参考/
+      - 📄 02-评估审核条目
+- 📁 06-规则库/
+  - 📁 02-通用准则-报告与披露/
+    - 📁 报告准则-精编条目/
+      - 📄 报告准则-总则与基本遵循
+  - 📁 03-通用准则-程序与档案/
+    - 📁 程序准则2026-精编条目/
+      - 📄 程序准则2026-第一章总则与第二章基本遵循
+""".strip()
+
+
+def _registry_with_public(public_skill: str, public_status: str = "available") -> str:
+    return f"""
+    # 多轴技能注册表
+
+    | axis | label | skill | status | load behavior |
+    | --- | --- | --- | --- | --- |
+    | asset | 房地产 | crwu-audit-asset-realestate | available | load |
+    | business | 资产经营 | crwu-audit-biz-asset-operation | available | load |
+    | public | 通用准则 | {public_skill} | {public_status} | load always |
+    """
+
+
+def _create_public_skill(repo: Path, name: str, roots, *, frontmatter=None) -> None:
+    """Public-axis capability fixture: one entry plus the two standard references.
+
+    Kept Python 3.9 compatible on purpose (this module has no `from __future__ import
+    annotations`), so no PEP 604 unions in the signature.
+    """
+    skill = repo / "skills" / name
+    _write(
+        skill / "SKILL.md",
+        f"""
+        ---
+        name: {frontmatter or name}
+        description: Use when crwu-audit selects the public capability.
+        ---
+
+        # {name}
+        """,
+    )
+    _write(skill / "references" / "00-applicability.md", "# Applicability\n")
+    root_rows = "\n        ".join(
+        f"| KEY{i} | public | 通用准则 | `{root}` | directory | true | true |"
+        for i, root in enumerate(roots)
+    )
+    _write(
+        skill / "references" / "01-kb-assembly.md",
+        f"""
+        # KB assembly
+
+        | source_key | owner_axis | canonical_label | kb_root | request_kind | recursive | required |
+        | --- | --- | --- | --- | --- | --- | --- |
+        {root_rows}
+        """,
+    )
+    _write(skill / "references" / "02-review-focus.md", "# Review focus\n")
+
+
+class PublicAxisMappingTest(unittest.TestCase):
+    """Public-axis capabilities sit outside the asset/business first-level-root model.
+
+    Regression guard: `audit_rows` filters registry rows by `AXIS_ROOTS`, so before this
+    coverage existed an `available` public skill could be missing entirely, or ship without
+    its references, and no mapping finding would fire.
+    """
+
+    PUBLIC_SKILL = "crwu-audit-public-general-standards"
+    PUBLIC_ROOTS = ("06-规则库/02-通用准则-报告与披露/", "06-规则库/03-通用准则-程序与档案/")
+
+    def _repo_with_public_row(self, root: Path) -> Path:
+        repo = root / "repo"
+        _create_valid_repo(repo)
+        _write(
+            repo / "skills/crwu-audit/references/07-skill-registry.md",
+            _registry_with_public(self.PUBLIC_SKILL),
+        )
+        return repo
+
+    def _tree(self, root: Path) -> Path:
+        tree = root / "tree.md"
+        tree.write_text(PUBLIC_AXIS_TREE, encoding="utf-8")
+        return tree
+
+    def test_available_public_skill_directory_missing_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = self._repo_with_public_row(root)
+            tree = self._tree(root)
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            self.assertEqual(
+                [self.PUBLIC_SKILL],
+                [item["skill"] for item in _findings(report, "AVAILABLE_SKILL_DIRECTORY_MISSING")],
+            )
+
+    def test_available_public_skill_requires_a_kb_assembly_table(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = self._repo_with_public_row(root)
+            tree = self._tree(root)
+            skill = repo / "skills" / self.PUBLIC_SKILL
+            _write(
+                skill / "SKILL.md",
+                f"---\nname: {self.PUBLIC_SKILL}\ndescription: public\n---\n\n# entry\n",
+            )
+            _write(skill / "references" / "00-applicability.md", "# Applicability\n")
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            self.assertNotIn("AVAILABLE_SKILL_DIRECTORY_MISSING", _codes(report))
+            self.assertEqual(
+                [self.PUBLIC_SKILL],
+                [item["skill"] for item in _findings(report, "SKILL_REFERENCE_MISSING")],
+            )
+
+    def test_public_skill_cross_cutting_assembly_table_name_is_accepted(self):
+        """`crwu-audit-datacheck` ships `00-KB装配表.md`; that naming must not be an error."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = self._repo_with_public_row(root)
+            tree = self._tree(root)
+            skill = repo / "skills" / self.PUBLIC_SKILL
+            _write(
+                skill / "SKILL.md",
+                f"---\nname: {self.PUBLIC_SKILL}\ndescription: public\n---\n\n# entry\n",
+            )
+            _write(
+                skill / "references" / "00-KB装配表.md",
+                "| 需要 | 库内层级路径 |\n| --- | --- |\n"
+                "| 规则 | `06-规则库/02-通用准则-报告与披露/` |\n",
+            )
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            self.assertEqual(
+                set(),
+                _codes(report) & {"SKILL_REFERENCE_MISSING", "AVAILABLE_SKILL_DIRECTORY_MISSING"},
+            )
+
+    def test_public_skill_frontmatter_mismatch_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = self._repo_with_public_row(root)
+            tree = self._tree(root)
+            _create_public_skill(
+                repo,
+                self.PUBLIC_SKILL,
+                self.PUBLIC_ROOTS,
+                frontmatter="crwu-audit-public-something-else",
+            )
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            mismatches = _findings(report, "SKILL_NAME_MISMATCH")
+            self.assertEqual([self.PUBLIC_SKILL], [item["skill"] for item in mismatches])
+
+    def test_public_skill_multi_root_assembly_is_not_forced_into_the_axis_root_model(self):
+        """Public assembly keys live under `06-规则库/`；no `02-资产类型/`-style root applies."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = self._repo_with_public_row(root)
+            tree = self._tree(root)
+            _create_public_skill(repo, self.PUBLIC_SKILL, self.PUBLIC_ROOTS)
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            self.assertEqual(
+                set(),
+                _codes(report)
+                & {
+                    "ASSEMBLY_FIRST_LEVEL_ROOT_MISSING",
+                    "ASSEMBLY_FILE_MAPPING",
+                    "AXIS_ROOT_MISMATCH",
+                    "AXIS_PREFIX_MISMATCH",
+                    "MAPPING_ROOT_NOT_IN_CATALOG",
+                    "REGISTRY_LABEL_NOT_IN_CATALOG",
+                },
+            )
+
+    def test_public_skill_path_keys_are_checked_against_the_catalog(self):
+        """`inspect_path_keys` walks every crwu-audit* directory, public axis included."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = self._repo_with_public_row(root)
+            tree = self._tree(root)
+            _create_public_skill(
+                repo,
+                self.PUBLIC_SKILL,
+                self.PUBLIC_ROOTS + ("06-规则库/99-未收录目录/",),
+            )
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            self.assertEqual(
+                ["06-规则库/99-未收录目录/"],
+                [
+                    item["path"]
+                    for item in _findings(report, "KB_PATH_KEY_NOT_IN_CATALOG")
+                ],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
