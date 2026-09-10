@@ -1229,44 +1229,77 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
         - 📁 01-业务路线/
           - 📁 01-资产经营/
             - 📁 租赁与租金评估/
-              - 📄 01-业务通用审核要点.md
+              - 📄 01-业务通用审核要点
         - 📁 02-资产类型/
           - 📁 01-房地产/
             - 📁 01-共性参考/
-              - 📄 02-评估审核条目.md
+              - 📄 02-评估审核条目
         """
-        # (nodeId, name, type, parentId) — flat, exactly like 目录快照.json
-        flat = [
-            ("b", "01-业务路线", "folder", None),
-            ("b1", "01-资产经营", "folder", "b"),
-            ("b2", "租赁与租金评估", "folder", "b1"),
-            ("b3", "01-业务通用审核要点.md", "file", "b2"),
-            ("a", "02-资产类型", "folder", None),
-            ("a1", "01-房地产", "folder", "a"),
-            ("a2", "01-共性参考", "folder", "a1"),
-            ("a3", "02-评估审核条目.md", "file", "a2"),
-        ]
+        # Authoritative shape per crwu-dws/references/00-目录快照schema.md:
+        # nested `children` + `parentFolderId`, completeness on `stats.complete`.
+        # Business/asset names carry no `.md` — that is only the local export suffix.
         snapshot = {
             "schema": "crwu.kb-dir-snapshot.v1",
             "space": {"name": "space", "workspaceId": "ws"},
             "fetchedAt": "2026-09-09T14:54:05+08:00",
-            "stats": {"total": len(flat), "folders": 6, "docs": 2},
-            "evidence": [{"folder": "<root>", "count": 8, "autoPageComplete": True, "hasMore": False}],
+            "stats": {"total_nodes": 8, "folders": 6, "docs": 2, "max_depth": 3, "complete": True},
             "failures": [],
             "nodes": [
-                {"nodeId": nid, "name": name, "type": kind, "parentId": parent}
-                for nid, name, kind, parent in flat
+                {
+                    "nodeId": "b", "name": "01-业务路线", "type": "folder",
+                    "parentFolderId": None, "depth": 0,
+                    "children": [
+                        {
+                            "nodeId": "b1", "name": "01-资产经营", "type": "folder",
+                            "parentFolderId": "b", "depth": 1,
+                            "children": [
+                                {
+                                    "nodeId": "b2", "name": "租赁与租金评估", "type": "folder",
+                                    "parentFolderId": "b1", "depth": 2,
+                                    "children": [
+                                        {"nodeId": "b3", "name": "01-业务通用审核要点", "type": "adoc",
+                                         "parentFolderId": "b2", "depth": 3, "children": []}
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "nodeId": "a", "name": "02-资产类型", "type": "folder",
+                    "parentFolderId": None, "depth": 0,
+                    "children": [
+                        {
+                            "nodeId": "a1", "name": "01-房地产", "type": "folder",
+                            "parentFolderId": "a", "depth": 1,
+                            "children": [
+                                {
+                                    "nodeId": "a2", "name": "01-共性参考", "type": "folder",
+                                    "parentFolderId": "a1", "depth": 2,
+                                    "children": [
+                                        {"nodeId": "a3", "name": "02-评估审核条目", "type": "adoc",
+                                         "parentFolderId": "a2", "depth": 3, "children": []}
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
             ],
         }
+        flat = [("b", "01-业务路线", "folder", None), ("b1", "01-资产经营", "folder", "b"),
+                ("b2", "租赁与租金评估", "folder", "b1"), ("b3", "01-业务通用审核要点", "adoc", "b2"),
+                ("a", "02-资产类型", "folder", None), ("a1", "01-房地产", "folder", "a"),
+                ("a2", "01-共性参考", "folder", "a1"), ("a3", "02-评估审核条目", "adoc", "a2")]
         paths = {
             "b": "01-业务路线",
             "b1": "01-业务路线/01-资产经营",
             "b2": "01-业务路线/01-资产经营/租赁与租金评估",
-            "b3": "01-业务路线/01-资产经营/租赁与租金评估/01-业务通用审核要点.md",
+            "b3": "01-业务路线/01-资产经营/租赁与租金评估/01-业务通用审核要点",
             "a": "02-资产类型",
             "a1": "02-资产类型/01-房地产",
             "a2": "02-资产类型/01-房地产/01-共性参考",
-            "a3": "02-资产类型/01-房地产/01-共性参考/02-评估审核条目.md",
+            "a3": "02-资产类型/01-房地产/01-共性参考/02-评估审核条目",
         }
         node_index = {
             "schema": "crwu.kb-node-index.v1",
@@ -1307,6 +1340,51 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertEqual("crwu.kb-node-index.v1", reports[2]["catalog"]["source_schema"])
             self.assertIs(True, reports[1]["catalog"]["complete"])
 
+    def test_legacy_flat_snapshot_uses_parent_folder_id_authoritatively(self):
+        """The flat legacy form must link on `parentFolderId`, with `parentId` as alias only."""
+        flat_nodes = [
+            {"nodeId": "a", "name": "02-资产类型", "type": "folder", "parentFolderId": None},
+            {"nodeId": "a1", "name": "01-房地产", "type": "folder", "parentFolderId": "a"},
+            {"nodeId": "a2", "name": "01-共性参考", "type": "folder", "parentFolderId": "a1"},
+            {"nodeId": "a3", "name": "02-评估审核条目", "type": "adoc", "parentFolderId": "a2"},
+        ]
+        alias_nodes = [
+            {**node, "parentId": node["parentFolderId"]} for node in flat_nodes
+        ]
+        for key in ("parentFolderId",):
+            for node in alias_nodes:
+                node.pop(key, None)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            _create_valid_repo(repo)
+            for name, nodes in (("authoritative.json", flat_nodes), ("alias.json", alias_nodes)):
+                catalog = root / name
+                catalog.write_text(
+                    json.dumps(
+                        {
+                            "schema": "crwu.kb-dir-snapshot.v1",
+                            "fetchedAt": "2026-09-09T14:54:05+08:00",
+                            "stats": {"total_nodes": len(nodes), "complete": True},
+                            "failures": [],
+                            "nodes": nodes,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                report = json.loads(run_checker(repo, catalog).stdout)
+                self.assertEqual(
+                    [
+                        "02-资产类型/",
+                        "02-资产类型/01-房地产/",
+                        "02-资产类型/01-房地产/01-共性参考/",
+                        "02-资产类型/01-房地产/01-共性参考/02-评估审核条目",
+                    ],
+                    report["catalog"]["paths"],
+                    name,
+                )
+
     def test_incomplete_dws_snapshot_is_reported_as_incomplete(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1318,11 +1396,11 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
                     {
                         "schema": "crwu.kb-dir-snapshot.v1",
                         "fetchedAt": "2026-09-09T14:54:05+08:00",
-                        "evidence": [
-                            {"folder": "<root>", "count": 8, "autoPageComplete": False, "hasMore": True}
-                        ],
-                        "failures": [{"folder": "x", "error": "timeout"}],
-                        "nodes": [{"nodeId": "a", "name": "02-资产类型", "type": "folder", "parentId": None}],
+                        "stats": {"total_nodes": 1, "folders": 1, "docs": 0,
+                                  "max_depth": 0, "complete": False},
+                        "failures": [{"nodeId": "a", "step": "node-list", "error": "timeout"}],
+                        "nodes": [{"nodeId": "a", "name": "02-资产类型", "type": "folder",
+                                   "parentFolderId": None, "depth": 0, "children": []}],
                     },
                     ensure_ascii=False,
                 ),

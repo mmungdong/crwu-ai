@@ -7,7 +7,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Active contracts that must never re-introduce a local knowledge-base root,
 # a downloaded-body mirror, or a "publish gate" style local fallback.
-ACTIVE_CONTRACT_FILES = [
+# Router/DWS-side documents that are individually pinned.
+PINNED_CONTRACT_FILES = [
     "skills/README.md",
     "skills/crwu-dws/SKILL.md",
     "skills/crwu-dws/references/00-目录快照schema.md",
@@ -32,6 +33,19 @@ ACTIVE_CONTRACT_FILES = [
     "docs/design-audit-live-kb-protocol.md",
     "docs/design-crwu-dws.md",
 ]
+
+
+def _leaf_files():
+    """Every file of every asset/biz leaf, so the whole family is covered (not a sample)."""
+    found = []
+    for pattern in ("crwu-audit-asset-*", "crwu-audit-biz-*"):
+        for leaf in sorted((REPO_ROOT / "skills").glob(pattern)):
+            if leaf.is_dir():
+                found.extend(sorted(str(p.relative_to(REPO_ROOT)) for p in leaf.rglob("*.md")))
+    return found
+
+
+ACTIVE_CONTRACT_FILES = PINNED_CONTRACT_FILES + _leaf_files()
 
 FORBIDDEN_TERMS = [
     "CRWU_KB_ROOT",
@@ -121,26 +135,69 @@ class DwsSourceContractTest(unittest.TestCase):
                 self.assertIn(term, text)
 
     def test_asset_and_business_leaves_declare_a_first_level_directory_root(self):
-        """Every crwu-audit asset/biz leaf must map one recursive first-level root."""
+        """Every asset/biz leaf must declare one exact recursive first-level root.
+
+        Parses the assembly table row (cell-level) rather than substring matching, and the
+        leaf must carry all four required references (not just the assembly table).
+        """
         leaves = sorted(
-            glob.glob(str(REPO_ROOT / "skills/crwu-audit-asset-*"))
-            + glob.glob(str(REPO_ROOT / "skills/crwu-audit-biz-*"))
+            leaf for pattern in ("crwu-audit-asset-*", "crwu-audit-biz-*")
+            for leaf in (REPO_ROOT / "skills").glob(pattern) if leaf.is_dir()
         )
-        self.assertNotEqual([], leaves, "expected at least one asset leaf skill")
+        self.assertNotEqual([], leaves, "expected at least one asset/biz leaf skill")
 
-        missing = []
+        required_references = (
+            "00-applicability.md",
+            "01-kb-assembly.md",
+            "02-review-focus.md",
+        )
+        problems = []
         for leaf in leaves:
-            assembly = Path(leaf) / "references" / "01-kb-assembly.md"
+            name = leaf.name
+            axis_root = "02-资产类型/" if name.startswith("crwu-audit-asset-") else "01-业务路线/"
+            for reference in required_references:
+                if not (leaf / "references" / reference).is_file():
+                    problems.append(f"{name}: missing references/{reference}")
+            assembly = leaf / "references" / "01-kb-assembly.md"
             if not assembly.is_file():
-                missing.append(f"{Path(leaf).name}: no 01-kb-assembly.md")
                 continue
-            text = assembly.read_text(encoding="utf-8")
-            if "01-业务路线/" not in text and "02-资产类型/" not in text:
-                missing.append(f"{Path(leaf).name}: no first-level library root")
-            if "directory" not in text or "true" not in text:
-                missing.append(f"{Path(leaf).name}: no directory/recursive contract")
 
-        self.assertEqual([], missing, "\n".join(missing))
+            rows = [
+                [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+                for line in assembly.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("|")
+            ]
+            header = next((r for r in rows if "kb_root" in r and "request_kind" in r), None)
+            if header is None:
+                problems.append(f"{name}: assembly has no first-level root table")
+                continue
+            index = {key: i for i, key in enumerate(header)}
+            data = [
+                r for r in rows
+                if len(r) == len(header) and r[index["request_kind"]] in {"directory"}
+            ]
+            if len(data) != 1:
+                problems.append(
+                    f"{name}: expected exactly one directory root row, found {len(data)}"
+                )
+                continue
+            row = data[0]
+            kb_root = row[index["kb_root"]]
+            label = row[index["canonical_label"]]
+            if not kb_root.startswith(axis_root) or not kb_root.endswith("/"):
+                problems.append(f"{name}: kb_root {kb_root!r} is not one {axis_root}<label>/ root")
+            if kb_root.count("/") != 2:
+                problems.append(f"{name}: kb_root {kb_root!r} is not a first-level root")
+            if row[index["recursive"]] != "true":
+                problems.append(f"{name}: recursive must be true")
+            if row[index["required"]] != "true":
+                problems.append(f"{name}: required must be true")
+            if label not in kb_root:
+                problems.append(f"{name}: canonical_label {label!r} not present in kb_root")
+            if ".md" in kb_root:
+                problems.append(f"{name}: kb_root must not carry the .md export suffix")
+
+        self.assertEqual([], problems, "\n".join(problems))
 
     def test_legacy_combined_and_business_prefixed_skills_are_gone(self):
         offenders = sorted(

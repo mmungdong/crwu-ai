@@ -166,8 +166,17 @@ def _walk_snapshot(nodes: Iterable[object], parents: tuple[str, ...] = ()) -> It
             yield from _walk_snapshot(children, parts if is_folder else parents)
 
 
+def _parent_link(node: dict) -> str | None:
+    """Authoritative snapshot field is `parentFolderId`; `parentId` is a legacy alias."""
+    for field in ("parentFolderId", "parentId"):
+        value = node.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _paths_from_flat_nodes(nodes: Iterable[object]) -> Iterable[str]:
-    """DWS flat snapshot: every node carries parentId, so rebuild each path by walking up."""
+    """Flat snapshot form: rebuild each path by walking the parent link up to a root."""
     by_id: dict[str, dict] = {}
     for raw_node in nodes:
         if not isinstance(raw_node, dict):
@@ -189,11 +198,20 @@ def _paths_from_flat_nodes(nodes: Iterable[object]) -> Iterable[str]:
             name = cursor.get("name")
             if isinstance(name, str) and name.strip():
                 parts.append(name.strip().strip("/"))
-            parent_id = cursor.get("parentId")
-            cursor = by_id.get(parent_id) if isinstance(parent_id, str) and parent_id else None
+            cursor = by_id.get(_parent_link(cursor) or "")
         if not parts:
             continue
         yield _normalize_path("/".join(reversed(parts)), folder=node.get("type") == "folder")
+
+
+def _paths_from_snapshot_nodes(nodes: Iterable[object]) -> Iterable[str]:
+    """crwu-dws directory snapshot: authoritative form nests nodes via `children`
+    (`crwu-dws/references/00-目录快照schema.md`); a flat list linked by `parentFolderId`
+    (legacy alias `parentId`) is tolerated so older snapshots still load."""
+    node_list = [n for n in nodes if isinstance(n, dict)]
+    if any(isinstance(n.get("children"), list) and n["children"] for n in node_list):
+        return _walk_snapshot(node_list)
+    return _paths_from_flat_nodes(node_list)
 
 
 def _paths_from_node_index(nodes: object) -> Iterable[str]:
@@ -210,13 +228,20 @@ def _paths_from_node_index(nodes: object) -> Iterable[str]:
 
 
 def _snapshot_is_complete(data: dict) -> bool | None:
-    """A DWS snapshot is only usable as path truth when every page came back."""
+    """A snapshot is only usable as path truth when every page came back.
+
+    `stats.complete` is the authoritative flag (`crwu-dws/references/00` §3); a non-empty
+    `failures` list always wins; a legacy top-level `evidence[]` receipt list is the fallback.
+    """
     failures = data.get("failures")
     if isinstance(failures, list) and failures:
         return False
+    stats = data.get("stats")
+    if isinstance(stats, dict) and isinstance(stats.get("complete"), bool):
+        return stats["complete"]
     evidence = data.get("evidence")
     if not isinstance(evidence, list):
-        return None
+        return True if isinstance(failures, list) else None
     for receipt in evidence:
         if not isinstance(receipt, dict):
             return None
@@ -249,7 +274,7 @@ def load_catalog(path: Path) -> Catalog:
             DIR_SNAPSHOT_SCHEMA,
             fetched_at if isinstance(fetched_at, str) else None,
             _snapshot_is_complete(data),
-            tuple(sorted(set(_paths_from_flat_nodes(nodes)))),
+            tuple(sorted(set(_paths_from_snapshot_nodes(nodes)))),
         )
     if schema == KB_NODE_INDEX_SCHEMA:
         fetched_at = data.get("fetchedAt")

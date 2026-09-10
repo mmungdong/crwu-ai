@@ -9,6 +9,29 @@
 
 ---
 
+## 2026-09-10 · fix · 修正快照解析：目录快照按权威 schema（嵌套 children + parentFolderId）解析
+
+- **问题（此前声称的验证是循环自证）**：`check_audit_skill_mappings.py` 把 `crwu.kb-dir-snapshot.v1` 当作**扁平节点表**并按 `parentId` 回溯父链，而 `crwu-dws/references/00-目录快照schema.md` §2/§3 定义的权威形态是**嵌套 `children` + `parentFolderId`**（`stats.complete` 判完整）。此前"三种真实形态路径完全一致 / error 0"的结论，是用**自己用 `parentId` 构造的快照**验证自己得到的，未对权威形态做过验证。
+- **影响（实测）**：用符合 schema 的真实快照（263 节点、9 个根层、`stats.complete=true`）复跑，检查器只解析出 **9 条路径**（根层），产生 **97 条误报**（88×`KB_PATH_KEY_NOT_IN_CATALOG`、9×`MAPPING_ROOT_NOT_IN_CATALOG`、9×`REGISTRY_LABEL_NOT_IN_CATALOG`）。该误报由并行评审报告独立复现（其记录的 30 条误报为重跑时点差异）。
+- **修复**：新增 `_paths_from_snapshot_nodes` —— 有非空 `children` 即按**嵌套形态**解析（复用 `_walk_snapshot`），否则按扁平形态解析；扁平形态**以 `parentFolderId` 为准**（`parentId` 仅作旧式别名容忍）。`_snapshot_is_complete` 改为优先 `stats.complete`，其次 `failures`，再退回旧式顶层 `evidence[]`。
+- **修复后验证**：四种形态（符合 schema 的目录快照 / 旧式扁平快照 / node-index / 目录树）对同一知识库均解析出 **263 条路径**、error=0、warning=2（仅剩库侧两个无审核文件的子业务）；`complete=true` 判定正确。
+- **测试加固（原测试正是缺陷来源）**：`test_audit_skill_maintainer.py` 的快照 fixture 从"扁平 + `parentId`"改为**权威嵌套形态**（`children`+`parentFolderId`+`depth`+`stats.complete`），并新增 `parentFolderId` 权威性 / `parentId` 别名的双形态断言；节点名一并去掉 `.md`（导出后缀）；不完整快照用例改用 `stats.complete=false`。38 → **39 项**。真实仓库回归用例的依赖快照已替换为符合 schema 的文件。
+- **测试加固（覆盖率）**：`test_dws_source_contract.py` 的 `ACTIVE_CONTRACT_FILES` 原为 23 项固定清单、**叶子文件只覆盖 4/36**；改为固定清单 + **动态枚举全部 asset/biz 叶子文件**（受检 59 个文件）；一级根断言从子串检查（`"directory" in text and "true" in text`）升级为**解析装配表行**：恰好一行 `request_kind=directory`、`kb_root` 属本轴且为二级一级根、不以 `/` 结尾或含 `.md` 即失败、`recursive`/`required` 必须为 `true`、`canonical_label` 必须出现在 `kb_root` 中，并检查三份必备 reference 齐全。
+- 说明：本次修正源于并行评审报告的独立发现；结论一并记录在此，避免与前面"已验证"的表述冲突。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · docs · 新增 crwu-audit 技能族评审报告（源仓口径）：硬门禁不可通过 / 通用兜底层缺失 / 旗舰清单孤儿 / 业务轴频次信号丢失
+
+- 影响：新增 `docs/review-crwu-audit-skills.md`（**只读评审报告**，不改任何技能正文）。评审范围限定源仓 `skills/` 的架构、划分、协作、内容支撑与门禁设计；运行态与部署侧问题（已安装版本滞后、`tools/` 未随技能分发、外部 `dws` CLI 与认证前提、附件下载能力等）明确列为范围外，由部署方另行处理，报告不作部署结论。基线：`skills/` 工作区快照 + 知识库目录快照 `中瑞世联评估审核知识库` `fetched_at=2026-09-10T14:18:56+08:00`（263 节点）+ `2026-09-10T14:15:54+08:00` 的本次下载物。
+- 说明（P0 结论）：① **硬门禁不可通过**（详见下条「门禁可信度」，因治理修订升为 P0）。② **通用兜底层无归属**——`REPORT_DISCLOSURE_GENERAL` 只登记在 `crwu-audit-asset-realestate/references/01-kb-assembly.md:42`（全仓仅此一处），`public` 轴只有 datacheck，对象非房地产时通用披露层无人装配；同文件 `:41-44` 另登记 `VALUATION_METHOD_INTERFACE`/`EXECUTION_CONTRACT`/`CALIBRATION_BACKTEST` 三个 method/public 键，与共同约束 §4「不复制进本轴根映射」相冲。③ **旗舰清单孤儿**——`06-规则库/清单-M-市场法`（CHK-MKT-001~014）与 `清单-M-成本法`（CHK-CST-001~012）在 `crwu-audit-realestate-rent` 下架后无人引用。④ **业务轴**：8 个叶子的同构属治理明文基线（`AGENTS.md`「新建叶子时以任一 `crwu-audit-biz-*` 的四件套为版式基线」），且叶子对「必检项待补」记 gap 符合治理新增的「部分内容待补但其余可真实归纳 → 可标 available，须声明覆盖不完整并记 gap」，**均不列为缺陷**；真正残留问题是**频次信号未进技能**——核对该次下载物，24 个子业务要点文件合计 258 KB / 560 条历史高频复核问题，每条自带「出现次数 · 项目数 · 分类标签」（如 `1173 次 · 651 个项目`），叶子只保留了分类标签，导致 560 条问题只能等权对待、无法排序分诊。次要结论：业务轴粒度（8 个技能彼此无不同清单，8× 维护成本换 0 增量能力，是否合并属治理决策）；叶子复述共同规则（轴边界句 / 共用层顺序句 / §7 状态表）与治理「不得复述共同规则」相冲；method/overlay 轴 registry 标签与 `03-评估方法/`、`04-监管覆盖/` 目录语义不对齐（成本法/假设开发法/基准地价系数修正法/路线价法无对应目录；「金融/银行」对应目录实为「金融国资」）；叶子→AuditResult 三处字段名互不相同、无映射规范；`request_kind`/`recursive`/`required` 与 crwu-dws manifest 无接口对端；9 个叶子 0 命中 `selected_relative_paths` 与输出自检，asset 叶子缺一级共用层先行、`REAL_ESTATE_OBJECT` 为悬空键、`expected_structure:17` 省略 `不动产准则-` 前缀（违反治理「一级根/寻址键逐字」明文）；契约实现缺口与 P2 杂项（rent 残留 3 处、`泰和里`、契约编号 04/03、optimize 旧画像词、`design-crwu-dws.md §10 决策点 D8–D12` 引用不存在）逐条列出并给出落点。
+- 说明（门禁可信度 → P0）：`check_audit_skill_mappings.py::_paths_from_flat_nodes` 以 `parentId` 回溯父链，而真实快照字段为 `parentFolderId` → 对真实快照**误报 error 105 / warning 9**（9 个一级根全部 `MAPPING_ROOT_NOT_IN_CATALOG`，catalog 路径被压缩到 188 条 / 实际 263 节点）；仅补 `parentId` 别名后重跑即得 `一级资产 1 / 一级业务 8 / 错误 0 / 警告 2`（warning 2 = `股权比例变动`、`其他目的` 两个空目录）。**该项因治理修订升级为 P0**：`skills/AGENTS.md` 已把「映射检查器对本次最新目录 error=0」列为 `available` 强制完成门禁，而该门禁对真实快照不可通过。直接证据：治理要求随门禁刷新的校准表 `skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md` 记录「目录抓取时间 2026-09-10T14:06:27、error/warning 0/2、检查 81 个寻址键全部命中」，该抓取时间正是代理快照 `/tmp/audit-live/目录快照.json` 的 `fetchedAt`，真实 `crwu-dws` 刷新为 `14:18:56`（晚 12 分钟、字段为 `parentFolderId`）——即**门禁与校准表都是对代理快照生成的**。测试全绿原因：`tools/kb/test_audit_skill_maintainer.py:1211` 的真实快照回归硬编码 `/tmp/audit-live/目录快照.json`（代理文件），`:1238` fixture 注释亦按 `parentId` 编写；`tools/kb/test_dws_source_contract.py` 的 `ACTIVE_CONTRACT_FILES` 23 项中叶子文件仅 **4 项**（叶子文件总数 36），一级根断言仅为 `"directory" in text and "true" in text` 子串检查。附带症状：`fetchedAt` vs `fetched_at`、`evidence` 期望数组实为对象（`_snapshot_is_complete` 恒返回 `None`）、`complete` 在顶层而非 `stats.complete`。
+- 说明（跑通判定）：技术链路（画像→并集→装配→执行→汇总→冻结→两阶段→交付）规范齐全、可跑通；房地产对象层是唯一有真实内容的资产类型；业务轴的必检项层（§一）全为「待补」，可用的是 §二 的 560 条历史问题（因频次信号丢失而无法排序）；方法/监管轴全 `pending`；**非房地产对象结构性不可用**（通用兜底层缺失 + 资产轴 7/8 pending）。报告同时声明方法与限制（知识库正文未本地全量留存、RULE 编号无仓内注册表可比对、业务叶子历史条数不可复现、治理文件评审期间在修订）。
+- 未新增/修改 crwu CLI 命令；未修改任何 `skills/` 文件。
+
+---
+
 ## 2026-09-10 · feat · 送达脚本接入编排层：router 步骤 11 冻结指纹 + 步骤 14 交付调用映射
 
 - 影响：`skills/crwu-audit/SKILL.md`（步骤 11 增冻结指纹命令 `tools/audit/audit_delivery.py digest <冻结快照.json>` 与 `phase1FrozenAt`/`phase1Digest` 写入口径；步骤 14 增编排层交付调用序列 ①汇总 JSON → ②`validate` → ③`render --out` → ④交付 HTML，并写明失败即停止交付、不得绕过、脚本缺失记 capability gap）；`skills/crwu-audit/references/11-html-delivery-spec.md` §14.1 新增"编排层调用映射（脚本接入）"（阶段/命令/输入/输出/失败处理四列表格 + "调用者唯一=crwu-audit 编排层，叶子不得调用"）；`tools/audit/audit_delivery.py` 新增 `digest` 子命令（阶段一冻结指纹，与 renderer 共用规范化序列化）；`tools/audit/README.md` 补编排层接入映射与用法；`tools/audit/test_audit_delivery.py` 增 3 项 CLI 测试（digest 与规范化 sha256 一致、validate 退出码、校验失败时拒绝产出 HTML），共 **24 项全绿**。
