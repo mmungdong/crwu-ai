@@ -966,6 +966,97 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             self.assertEqual([], _findings(report, "BUSINESS_COMMON_REVIEW_NOT_REFERENCED"))
             self.assertEqual([], report["findings"])
 
+    def test_negative_common_review_claim_does_not_satisfy_the_reference(self):
+        """Naming the document while denying it exists is not a reference.
+
+        Regression for the field bug this check was written against: a leaf that still said
+        "一级根未提供 `共同审核点`" mentioned the document, so a plain substring test passed
+        while the shared review layer was in fact never referenced.
+        """
+        tree_with_common = """
+        - 📁 01-业务路线/
+          - 📁 01-资产经营/
+            - 📄 共同审核点
+            - 📁 租赁与租金评估/
+              - 📄 01-业务通用审核要点
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            tree = self._tree(root, tree_with_common)
+            _create_valid_repo(repo)
+            _write(
+                repo / "skills/crwu-audit-biz-asset-operation/references/02-review-focus.md",
+                "# Review focus\n\n## 一级共用层\n\n"
+                "- 路径：库内未提供（无此前缀路径）\n"
+                "- 状态：一级根未提供 `共同审核点`（条件性约定，**不记缺口**）。\n",
+            )
+
+            report = json.loads(run_checker(repo, tree).stdout)
+
+            self.assertEqual(
+                ["资产经营"],
+                [
+                    i["label"]
+                    for i in _findings(report, "BUSINESS_COMMON_REVIEW_NOT_REFERENCED")
+                ],
+            )
+
+    def test_emitted_calibration_table_does_not_become_drift(self):
+        """`--emit-map` writes its diagnostic table into a scanned file: it must stay idempotent.
+
+        The table lists missing keys; backticking them there made the next run report the
+        calibration file itself as drifted (and re-attributed another skill's drift to it).
+        """
+        tree = """
+        - 📁 00-总纲/
+          - 📁 治理/
+            - 📄 标签词典
+        - 📁 01-业务路线/
+          - 📁 01-资产经营/
+            - 📄 共同审核点
+            - 📁 租赁与租金评估/
+              - 📄 01-业务通用审核要点
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            tree_path = self._tree(root, tree)
+            _create_valid_repo(repo)
+            _write(
+                repo / "skills/crwu-audit/references/00-input-and-route-profile.md",
+                "# profile\n\n- 库内没有的键：`00-总纲/治理/术语对照总表`\n",
+            )
+            calibration = (
+                repo
+                / "skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md"
+            )
+
+            first = json.loads(
+                run_checker(repo, tree_path, "--emit-map", str(calibration)).stdout
+            )
+            self.assertEqual(
+                ["00-总纲/治理/术语对照总表"],
+                [i["path"] for i in _findings(first, "KB_PATH_KEY_NOT_IN_CATALOG")],
+            )
+            self.assertIn("术语对照总表", calibration.read_text(encoding="utf-8"))
+
+            second = json.loads(run_checker(repo, tree_path).stdout)
+
+            self.assertEqual(
+                [],
+                [
+                    i
+                    for i in _findings(second, "KB_PATH_KEY_NOT_IN_CATALOG")
+                    if str(calibration) in (i["source"] or "")
+                ],
+                "the emitted calibration table must not report itself as drift",
+            )
+            self.assertEqual(
+                ["00-总纲/治理/术语对照总表"],
+                [i["path"] for i in _findings(second, "KB_PATH_KEY_NOT_IN_CATALOG")],
+            )
+
     def test_missing_router_entry_point_is_reported(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
