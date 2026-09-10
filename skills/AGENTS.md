@@ -28,17 +28,19 @@
 
 ## Skill 与 references 分工
 
-`SKILL.md` 保持入口化，只包含职责边界、输入、必读 reference、执行步骤和输出门禁。详细分类、装配映射和审核要点放入本 Skill 的 `references/`，推荐最小结构如下：
+`SKILL.md` 与 `references/` 下所有文件共同遵守以下总则：均不得写知识库名称、个人绝对路径、本地下载或缓存正文路径、`nodeId`；不得逐字复制任何知识库正文。凡需沉淀知识库相关信息，只允许写 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
+
+`SKILL.md` 保持入口化，只包含职责边界、输入、必读 reference、执行步骤和输出门禁；资产或业务叶子 `SKILL.md` 必须明确“仅经 `crwu-audit` 编排调用、禁止单独调用”。详细分类、装配映射和审核要点放入本 Skill 的 `references/`，推荐最小结构如下：
 
 - `00-applicability.md`：canonical label 的适用、排除和边界条件。
 - `01-kb-assembly.md`：只记录 RULE/CHK 编号与钉钉库内层级路径寻址键。禁止写知识库名称、个人绝对路径、本地正文缓存路径或 `nodeId`，也不得复制规则正文；目录或文件名变更时必须同步更新。
-- `02-review-focus.md`：基于本次真实读取资料整理的结构化审核要点与映射。不得复制大段知识库正文；每个要点必须回指 RULE/CHK 编号和库内层级路径。
+- `02-review-focus.md`：基于本次真实读取资料整理的结构化审核要点与映射。不得逐字复制知识库正文；每个要点必须回指 RULE/CHK 编号和库内层级路径。
 
 可按需增加其他 reference，但每个文件必须有单一职责，且不得成为知识库正文副本。实际运行审核时仍须通过 `crwu-dws` 重新下载正文，最终出处使用“本次下载文件:行号 + `exportedAt`”；reference 中的映射不能替代本次下载证据。
 
-## 新 available Skill 完成门禁
+## available 能力完成门禁
 
-新增 Skill 只有在以下内容同批完成后，才可在 registry 标记为 `available`：
+任何新增或扩展的资产或业务 `axis + label` 能力，以及既有能力从 `pending` 改为 `available`，只有在以下内容同批完成后，才可在 registry 标记为 `available`：
 
 - 对应的资产或业务分类、`07-skill-registry.md` 已同步；
 - `SKILL.md`、`00-applicability.md`、`01-kb-assembly.md`、`02-review-focus.md` 已完成且边界一致；
@@ -59,7 +61,7 @@ python3 tools/kb/kb_tool.py validate --skill-root skills
 git diff --check
 ```
 
-## 资产 / 业务 Skill 新增检查单
+## 资产 / 业务能力新增、扩展或转 available 检查单
 
 - [ ] 已确认轴和 canonical label，未创建组合 Skill。
 - [ ] 已核对目录树并形成“本次来源清单”。
