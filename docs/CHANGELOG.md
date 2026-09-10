@@ -9,6 +9,17 @@
 
 ---
 
+## 2026-09-10 · fix(skills) · 知识库今日改版后同步 8 个业务叶子与 optimize 指针，并修两处映射检查器缺陷
+
+- **触发**：知识库当日（2026-09-10）改版——8 个一级业务目录补齐 `共同审核点`、27 个子业务 `01-业务通用审核要点` 由「必检项待补」改为真实内容、新增 `合并对价分摊`、`股权比例变动`/`其他目的` 补要点、清理 `01-业务路线/TODO/`、移除 `00-总纲/目录地图`。技能文本仍停留在旧状态（7 个业务叶子写着"一级根未提供 `共同审核点`（不记缺口）"、全部子业务标「待补」），属典型的"知识库已改、技能没跟"。
+- **核对口径**：经 `crwu-dws` 实时拉取目录两次（17:51 / 18:12，节点集一致：257 节点 / 94 目录 / 163 文档 / complete）＋ 逐份实时读取 8 份 `共同审核点` 与 27 份 `01-业务通用审核要点` 正文；实测 110 条共用层必检项、305 条子业务必检项、448 条历史高频复核问题。**不改知识库、不复制正文进技能**。
+- **技能同步（16 文件）**：`crwu-audit-biz-*` × 8 的 `01-kb-assembly.md` 与 `02-review-focus.md` —— 共用层状态改为"已提供且非占位"并给出路径键 `<一级根>共同审核点`；22 个子业务必检项改为实测条数与主题标签；5 个子业务（拍卖与处置、转让与出售、ABS及发债、并购与重组、股权转让）保留「待补」gap 声明不补造；补齐 `合并对价分摊` 并修正 `股权比例变动`、`其他目的` 的"无审核文件"旧结论。
+- **指针修复（4 文件）**：`crwu-audit-optimize` 的 `SKILL.md` 与 `references/00`、`01`、`02` 中 9 处 `00-总纲/目录地图` —— 该节点已从库内移除（同位置是氚云项目统计文档，非目录映射），KB 登记点改指仍存在的 `00-总纲/README`；库侧缺口（含库内 README §3 仍引用该文档、以及同为不存在的 `00-总纲/治理/知识库大纲与进度总表`、`00-总纲/执行契约/01-04-*.md` 实为 01~03）登记在 `references/00` §2.1，不代改知识库。
+- **检查器修复（`skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py`）**：① `BUSINESS_COMMON_REVIEW_NOT_REFERENCED` 原只判"字面出现"，叶子写"一级根**未提供** `共同审核点`"反而通过（本轮真实漏报）→ 改为**正向断言**：必须给出 `<一级根><共同审核点节点名>` 路径键；② `--emit-map` 的「库内路径键健康」诊断表把未命中键以反引号写回校准表，而该校准表本身在扫描范围内 → 下一轮把这张表当成本文件的新漂移（非幂等，并把别的技能的漂移重复记到维护器名下）→ 该表不再写反引号；③ `--emit-map` 的通知行在 `--format json` 下改走 stderr，保证 stdout 是唯一可解析报告对象。
+- **回归测试**：`tools/kb/test_audit_skill_maintainer.py` 新增 2 例——`test_negative_common_review_claim_does_not_satisfy_the_reference`、`test_emitted_calibration_table_does_not_become_drift`（52 例全绿）。
+- **校准与门禁**：`crwu-audit-skill-maintainer/references/07-kb-skill-map.md` 已刷新（257 节点 / error 0 / warning 0，129 处寻址键全部命中，二次运行幂等）；内容级备注写明本次正文核对结论与剩余缺口。`references/05-validation-and-delivery.md` 同步 finding 语义与 `--emit-map` 幂等要求。`kb_tool.py validate --skill-root skills` error=0/warn=0。
+- **未做项**：知识库侧 5 份必检项「待补」、2 份空索引文档、缺失的 `目录地图` 均只登记 gap，不代改、不补造。
+
 ## 2026-09-10 · feat(skills) · P0-1 通用披露层归属：新增 public 轴通用准则能力，并补公共轴映射门禁
 
 - **问题**：报告通用披露层只作为「其他轴共享依赖」登记在资产叶子 `skills/crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 一处，`07-skill-registry.md` 的 `public` 轴只有表格勾稽，`08-union-dispatch-rules.md` 的 `public_skills` 写死为「仅当存在表格」。对象不是房地产时通用披露层无人装配（设备/企业价值/无形资产场景结构性出不了专业结论）；该登记同时违反 `12-leaf-common-contract.md` §4「方法正文、监管正文与全局契约由 router 其他轴装配，不复制进本轴根映射」。
