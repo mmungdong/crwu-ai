@@ -105,12 +105,19 @@ skills/crwu-audit-skill-maintainer/
 │   ├── 02-child-skill-contract.md
 │   ├── 03-review-item-execution-contract.md
 │   ├── 04-registry-and-mapping-update.md
-│   └── 05-validation-and-delivery.md
+│   ├── 05-validation-and-delivery.md
+│   └── 06-live-routing-reconciliation.md
 └── scripts/
     └── check_audit_skill_mappings.py
 ```
 
 不创建 README、示例占位目录或下载正文副本。
+
+> **v0.3 增补（2026-09-10，用户追加要求）**：新增 `06-live-routing-reconciliation.md`。`audit` 不再只比对"某份目录快照"，而是先用 `crwu-dws` 拉取**最新**知识库目录，再与当前 skill 体系逐项对比四层——① 路由机制（router 入口与路由 reference 齐全、知识库出现的轴确实被并集规则加载）② 路由参考是否注册（每个一级目录在 registry 恰好一行、label 与 classification 一致）③ Skill 是否存在（available 行对应真实目录 + references + 一级根契约；router 命名的具体技能可解析）④ 是否需要创建（无登记的一级目录为候选；细分对象、子业务与结构缺口明确**不**进入该清单）。检查器相应新增 `ROUTER_FILE_MISSING`、`ROUTER_REFERENCE_MISSING`、`ROUTER_REFERENCE_UNRESOLVED`、`ROUTER_AXIS_UNDISPATCHED`、`ROUTER_SKILL_REFERENCE_UNRESOLVED`、`CATALOG_NOT_LIVE`、`CATALOG_STALE` 与 `--max-age-hours`。
+>
+> 同批增补：一级业务目录若存在 `共同审核点` 文档，必须随一级根一并拉取并作为该一级业务的**共用审核层**参考（先于子业务条目执行、对全部子业务生效）；不存在不记缺口。检查器新增 `BUSINESS_COMMON_REVIEW_NOT_REFERENCED`。
+>
+> 同批更新：本设计的"六份 references"以本节结构为准，现为七份。
 
 ### 6.1 `SKILL.md`
 
@@ -454,7 +461,7 @@ git diff --check
 
 第一版完成：
 
-- 新建 `crwu-audit-skill-maintainer` 及六份 references；
+- 新建 `crwu-audit-skill-maintainer` 及 references（初版六份；2026-09-10 增补 `06-live-routing-reconciliation.md`，共七份）；
 - 新建只读映射检查脚本及测试；
 - 在 `skills/README.md` 登记维护 Skill；
 - 在 `crwu-audit-optimize` 中增加经确认后的维护交接说明；

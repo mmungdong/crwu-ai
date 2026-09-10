@@ -1,138 +1,127 @@
 ---
 name: crwu-audit
-description: >-
-  报告审核能力族的【总路由/分发器】：先对输入做画像——报告形态 → 经济行为主线（受控审核角度词表）
-  → 对象大类 → 方法（附件名提示+抽验确认）→ 监管覆盖层（国资/证券/司法/金融），再按本文件
-  路由注册表分发到对应 crwu-audit-* 叶子技能；细分未命中→降级父大方向→通用兜底→如实说明。
-  crwu-audit 本身不产出具体审核判断，只负责画像、分发、汇总去重、输出（含路由路径与规则集快照）。
-  兜底或命中 🅿️/⏳ 技能时，自动附《待建子技能提案》（references/04：补哪个子技能/管什么/审什么，非审核结论）。
-  设计见 docs/design-crwu-audit-skills.md；运行时分发材料在本技能 references/（改前必读 99）。
+description: Use when routing or orchestrating report audits from a material package, SeqNo, or ObjectId.
 ---
 
-# crwu-audit 总路由（报告审核能力族分发器）
+# crwu-audit 多维并集路由
 
-## 0. 目录结构与加载
-- `SKILL.md`（本文件，入口 ≤300 行：流程+注册表+指针）
-- `references/00-route-profile-schema.md` —— 输入字段与 route_profile 画像 schema
-- `references/01-audit-angles-catalog.md` —— 受控审核角度词表（canonical，分发主键）
-- `references/02-overlay-rules.md` —— 监管覆盖层判定与冲突检测
-- `references/03-业务风险分类判定.md` —— 机构 A/B/C 业务分类（路由首判·严谨度参考）
-- `references/04-待建子技能提案.md` —— 兜底/🅿️⏳ 命中时自动推导"补哪个子技能、管什么、审什么"（提案卡，非审核结论）
-- `references/99-维护说明.md` —— **修改本族任何技能/本文档前必须先读**（分层地图/标准流程/红线）
-- 本族自含分发逻辑与运行材料，**与知识库正文解耦**：不预读知识库入口文档；规则正文与输出/统计/防幻觉契约仅经 crwu-dws 按本次清单从钉钉实时下载后只读引用，目录缓存不能提供正文
+## 职责与边界
 
-## 1. 输入（两种来源）
-- **独立审核门禁（自输入起生效，先于一切）**：复核记录（一/二/三级/四级复核意见、质控意见、
-  底稿/在线底稿意见、外审意见、答复文件）**不是审核源材料**——读取字段/附件清单时只登记其存在
-  （文件/份数/状态），不读取正文、不参与画像与审核判断；见步骤 5 与契约 02 §5.1。
-- ① 材料包（目录约定由部署环境注入）
-- ② 氚云「报告审核」记录（schema `Srabfcm8figc1xuzxawc5u04x5`，字段清单见 references/00）：
-  读取记录全字段 + 附件文件名，按 references/00 产出画像，不依赖人工 manifest。
+本技能是全部 `crwu-audit-*` 叶子的唯一入口，只负责定位报告、生成画像、准备和隔离材料、计算多轴并集、分发、独立审核结果汇总，以及后续复核对照和交付。本技能不产出具体专业审核判断；判断由实际加载的专业技能执行。
 
-## 2. 分发算法（每次审核按此执行）
-1. **显性输入 + 报告形态（第 0 维，先于一切）**：先读两条显性输入——
-   报告名称 F0000049（关键词/主体性质/金额来源）与 **风险等级 F0000020（提前；作机构分类先验与
-   一致性锚点，不直接采信）**；形态 F0000056 → 评估/咨询/估值/矿业权（咨询/估值=参照口径
-   RULE-01-02-435，无“评估结论/有效期”表述）；
-2. **机构业务分类 A/B/C（路由首判，严谨度参考）**：按 references/03 制度条款判定 →
-   route_profile.business_risk_class{class,hits,unknown,basis,rigor}；**只作严谨度参考与首页标注，
-   不改变审核角度清单**（agent 一律全面审核，最终通过由人工复核）；F0000020 与判定结果
-   不一致 → 路由备注待人工确认；
-3. **经济行为主线**：F0000065 × F0000064 → references/01 受控角度词表 canonical；
-   **路由阶段同步从报告/评估说明文件提取“评估目的”原文**与字段比对（不一致→冲突提示）；
-   业务大类/目的为空（基线约 700 条）→ 读报告名称 F0000049 推理兜底，推不出报
-   “画像歧义，需人工确认”，**禁止猜测分发**；
-4. **对象大类/范围 + 复杂度档**：F0000119 × F0000066 → 挂对象专项；并判对象复杂度档：
-   **单项资产 = 常规流**；**企业价值（股东权益/企业资产负债/资产组合/资产组等）= 复杂流** →
-   route_profile.complexity{flow, reason}，预装 财务异常扫描/收益法·资产基础法方法专项/证据验证
-   等模块提示（V2.2 步骤 4 装配）；
-5. **方法（路由阶段从文件提取，必须走真实读取链路）**：前置三步——① 下载附件
-   （`crwu h3yun file download --schema <code> --id <recordId> --out <dir>`）；
-   **独立审核门禁（阶段一）——源材料下载排除复核记录**：一级/二级/三级/四级复核意见、质控意见、
-   底稿/在线底稿意见、外审意见、答复文件等**一律不下载、不读取、不参考**——它们不属于审核源材料，
-   AI 意见必须独立检出（以源材料＋实时下载的规则/清单为依据）；复核记录留待**阶段二（步骤 11，
-   AI 意见定稿后）**单独下载比对，任何环节不得以复核记录为线索、先验或参考（否则复核对照 A/B/C
-   分类与漏检统计失真）；② 转文本
-   （先 `file` 识别：旧版 .doc OLE → 本机 `textutil -convert txt`；.docx/.pdf/.xlsx 用现成工具，
-   **先探测本机可用工具再下结论**）；③ grep/read 定位 文件·章节/页/行号，命中原文后确认
-   `methods[]`（逐一标 role：采用-作结论 / 采用-未作结论 / 测算-参考，以报告“选用方法”口径判定，
-   结论未取≠未采用；禁止把多方法压成单一结论方法）与 `conclusion_method`。
-   **红线：评估目的/方法/结论方法及 loc 只能来自真实读取的文件——严禁凭字段、附件文件名、
-   经验拟造原文或编造行号**；文件未读取/不可读 → 保持“待抽验（文件未读取）”显式标注，由叶子或
-   兜底报告呈现，不得用于冲突定论；
-   （下载分两类、勿混淆：① 上述附件下载 = 审核源材料链路（h3yun 项目文件）；② 规则/契约/清单等
-   知识库文档 = crwu-dws 实时下载链路，本次下载清单 = 路由 + 命中子技能携带路径表
-   （references/00-KB装配表.md）的并集，见步骤 10 汇总输出——正文一律从钉钉实时下载后引用，目录缓存不得作为正文兜底。）
-6. **监管覆盖层**：按 references/02 四类判定（国资/证券/司法/金融）装载覆盖层规则集；
-7. **分层路由与兜底**：L1 大方向匹配（§3 注册表）→ L2 细分匹配 → 未命中细分降级父大方向 →
-   命中技能未实现(🅿️/⏳)或大方向未命中无 A 级依据 → **输出路由级兜底简要报告**
-   （结构见 references/00 §7：画像摘要 + 评估目的/评估方法**含依据出处** + 对象复杂度档(单项资产|企业价值) +
-   注明“依赖子技能暂未实现，非审核结论，待重跑或人工复核”），禁止“无能力”空返或假装已审；
-   **同步骤自动产出《待建子技能提案》**（五查推导与卡格式见 references/04：候选技能名/定位职责/需要审核什么/
-   现成依据段/内容缺口/前置登记/优先级，附 kb_tool 证据——非审核结论，供用户补充或走 crwu-audit-optimize 正式化）；
-   画像歧义（推不出对象/主线）只报“需人工确认”，不产提案；
-8. **冲突检测**：字段画像 vs 材料/报告自述不一致 → ROUTE001–004（references/02）；
-9. **无发布门禁（口径 2026-09-08）**：知识库文档即权威——本次下载清单（路由 + 命中子技能
-   `references/00-KB装配表.md` 路径键并集，见步骤 5/10）经 crwu-dws 实时下载后**下载即审**
-   （出处=本次下载文件:行号+exportedAt，文件零缓存）；不做发布/试点状态判定与标注。
-10. **汇总输出（阶段一收口：独立审核意见定稿，全程未参考复核记录）**：意见按
-     报告/评估说明/测算明细表 分区去重；附路由路径与**调用链**（本次执行/拟执行的
-     技能序列与叠加能力，含兜底提案卡引用）、适用规则集快照（含装配键/未装载原因，契约 02 §6.4）、
-     route_profile 摘要（含 显性输入/目的·方法文件级提取/complexity）与三段式引用（输出/防幻觉契约按单文件路径
-     `00-总纲/执行契约/02-审核意见单规范.md`、`00-总纲/执行契约/03-防幻觉协议执行细则.md`
-     经 crwu-dws 实时下载后只读引用，禁止放宽；目录缓存不能提供知识正文）。**本步只产意见、不读复核记录**；
-11. **复核对照（阶段二 A：AI 意见定稿后，单独下载复核记录并逐条对照）**：下载复核意见类附件
-     （与步骤 5 排除清单同集合：一/二/三级/四级复核意见、质控意见、底稿/在线底稿意见、外审意见、
-     答复文件，`crwu h3yun file download`；材料包自带复核意见亦在本步才读取）→ 对《意见列表》每条
-     issue 对照分类：A 已在复核意见提出（必须指出 出处文件+条目/页码+原文摘录）/ B 复核意见未提出
-     （AI 新增发现，单列并建议人工复核补充）/ C 未对照（材料缺失/不可读，显式标注，禁止编造出处）——
-     分类与红线见契约 02 §5；对照只回答“是否已提出、在哪提出”，不改写已定稿的 AI 意见；
-12. **综合对比输出（阶段二 B，契约 02 §5.5）**：AI 意见 × 复核记录双向综合对比三条带——
-     AI∩复核（相互印证，=A）/ AI 新增（复核未提，=B）/ **复核独有（复核已提而 AI 未命中 = 漏检候选，L）**
-     ＋命中率小结（对照材料可读时 M/(M+L)）；复核独有先查《适用规则集快照》/逐条裁定表归因
-     （画像/装配/清单/算法），确属本次审核面 → 补审（独立出意见后再对照，禁止拿复核记录补 AI 意见）
-     或登记走 crwu-audit-optimize，禁止静默；产物入意见单附块归档；
-13. **统计回填**：route 命中/降级/空能力/weak_structured 计数 → 单文件
-     `00-总纲/执行契约/04-审核统计与台账规范.md` 台账（经 crwu-dws 从钉钉实时下载后引用）。
+- 叶子技能只能由本 router 编排，禁止单独调用，也不得自行重新查询报告记录。
+- 叶子不得替代其他轴；禁止创建或选择“资产 × 业务”等组合技能。
+- 规则正文与检查点必须覆盖完整 `skills_to_load`（含 public skill），经 `crwu-dws` 在本次运行实时下载。目录缓存只能定位，不能充当正文或证据；下载失败时记录缺口，不编造判断。
+- 评估目的、方法、结论方法及位置只能来自真实读取并定位的报告材料。字段、附件名和经验只能作为提示，不能补写原文或伪造位置。
 
-## 3. 路由注册表（唯一维护点）
-| 层级 | skill | 命中判据 | 状态 |
-| --- | --- | --- | --- |
-| L1 ✅ | `crwu-audit-realestate` | 评估报告 × 不动产/房产（房建/商铺/办公/公寓/厂房等） | 可用（P0） |
-| L2 ✅ | `crwu-audit-realestate-rent` | realestate 命中 × 经营性物业出租场景 × 租金/市值（市场法租金比较/收益法租约/成本法） | 可用（P0） |
-| L2 ✅ | `crwu-audit-datacheck` | 材料含测算/明细/汇总表（任何对象）或叶子技能要求先跑表格勾稽 | 可用（H0：隐藏区禁读禁报） |
-| L1 🅿️ | `crwu-audit-enterprise-value` | 评估报告 × 企业价值（股权/产权转让、股东变动、收购并购、增资主线） | P1 |
-| L1 🅿️ | `crwu-audit-equipment` | 评估报告 × 设备/存货等单项资产（含报废残值处置，基线第二大对象 1,882） | P1 |
-| L1 🅿️ | `crwu-audit-advisory` | 咨询/估值文书（参照口径，咨询+估值基线 1,482） | P1 |
-| L1 🅿️ | 财务报告专项（减值 BR05 / 公允 BR04，含资产组/商誉） | 评估报告 × 财务报告目的（减值测试 523 / 公允价值计量 600） | P1 |
-| L1 🅿️ | `crwu-audit-mining` | 评估报告 × 矿业权（采矿权/探矿权，87） | P2 |
-| L2 🅿️ | 债权/金融不良 | 咨询或评估 × 债权类对象 / 金融不良 | P2 |
-| L2 ⏳ | 复核报告 | 复核既有评估报告结论是否成立（评估 47 + 咨询 45） | 待定 |
-- 角度→技能/对象挂载细节见 references/01；覆盖层装载见 references/02。
+## 必读 references
 
-## 4. 示例路由
-| 输入摘要 | 路由路径 | 执行 |
-| --- | --- | --- |
-| 商铺租金市场价值评估（市场法，红宝路39号） | 评估形态→租赁/租金角度→房建对象→L1 realestate→L2 rent 命中 | realestate-rent |
-| 设备类报废物资残余价值评估（国网废旧物资，监管归属非空） | 评估形态→转让处置-资产角度→设备对象→L1 equipment 🅿️→降级通用兜底+提示待建；叠加国资覆盖层 | 兜底+覆盖层 |
-| 银行不良债权价值分析咨询 | 咨询形态（参照口径）→咨询-债权角度→债权对象→advisory 🅿️ + 金融覆盖层 | 参照口径兜底 |
-| 上市公司商誉减值测试评估 | 评估形态→财务报告-减值角度→企业/资产组对象→财务报告专项 🅿️ + 证券覆盖层 | 兜底+覆盖层 |
+按下列顺序理解所有权；运行时只在对应阶段读取：
 
-## 5. 边界与纪律
-- crwu-audit 只编排：不产出具体审核判断、不替叶子技能下结论；
-- 抽验红线：B 层（评估目的/方法/结论方法 + loc）只允许来自**真实下载并读取**的文件
-  （下载→转换→grep 行号定位）；未读文件 → 标“未抽验（文件未读取）”，严禁凭字段/附件名/经验
-  拟造原文或行号；
-- 数据隔离：含隐藏脏数据的 **raw 原件只归编排层**，叶子/下游一律只读已删隐藏数据的**工作版**
-  （references/00 §6.1）；传给子技能的任何附件必须指向工作版路径；
-- 材料缺件/画像歧义 → 先报告缺什么/列出可能画像请用户确认，不猜测；
-- **复核记录不进叶子/下游上下文（独立审核门禁）**：材料包或氚云字段含复核记录时，由编排层在移交
-  叶子前剔除/隔离（同隐藏数据隔离的只读工作版原则），叶子与数据链路只读源材料工作集；
-  **复核对照（步骤 11）与综合对比（步骤 12）仅在 AI 意见定稿后由本路由执行**，任何 crwu-audit-*
-  叶子不读取、不输出复核对照；
-- 本技能是全部 crwu-audit-* 叶子/能力技能的**唯一编排入口**：叶子技能禁止被 Agent 直接单独调用
-  （各叶子 SKILL.md 已含同款前置条件），否则审核不完整、口径漂移；
-- **机构业务分类 A/B/C = 路由首判**（严谨度参考与首页标注，判定见 references/03；agent 一律全面
-  审核，最终通过由人工复核）；氚云风险等级字段 F0000020、级次、状态 **不参与审核角度判定**
-  （同业务角度同审核逻辑）；
-- 维护/变更必须按 references/99 流程执行（含两处拷贝同步 + design/README/CHANGELOG 登记）。
+1. [99-maintenance.md](references/99-maintenance.md)：仅在维护 router、references 或叶子时先读；普通审核运行不加载。
+2. [00-input-and-route-profile.md](references/00-input-and-route-profile.md)：每次运行开始时读取；定义输入字段、五轴画像、证据、文件读取和隐藏数据隔离。
+3. [01-report-id-resolution.md](references/01-report-id-resolution.md)：输入为 `SeqNo` 或 `ObjectId` 时读取；材料包输入无需记录查询。
+4. [02-scope-classification.md](references/02-scope-classification.md)：材料准备并真实读取报告后，生成 `scope_types[]`，并判定企业价值底层资产的 `materiality`。
+5. [03-asset-classification.md](references/03-asset-classification.md)：同阶段生成多标签 `asset_types[]`。
+6. [04-business-classification.md](references/04-business-classification.md)：同阶段按字段与已定位的目的原文生成多标签 `business_types[]`。
+7. [05-method-classification.md](references/05-method-classification.md)：报告方法与结论章节已真实读取后生成 `methods[]` 和 `conclusion_method`。
+8. [06-overlay-classification.md](references/06-overlay-classification.md)：生成 `overlays[]` 并处理 ROUTE001–004 冲突。
+9. [07-skill-registry.md](references/07-skill-registry.md)：所有轴完成分类后，把每个 `axis+label` 解析为 `available`、`pending` 或 `profile-only`。
+10. [08-union-dispatch-rules.md](references/08-union-dispatch-rules.md)：registry 解析完毕后形成稳定并集 `skills_to_load`，并按来源归并结果。
+11. [09-review-risk-classification.md](references/09-review-risk-classification.md)：构建画像时生成 `review_risk_class`；它只提示审核严谨度，不增删业务标签或技能。
+12. [10-capability-gap-proposal.md](references/10-capability-gap-proposal.md)：出现 `pending`、未注册标签或能力缺口时读取，逐标签记录 gap 或非审核提案。
+13. [11-html-delivery-spec.md](references/11-html-delivery-spec.md)：阶段一定稿冻结后、阶段二对照与交付（步骤 14）时读取；**送达与交付层正文**（CRWU 审核意见 HTML 送达规范 v1.0：AuditResult 单一事实源、单文件 HTML 交付、双证据链、两阶段门禁、验收清单）。
+14. [12-leaf-common-contract.md](references/12-leaf-common-contract.md)：加载任一 `crwu-audit-asset-*` / `crwu-audit-biz-*` 叶子时读取；**叶子共同约束**（轴边界、输入、一级根装配、二级选择、执行顺序、条目状态、来源优先级、证据出处、capability gap）。公共规则只在该文件写一份，叶子不各自复述；叶子与它冲突时以它为准。
+
+## 输入
+
+接受材料包、`SeqNo` 或 `ObjectId`。
+
+- `SeqNo` / `ObjectId` 只按 `01-report-id-resolution.md` 解析。`SeqNo` 必须精确查询；返回 0 条或多条时停止，不自行选择。
+- 不得硬编码或猜测 `ObjectId`、schema code 或 schema。schema 必须来自现场可验证结果或已确认配置。
+- 对记录型输入，router 只 fetch 一次完整报告记录，以同一快照构建画像并准备材料。H3Yun 项目附件与知识库规则/契约使用两条隔离的下载链，禁止混用。
+- 材料包输入直接盘点并准备其中材料；标识冲突、缺件或不可读项写入 `route_profile.conflicts[]` 或 `route_profile.material_gaps[]`。
+
+## 路由流程
+
+1. **定位与一次取数**：按输入类型定位唯一记录；记录型输入只 fetch 一次全字段。随后执行 `crwu h3yun files list --schema <code> --id <ObjectId>`，只取得附件字段、文件名、类型、大小和下载 URL 等元数据并分类；附件名只用于隔离决策和待抽验提示。
+2. **阶段一安全下载门禁**：先把一至四级复核意见、质控意见、底稿/在线底稿意见、外审意见、答复文件等归为复核记录。只有部署环境提供经验证的单附件/allowlist 下载能力，或用户已经提供确认隔离的源材料包，才继续准备报告、评估说明和测算材料。当前 `crwu h3yun file download --schema <code> --id <ObjectId> --out <dir>` 会下载整条记录的全部附件，阶段一禁止调用；如果只有该命令且记录含复核附件，立即停止并记录 capability gap，绝不能先整单下载再隔离或让模型接触复核正文。
+3. **工作材料隔离**：表格在任何解析前按 00 重建只含可见区域的工作版；raw 只由 router 持有。阶段一源材料工作集不得含复核记录；叶子只接收隔离后的只读材料路径。
+4. **真实读取与画像**：真实读取报告、评估说明和测算材料，定位评估目的、全部采用/参考方法、结论方法及 `source/evidence/location`。构建多标签 `route_profile`：`scope_types[]`、`asset_types[]`、`business_types[]`、`methods[]`、`overlays[]`，并生成 `review_risk_class`。企业价值底层 `asset_types[]` 逐项保留 `materiality=key|non-key|unknown`；不确定项要求人工复核，不静默排除。
+5. **冲突处理**：按 06 记录 ROUTE001–004 及双方证据，只挂起冲突影响的标签、字段或依赖规则；其他已确认轴继续求值。未真实读取或未定位的材料不能触发冲突定论。
+6. **专业候选解析**：对五个轴的每个标签查询 07。`available` 加入对应候选数组；`pending` 或未注册项按 10 在 `route_profile.material_gaps[]` 生成独立的 per-label gap；`profile-only` 只保留画像。任一 gap 不得短路其他能力。
+7. **先判公共能力**：在求并集前检查材料类型；存在测算、明细、汇总等表格时把表格公共能力写入 `public_skills[]`，否则写空数组。即使所有专业标签都为 `pending`，公共能力仍须独立求值。
+8. **完整稳定并集**：六个候选数组全部求值后，严格按 08 计算 `skills_to_load`。不得 first-match、不得使用排他链、不得以后加载技能覆盖先前轴，也不得在并集或执行后追加 public skill。
+9. **先准备完整 DWS 清单**：汇总全部 `skills_to_load`（包括 `public_skills[]`）各自 references 声明的层级路径，与两个执行契约 `00-总纲/执行契约/02-防幻觉协议执行细则`、`00-总纲/执行契约/03-审核统计与台账规范`，去重形成本次 DWS 清单（**交付/送达口径不再走知识库契约，见 `references/11-html-delivery-spec.md`**）。在任何技能执行前，对整份清单逐项完成本次 `crwu-dws` 实时下载和成功/失败验证；目录缓存不能提供正文。下载文件、行号、库内路径、运行时 `nodeId` 与 `exportedAt` 只作本次证据，不写回 Skill source。
+10. **同时加载执行**：完整清单验证结束后，同时加载并执行规则材料验证成功的 `skills_to_load`（包括 public skill）。验证失败的技能仍保留在 `dispatch.skills_to_load` 及执行状态中并记录 gap，不得静默删除，也不得短路其他成功技能。每个叶子只接收同一 `route_profile`、已准备的阶段一源材料工作路径，以及经验证的本次 DWS 规则材料路径/manifest；不得接收复核记录，也不得重复 fetch 记录。
+11. **阶段一独立汇总并冻结**：汇总所有 `skills_to_load` 基于源材料独立产生的 findings，按报告、评估说明、测算明细表分区去重。每条 finding 必须保留 `source_skills[]`；相同结论合并时保留全部来源，冲突结论并列留待人工复核，不相互覆盖。在读取任何复核记录前，定稿并冻结 AI 意见、完整 `route_profile`、全部命中轴，以及本次完整规则/模块清单；这些阶段一产物在阶段二不可改写。**冻结指纹按 `tools/audit/audit_delivery.py digest <冻结快照.json>` 计算**（规范化序列化 sha256）写入 `phaseControl.phase1FrozenAt` / `phaseControl.phase1Digest`，冻结后才允许进入阶段二。
+12. **阶段二复核对照**：AI 意见固定后才在阶段二上下文读取复核记录。逐条标记 A（复核已提出，给出处）、B（AI 新增）、C（材料缺失或不可读而未对照）；再做双向三条带：AI∩复核、AI 新增、复核独有。复核独有属于漏检候选，先按规则集快照与逐条裁定表归因，不得拿复核文本直接改写阶段一意见。
+13. **隔离补审**：发现漏检候选后，只能由阶段二编排器创建不继承复核文本和阶段二历史的新子任务或隔离执行上下文。该上下文只接收阶段一源材料工作集、已验证的 DWS 规则快照，以及步骤 11 在复核读取前已冻结的完整命中模块集合；应重跑全部阶段一命中模块或完整阶段一审核。禁止传复核原文、摘要、结论，也禁止用复核事项派生、改写、提示、选择或缩窄补审范围。隔离执行先产出并固定不可变的补审结果，再回到阶段二上下文对照。无法建立该隔离上下文时不补审，记录 capability gap 并交人工复核；需要长期修复时登记 `crwu-audit-optimize`。
+14. **交付与回填**：按技能内 `references/11-html-delivery-spec.md`（v1.0 送达规范）执行，**不再引用知识库输出契约**。以 **AuditResult JSON 为单一事实源**汇总阶段一 findings、适用规则集快照、逐条裁定、复核对照与综合对比、《本次审核记录清单》（AI 检查项、知识库业务/资产必检项、评估数据核查、监管覆盖核查、风险覆盖核查、未检查项及阶段二对照/归因，逐条给证据，对比项两端都给依据）。发布前必须通过送达规范校验：规则性缺陷双证据链齐备、五段式判定完整、未检查项显式、统计可重算、无绝对路径/`nodeId`/凭据。**每个项目只交付一个自包含单文件 HTML** `审核意见.<项目ID>.html`（由 AuditResult 确定性渲染，可离线打开、A4 可打印、含默认折叠的专业审核轨迹；renderer 只呈现不改写，JSON 可嵌入同页但不作为独立交付件）。落地实现见源仓 `tools/audit/audit_delivery.py`（`validate` 校验 + `digest` 冻结指纹 + `render` 渲染）与 `tools/audit/audit_result.schema.json`。**编排层交付调用序列（按序执行，不得跳步）**：① 汇总产出 AuditResult 写入 `审核意见.<项目ID>.json`；② `python3 tools/audit/audit_delivery.py validate 审核意见.<项目ID>.json`（失败 → 停止交付、逐条报错，禁止人工绕过或删检查）；③ `python3 tools/audit/audit_delivery.py render 审核意见.<项目ID>.json --out 审核意见.<项目ID>.html`（脚本内置渲染后自检，失败即报错且不产出 HTML）；④ 交付 HTML 为唯一交付件、JSON 作内部留档（已嵌入同页）。部署环境未含 `tools/audit/`（技能以副本安装）时记 capability gap，只交付 JSON 与校验错误报告，**不得跳过校验直接出 HTML**。契约 04 统计台账仍须由本次 `crwu-dws` 实时下载后回填。
+
+## 失败与冲突
+
+- `SeqNo` 精确查询为 0 条或多条、`ObjectId` 身份冲突时是定位级硬停止：不得 fetch 候选记录、准备其附件或开始审核，先返回证据并等待人工处理。
+- 阶段一缺少经验证的单附件/allowlist 下载能力且没有已隔离源材料包时停止材料准备并记录 capability gap；尤其不得用全附件下载命令跨过复核记录隔离门禁。
+- 单个标签或单个轴画像含混时，只挂起受影响标签/候选并写入 `route_profile.material_gaps[]`；其他已确认标签和轴必须继续求值、并集加载和审核。不得把局部歧义扩大为整体停止。
+- ROUTE001–004 只按 06 挂起受影响的业务/范围/资产标签、基准日或价值类型及其依赖规则；未受影响的技能继续执行。证据冲突不得静默任选一边。
+- 单个专业技能 `pending`、未注册、下载失败或执行失败时逐标签记录原因，其他 `available` 技能和满足条件的公共能力继续执行。
+- 只有所有分发维度均无可靠命中时，才停止专业审核结论，输出已知画像、证据、缺口与候选，请求人工确认；表格等不依赖画像的公共能力仍可按条件执行，但不得冒充专业结论。
+
+## 输出
+
+`skills_to_load` 专指 08 计算出的、可实际同时加载的 `available` 技能稳定并集，不包含 `pending` 候选或 `profile-only` 标签。输出 schema 中，画像字段只属于 `route_profile`；六个候选数组及稳定并集只属于 `dispatch`。下列字段必须完整保留，具体结构和定义以 `00-input-and-route-profile.md` 为准：
+
+```jsonc
+{
+  "route_profile": {
+    "identity": {},
+    "report_form": null,
+    "record_context": {},
+    "scope_types": [],
+    "asset_types": [], // 企业价值范围下每项另含 materiality=key|non-key|unknown
+    "business_types": [],
+    "methods": [],
+    "conclusion_method": null,
+    "overlays": [],
+    "review_risk_class": {},
+    "conflicts": [],
+    "material_gaps": [],
+    "weak_structured": false,
+    "confidence": {}
+  },
+  "dispatch": {
+    "scope_skills": [],
+    "asset_skills": [],
+    "business_skills": [],
+    "method_skills": [],
+    "overlay_skills": [],
+    "public_skills": [],
+    "skills_to_load": []
+  }
+}
+```
+
+稳定并集按 08 固定为：
+
+```text
+dispatch.skills_to_load = stable_unique(
+  dispatch.scope_skills + dispatch.asset_skills + dispatch.business_skills +
+  dispatch.method_skills + dispatch.overlay_skills + dispatch.public_skills
+)
+```
+
+最终编排结果还必须保留：
+
+- `route_profile`（内含五轴、各资产 `materiality`、`review_risk_class`、`conflicts[]` 和 `material_gaps[]`）与 `dispatch`（内含六数组和 `skills_to_load`）；
+- 材料工作路径、规则材料路径、未读取或未装载原因及适用规则集快照；
+- findings 及每条的 `source_skills[]`；
+- `references/11-html-delivery-spec.md`（v1.0 送达规范）要求的逐条裁定、复核对照与综合对比、《本次审核记录清单》、未检查项，以及最终**单文件 HTML 交付物**（AuditResult 单一事实源渲染）。
+
+无专业技能可用时仍交付画像、逐标签 gap 与已执行公共能力结果，不以“无能力”空返。
+
+## KB 兼容边界
+
+按 `00-input-and-route-profile.md`，五轴 `scope_types[]/asset_types[]/business_types[]/methods[]/overlays[]` 是 router 的唯一画像契约，router 不得为兼容生成旧画像键。
+
+装配清单由叶子声明、不经本仓装配器：命中轴标签后，下载清单 = 命中叶子 `references/01-kb-assembly.md` 的路径键（一级目录根或单文件路径）＋公共执行契约路径并集，由 `crwu-dws` 实时下载正文。叶子的一级目录根按 `request_kind=directory`、`recursive=true` 递归下载根内全部支持正文；细分对象与子业务在已下载目录包内二次选用，不各建技能。下载失败、空目录或不支持导出的节点记 capability gap，并继续执行不依赖该步骤的已加载能力。

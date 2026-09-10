@@ -2,7 +2,7 @@
 
 ## 适用范围与规则优先级
 
-- 本文件适用于 `skills/` 下所有 Skill、reference、配套文档与测试的维护，重点约束 `crwu-audit-asset-*` 和 `crwu-audit-business-*` 两类审核 Skill。
+- 本文件适用于 `skills/` 下所有 Skill、reference、配套文档与测试的维护，重点约束 `crwu-audit-asset-*` 和 `crwu-audit-biz-*` 两类审核 Skill。`crwu-audit-business-*` 仅视为待迁移的遗留前缀。
 - 仓库根目录 `AGENTS.md` 的要求继续适用。本文件是 `skills/` 范围内的补充规则；若将来某个更深子目录存在更具体的 `AGENTS.md`，以更深层规则为准。
 - 只修改并提交 source repo 中获授权的文件。不得直接写入、复制、链接或删除任何运行时 Skill 目录。
 
@@ -13,6 +13,14 @@
 - 同一报告同时命中资产与业务标签时，由 `crwu-audit` router 对各轴 Skill 做稳定并集加载；任何一轴都不得替代另一轴。
 - 禁止创建 `asset × business` 组合 Skill。交叉场景的共同结果来自 router 装配，而不是复制两轴内容或新增组合目录。
 - 新建或扩展资产 Skill 前，先在 `crwu-audit/references/03-asset-classification.md` 确认 canonical label；业务 Skill 对应检查 `crwu-audit/references/04-business-classification.md`。标签、状态或 Skill 映射发生变化时，同步更新 `crwu-audit/references/07-skill-registry.md`。
+
+## 一级 Skill 与知识库目录粒度
+
+- 资产 Skill 只映射 `02-资产类型/` 下一个一级资产目录；业务 Skill 只映射 `01-业务路线/` 下一个一级业务目录。
+- `01-kb-assembly.md` 对该轴只登记一个精确一级根，`request_kind=directory`、`recursive=true`。正式审核命中后由 `crwu-dws` 递归下载该根内全部支持正文；不得退回逐文件挑选模式。
+- 资产目录中的细分对象与业务目录中的子业务只作为父 Skill 的二级选择索引，不各建 Skill、不各占 registry 行。
+- 资产 Skill 始终读取命中一级根的 `01-共性参考/` 全部正文，再叠加命中细分对象的 `评估审核条目`。业务 Skill 根据评估目的等原始证据识别子业务，再执行命中目录的 `01-业务通用审核要点` 和关联文件。
+- 缺少共性参考、细分对象审核条目或子业务审核要点属于知识内容 gap；不得用新建空 Skill 或编造规则掩盖。
 
 ## 知识库驱动的维护流程
 
@@ -28,7 +36,7 @@
 
 ## Skill 与 references 分工
 
-以下总则仅适用于 `crwu-audit-asset-*` 与 `crwu-audit-business-*` 审核叶子的 `SKILL.md` 和所有 references 中的知识装配内容，不扩大为对 `skills/` 下其他 Skill 的全局禁令：不得保存或硬编码知识库名称、个人绝对路径、本地正文路径、`nodeId` 常量值；不得逐字复制任何知识库正文。知识装配只允许保存 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
+以下总则仅适用于 `crwu-audit-asset-*` 与 `crwu-audit-biz-*` 审核叶子的 `SKILL.md` 和所有 references 中的知识装配内容，不扩大为对 `skills/` 下其他 Skill 的全局禁令：不得保存或硬编码知识库名称、个人绝对路径、本地正文路径、`nodeId` 常量值；不得逐字复制任何知识库正文。知识装配只允许保存 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
 
 上述限制不禁止使用 `nodeId` 协议字段名。`crwu-dws` 的操作、协议与 schema 文档可以定义该字段，运行时 manifest 和输出也可以携带其值，但该值必须来自本次 `crwu-dws` 实际返回，且不得写回任何 Skill source。
 

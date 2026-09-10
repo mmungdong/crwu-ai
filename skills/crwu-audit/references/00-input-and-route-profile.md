@@ -97,9 +97,9 @@
 
 ## KB 装配输入
 
-五轴 `route_profile` 是新 router 的唯一画像契约。当前 `tools/kb/kb_tool.py assemble` 仍是 legacy 装配器：其 route profile 转换只理解旧 `object.object_class`、`methods[].method` 与 `scenario`，不理解正式五轴；禁止把新五轴画像直接传给它，以免维度静默漏装。
+五轴 `route_profile` 是 router 的唯一画像契约。**装配清单不再由本仓工具生成**：命中某个轴标签后，下载清单 = 命中叶子 `references/01-kb-assembly.md` 中该轴的路径键（一级目录根 `request_kind=directory`/`recursive=true`，或明确的单文件路径）＋公共执行契约路径并集。
 
-在装配器完成原生多轴支持前，命中的 available 叶子 skill 必须按自身 references 中声明的真实 DWS 路径执行实时下载和材料准备。确需调用 legacy assemble 时，只有存在明确、经验证且不丢失五轴标签的适配器才可继续；没有适配器则阻断该装配步骤并记录能力缺口。router 不得为兼容而生成任何旧画像键。
+router 只负责把五轴画像映射成轴标签并选出 available 叶子；不得为兼容而生成旧画像键，也不得自行挑选叶子装配表以外的知识库文件。叶子按自身装配表声明的一级目录根，经 `crwu-dws` 递归实时下载该根下全部支持正文并准备材料；下载失败、空目录或不支持导出的节点记 capability gap，不静默忽略。
 
 ## Excel 隐藏数据隔离
 

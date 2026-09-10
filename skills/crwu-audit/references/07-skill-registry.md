@@ -19,28 +19,14 @@
 | asset | 矿业权 | crwu-audit-asset-mining-right | pending | record gap |
 | asset | 数据资产 | crwu-audit-asset-data | pending | record gap |
 | asset | 森林资源 | crwu-audit-asset-forest | pending | record gap |
-| business | 租赁 | crwu-audit-business-rent | available | load |
-| business | 清算 | crwu-audit-business-liquidation | pending | record gap |
-| business | 破产 | crwu-audit-business-bankruptcy | pending | record gap |
-| business | 资产处置 | crwu-audit-business-disposal | pending | record gap |
-| business | 资产转让 | crwu-audit-business-transfer | pending | record gap |
-| business | 拍卖 | crwu-audit-business-auction | pending | record gap |
-| business | 资产收购 | crwu-audit-business-acquisition | pending | record gap |
-| business | 资产置换 | crwu-audit-business-swap | pending | record gap |
-| business | 抵押质押 | crwu-audit-business-mortgage | pending | record gap |
-| business | 抵债偿债 | crwu-audit-business-debt-settlement | pending | record gap |
-| business | 债务重组 | crwu-audit-business-debt-restructuring | pending | record gap |
-| business | 财务报告 | crwu-audit-business-financial-reporting | pending | record gap |
-| business | 公允价值计量 | crwu-audit-business-fair-value | pending | record gap |
-| business | 减值测试 | crwu-audit-business-impairment | pending | record gap |
-| business | 投资出资 | crwu-audit-business-investment | pending | record gap |
-| business | 股权变动 | crwu-audit-business-equity-change | pending | record gap |
-| business | 计税 | crwu-audit-business-taxation | pending | record gap |
-| business | 追溯评估 | crwu-audit-business-retrospective | pending | record gap |
-| business | 司法涉诉 | crwu-audit-business-litigation | pending | record gap |
-| business | 补偿 | crwu-audit-business-compensation | pending | record gap |
-| business | 复核 | crwu-audit-business-review | pending | record gap |
-| business | 价值咨询 | crwu-audit-business-advisory | pending | record gap |
+| business | 资产经营 | crwu-audit-biz-asset-operation | available | load |
+| business | 交易与处置 | crwu-audit-biz-transaction-disposal | available | load |
+| business | 财务报告 | crwu-audit-biz-financial-reporting | available | load |
+| business | 融资与债务 | crwu-audit-biz-financing-debt | available | load |
+| business | 投资与资本运作 | crwu-audit-biz-investment-capital | available | load |
+| business | 税务与历史确认 | crwu-audit-biz-tax-history | available | load |
+| business | 司法清算与补偿 | crwu-audit-biz-judicial-liquidation-compensation | available | load |
+| business | 咨询复核与其他 | crwu-audit-biz-consulting-review | available | load |
 | method | 资产基础法 | crwu-audit-method-asset-based | pending | record gap |
 | method | 成本法 | crwu-audit-method-cost | pending | record gap |
 | method | 市场法 | crwu-audit-method-market | pending | record gap |

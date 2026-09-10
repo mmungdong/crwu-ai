@@ -44,7 +44,7 @@ skills_to_load = stable_unique(
   "finding": "租金案例调整依据不足",
   "source_skills": [
     "crwu-audit-asset-realestate",
-    "crwu-audit-business-rent"
+    "crwu-audit-biz-asset-operation"
   ]
 }
 ```
@@ -53,23 +53,22 @@ skills_to_load = stable_unique(
 
 ### 房地产租赁
 
-画像命中 `asset=房地产`、`business=租赁`。注册表解析为 `crwu-audit-asset-realestate (available)` 与 `crwu-audit-business-rent (available)`，两者均进入 `skills_to_load`；若材料含明细表，再追加 `crwu-audit-datacheck`。不得用租赁技能替代房地产对象技能。
+画像命中 `asset=房地产`、`business=资产经营`（目的原文为出租/租金，子业务为 `租赁与租金评估`）。注册表解析为 `crwu-audit-asset-realestate (available)` 与 `crwu-audit-biz-asset-operation (available)`，两者均进入 `skills_to_load`；若材料含明细表，再追加 `crwu-audit-datacheck`。不得用业务技能替代房地产对象技能，也不得为子业务另建 Skill。
 
 ### 房地产清算后拍卖处置
 
-画像命中 `asset=房地产` 以及 `business=清算 + 资产处置 + 拍卖`。逐标签解析得到：
+画像命中 `asset=房地产` 以及 `business=司法清算与补偿 + 交易与处置`（旧行为词 清算→前者，资产处置/拍卖→后者）。逐标签解析得到：
 
 - `crwu-audit-asset-realestate`：available，继续加载；
-- `crwu-audit-business-liquidation`：pending，为 `business+清算` 记录独立 gap；
-- `crwu-audit-business-disposal`：pending，为 `business+资产处置` 记录独立 gap；
-- `crwu-audit-business-auction`：pending，为 `business+拍卖` 记录独立 gap。
+- `crwu-audit-biz-judicial-liquidation-compensation`：available，加载，叶子内选用子业务 `破产清算与解散`；
+- `crwu-audit-biz-transaction-disposal`：available，加载，叶子内选用子业务 `拍卖与处置`。
 
-最终执行当前 available 并集，三个 pending 候选不得假装已执行，也不得让它们阻断房地产技能。
+两个业务一级标签分别保留各自的 `source_skills[]`，不得因为都命中而合并成一个组合技能；子业务只在各自叶子内选用，不进入 `skills_to_load`。
 
 ### 设备抵押
 
-画像命中 `asset=设备`、`business=抵押质押`。分别解析为 `crwu-audit-asset-equipment (pending)` 与 `crwu-audit-business-mortgage (pending)`，因此产生两个独立 gap。如果材料含表格，available 的 `crwu-audit-datacheck` 仍必须加载；不得因为对象和业务技能均 pending 而空返。
+画像命中 `asset=设备`、`business=融资与债务`（旧行为词 抵押质押，子业务 `抵押与担保`）。解析为 `crwu-audit-asset-equipment (pending)` 与 `crwu-audit-biz-financing-debt (available)`：前者为 `asset+设备` 记录独立 gap，后者正常加载。如果材料含表格，available 的 `crwu-audit-datacheck` 仍必须加载；不得因为对象技能 pending 而空返。
 
 ### 企业价值多资产清算
 
-画像命中 `scope=企业价值`、`asset=房地产 + 设备 + 无形资产`、`business=清算`。`crwu-audit-scope-enterprise-value`、设备、无形资产和清算候选分别记录 gap；`crwu-audit-asset-realestate` 仍加载。资产标签各自保留 `materiality=key|non-key|unknown`：available 且 `key` 的技能必须加载，`unknown` 保留并人工复核，`non-key` 不得删除标签但不让其主导输出。材料含表格时再并入 `crwu-audit-datacheck`。
+画像命中 `scope=企业价值`、`asset=房地产 + 设备 + 无形资产`、`business=司法清算与补偿`。`crwu-audit-scope-enterprise-value`、设备、无形资产候选分别记录 gap；`crwu-audit-asset-realestate` 与 `crwu-audit-biz-judicial-liquidation-compensation` 仍加载。资产标签各自保留 `materiality=key|non-key|unknown`：available 且 `key` 的技能必须加载，`unknown` 保留并人工复核，`non-key` 不得删除标签但不让其主导输出。材料含表格时再并入 `crwu-audit-datacheck`。

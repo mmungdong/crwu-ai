@@ -9,6 +9,146 @@
 
 ---
 
+## 2026-09-10 · feat · 送达脚本接入编排层：router 步骤 11 冻结指纹 + 步骤 14 交付调用映射
+
+- 影响：`skills/crwu-audit/SKILL.md`（步骤 11 增冻结指纹命令 `tools/audit/audit_delivery.py digest <冻结快照.json>` 与 `phase1FrozenAt`/`phase1Digest` 写入口径；步骤 14 增编排层交付调用序列 ①汇总 JSON → ②`validate` → ③`render --out` → ④交付 HTML，并写明失败即停止交付、不得绕过、脚本缺失记 capability gap）；`skills/crwu-audit/references/11-html-delivery-spec.md` §14.1 新增"编排层调用映射（脚本接入）"（阶段/命令/输入/输出/失败处理四列表格 + "调用者唯一=crwu-audit 编排层，叶子不得调用"）；`tools/audit/audit_delivery.py` 新增 `digest` 子命令（阶段一冻结指纹，与 renderer 共用规范化序列化）；`tools/audit/README.md` 补编排层接入映射与用法；`tools/audit/test_audit_delivery.py` 增 3 项 CLI 测试（digest 与规范化 sha256 一致、validate 退出码、校验失败时拒绝产出 HTML），共 **24 项全绿**。
+- 说明：不加 Makefile / CLI 入口，脚本只由编排层在既定阶段调用——阶段一冻结算摘要、阶段二收口先校验后渲染；`digest` 与 `render` 使用同一规范化序列化（排序键、UTF-8、无多余空白），冻结指纹可复现且可与 `fileTrace.sourceDigest` 互校。部署环境未含 `tools/audit/` 时记 capability gap，只交付 JSON 与校验错误报告，不得跳过校验直接出 HTML。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · 落地送达规范 v1.0 参考实现：AuditResult JSON Schema + 校验器 + 单文件 HTML renderer
+
+- 影响：新增 `tools/audit/`——`audit_result.schema.json`（§9 字段契约，draft 2020-12）、`audit_delivery.py`（纯标准库校验器 + 确定性 renderer，`validate` / `render` 子命令）、`examples/audit-result.sample.json`（【示意】样例）、`test_audit_delivery.py`（21 项契约测试）、`README.md`（用法与维护规则）；`skills/crwu-audit/references/11-html-delivery-spec.md` §14 增“参考实现（已落地）”行；`skills/crwu-audit/SKILL.md` 步骤 14 指向该实现。
+- 说明：校验器覆盖 §9.4/§11.1/§12.2——`issueId`/`ruleId`/`recordId` 作用域内唯一、`decision=fail` 且规则性缺陷必须双证据链齐备、`external_formal` 版本不得写“现行”、`kbRelativePath` 必须相对路径、`summary.counts`/`usageCount`/`usedByIssueIds`/复核三条带可重算、阶段二完成后每条阶段一 issue 必须有 `reviewComparison` 且复核独有项进 `reviewerOnlyItems`、`reviewAccessedAt` 必须晚于 `phase1FrozenAt`、未检查项 `reasonCode` 受控枚举，以及绝对路径/`file://`/`nodeId`/凭据类字段的敏感信息扫描。renderer 为**确定性单文件渲染**：九区结构（含折叠的专业审核轨迹）、规则→材料→差异→结论→修改五段式问题卡片、严重程度文字标签与颜色并存、A4 打印样式与表头跨页、空态“本次无此类事项”、嵌入 JSON（`<` 转义为 `\u003c`）与 `sourceDigest`/`embeddedJsonDigest` 可离线追溯；**渲染前校验失败即拒绝渲染**，渲染后自检不通过即报错。测试覆盖 XSS 转义、离线自包含、渲染确定性、空态、打印规范与“文本节点只来自受控标签或输入数据”的防拼接检查，21 项全绿。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · 映射检查器增加「库内路径键存在性」检查（公共轴也查），并修掉 9 文件 25 处旧库路径残留
+
+- 影响（检查器）：`check_audit_skill_mappings.py` 新增 `inspect_path_keys` —— 扫描 `skills/crwu-audit*` 全部 `.md` 的**反引号库内路径键**，逐条与最新目录比对，新增三个 finding：`KB_PATH_KEY_NOT_IN_CATALOG`（键在最新目录不存在）、`KB_PATH_KEY_HAS_EXPORT_SUFFIX`（键带 `.md` 导出后缀，或把文件当目录写）、`KB_PATH_KEY_FOLDER_NEEDS_SLASH`（目录键漏尾斜杠）。此前只校验资产/业务一级根，公共轴（`00-总纲`/`03`/`04`/`06`）的键不受检。
+- 判定边界：只判断**本次目录已捕获的顶层容器**下的键（局部快照不会被误读为"另一轴全失效"，与 `MAPPING_ROOT_NOT_IN_CATALOG` 同一原则）；含 `…`／`*`／`<>`／`某`／`待建`／`不存在`／`省略` 的写法视为示例不检查；反引号外散文不扫描。
+- 影响（修真实漂移）：检查器首次运行即报 30 条，全部修复 ——
+  - **14 处 `.md` 后缀残留**（`crwu-audit`、`crwu-audit-datacheck`、`crwu-audit-optimize` 的标签词典/目录地图/回测报告/校准案例记录/模块条目等）；
+  - **4 处编号漂移**：`00-总纲/执行契约/03-防幻觉协议执行细则.md` → 新库 `02-防幻觉协议执行细则`、`04-审核统计与台账规范.md` → `03-审核统计与台账规范`；
+  - **9 处我方生成文件缺陷**：业务叶子 `02-review-focus.md` 对库内不存在的文档也写了「路径：」行，把不存在路径当寻址键 → 改为「库内未提供（无此前缀路径）」；
+  - maintainer 自身 `SKILL.md` 的反例 `02-资产类型/房地产/` 曾被当成寻址键 → 反例改为非反引号写法，并新增纪律：**本文档里的路径只写库内真名**。
+  合计 **9 个文件 25 处**。
+- 影响（校准表）：`--emit-map` 产物新增「**库内路径键健康（公共轴也查）**」节，报告检查键数与未命中清单；本节次校准结果 = 检查 **81** 个寻址键，全部命中。
+- 测试：`tools/kb/test_audit_skill_maintainer.py` 34 → **38 项**（键存在性、导出后缀/目录斜杠漂移、占位写法不误报、局部快照不误判，以及一项**对真实仓库 + 真实 DWS 快照**的路径键回归——快照不存在时自动 skip）。
+- 验证：实时 audit error 30 → **0**、warning 2（仅剩库侧两个无审核文件的子业务）；`test_audit_skill_maintainer` 38/38、`test_audit_multiaxis_router` 9/9、`test_dws_source_contract` 6/6、`test_audit_delivery` 24/24、`kb_tool validate` error=0、`git diff --check` 通过。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · refactor · crwu-audit-optimize 保留并瘦身：重划与维护器的执行边界 + 修 6 处过时/漂移
+
+- 决定：`crwu-audit-optimize` **保留**（不删除）。它独有的"复核反馈 → 规则内容/词表/算法诊断"职责无人替代，且其职责分离由 `docs/superpowers/specs/2026-09-10-crwu-audit-skill-maintainer-design.md` §5 与 §4 非目标明确规定；删除会使"审核意见错了/规则不对"这类反馈失去入口。
+- 影响（边界重划）：`SKILL.md` §2 改为「症状 → 落点 → **谁执行**」表 —— **A 规则/清单内容、C 词表/画像取值、D 技能算法与流程（含公共规则落 `12-leaf-common-contract.md` 一份）由本技能执行**；**B 覆盖缺失（一级 Skill 创建）与 E 路径/装配/指针漂移（一级根/registry/classification）一律交接 `crwu-audit-skill-maintainer`**，本技能只给根因、证据、影响面与最低改动集，不自行改结构。新增 §2.2：门禁、逐文件方案与校验口径不再重复定义，统一沿用维护器 `references/04`／`05`。
+- 影响（修过时/漂移）：
+  1. `references/00-route-profile-schema.md`（**不存在**）→ `references/00-input-and-route-profile.md`（SKILL.md 与 references/01 各一处）；
+  2. `crwu-audit/SKILL.md §3 路由注册表`（**已无该节**）→ `references/07-skill-registry.md` + maintainer 校准表 `07-kb-skill-map.md`；
+  3. 画像示例的业务主线由旧行为词改为 v2.0 一级业务标签（8 个），并写明历史行为词降级为命中信号；
+  4. `references/00` 增执行分界与 §2 落点表标注；§5「三处登记」改为交接维护器代办；
+  5. `references/02` 增"门禁与校验沿用维护器"说明；`crwu-audit/references/10-capability-gap-proposal.md` 的落地分工改为"诊断走 optimize、一级 Skill 落地走 maintainer"。
+  6. **路径键 `.md` 后缀漂移修正**：资产叶子装配表 6 个单文件路径键去掉 `.md` 并修正编号（`03-防幻觉协议执行细则` → 实为 `02-防幻觉协议执行细则`）。依据：`crwu-dws` 的 `by_path` 键 = **原样精确名**；实测新库「中瑞世联评估审核知识库」263 节点中带 `.md` 者 **0 个**，而旧库「中瑞世联 AI 测试知识库」节点名自带 `.md` —— 带后缀写法是旧库残留，会在 M2 与 `by_path` 不匹配而记 failure。
+- 影响（防复发）：`crwu-dws/references/01-审核下载与manifest规范.md` 的 manifest 示例 `requestPath` 改为不带 `.md`，并新增口径：`requestPath` 逐字等于库内节点名，`.md` 只是导出后的本地文件名；旧库带后缀写法属历史残留，迁移后必须去后缀。资产叶子 `01-kb-assembly.md` 同步增「路径键写法」说明。
+- 验证：`test_audit_skill_maintainer` 34/34、`test_audit_multiaxis_router` 9/9、`test_dws_source_contract` 6/6、`kb_tool validate --skill-root skills` error=0、`git diff --check` 通过。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · crwu-audit-skill-maintainer 增加知识库↔Skill 映射校准表 + 规范细化
+
+- 影响（新增产物）：新增 `skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md` —— **知识库 ↔ Skill 映射校准表**，每次 `audit`/`create`/`repair`/`remap` 收尾自动刷新。表内容：校准时间、目录抓取时间、输入形态、完整性、节点数、一级资产/业务数、error/warning/建议；**资产轴**（一级目录 / 标签 / Skill / registry 状态 / 声明的一级根 / 共性参考 / 细分对象(有审核条目) / 本次问题代码）与**业务轴**（同列 + 共同审核点 / 子业务(有要点) / 缺项名）；未登记与待处理 Skill；以及「内容级校准备注」（人工维护、工具不覆盖）与「校准历史」（工具追加、新→旧）。
+- 影响（工具）：`check_audit_skill_mappings.py` 新增 `--emit-map PATH` 与 `report.calibration`（机器可读的映射快照）。校准表由最新目录 + registry + 真实目录派生，**状态列禁止手工编辑**；「校准备注」与「校准历史」两区跨次运行保留并把新行追加在历史顶部。
+- 影响（SKILL.md 细化）：职责新增校准表维护与"叶子共同约束只写一份"（`12-leaf-common-contract.md`）；词表口径写明 `business_types[]` 只取一级业务标签、历史行为词降级为命中信号；执行步骤新增第 4 步内容级核对（必检项「待补」/空文档/`TODO` 占位/结构断言）与第 8 步校准表同步（每个模式收尾必做，`audit` 也做）；硬门禁新增 6 条——**一级根逐字使用库内精确路径（含数字前缀）**、必检项待补/占位/空文档只记 gap 不补造、叶子不得复述共同约束、校准表只由工具生成、不把子业务与结构缺口列进"需创建"、不冒充"已核实最新"。
+- 影响（references）：`04-registry-and-mapping-update.md` 增「校准表」节（定位/生成命令/同步时机/两区语义/目录级自动化与内容级人工的分工）；`05-validation-and-delivery.md` 交付清单与完成判据增列校准表刷新与内容级备注。
+- 测试：`tools/kb/test_audit_skill_maintainer.py` 32 → **34 项**（`--emit-map` 生成与备注/历史保留、校准表对缺失子业务与共同层的标注）。
+- 校准结果（2026-09-10 本次实时目录）：error 0 / warning 2 / 建议 0；内容级缺口见校准表备注（24 份要点必检项全部「待补」、`共同审核点` 为 `TODO` 占位、2 份空索引、2 个无审核文件的子业务）。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · 业务轴落地：8 个 crwu-audit-biz-* 叶子 + registry/classification 迁移到一级业务词表 + 叶子共同约束
+
+- 影响（新技能）：新建 8 个业务一级 Skill —— `crwu-audit-biz-asset-operation`、`-transaction-disposal`、`-financial-reporting`、`-financing-debt`、`-investment-capital`、`-tax-history`、`-judicial-liquidation-compensation`、`-consulting-review`，各含 `SKILL.md` + `references/00-applicability.md`、`01-kb-assembly.md`、`02-review-focus.md`（共 32 个文件）。每个 Skill 恰好映射一个一级根 `01-业务路线/0N-<一级业务>/`（`directory`/`recursive`/`required`）；26 个子业务只在父级二级索引内选用，不各建 Skill、不建资产×业务组合 Skill。
+- 影响（共同约束）：新增 `skills/crwu-audit/references/12-leaf-common-contract.md` —— 资产/业务叶子的共同约束（轴边界、输入、一级根装配、二级选择返回、执行顺序「一级共用层→命中二级条目」、必检项 4 态与历史问题 3 态字段、来源优先级、证据出处、capability gap）。公共规则只写这一份，叶子以 `../crwu-audit/references/12-leaf-common-contract.md` 引用、不复制；`crwu-audit` SKILL §reference 清单与 `crwu-audit-asset-realestate` 已接入。
+- 影响（registry/classification 迁移）：`07-skill-registry.md` 的 22 行 `crwu-audit-business-*` 业务行替换为 8 个 `crwu-audit-biz-*` 一级业务行（均 available）；`04-business-classification.md` 升 v2.0 —— `business_types[]` 取值域收敛为 8 个一级业务标签，历史行为词（租赁/清算/破产/资产处置/拍卖/抵押质押/减值测试/计税/追溯评估/复核…）降级为**命中信号**，并补全一级业务→子业务映射。
+- 影响（联动）：`08-union-dispatch-rules.md` 的三个示例场景（房地产租赁 / 房地产清算后拍卖处置 / 设备抵押）改用新一级业务与 `crwu-audit-biz-*` 名称；`10-capability-gap-proposal.md` gap 示例同步；`skills/README.md` 登记 8 个新叶子与共同约束；审核技能族设计增 §7.2。
+- 依据（真实来源）：本次经 `crwu-dws` 实时拉取「中瑞世联评估审核知识库」（263 节点、failures=0）并导出 35 份业务正文后归纳，未使用旧缓存或历史摘录。**知识库内容缺口如实登记**：24 份 `01-业务通用审核要点` 的必检项要点全部为「待补」；`01-资产经营/共同审核点` 为 `TODO` 占位；`租赁与租金评估` 的两份适用索引为空文档；子业务 `股权比例变动`、`其他目的` 无审核文件。技能不自行补造，在 `02-review-focus.md` 与运行 gap 中声明。
+- 验证：映射检查器对本次实时目录 error 30 → **0**、warning 11 → **2**（仅剩上述两个缺文件的子业务）；`test_audit_skill_maintainer` 32/32、`test_audit_multiaxis_router` 9/9、`test_dws_source_contract` 6/6、`test_audit_delivery` 24/24；11 个受影响技能 `quick_validate` 全过；`kb_tool validate --skill-root skills` error=0；`git diff --check` 通过。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · crwu-audit-skill-maintainer 增加实时路由一致性核对层（crwu-dws 最新目录 ↔ router/registry/真实 Skill）
+
+- 影响：新增 `skills/crwu-audit-skill-maintainer/references/06-live-routing-reconciliation.md`。`audit` 不再只比对"某份目录快照"，而是**先经 `crwu-dws` 拉取最新知识库目录**（只读；缓存只用于定位，不得当最新），再与当前 skill 体系逐项对比四层：① 路由机制 ② 路由参考是否注册 ③ Skill 是否存在 ④ 是否需要创建；结论必须标注分级（已核实最新／候选·待核验／无法判定）。
+- 契约：`SKILL.md` 增补实时刷新前置步骤、`06` reference 路由与两条硬门禁（不用缓存命中/粘贴目录冒充"已核实最新"；不把细分对象、子业务或结构缺口列进"需创建 Skill"）；`references/01` 把"目录事实"改为本次在线结果并说明离线降级；`references/05` 交付清单增列结论分级与路由机制结论、补全 finding 表。
+- 检查器：`check_audit_skill_mappings.py` 新增 `ROUTER_FILE_MISSING`、`ROUTER_REFERENCE_MISSING`、`ROUTER_REFERENCE_UNRESOLVED`、`ROUTER_AXIS_UNDISPATCHED`、`ROUTER_SKILL_REFERENCE_UNRESOLVED`，以及 `--max-age-hours H` 触发的 `CATALOG_NOT_LIVE`／`CATALOG_STALE`。路由层按"真实 `crwu-audit*` 目录 ∪ registry 行"解析技能名，通配（`crwu-audit-asset-*`）与占位（`crwu-audit-<axis>-<label>`）写法不误报。
+- 测试：`tools/kb/test_audit_skill_maintainer.py` 26 → **32 项**——router 入口缺失、路由 reference 缺失/未解析、轴未分发、路由命名不可解析技能、快照过期/无时间戳，以及一项**对真实仓库**的路由层一致性回归（router/references/registry/真实目录必须互相解析）。
+- 设计记录：`docs/superpowers/specs/…-design.md` §6 增补 v0.3 说明（references 由六份增至七份）。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · crwu-audit-skill-maintainer 支持一级业务目录 `共同审核点`（业务轴共用审核层）
+
+- 影响：`skills/crwu-audit-skill-maintainer/SKILL.md` 增补——一级业务目录下若存在 `共同审核点` 文档，必须与一级根一并拉取并作为该业务 Skill 的**共用审核层**参考：先于子业务条目执行、对该一级业务全部子业务生效、不因命中哪几个子业务而改变；文档不存在不视为缺口，也不得凭经验或旧摘录补造。
+- 契约：`references/01-kb-source-discovery.md` 业务目录解释增补识别与处置（位置=一级根直接子文档，数字前缀/`.md` 不影响识别；归属=一级共用层不属于任何单个子业务；缺失不报错；名称近似不自动等同、只报候选交人工确认；导出失败记 capability gap）；`references/02-child-skill-contract.md` 把该文档写入业务轴 `expected_structure` 断言与 `02-review-focus.md` 共用段；`references/03` 合并顺序改为「一级共用层（`共同审核点`）→ 命中子业务通用审核要点」；`references/05` 交付清单与完成判据增列该文档的有无与回指状态。
+- 检查器：`check_audit_skill_mappings.py` 新增 `BUSINESS_COMMON_REVIEW_NOT_REFERENCED`（warning）——仅当一级业务目录**确实存在**该文档、而对应 available 业务 Skill 的 `01-kb-assembly.md` 与 `02-review-focus.md` 均未回指时触发；文档不存在不报，避免把条件性约定当缺口。
+- 测试：`tools/kb/test_audit_skill_maintainer.py` 23 → **26 项**（存在且未回指→告警；存在且回指→干净；不存在→不报且整体无 finding）。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · refactor · 废止本地知识库根模型（CRWU_KB_ROOT）：正文唯一来源=钉钉；下架 crwu-audit-realestate-rent
+
+- 影响（工具）：`tools/kb/kb_tool.py` 收窄为**只做不依赖本地知识库的校验**——唯一子命令 `validate --skill-root`（引用卫生 + 实时协议 lint）；删除 `index`/`resolve`/`query`/`release`/`assemble`/`extract`/`selftest`（全部建立在本地知识库 md 树上，而该树已迁至钉钉、本地根不再存在，命令实际不可运行）。删除 `tools/kb/examples/`；`tools/kb/README.md` 改写为"引用与实时协议校验"定位。
+- 影响（纪律）：`CRWU_KB_ROOT` 常量与 `KB/<相对路径>` 本地根相对引用由"仅 crwu-audit* 目录禁用"升级为**全 skill-root error**；说明性的"某写法已废止/禁止"行自动豁免，避免规范文本自伤。
+- 影响（技能）：下架 `skills/crwu-audit-realestate-rent/`（资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载）；`crwu-audit-asset-realestate/references/01-kb-assembly.md` 改为**一级根映射**——唯一主映射 `02-资产类型/房地产/`（`request_kind=directory`、`recursive=true`、`required=true`）+ `expected_structure` 断言 + 二级选择索引（土地使用权等细分对象在已下载目录包内选用）；方法/披露/执行契约/校准改为标注 `owner_axis` 的**其他轴共享依赖**，不再伪装成本技能自有装配。
+- 影响（文档口径）：`crwu-audit-optimize` SKILL + references 00/01/02 的 `kb_tool index/assemble/query/resolve/extract` 依赖全部改写为"读叶子装配表路径键 + crwu-dws 实时下载"；`crwu-audit` SKILL 与 `references/00`/`10` 的 legacy assemble 例外条款改写为"装配清单由叶子声明、router 不生成画像键"；`skills/README.md` 与 `docs/design-crwu-audit-skills.md` 的 L0/L1/L2 分层描述改为**分轴并集模型**（历史模型保留标注）。
+- 测试：`tools/kb/test_dws_source_contract.py` 重写——活动清单文件须真实存在、逐行禁本地根/正文镜像字面、M2 单文件+目录混装契约、**每个 asset/biz 叶子必须声明递归一级根**、遗留前缀目录必须消失；`test_audit_multiaxis_router.py` 的 registry 断言改为"轴覆盖"，registry↔真实目录卫生交回 skill-maintainer 映射检查器（单一归属），router reference 集纳入 `11-html-delivery-spec.md`。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · feat · 新增 crwu-audit-skill-maintainer：资产/业务 Skill 目录盘点与映射维护
+
+- 影响：新增 `skills/crwu-audit-skill-maintainer/`（入口、六份 reference、只读映射检查器）和 `tools/kb/test_audit_skill_maintainer.py`；同步 `skills/AGENTS.md`、`skills/README.md`、`crwu-audit-optimize/SKILL.md` 与审核技能族设计。
+- 说明：支持读取粘贴目录树、DWS snapshot 或 node-index，对照 classification、registry 和真实 Skill，识别缺失的一级资产/业务 Skill、遗留业务前缀、失效一级根、缺少共性参考/细分对象审核条目/子业务审核要点等问题。资产 Skill 使用 `crwu-audit-asset-*`，业务 Skill 使用 `crwu-audit-biz-*`；细分对象和子业务只进入父 Skill 的二级索引，不创建独立或组合 Skill。
+- 装配口径：一个资产/业务 Skill 恰好登记一个一级目录根，运行时由 `crwu-dws` 递归下载根内全部支持正文；必检项逐项记录 `符合/不符合/不适用/无法核验`，历史问题逐项记录 `涉及/未涉及/无法核验`，准则保持硬约束。
+- 安全：检查器只读；创建、修复和重映射必须先输出逐文件方案并经用户确认。下载正文、manifest、缓存、凭据和运行时 Skill 不进入 source 提交。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-10 · fix · crwu-audit-skill-maintainer 加固：真实 DWS 目录输入、registry 全量校验与 audit 模式定名
+
+- 影响：`skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py` 新增 `crwu.kb-dir-snapshot.v1`（扁平 `nodes[]`，按 `parentId` 上溯重建路径）与 `crwu.kb-node-index.v1`（`nodes{}` 字典，节点自带 `path`）两种**真实** `crwu-dws` 产物解析。此前只接受自造 schema，实际目录缓存无法作为 `--catalog` 输入。
+- 检查项：新增 `MAPPING_ROOT_NOT_IN_CATALOG`（声明的一级根已不在最新目录）、`AXIS_ROOT_MISMATCH`（资产 Skill 登记业务根或反向）、`AXIS_PREFIX_MISMATCH`（轴与 `crwu-audit-asset-*`／`crwu-audit-biz-*` 前缀不符）、`REGISTRY_LABEL_NOT_IN_CATALOG`（available 标签无对应一级目录）；`AVAILABLE_SKILL_DIRECTORY_MISSING` 与 `REGISTRY_LABEL_DUPLICATE` 改为对全部资产/业务 registry 行生效，不再因该标签未出现在本次目录快照而漏检。
+- 判定边界：仅在该轴容器目录（`02-资产类型/`、`01-业务路线/`）已被本次目录捕获时才判定根失效，只抓一个轴的局部快照不会被误读为另一轴已删除；`REGISTRY_LABEL_NOT_IN_CATALOG` 只针对 `available` 行，`pending` 行的目录缺失属正常中间态。
+- 定名：只读模式按设计 §7.4 定为 `audit`，`inventory` 仅作同义旧称；触发描述同时保留 audit/inventory 两个词以便发现。
+- 测试：`tools/kb/test_audit_skill_maintainer.py` 由 8 项扩到 22 项，补充真实 DWS 三形态路径一致、不完整快照标记，以及此前缺测的目录缺失、名称漂移、references 缺失、标签重复、未登记 Skill、轴前缀与越界根等用例。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
+## 2026-09-09 · docs · 送达规范 v1.0 进技能：AuditResult 单一事实源 + 单文件 HTML 交付；下掉技能侧的知识库输出契约引用
+
+- 影响：新增 `skills/crwu-audit/references/11-html-delivery-spec.md`（**CRWU 审核意见 HTML 送达规范 v1.0** 全文收录 + §14 归属/维护/运行时加载说明：统一数据模型、单文件交付、双证据链、五段式判定、两阶段门禁、员工端九区结构、未检查项、专业审核轨迹、AuditResult JSON 契约与校验规则、HTML 安全/A4 打印/嵌入 JSON 规范、发布前验收清单）；
+  `skills/crwu-audit/SKILL.md`（必读 references 增第 13 条指向 `11-html-delivery-spec.md`；步骤 9 的 DWS 契约清单由三份减为两份——**去掉交付契约，"交付/送达口径不再走知识库契约"**；步骤 14 改写为按 v1.0 执行：AuditResult JSON 单一事实源 → **每个项目只交付一个自包含单文件 HTML** `审核意见.<项目ID>.html`（离线可开、A4 可打印、含默认折叠的专业审核轨迹；renderer 只呈现不改写，JSON 可嵌入同页但不作独立交付件），发布前过双证据链/五段式/未检查项/统计可重算/无绝对路径与 `nodeId` 与凭据校验；输出清单项同步）；
+  `skills/crwu-audit/references/99-maintenance.md`（owner 映射增"送达与交付层 → `11-html-delivery-spec.md`"，并注明该正文为本技能内正式规范、不经知识库下载）；
+  `skills/crwu-audit-realestate-rent/SKILL.md` 与 `references/00-KB装配表.md`（裁定表正文指针与输出口径、装配表执行契约行同步去掉 `02-审核意见单规范.md`，改指 `references/11-html-delivery-spec.md` v1.0）；
+  `docs/design-crwu-audit-skills.md`（§5 汇总输出与两阶段纪律按 v1.0 改写）；`skills/README.md`（总路由行交付口径改为 v1.0）；
+  草案 `docs/02-审核意见单规范-v0.4-草稿.md` 保留为内部逻辑草案留档（其送达层已被技能内 v1.0 取代）
+- 说明：员工端送达规则不再依赖知识库输出契约——**送达/交付正文 owner 改为技能内 `crwu-audit/references/11-html-delivery-spec.md`**；crwu-audit 的 DWS 清单只保留防幻觉（03）与统计台账（04）两份契约。核心口径：AuditResult JSON 是唯一权威结果、HTML 只如实呈现；员工侧每个项目只交付一个 HTML；双证据链（审核规则依据 vs 被审核材料证据）与五段式判定（规则/材料/差异/结论/修改）强制；两阶段门禁（阶段一定稿冻结后才允许读复核记录，阶段二对照与漏检反查不得回写阶段一）；未检查项与"不适用"必须显式披露；renderer 不得新增、删除、合并、拆分、升级、降级或润色审核结论。v0.4 草案中的《本次审核记录清单》《复核对照与综合对比》《逐条裁定表》等内部产物由 v1.0 §6/§7/§8/§11 承接。
+- 未新增/修改 crwu CLI 命令。
+
+---
+
 ## 2026-09-09 · docs · 输出契约 v0.4（草稿）：复核对照阶段化 + §5.5 综合对比（AI 独立审核 → 复核对照 → 综合对比）
 
 - 影响：`skills/crwu-audit/SKILL.md`（§1 输入起增"独立审核门禁"；步骤 5 源材料下载排除复核记录改写为

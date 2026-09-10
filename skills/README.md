@@ -14,22 +14,36 @@
 | [`crwu-init`](crwu-init/SKILL.md) | 提示型 | crwu 环境**初始化/安装/更新分发器**：确定目标 agent（workbuddy/codex/opencode/deepseek harness，未指定则给选项 workbuddy/codex/deepseek harness）→ 联网核实其 skills 安装目录 → 从 `https://gitee.com/mengdong123/crwu-ai` 拉取 `skills/` → 安装全部/安装指定/更新（同名覆盖含子文件夹）到 agent skills 目录。不改技能正文、不跑业务 |
 | [`h3yun-login`](h3yun-login/SKILL.md) | 提示型 | H3Yun 员工自助登录：自动开浏览器扫码绑定会话，令牌不进对话 |
 | [`h3yun-query`](h3yun-query/SKILL.md) | 提示型 | 交互式 H3Yun 查询：系统→表单→记录，20 条/页，支持标题关键词查找 |
-| [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**（≤300 行入口 + `references/` 运行材料）：维护全部 crwu-audit-* 路由注册表；画像=报告形态→经济行为主线（受控角度词表）→对象→方法（附件名+抽验）→监管覆盖层（国资/证券/司法/金融）；字段画像先行、弱结构化名称兜底；细分未命中降级父大方向→汇总输出（自身不做审核判断）；**兜底/🅿️⏳ 命中时自动附《待建子技能提案》**（references/04：补哪个子技能/管什么/审什么）；画像必含 **scenario 装配键**（评估目的×方法双键，refs/00 §3 / 01）；**两阶段输出：阶段一独立审核（意见定稿前不下载/读取/参考复核记录）→ 阶段二复核对照 A/B/C + 综合对比（AI∩复核/AI 新增/复核独有=漏检候选，契约 02 §5）**；改前先读 `references/99-维护说明.md` |
-| [`crwu-audit-realestate`](crwu-audit-realestate/SKILL.md) | 提示型 | 房地产（不动产/房产）**大方向**通用审核：对象层+披露通用+方法适用性，按 报告/说明/明细表 分区（RULE-01-02-543~578、281~305） |
-| [`crwu-audit-realestate-rent`](crwu-audit-realestate-rent/SKILL.md) | 提示型 | 房地产大方向下 **L2 细分**：商铺/办公/公寓等经营性物业·租金或市场价值评估报告，执行 CHK-MKT/CHK-CST 专项清单（含表格勾稽必做步骤）；**命中清单逐条裁定表=强制产物，校准点（B4/B8/B9/B11…）反查对应 CHK 为硬约束（OPT-2026-09-07-01）** |
+| [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**（≤300 行入口 + `references/` 运行材料）：维护全部 crwu-audit-* 路由注册表；画像=报告形态→经济行为主线（受控角度词表）→对象→方法（附件名+抽验）→监管覆盖层（国资/证券/司法/金融）；字段画像先行、弱结构化名称兜底；细分未命中降级父大方向→汇总输出（自身不做审核判断）；**兜底/🅿️⏳ 命中时自动附《待建子技能提案》**（references/04：补哪个子技能/管什么/审什么）；画像必含 **scenario 装配键**（评估目的×方法双键，refs/00 §3 / 01）；**两阶段输出：阶段一独立审核（意见定稿前不下载/读取/参考复核记录）→ 阶段二复核对照 A/B/C + 综合对比（AI∩复核/AI 新增/复核独有=漏检候选）**；交付按技能内 **`references/11-html-delivery-spec.md`（CRWU 审核意见 HTML 送达规范 v1.0）**：AuditResult JSON 单一事实源 + 双证据链 + 《本次审核记录清单》+ **每个项目只交付一个自包含单文件 HTML `审核意见.<项目ID>.html`（可离线、A4 可打印、含折叠专业审核轨迹）**；改前先读 `references/99-维护说明.md` |
+| [`crwu-audit-leaf-common`](crwu-audit/references/12-leaf-common-contract.md) | 契约 | 资产/业务叶子的**共同约束**（轴边界·输入·一级根装配·二级选择·执行顺序·条目状态·来源优先级·证据出处·capability gap）：公共规则只写这一份，叶子引用不复制 |
+| [`crwu-audit-asset-realestate`](crwu-audit-asset-realestate/SKILL.md) | 提示型 | 房地产（不动产/房产）**一级资产 Skill**：映射 `02-资产类型/房地产/` 一级根，运行时经 crwu-dws 递归下载根内全部支持正文；执行对象适用性 + 生成审核关注点，细分对象（如土地使用权）在已下载目录包内二次选用；业务要求由业务轴 Skill 并集提供，不建资产×业务组合 Skill |
+| [`crwu-audit-biz-asset-operation`](crwu-audit-biz-asset-operation/SKILL.md) | 提示型 | 资产经营**一级业务 Skill**：映射 `01-业务路线/01-资产经营/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-transaction-disposal`](crwu-audit-biz-transaction-disposal/SKILL.md) | 提示型 | 交易与处置**一级业务 Skill**：映射 `01-业务路线/02-交易与处置/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-financial-reporting`](crwu-audit-biz-financial-reporting/SKILL.md) | 提示型 | 财务报告**一级业务 Skill**：映射 `01-业务路线/03-财务报告/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-financing-debt`](crwu-audit-biz-financing-debt/SKILL.md) | 提示型 | 融资与债务**一级业务 Skill**：映射 `01-业务路线/04-融资与债务/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-investment-capital`](crwu-audit-biz-investment-capital/SKILL.md) | 提示型 | 投资与资本运作**一级业务 Skill**：映射 `01-业务路线/05-投资与资本运作/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-tax-history`](crwu-audit-biz-tax-history/SKILL.md) | 提示型 | 税务与历史确认**一级业务 Skill**：映射 `01-业务路线/06-税务与历史确认/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-judicial-liquidation-compensation`](crwu-audit-biz-judicial-liquidation-compensation/SKILL.md) | 提示型 | 司法清算与补偿**一级业务 Skill**：映射 `01-业务路线/07-司法清算与补偿/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
+| [`crwu-audit-biz-consulting-review`](crwu-audit-biz-consulting-review/SKILL.md) | 提示型 | 咨询复核与其他**一级业务 Skill**：映射 `01-业务路线/08-咨询复核与其他/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
 | [`crwu-audit-datacheck`](crwu-audit-datacheck/SKILL.md) | 提示型 | 跨方向 **L2 数据/表格勾稽**（C1–C6）：测算/明细/汇总表合计与口径、公式错误、跨项目串扰词、占位残留 → 差异清单（含 xlsx/.xls 解析与公式重算工具链说明）。**H0：人工隐藏区（sheet/行/列/折叠组）强制跳过——禁读禁报，只审可见区**；**坐标基准：剔除隐藏后工作版行列收缩，公式/引用勾稽以 raw 原件坐标为准（可见区只读例外，见 crwu-audit refs/00 §6.1）** |
 | [`crwu-audit-optimize`](crwu-audit-optimize/SKILL.md) | 提示型（维护/元技能） | 审核能力族**维护/优化入口**（不经 crwu-audit 路由、不产审核判断）：用户反馈驱动的 规则/覆盖/路径 演进——先定位单子画像与缺口分桶（A 规则内容/B 覆盖缺失/C 词表/D 算法/E 漂移）→ 输出《优化方案》（拟改文件清单，源仓+运行时双份）→ **用户确认后**按 99 流程执行 + kb_tool 校验回归。规范见其 references/00-02 |
+| [`crwu-audit-skill-maintainer`](crwu-audit-skill-maintainer/SKILL.md) | 提示型（维护/元技能） | 资产/业务 Skill 的盘点、创建、修复和重映射：读取目录树或 DWS 快照，识别缺失的一级资产/业务 Skill、遗留命名、失效根映射及细分审核文件缺口；资产用 `crwu-audit-asset-*`、业务用 `crwu-audit-biz-*`，细分对象和子业务只进入父 Skill 索引；修改 source 前先给逐文件方案并等待确认 |
 
 | [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联评估审核知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
 
-## crwu-audit 审核能力族（分层可插拔）
+## crwu-audit 审核能力族（分轴并集）
 
-三层模型：`crwu-audit`（L0 总路由：统一维护全部能力 skill 路由）→ L1 大方向技能（命中即按该方向
-通用审核逻辑执行）→ L2 细分能力（挂在父大方向下可插拔；细分未命中降级父级大方向通用逻辑）。
+分轴模型：`crwu-audit`（总路由：画像 → 各轴标签 → 稳定并集加载，只分发不判断）→ 叶子按轴承担能力。
+轴 = scope / asset / business / method / overlay / public；**不建资产×业务组合 Skill**，交叉场景的并集由 router 装配。
+
+- **资产轴** `crwu-audit-asset-*`：一个 Skill 恰好映射 `02-资产类型/` 下一个一级资产目录。
+- **业务轴** `crwu-audit-biz-*`：一个 Skill 恰好映射 `01-业务路线/` 下一个一级业务目录（`crwu-audit-business-*` 为待迁移遗留前缀）。
+- 一级根按 `request_kind=directory`、`recursive=true` 递归下载根内全部支持正文；**细分对象与子业务不各建 Skill**，由父 Skill 在已下载目录包内二次选用。
+
 设计、能力树与路由表见 [`docs/design-crwu-audit-skills.md`](../docs/design-crwu-audit-skills.md)。
-总路由 `crwu-audit` 入口与知识库仓库解耦（不预读知识库入口文档/路径）；**叶子技能执行期按 RULE/CHK 编号 + 库内层级路径寻址，经 crwu-dws 按本次审核清单实时下载规则正文后引用（文件零缓存；收益法等细则不进技能，不复制正文——实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md）**。
-叶子技能只读引用、不复制规则正文。新增能力需在 crwu-audit 路由注册表 + 设计文档 §4 + 本表三处登记。
-**族维护入口 = `crwu-audit-optimize`**（用户反馈驱动的规则/覆盖/路径优化：先方案、确认后执行；不经 crwu-audit 路由、不产审核判断）。
+总路由 `crwu-audit` 入口与知识库仓库解耦（不预读知识库入口文档/路径）；**叶子技能执行期按 RULE/CHK 编号 + 库内层级路径寻址，经 crwu-dws 按本次清单实时下载规则正文后引用（文件零缓存；不复制正文——实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md）**。
+叶子技能只读引用、不复制规则正文。新增能力需在 crwu-audit 路由注册表 + 设计文档 + 本表三处登记。
+**族维护分工**：`crwu-audit-optimize` 负责从漏检、误检和复核反馈诊断“需要改什么”；`crwu-audit-skill-maintainer` 负责盘点目录树以及创建、修复、重映射资产/业务 Skill。两者都不经 crwu-audit 路由、不产审核判断，source 修改均先出逐文件方案、确认后执行。
 
 ## crwu-dws（钉钉知识库只读域：M1 目录查询+缓存 / M2 按清单实时下载 / M3 路径·缓存兜底查找）
 

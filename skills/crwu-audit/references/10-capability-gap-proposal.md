@@ -3,7 +3,7 @@
 | 版本 | v1.0 | 状态 | 2026-09-09 定稿 | 维护 | `axis+label` 缺口与非审核提案唯一事实源 |
 | --- | --- | --- | --- | --- | --- |
 
-能力缺口按独立分类标签管理，不再按“形态×目的×对象×方法×场景”组合创建或注册技能。提案是建议和证据，不是审核结论，不修改任何文件；正式落地统一由 `crwu-audit-optimize` 在用户确认后执行。
+能力缺口按独立分类标签管理，不再按“形态×目的×对象×方法×场景”组合创建或注册技能。提案是建议和证据，不是审核结论，不修改任何文件。落地分工：诊断与根因分桶走 `crwu-audit-optimize`；**一级 Skill 的创建、改名、structure/一级根/registry/classification 改动由 `crwu-audit-skill-maintainer` 在用户确认后执行**（`create`/`repair`/`remap`）。
 
 ## 触发与持续执行
 
@@ -22,16 +22,16 @@
 
 ```jsonc
 {
-  "gap_id": "business:清算",
+  "gap_id": "business:交易与处置",
   "axis": "business",
-  "label": "清算",
-  "candidate_skill": "crwu-audit-business-liquidation",
+  "label": "交易与处置",
+  "candidate_skill": "crwu-audit-biz-transaction-disposal",
   "registry_status": "pending",
   "source": ["F0000064", "评估报告文件"],
   "evidence": ["企业清算", "为破产清算提供价值参考"],
   "location": ["record.F0000064", "评估报告·摘要(L60-68)"],
   "impact": "清算业务专项能力未实现；非审核结论",
-  "next_action": "人工按已加载能力复核，或经 crwu-audit-optimize 正式化"
+  "next_action": "人工按已加载能力复核；根治走 crwu-audit-optimize，一级 Skill 落地走 crwu-audit-skill-maintainer"
 }
 ```
 
@@ -40,8 +40,8 @@
 每个 gap 可附一张同 `axis+label` 的提案卡；同一次路由中的相同 gap 去重。
 
 1. **查技能**：优先沿用 07 已登记名称；未登记时按轴命名 `crwu-audit-<axis>-<label-slug>`，禁止组合多个轴。
-2. **查词表**：经 `crwu-dws` 实时下载 `00-总纲/治理/标签词典.md`，核对该轴标签是否登记；未登记则列为前置项。
-3. **查依据**：可用 `kb_tool.py assemble/query` 查询编号和装配现状，但规则正文必须经 `crwu-dws` 按本次清单实时下载，机器查询或目录缓存不能提供正文。
+2. **查词表**：经 `crwu-dws` 实时下载 `00-总纲/治理/标签词典`，核对该轴标签是否登记；未登记则列为前置项。
+3. **查依据**：读已登记叶子/拟建叶子的装配表路径键与 07 注册表现状；规则正文必须经 `crwu-dws` 按本次清单实时下载，目录缓存不能提供正文。
 4. **查目录**：经 `crwu-dws` 检查对应业务路线、资产类型或方法目录的内容状态，区分只缺技能与技能、内容均缺。
 5. **查体量**：读取实时下载的目录地图 count，按可复现的体量证据建议优先级；无依据时不臆造 P0/P1/P2。
 
@@ -60,7 +60,7 @@
 | 内容缺口 | 所需官方原文、指南或精编内容；无则明确仅缺技能 |
 | 前置登记 | 07 注册、设计文档、skills README、叶子门禁等正式化事项 |
 | 优先级依据 | 目录地图 count 或明确的无数据说明 |
-| 证据附件 | 可复现的 assemble/query 命令与输出 |
+| 证据附件 | 可复现的 crwu-dws 目录/正文下载结果与装配表路径键 |
 | 边界 | “非审核结论；待人工复核或经 optimize 正式化” |
 
 新增能力只有真实实现、验证和规定登记完成后才能把 07 状态改为 available。不得直接写运行时技能目录，不得把提案卡当规则正文、审核意见或可执行技能。

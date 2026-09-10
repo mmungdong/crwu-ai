@@ -45,19 +45,23 @@
   "space": { "name": "…", "workspaceId": "…", "spaceType": "…" },
   "case_dir": "<案例目录绝对路径>", "started_at": "ISO8601" }
 
-{ "kind": "entry", "requestPath": "06-规则库/某文件.md",
+{ "kind": "entry", "requestPath": "06-规则库/某文件",
   "requestKind": "file", "nodeId": "…", "name": "…", "type": "adoc",
   "folderPath": "knowledge/06-规则库",
   "localPath": "knowledge/06-规则库/某文件.md",
   "exportedAt": "ISO8601",
   "evidence": { "export": { "localPath": "…", "sizeBytes": 1234 } } }
 
-{ "kind": "failure", "requestPath": "06-规则库/不存在.md",
+{ "kind": "failure", "requestPath": "06-规则库/不存在",
   "requestKind": "file", "nodeId": null, "error": "清单项在库内不存在" }
 ```
 
 - 目录条目展开出的 entry 保留原始 `requestPath`，并使用 `requestKind:"directory"`。
 - `localPath` 相对案例目录；绝对路径只在 header 的 `case_dir` 出现。
+- **`requestPath` 必须逐字等于库内节点名**（`by_path` 键 = 原样精确名，不折叠大小写/全半角）：
+  目录项以 `/` 结尾；**单文件项不要加 `.md` 后缀**——`.md` 只是导出后的本地文件名
+  （§3.3「adoc 规范名为 `<节点名>.md`」），写进 `requestPath` 会与 `by_path` 键不匹配而记 failure。
+  旧库（节点名自带 `.md`）留下的带后缀写法属历史残留，迁移到新库后必须去掉后缀。
 - 导出回执包含 `localPath` 且 `sizeBytes>0` 才算成功；证据按真实返回记录。
 
 ## 5. 收敛与摘要

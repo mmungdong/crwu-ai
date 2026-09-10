@@ -19,6 +19,8 @@ EXPECTED_REFERENCE_FILES = (
     "08-union-dispatch-rules.md",
     "09-review-risk-classification.md",
     "10-capability-gap-proposal.md",
+    "11-html-delivery-spec.md",
+    "12-leaf-common-contract.md",
     "99-maintenance.md",
 )
 
@@ -44,16 +46,17 @@ REQUIRED_ROUTER_TERMS = (
 
 REGISTRY_HEADER = ("axis", "label", "skill", "status", "load behavior")
 
+# Stable rows only: business-axis names are mid-migration to crwu-audit-biz-* and
+# are reported by the skill-maintainer mapping checker instead of being pinned here.
 EXPECTED_REGISTRY_ROWS = (
-    ("scope", "企业价值", "crwu-audit-scope-enterprise-value", "pending", "record gap"),
     ("asset", "房地产", "crwu-audit-asset-realestate", "available", "load"),
     ("asset", "设备", "crwu-audit-asset-equipment", "pending", "record gap"),
-    ("asset", "无形资产", "crwu-audit-asset-intangible", "pending", "record gap"),
-    ("business", "租赁", "crwu-audit-business-rent", "available", "load"),
-    ("business", "清算", "crwu-audit-business-liquidation", "pending", "record gap"),
 )
 
+DISPATCH_AXES = ("scope", "asset", "business", "method", "overlay", "public")
+
 LEGACY_REGISTRY_SKILL = "crwu-audit-realestate-rent"
+LEGACY_BUSINESS_PREFIX = "crwu-audit-business-"
 
 
 def _markdown_cells(line):
@@ -173,9 +176,8 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         scenario_body = rules_text[scenario_start : scenario_start + 1200]
         expected_skills = (
             "crwu-audit-asset-realestate",
-            "crwu-audit-business-liquidation",
-            "crwu-audit-business-disposal",
-            "crwu-audit-business-auction",
+            "crwu-audit-biz-judicial-liquidation-compensation",
+            "crwu-audit-biz-transaction-disposal",
         )
         missing = [skill for skill in expected_skills if skill not in scenario_body]
 
@@ -186,26 +188,41 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         )
 
     def test_axis_named_leaf_skills_replace_legacy_combined_skills(self):
-        required_leaf_files = (
-            REPO_ROOT / "skills/crwu-audit-asset-realestate/SKILL.md",
-            REPO_ROOT / "skills/crwu-audit-business-rent/SKILL.md",
-        )
+        asset_leaf = REPO_ROOT / "skills/crwu-audit-asset-realestate/SKILL.md"
         obsolete_skill_dirs = (
             REPO_ROOT / "skills/crwu-audit-realestate",
             REPO_ROOT / "skills/crwu-audit-realestate-rent",
         )
-        missing = [str(path.relative_to(REPO_ROOT)) for path in required_leaf_files if not path.is_file()]
         remaining = [str(path.relative_to(REPO_ROOT)) for path in obsolete_skill_dirs if path.exists()]
 
-        self.assertEqual([], missing, f"missing axis-named leaf skills: {missing}")
+        self.assertTrue(asset_leaf.is_file(), f"missing axis-named asset leaf: {asset_leaf}")
         self.assertEqual([], remaining, f"legacy combined skill directories remain: {remaining}")
+
+    def test_leaf_skill_directories_use_axis_prefixes_only(self):
+        approved = ("crwu-audit-asset-", "crwu-audit-biz-")
+        offenders = sorted(
+            child.name
+            for child in SKILLS_ROOT.iterdir()
+            if child.is_dir()
+            and child.name.startswith("crwu-audit-")
+            and not child.name.startswith(approved)
+            and child.name
+            not in {
+                "crwu-audit",
+                "crwu-audit-optimize",
+                "crwu-audit-skill-maintainer",
+                "crwu-audit-datacheck",
+            }
+        )
+
+        self.assertEqual([], offenders, f"crwu-audit leaf directories must use axis prefixes: {offenders}")
 
     def test_active_contracts_do_not_reference_deleted_combined_skill(self):
         active_paths = (
             SKILLS_ROOT / "README.md",
             AUDIT_SKILL_ROOT / "SKILL.md",
             SKILLS_ROOT / "crwu-audit-asset-realestate/SKILL.md",
-            SKILLS_ROOT / "crwu-audit-business-rent/SKILL.md",
+            SKILLS_ROOT / "crwu-audit-skill-maintainer/SKILL.md",
         )
         forbidden_skill = "crwu-audit-realestate-rent"
         violations = [
@@ -239,6 +256,15 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             registered_skills,
             f"legacy combined skill remains registered: {LEGACY_REGISTRY_SKILL}",
         )
+        axes = {row[0] for row in registry_rows}
+        absent = [axis for axis in DISPATCH_AXES if axis not in axes]
+        self.assertEqual([], absent, f"registry does not name every dispatch axis: {absent}")
+        # Registry<->reality hygiene (a retired-prefix row still marked `available`, or an
+        # available row whose skill directory does not exist) is owned by the skill
+        # maintainer mapping checker, which reports it with per-row evidence:
+        #   python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
+        #   -> LEGACY_BUSINESS_PREFIX / AVAILABLE_SKILL_DIRECTORY_MISSING / REGISTRY_LABEL_NOT_IN_CATALOG
+        # It is deliberately not duplicated here, so the in-flight migration has one owner.
 
 
 if __name__ == "__main__":

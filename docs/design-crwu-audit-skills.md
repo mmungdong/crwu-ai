@@ -1,10 +1,15 @@
-# crwu-audit 技能族设计（分层可插拔路由 v0.2）
+# crwu-audit 技能族设计（分轴并集路由 v0.4）
 
-| 版本 | v0.3（画像层契约：references 运行材料） | 日期 | 2026-09-07 | 状态 | 已实现：总路由 crwu-audit（references 四件）+ realestate + realestate-rent + datacheck；P0/P1/P2 按 8,486 条基线调整 |
+| 版本 | v0.4（分轴并集路由；§1–§4/§6 的 L0/L1/L2 分层模型为历史记录，当前模型见 §7.1） | 日期 | 2026-09-10 | 状态 | 已实现：总路由 crwu-audit（references 运行材料）+ asset-realestate + datacheck；`crwu-audit-realestate-rent` 已于 2026-09-10 下架（资产×业务组合模型废止） |
 | --- | --- | --- | --- | --- |
-| 关联知识库 | 钉钉知识库（crwu-dws 查询解析的默认库；规则/清单正文=实时下载事实源，本地静态根仅维护/离线归档（不冒充实时）；无发布/试点门禁（口径 2026-09-08）——装配/路由命中文件按库内层级路径经 crwu-dws 实时下载后**下载即审**；实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md） | | | |
+| 关联知识库 | 钉钉知识库（crwu-dws 查询解析的默认库；规则/清单正文=唯一来源，按库内层级路径经 crwu-dws 实时下载后**下载即审**；本仓不持有本地知识库根——`CRWU_KB_ROOT` 与 `KB/<相对路径>` 引用已废止；无发布/试点门禁（口径 2026-09-08）；实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md） | | | |
 
-## 1. 架构：三层可插拔
+> **当前模型 = §7.1 资产/业务一级目录分轴模型**。下述 §1–§4、§6 保留为 L0/L1/L2 分层可插拔模型的历史记录，
+> 已被分轴并集取代：`crwu-audit-realestate-rent`（资产×业务组合）已下架，`crwu-audit-realestate` 更名为
+> `crwu-audit-asset-realestate` 并映射 `02-资产类型/房地产/` 一级根。新增能力一律按 §7.1 与
+> `skills/AGENTS.md` 的 `crwu-audit-asset-*` / `crwu-audit-biz-*` 约束执行。
+
+## 1. 架构：三层可插拔（历史）
 
 ```
 crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册表，只分发不判断）
@@ -54,8 +59,8 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 | 层级 | 技能（skill 名） | 画像命中判据 | 知识库支撑 | 状态 |
 | --- | --- | --- | --- | --- |
 | L0 | crwu-audit | 任何待审材料 | —（分发/汇总/引用文件清单汇总） | ✅ |
-| L1 | crwu-audit-realestate | 评估报告 × 不动产（房产/商铺/办公/公寓/厂房等，通用不动产逻辑） | 不动产 36 + 评估方法 25 + 报告准则通用披露 | ✅ |
-| L2 | crwu-audit-realestate-rent | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值，市场法租金比较/收益法租约/成本法） | + CHK-MKT-001~014 / CHK-CST-001~012 + 案例 B | ✅ |
+| L1 | ~~crwu-audit-realestate~~ → `crwu-audit-asset-realestate` | 评估报告 × 不动产（房产/商铺/办公/公寓/厂房等，通用不动产逻辑） | `02-资产类型/房地产/` 一级根（递归全量） | ✅（2026-09-10 更名并改一级根装配） |
+| L2 | ~~crwu-audit-realestate-rent~~ | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值） | 组合模型废止；租赁类业务要求改由业务轴 Skill 承载 | ❌ 2026-09-10 下架 |
 | L2 能力 | crwu-audit-datacheck | 跨方向 · 材料含测算/明细/汇总表（任何对象） | M-数据校对口径：C1–C6 差异清单（**仅可见区**；H0：人工隐藏区 sheet/行/列/折叠组 强制跳过、禁读禁报） | ✅ v0.1 |
 | L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值（股权/产权转让、股东变动、收购并购、增资主线） | 企业价值 50 | 🅿️ P1 |
 | L1 | crwu-audit-intangible | 评估报告 × 无形资产 | 知识产权 42；无形资产总纲待精编 | 🅿️ |
@@ -88,15 +93,20 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
    降级通用兜底或如实说明（§1 语义 3）。
 4. **执行**：调用命中技能的 `SKILL.md` 全流程；router 自身不产出具体审核判断。
 5. **汇总输出**：意见按分区去重 + 路由路径 + 《适用规则集快照》+ 三段式依据引用 + 答复/流转
-   （输出/防幻觉契约文件（库内层级路径，经 crwu-dws 实时下载后执行）：`00-总纲/执行契约/02-输出Schema与审核意见单.md`、`03-防幻觉协议执行细则.md`，
-   禁止放宽）；统计台账文件=`00-总纲/执行契约/04-审核统计与台账规范.md`（同上实时下载）。
+   （防幻觉契约文件（库内层级路径，经 crwu-dws 实时下载后执行）：`00-总纲/执行契约/03-防幻觉协议执行细则.md`，
+   禁止放宽）；统计台账文件=`00-总纲/执行契约/04-审核统计与台账规范.md`（同上实时下载）；
+   **交付/送达口径 = 技能内 `crwu-audit/references/11-html-delivery-spec.md`（v1.0 送达规范，不经知识库下载）**。
 
-> **两阶段输出纪律（2026-09-09，契约 02 §5 v0.4）**：AI 审核是"先独立审、后对照"两阶段流程——
+> **两阶段输出纪律（2026-09-09，送达规范 v1.0）**：AI 审核是"先独立审、后对照"两阶段流程——
 > 阶段一：AI《意见列表》必须在读取任何复核记录（一/二/三级/四级意见、质控、底稿/在线意见、答复文件）
 > 之前独立产出并定稿（复核记录不下载/不读取/不参考，叶子与数据链路不得接触）；阶段二（router 步骤
-> 11/12）：复核对照分类 A/B/C + 双向综合对比三条带（AI∩复核 相互印证／AI 新增／复核独有＝AI 未命中
-> ＝漏检候选）+ AI 命中率；复核独有先查快照/逐条裁定表归因，确属漏检 → 独立补审后再对照，或登记
-> crwu-audit-optimize，禁止拿复核记录抄补 AI 意见。
+> 12/13/14）：复核对照分类 A/B/C + 双向综合对比三条带（AI∩复核 相互印证／AI 新增／复核独有＝AI 未命中
+> ＝漏检候选）+ 隔离补审；复核独有先查快照/逐条裁定表归因，禁止拿复核记录抄补 AI 意见。交付按
+> `references/11-html-delivery-spec.md`：以 **AuditResult JSON 为单一事实源**，汇总适用规则集快照、
+> 逐条裁定、复核对照与综合对比、《本次审核记录清单》（AI 检查项／知识库业务·资产必检项／评估数据核查／
+> 监管覆盖核查／风险覆盖核查／未检查项逐条留痕并带文件内证据，所有对比两端给依据），最终**每个项目只
+> 交付一个自包含单文件 HTML** `审核意见.<项目ID>.html`（可离线打开、A4 可打印、含折叠的专业审核轨迹，
+> renderer 只呈现不改写）。
 
 6. **引用口径（无发布/试点门禁，口径 2026-09-08）**：知识库文档即权威——命中技能依赖的
    RULE/清单按库内层级路径经 crwu-dws **实时下载**后**下载即审**，无“人工待发布/试点”状态判定
@@ -106,7 +116,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 
 | 优先 | 能力 | 依据 |
 | --- | --- | --- |
-| P0（本期） | realestate 大方向 + realestate-rent | 占比最大对象子流（房建/不动产，风险 C 级单格最大）；规则/清单/校准样本全就绪；先于细分验证路由 |
+| P0（本期） | `crwu-audit-asset-realestate`（原 realestate 大方向） | 占比最大对象子流（房建/不动产，风险 C 级单格最大）；规则/清单/校准样本全就绪；组合细分（realestate-rent）已由分轴模型取代 |
 | P1 | enterprise-value / intangible / advisory | 规则已精编或部分就绪；先补大方向技能与所需清单 |
 | P2 | equipment / mining / realestate-asset / 法律专项 | 先补对象层官方原文 + 精编 / 对应法规精编 |
 
@@ -118,15 +128,31 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
   用户确认后按 99 流程执行并跑 `tools/kb` 校验回归（validate error=0 / 装配两跑一致 / 试点回归不劣化）；
 - 变更/新增后按 crwu-ai `AGENTS.md` 在 `docs/CHANGELOG.md` 追加纪要。
 
+### 7.1 资产/业务一级目录维护模型（2026-09-10）
+
+- 新架构中的资产 Skill 使用 `crwu-audit-asset-*`，每个 Skill 映射 `02-资产类型/` 下一个一级资产目录；业务 Skill 使用 `crwu-audit-biz-*`，每个 Skill 映射 `01-业务路线/` 下一个一级业务目录。
+- 命中一级 Skill 后，`crwu-dws` 按目录请求递归下载该一级根内全部支持正文。资产目录中的细分对象与业务目录中的子业务只作为父 Skill 内部二级选择，不创建独立 Skill 或资产×业务组合 Skill。
+- 资产父 Skill 始终执行共性参考，并叠加命中细分对象的评估审核条目；业务父 Skill根据评估目的等原始证据识别子业务，并执行其业务通用审核要点及关联文件。
+- `crwu-audit-skill-maintainer` 负责把目录树、classification、registry 和真实 Skill 做只读盘点，并在确认后执行创建、修复和重映射；`crwu-audit-optimize` 仍负责漏检/误检的根因诊断。
+- 旧 `crwu-audit-business-*` 和组合 Skill 属迁移对象。迁移状态必须如实登记，不得在真实目录与一级根合同完成前标为 available。
+
+### 7.2 业务轴落地与叶子共同约束（2026-09-10 二次落地）
+
+- **业务轴改为一级业务目录驱动**：`04-business-classification.md` v2.0 的 `business_types[]` 只取 8 个一级业务标签（资产经营 / 交易与处置 / 财务报告 / 融资与债务 / 投资与资本运作 / 税务与历史确认 / 司法清算与补偿 / 咨询复核与其他）；历史行为词（租赁、清算、破产、拍卖、抵押质押、减值测试、计税…）降级为**命中信号**，不再作为标签、不再各占 registry 行。
+- **8 个业务叶子已创建**：`crwu-audit-biz-*`，各自 `SKILL.md` + `00-applicability.md` + `01-kb-assembly.md` + `02-review-focus.md`，一级根 = `01-业务路线/0N-<一级业务>/`（`directory`/`recursive`/`required`），26 个子业务作为父级二级索引。
+- **叶子共同约束 `references/12-leaf-common-contract.md`（新增）**：轴边界、输入、一级根装配、二级选择返回、执行顺序（一级共用层→命中二级条目）、必检项/历史问题状态字段、来源优先级、证据出处、capability gap 全部只在该文件写一份；叶子 `SKILL.md` 以相对路径引用，不复制共同规则。
+- **知识与能力状态（本次实时核对，抓取 2026-09-10T14:06+08:00）**：8 个一级业务、26 个子业务，24 份 `01-业务通用审核要点` 均有内容，但**必检项要点全部为「待补」**；`01-业务经营/共同审核点` 为 `TODO` 占位；`租赁与租金评估` 的 `02-方法适用索引`/`03-监管适用索引` 为空文档；子业务 `股权比例变动`、`其他目的` 目录内无审核文件。以上均登记为**知识库内容缺口**，不自行补造；技能仍按结构门禁标 `available`，缺口在对应 `02-review-focus.md` 与运行 gap 中如实声明。
+- 映射检查器对本次实时目录的结论：error 30 → **0**、warning 11 → **2**（剩余 2 条即上述缺审核文件的子业务）。
+
 ## 8. 本期交付
 
 - [x] 本文档 v0.2（分层路由模型）
 - [x] `skills/crwu-audit/SKILL.md`（L0 总路由：全量路由注册表 + 分层分发/降级/汇总/引用文件清单汇总）
-- [x] `skills/crwu-audit-realestate/SKILL.md`（L1 房地产大方向通用审核逻辑）
-- [x] `skills/crwu-audit-realestate-rent/SKILL.md`（L2 商铺租金/经营性物业市值专项）
-- [x] `skills/crwu-audit-datacheck/SKILL.md`（L2 跨方向数据/表格勾稽，rent/realestate 表格必做步骤已挂接）
+- [x] `skills/crwu-audit-asset-realestate/SKILL.md`（一级资产 Skill：`02-资产类型/房地产/` 一级根；2026-09-10 由 realestate 更名而来）
+- [x] ~~`skills/crwu-audit-realestate-rent/SKILL.md`~~（L2 商铺租金/经营性物业市值专项）——**2026-09-10 下架**：资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载
+- [x] `skills/crwu-audit-datacheck/SKILL.md`（跨轴数据/表格勾稽能力）
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
-- [x] `tools/kb/kb_tool.py`（2026-09-07）：只读索引 kb-index.jsonl + validate + assemble（装配清单=命中/排除，可复现）
+- [x] `tools/kb/kb_tool.py`：**2026-09-10 收窄**为 `validate --skill-root`（引用卫生 + 实时协议 lint）；随本地知识库根模型废止，删除 index/assemble/query/resolve/release/extract/selftest（装配清单改由叶子 `01-kb-assembly.md` 声明、crwu-dws 实时下载）
 - [x] `skills/crwu-audit-optimize/`（2026-09-07）：族维护/优化入口（反馈→单子画像定位→分桶→拟改文件方案→用户确认→99 流程执行→kb_tool 校验回归；不经 crwu-audit 路由、不产审核判断）
 - [ ] references 试点回测：跨形态 8~10 条 + BG8169/300673 回归
 - [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/equipment/advisory/财务报告 等大方向

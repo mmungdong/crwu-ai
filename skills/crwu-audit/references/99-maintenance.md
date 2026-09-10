@@ -18,9 +18,10 @@
 | 稳定并集、pending/冲突执行边界与结果来源 | `08-union-dispatch-rules.md` |
 | A/B/C 机构审核风险分类 | `09-review-risk-classification.md` |
 | 能力 gap 与待建提案 | `10-capability-gap-proposal.md` |
+| 送达与交付层（AuditResult/单文件 HTML、双证据链、两阶段门禁、验收清单） | `11-html-delivery-spec.md` |
 | 总体 workflow、加载指针与输出步骤 | `SKILL.md` |
 
-规则正文和检查点不属于本技能族的 owner；只允许按编号和知识库层级路径引用。
+规则正文和检查点不属于本技能族的 owner；只允许按编号和知识库层级路径引用。**例外**：送达与交付层正文（CRWU 审核意见 HTML 送达规范 v1.0）为本技能内正式规范，owner 是 `11-html-delivery-spec.md`，不经知识库下载。
 
 ## 维护流程
 
