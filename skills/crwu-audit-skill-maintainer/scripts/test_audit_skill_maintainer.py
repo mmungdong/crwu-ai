@@ -10,7 +10,7 @@ import textwrap
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]  # skills/<skill>/scripts/<file>
 CHECKER = (
     REPO_ROOT
     / "skills"
@@ -464,7 +464,7 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
             )
 
     def test_maintainer_skill_passes_live_source_protocol_lint(self):
-        module_path = REPO_ROOT / "tools/kb/kb_tool.py"
+        module_path = REPO_ROOT / "skills/crwu-audit-skill-maintainer/scripts/kb_tool.py"
         spec = importlib.util.spec_from_file_location("kb_tool_for_test", module_path)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)

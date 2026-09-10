@@ -3,7 +3,7 @@ import re
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]  # skills/<skill>/scripts/<file>
 SKILLS_ROOT = REPO_ROOT / "skills"
 AUDIT_SKILL_ROOT = SKILLS_ROOT / "crwu-audit"
 

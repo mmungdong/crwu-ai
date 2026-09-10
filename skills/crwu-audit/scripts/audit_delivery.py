@@ -9,8 +9,8 @@
 - 渲染输出自包含单文件 HTML（内嵌 CSS、无外链资源、A4 可打印、专业审核轨迹默认折叠）。
 
 用法：
-    python3 tools/audit/audit_delivery.py validate <audit-result.json> [--rendered]
-    python3 tools/audit/audit_delivery.py render   <audit-result.json> --out <opinion.html>
+    python3 skills/crwu-audit/scripts/audit_delivery.py validate <audit-result.json> [--rendered]
+    python3 skills/crwu-audit/scripts/audit_delivery.py render   <audit-result.json> --out <opinion.html>
 退出码：0 成功；1 校验失败（错误打印到 stderr）。
 """
 

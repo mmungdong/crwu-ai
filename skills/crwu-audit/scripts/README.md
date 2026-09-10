@@ -14,19 +14,19 @@
 
 ```bash
 # 阶段一冻结指纹（写入 AuditResult.phaseControl.phase1Digest）
-python3 tools/audit/audit_delivery.py digest <冻结快照.json>
+python3 skills/crwu-audit/scripts/audit_delivery.py digest <冻结快照.json>
 
 # 交付校验（渲染前）
-python3 tools/audit/audit_delivery.py validate tools/audit/examples/audit-result.sample.json
+python3 skills/crwu-audit/scripts/audit_delivery.py validate skills/crwu-audit/scripts/examples/audit-result.sample.json
 
 # 渲染自包含单文件 HTML（送达员工的唯一交付件；内置渲染后自检）
-python3 tools/audit/audit_delivery.py render tools/audit/examples/audit-result.sample.json --out 审核意见.PRJ-2026-0001.html
+python3 skills/crwu-audit/scripts/audit_delivery.py render skills/crwu-audit/scripts/examples/audit-result.sample.json --out 审核意见.PRJ-2026-0001.html
 
 # 校验渲染后状态（要求 fileTrace 摘要已回填）
-python3 tools/audit/audit_delivery.py validate <rendered.json> --rendered
+python3 skills/crwu-audit/scripts/audit_delivery.py validate <rendered.json> --rendered
 
 # 契约测试
-python3 tools/audit/test_audit_delivery.py
+python3 skills/crwu-audit/scripts/test_audit_delivery.py
 ```
 
 退出码：`0` 通过；`1` 校验失败（错误逐条打印到 stderr，且**拒绝渲染**）。

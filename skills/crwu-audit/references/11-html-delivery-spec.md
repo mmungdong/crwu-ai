@@ -705,7 +705,7 @@ AuditResult 是单一事实源。字段名推荐统一使用英文 camelCase，�
 | 文本属性 | 本规范为项目内部正式规范（非知识库规则正文），随技能版本维护：修改须同批更新 `SKILL.md` 指针、`99-maintenance.md` owner 映射、`docs/CHANGELOG.md` 与相关测试。 |
 | 与其他契约的关系 | 交付/送达口径以本规范为准；防幻觉与统计台账口径仍按 `00-总纲/执行契约/02-防幻觉协议执行细则`、`00-总纲/执行契约/03-审核统计与台账规范` 经本次 `crwu-dws` 实时下载后执行。原始 v0.4 内部逻辑（逐条裁定、复核对照、记录清单）由本规范 §6/§7/§8/§11 承接；其字段契约以实现层 JSON Schema 为准。 |
 | 运行时加载时机 | 审核运行不预读；阶段一定稿冻结后、阶段二对照与交付（router 步骤 14）时读取；渲染层按 §13.3 确定性渲染。 |
-| 参考实现（已落地） | 本规范的机器可校验 Schema 与参考实现位于源仓 `tools/audit/`：`audit_result.schema.json`（§9 字段契约）、`audit_delivery.py`（`validate` 校验 §9.4/§11.1/§12.2 + `render` 确定性渲染 §10）、`test_audit_delivery.py`（§13.4 契约测试 21 项）、`examples/audit-result.sample.json`（示意样例）、`README.md`（用法与维护规则）。渲染器版本记于 `fileTrace.rendererVersion`。 |
+| 参考实现（已落地） | 本规范的机器可校验 Schema 与参考实现位于源仓 `skills/crwu-audit/scripts/`：`audit_result.schema.json`（§9 字段契约）、`audit_delivery.py`（`validate` 校验 §9.4/§11.1/§12.2 + `render` 确定性渲染 §10）、`test_audit_delivery.py`（§13.4 契约测试 21 项）、`examples/audit-result.sample.json`（示意样例）、`README.md`（用法与维护规则）。渲染器版本记于 `fileTrace.rendererVersion`。 |
 | 叶子职责 | 叶子只输出结构化 findings／证据／裁定／检查记录（§13.1），不生成页面、不定义最终字段、不写最终员工报告。 |
 
 ### 14.1 编排层调用映射（脚本接入）

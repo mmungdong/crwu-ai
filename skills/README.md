@@ -61,6 +61,6 @@
   债权-金融不良 → P2；复核报告 → 待定；mining → P2。
 - 数据基线：氚云「报告审核」8,486 条（2026-09-07 快照），词表体量列与覆盖层判定即源于此；
   复跑脚本 `pull_全量画像.py`（基线/统计由部署方维护，技能不持有）。
-- **知识库推理引用协议（实时版，2026-09-08）**：crwu-audit 族技能引用知识库只写 RULE/CHK 编号 + **库内层级路径**（如 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核`），不写知识库名称、本地根路径或节点 nodeId。**单文件寻址键不带 `.md`**（`.md` 只是导出到本地时的文件名；带后缀会与 `by_path` 键不匹配而在 M2 记 failure），目录项以 `/` 结尾。nodeId 每次由 crwu-dws 目录树动态解析，正文按**本次审核清单**从钉钉实时下载；清单支持单文件与目录路径，文件零缓存、跨审核重下。设计/决策见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）与 `docs/design-crwu-dws.md`。机器校验：`tools/kb/kb_tool.py validate --skill-root <repo>/skills`；对单个 audit 根加 `--forbid-literal <库名>` 禁知识库名字面。**本 README 不随技能安装到 agent（仅源仓维护者视角）。**
+- **知识库推理引用协议（实时版，2026-09-08）**：crwu-audit 族技能引用知识库只写 RULE/CHK 编号 + **库内层级路径**（如 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核`），不写知识库名称、本地根路径或节点 nodeId。**单文件寻址键不带 `.md`**（`.md` 只是导出到本地时的文件名；带后缀会与 `by_path` 键不匹配而在 M2 记 failure），目录项以 `/` 结尾。nodeId 每次由 crwu-dws 目录树动态解析，正文按**本次审核清单**从钉钉实时下载；清单支持单文件与目录路径，文件零缓存、跨审核重下。设计/决策见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）与 `docs/design-crwu-dws.md`。机器校验：`skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <repo>/skills`；对单个 audit 根加 `--forbid-literal <库名>` 禁知识库名字面。**本 README 不随技能安装到 agent（仅源仓维护者视角）。**
 - 2026-09-07：`references/03-业务风险分类判定.md` —— 机构 A/B/C 业务分类作为**路由首判**（严谨度参考、首页标注；
   agent 一律全面审核、不裁剪检查点，最终通过由人工复核；与氚云风险等级字段对照校验）。

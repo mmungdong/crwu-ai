@@ -3,7 +3,7 @@ import glob
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]  # skills/<skill>/scripts/<file>
 
 # Active contracts that must never re-introduce a local knowledge-base root,
 # a downloaded-body mirror, or a "publish gate" style local fallback.
@@ -110,7 +110,7 @@ class DwsSourceContractTest(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                str(REPO_ROOT / "tools/kb/kb_tool.py"),
+                str(REPO_ROOT / "skills/crwu-audit-skill-maintainer/scripts/kb_tool.py"),
                 "validate",
                 "--skill-root",
                 str(REPO_ROOT / "skills"),
