@@ -247,6 +247,64 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         else:
             self.assertTrue(rec.get("note"), "读不到必须写明原因，不得静默")
 
+    # ---- 4c 隐藏区引用审计（只坐标，不读内容）-------------------------------
+    def test_hidden_reference_audit_flags_visible_results_depending_on_hidden_inputs(self):
+        """可见公式引用隐藏列/行/隐藏表 → 标记"计算链不可复核"；且不得读隐藏内容。
+
+        对应真实案件：土地表隐藏列 N（账面价值）被 32 处可见公式引用、底稿隐藏评分列
+        被 24 处引用 —— 这类隐藏列**是计算输入**，一刀切剔除会让结果不可复核。
+        """
+        import openpyxl
+        d = self.src / "定稿"
+        d.mkdir()
+        f = d / "引用审计.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "土地表"
+        ws["P1"] = "=U25*2"                  # 相对引用隐藏列 U
+        ws["P2"] = "=SUM($U$25:$U$30)"       # 绝对引用 + 范围（曾漏匹配 $U$25）
+        ws["P3"] = "=A1*2"                   # 仅引用可见格 → 不得报
+        ws["P4"] = "=LOG10(A1)"              # 函数名不得被误判为单元格引用
+        ws["P5"] = "='隐藏表'!B2"            # 引用隐藏工作表
+        ws["U25"] = 999999                   # 隐藏列的内容（哨兵）
+        ws.column_dimensions["U"].hidden = True
+        hid = wb.create_sheet("隐藏表")
+        hid["B2"] = 888888
+        hid.sheet_state = "hidden"
+        wb.save(f)
+
+        self._run()
+
+        rec = self._inventory()[0]["workbook"]
+        kinds = sorted({h["kind"] for h in rec["hiddenRefs"]})
+        self.assertEqual(["引用隐藏列", "引用隐藏工作表"], kinds, rec["hiddenRefs"])
+        cells = {h["cell"] for h in rec["hiddenRefs"]}
+        self.assertEqual({"P1", "P2", "P5"}, cells, "只报真正引用隐藏区的可见格")
+        self.assertEqual(["土地表!P1", "土地表!P2", "土地表!P5"], rec["calcChainNotReproducible"])
+        blob = (self.case / "材料盘点.json").read_text(encoding="utf-8")
+        for sentinel in ("999999", "888888"):
+            self.assertNotIn(sentinel, blob, "引用审计只出坐标，绝不能带出隐藏区内容")
+
+    def test_hidden_reference_audit_is_quiet_when_hidden_columns_are_unreferenced(self):
+        """隐藏列仅被隐藏区内部自引用（可见区无引用）→ 不产生"不可复核"结论。"""
+        import openpyxl
+        d = self.src / "定稿"
+        d.mkdir()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "汇总表"
+        ws["A1"] = 1
+        ws["C1"] = "=C2*2"                   # 隐藏列内部自引用（隐藏格，不得读取）
+        ws["C2"] = 5
+        ws.column_dimensions["C"].hidden = True
+        wb.save(d / "自引用.xlsx")
+
+        self._run()
+
+        rec = self._inventory()[0]["workbook"]
+        self.assertEqual([], rec["hiddenRefs"])
+        self.assertEqual([], rec["calcChainNotReproducible"])
+
     # ---- 5 格式语义 ------------------------------------------------------
     def test_number_format_is_preserved(self):
         """重建须保留 number_format，避免数值/日期语义被改变。"""

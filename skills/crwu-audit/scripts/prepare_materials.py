@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import tempfile
 
@@ -213,6 +214,76 @@ def _hidden_metadata(wb_value, wb_formula) -> dict:
     return hidden
 
 
+# ---- 隐藏区引用审计（H0 内合法动作：只读「可见区公式的坐标」，绝不读隐藏区内容） ----
+_CELL_RE = r"\$?[A-Z]{1,3}\$?\d{1,7}"
+_REF_RE = re.compile(
+    r"(?:(?:'(?P<q>[^']+)'|(?P<s>[A-Za-z\u4e00-\u9fff_][^!:'\[\]]*))!)?"
+    r"(?P<a>" + _CELL_RE + r")(?::(?P<b>" + _CELL_RE + r"))?(?!\s*\()"
+)
+
+
+def _coord(ref: str):
+    from openpyxl.utils import column_index_from_string
+    ref = ref.replace("$", "")
+    i = 0
+    while i < len(ref) and not ref[i].isdigit():
+        i += 1
+    return int(ref[i:]), column_index_from_string(ref[:i])
+
+
+def _span(a: str, b: str):
+    """范围涉及的 (行集合, 列集合)；无 b 时即单格。"""
+    r1, c1 = _coord(a)
+    r2, c2 = _coord(b) if b else (r1, c1)
+    return set(range(min(r1, r2), max(r1, r2) + 1)), set(range(min(c1, c2), max(c1, c2) + 1))
+
+
+def audit_hidden_references(wbf, hidden: dict):
+    """逐「可见格公式」解析其引用坐标，判定是否指向隐藏行/列/隐藏工作表。
+
+    只读可见格的公式串；隐藏行/列/隐藏 sheet 的单元格**一律不读**（H0）。
+    用途：判定"可见结果是否依赖不可见的计算输入" → 计算链不可复核。
+    """
+    from openpyxl.utils import column_index_from_string, get_column_letter
+    hidden_sheets = set(hidden.get("hiddenSheets", []))
+    hid_rows = {s: set(v) for s, v in hidden.get("hiddenRows", {}).items()}
+    # 忽略清单里列用字母（给人看），比对时必须换算成列序号
+    hid_cols = {s: {column_index_from_string(c) for c in v}
+                for s, v in hidden.get("hiddenCols", {}).items()}
+    hits, seen = [], set()
+    for ws in wbf.worksheets:
+        if ws.sheet_state != "visible":
+            continue                      # H0：隐藏 sheet 整体不读
+        rows_h = hid_rows.get(ws.title, set())
+        cols_h = hid_cols.get(ws.title, set())          # 列序号集合
+        for row in ws.iter_rows():
+            for c in row:
+                if c.row in rows_h or c.column in cols_h:
+                    continue              # H0：隐藏格不读
+                f = c.value
+                if not isinstance(f, str) or not f.startswith("="):
+                    continue
+                for m in _REF_RE.finditer(f):
+                    sheet = (m.group("q") or m.group("s") or ws.title).strip()
+                    kind = None
+                    if sheet in hidden_sheets:
+                        kind = "引用隐藏工作表"
+                    elif sheet == ws.title:
+                        rows, cols = _span(m.group("a"), m.group("b"))
+                        if rows & rows_h:
+                            kind = "引用隐藏行"
+                        elif cols & cols_h:
+                            kind = "引用隐藏列"
+                    if kind:
+                        key = (ws.title, c.coordinate, m.group(0))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        hits.append({"sheet": ws.title, "cell": c.coordinate,
+                                     "kind": kind, "ref": m.group(0)})
+    return hits
+
+
 def xlsx_visible(p: str, outdir: str, out_name: str):
     """重建法：新建簿，只复制「可见 sheet × 可见行 × 可见列」的值（缓存值优先）与格式。
 
@@ -266,7 +337,8 @@ def xlsx_visible(p: str, outdir: str, out_name: str):
 
     chk = openpyxl.load_workbook(out)
     resid = sum(1 for ws in chk.worksheets if ws.sheet_state != "visible")
-    return out, hidden, stats, resid, unavailable
+    refs = audit_hidden_references(srcf, hidden)
+    return out, hidden, stats, resid, unavailable, refs
 
 
 def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str) -> dict:
@@ -326,12 +398,17 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str) -> dict:
                     out_name = f"{stem}__{os.path.basename(os.path.dirname(p))}{se}"
                     rec["nameCollision"] = True
                 seen_xlsx.add(out_name)
-                out, hidden, stats, resid, unavailable = xlsx_visible(p, work_dir, out_name)
+                out, hidden, stats, resid, unavailable, refs = xlsx_visible(p, work_dir, out_name)
                 rec["readable"] = True
                 rec["workbook"] = {"workVersion": os.path.relpath(out, case),
                                    "sheets": stats, "hiddenResidual": resid,
                                    "hiddenMeta": hidden,
-                                   "valueUnavailable": unavailable}
+                                   "valueUnavailable": unavailable,
+                                   "hiddenRefs": refs[:50],
+                                   "hiddenRefsCount": len(refs),
+                                   "calcChainNotReproducible": sorted(
+                                       {f"{h['sheet']}!{h['cell']}" for h in refs}),
+                                   }
                 if resid:
                     rec["note"] = f"隐藏区残留 {resid}：需按重建法重做，仍残留则挂起"
                 with open(os.path.join(txt_dir, os.path.basename(p) + ".sheets.json"), "w",
