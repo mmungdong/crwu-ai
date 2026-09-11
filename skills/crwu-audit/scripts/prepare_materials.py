@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -48,6 +49,161 @@ def missing_deps() -> list:
     """缺哪些可选依赖（缺了会让对应格式读不到，必须显式告知，不得静默）。"""
     import importlib.util as iu
     return [f"{mod}({ext})" for mod, ext in OPTIONAL_DEPS.items() if iu.find_spec(mod) is None]
+
+
+# ---- 压缩包处理（下载后必须先解压再审核；解压产物落派生目录，绝不写入源材料目录） ----
+ARCHIVE_EXTS = (".zip", ".tar", ".tgz", ".tbz2", ".txz", ".tar.gz", ".tar.bz2", ".tar.xz",
+                ".rar", ".7z")
+# 阶段一隔离门禁：归档内含复核记录类文件时**不解压该条目**（隔离优先于解压）
+REVIEW_NAME_HINTS = ("复核", "质控", "外审", "答复", "审核意见", "复核意见", "底稿意见")
+MAX_ENTRIES = 2000
+MAX_TOTAL_BYTES = 500 * 1024 * 1024
+MAX_NESTED_DEPTH = 2
+
+
+def is_archive(name: str) -> bool:
+    low = name.lower()
+    return any(low.endswith(ext) for ext in ARCHIVE_EXTS)
+
+
+def _safe_join(dest: str, member: str):
+    """拒绝绝对路径与 .. 越界（zip-slip）；返回安全绝对路径或 None。"""
+    pure = member.replace("\\", "/")
+    if pure.startswith("/") or re.match(r"^[A-Za-z]:", pure):
+        return None
+    parts = [seg for seg in pure.split("/") if seg not in ("", ".")]
+    if any(seg == ".." for seg in parts):
+        return None
+    if not parts:
+        return None
+    target = os.path.abspath(os.path.join(dest, *parts))
+    if not target.startswith(os.path.abspath(dest) + os.sep):
+        return None
+    return target
+
+
+def _decode_zip_name(info) -> str:
+    """zip 内中文名常为 GBK 且无 UTF-8 标志位 → 默认 cp437 会成乱码，需重解码。"""
+    name = info.filename
+    if info.flag_bits & 0x800:          # 已声明 UTF-8
+        return name
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        return name
+    for enc in ("gbk", "utf-8"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return name
+
+
+def extract_archive(path: str, dest_root: str, depth: int = 0):
+    """解压单个归档；返回 (解压目录, 记录 dict)。不合规条目跳过并如实记账，不静默。"""
+    name = os.path.basename(path)
+    stem = name
+    for ext in sorted(ARCHIVE_EXTS, key=len, reverse=True):
+        if stem.lower().endswith(ext):
+            stem = stem[: -len(ext)]
+            break
+    dest = os.path.join(dest_root, stem)
+    rec = {"archive": path, "destDir": dest, "entries": 0, "extracted": [],
+           "skippedIsolation": [], "failures": [], "capabilityGaps": []}
+    os.makedirs(dest, exist_ok=True)
+    ext = name.lower()
+    try:
+        if ext.endswith(".zip"):
+            import zipfile
+            with zipfile.ZipFile(path) as z:
+                infos = z.infolist()
+                rec["entries"] = len(infos)
+                if len(infos) > MAX_ENTRIES:
+                    rec["capabilityGaps"].append(f"条目数 {len(infos)} 超上限 {MAX_ENTRIES}，未解压")
+                    return dest, rec
+                total = sum(i.file_size for i in infos)
+                if total > MAX_TOTAL_BYTES:
+                    rec["capabilityGaps"].append(f"解压后 {total/1e6:.0f}MB 超上限，未解压")
+                    return dest, rec
+                for info in infos:
+                    member = _decode_zip_name(info)
+                    if info.is_dir():
+                        continue
+                    if any(h in member for h in REVIEW_NAME_HINTS):
+                        rec["skippedIsolation"].append(member)
+                        continue
+                    if (info.external_attr >> 16) & 0o170000 == 0o120000:   # 符号链接
+                        rec["failures"].append(f"{member}: 符号链接，已跳过")
+                        continue
+                    target = _safe_join(dest, member)
+                    if target is None:
+                        rec["failures"].append(f"{member}: 绝对路径或越界（zip-slip），已跳过")
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with z.open(info) as src, open(target, "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    rec["extracted"].append(member)
+        elif ext.endswith((".tar", ".tgz", ".tbz2", ".txz", ".tar.gz", ".tar.bz2", ".tar.xz")):
+            import tarfile
+            mode = "r:gz" if ext.endswith((".tgz", ".tar.gz")) else (
+                "r:bz2" if ext.endswith((".tbz2", ".tar.bz2")) else (
+                    "r:xz" if ext.endswith((".txz", ".tar.xz")) else "r:"))
+            with tarfile.open(path, mode) as tar:
+                members = [m for m in tar.getmembers() if m.isfile() or m.issym() or m.islnk()]
+                rec["entries"] = len(members)
+                if len(members) > MAX_ENTRIES:
+                    rec["capabilityGaps"].append(f"条目数超上限，未解压")
+                    return dest, rec
+                for m in members:
+                    member = m.name
+                    if any(h in member for h in REVIEW_NAME_HINTS):
+                        rec["skippedIsolation"].append(member)
+                        continue
+                    if m.issym() or m.islnk():
+                        rec["failures"].append(f"{member}: 链接条目，已跳过")
+                        continue
+                    target = _safe_join(dest, member)
+                    if target is None:
+                        rec["failures"].append(f"{member}: 绝对路径或越界，已跳过")
+                        continue
+                    if m.size > MAX_TOTAL_BYTES:
+                        rec["failures"].append(f"{member}: 单文件过大，已跳过")
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    src = tar.extractfile(m)
+                    if src is None:
+                        rec["failures"].append(f"{member}: 无法读取")
+                        continue
+                    with src, open(target, "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    rec["extracted"].append(member)
+        else:
+            tool = shutil.which("7z") or shutil.which("7zz") or shutil.which("unar")
+            if not tool:
+                rec["capabilityGaps"].append(
+                    f"{os.path.splitext(name)[1]} 需外部解压工具（7z/unar）且本机未安装：该件本次未核")
+                return dest, rec
+            r = subprocess.run([tool, "x", "-y", f"-o{dest}", path],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                rec["capabilityGaps"].append(f"{tool} 解压失败：{r.stderr.strip()[:100]}")
+                return dest, rec
+            for root, _dirs, fs in os.walk(dest):
+                for f in fs:
+                    rec["extracted"].append(os.path.relpath(os.path.join(root, f), dest))
+    except Exception as e:
+        rec["capabilityGaps"].append(f"{type(e).__name__}: {e}")
+        return dest, rec
+
+    # 嵌套归档：限深继续解压
+    if depth < MAX_NESTED_DEPTH:
+        for root, _dirs, fs in list(os.walk(dest)):
+            for f in sorted(fs):
+                if is_archive(f):
+                    _, sub = extract_archive(os.path.join(root, f), root, depth + 1)
+                    rec.setdefault("nested", []).append(sub)
+    rec["dirUnreadable"] = [p for p in rec["skippedIsolation"]]
+    return dest, rec
 
 
 def magic(p: str) -> str:
@@ -341,27 +497,58 @@ def xlsx_visible(p: str, outdir: str, out_name: str):
     return out, hidden, stats, resid, unavailable, refs
 
 
-def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str) -> dict:
+def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
+            extract_dir: str = None) -> dict:
+    """盘点 + 隔离 + 解压 + 工作版重建。
+
+    队列式处理：源材料先入队；**归档解压后的文件以同一套逻辑继续处理**（again 提取文本、
+    重建工作版），并在盘点中记录来源归档（originArchive），可追溯。
+    """
     os.makedirs(txt_dir, exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)
-    inv = []
-    seen_xlsx: set = set()
-    files = []
+    extract_dir = os.path.abspath(extract_dir or os.path.join(case, "解压"))
+    inv, seen_xlsx, archives = [], set(), []
+    queue = []
     for root, _, fs in os.walk(src_dir):
         for f in sorted(fs):
             if f.startswith(".") or f.endswith(".part"):
                 continue
-            files.append(os.path.join(root, f))
+            queue.append((os.path.join(root, f), None))
 
-    for p in sorted(files):
+    def process(p: str, origin):
         rel = os.path.relpath(p, case)
         ext = os.path.splitext(p)[1].lower()
         kind = magic(p)
         rec = {"path": rel, "name": os.path.basename(p),
                "stage": os.path.basename(os.path.dirname(p)),
                "ext": ext, "magic": kind, "size": os.path.getsize(p)}
+        if origin:
+            rec["originArchive"] = origin
+        extracted = []
         try:
-            if ext == ".doc" and kind == "ole":
+            if is_archive(os.path.basename(p)):
+                # 下载后必须先解压再审核：解压产物落派生目录，源材料目录零写入
+                dest, arec = extract_archive(p, extract_dir)
+                arec["archive"] = rel
+                archives.append(arec)
+                rec["readable"] = True
+                rec["archive"] = {"destDir": os.path.relpath(dest, case),
+                                  "entries": arec["entries"],
+                                  "extracted": len(arec["extracted"]),
+                                  "skippedIsolation": arec["skippedIsolation"],
+                                  "failures": arec["failures"],
+                                  "capabilityGaps": arec["capabilityGaps"]}
+                for name in arec["extracted"]:
+                    extracted.append(os.path.join(dest, name))
+                notes = []
+                if arec["skippedIsolation"]:
+                    notes.append(f"按阶段一隔离门禁跳过 {len(arec['skippedIsolation'])} 项（复核记录类）")
+                if arec["failures"]:
+                    notes.append(f"跳过 {len(arec['failures'])} 项（越界/链接等）")
+                if arec["capabilityGaps"]:
+                    notes.append("；".join(arec["capabilityGaps"]))
+                rec["note"] = "；".join(notes) if notes else "已解压，随解压产物继续盘点"
+            elif ext == ".doc" and kind == "ole":
                 txt, err = doc_to_text(p)
                 rec["readable"] = txt is not None
                 if txt:
@@ -391,7 +578,6 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str) -> dict:
                 if err:
                     rec["note"] = err
             elif ext == ".xlsx":
-                # 同名不同版本（定稿/送审稿）必须消歧，否则后落盘者静默覆盖前者
                 out_name = os.path.basename(p)
                 if out_name in seen_xlsx:
                     stem, se = os.path.splitext(out_name)
@@ -407,8 +593,7 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str) -> dict:
                                    "hiddenRefs": refs[:50],
                                    "hiddenRefsCount": len(refs),
                                    "calcChainNotReproducible": sorted(
-                                       {f"{h['sheet']}!{h['cell']}" for h in refs}),
-                                   }
+                                       {f"{h['sheet']}!{h['cell']}" for h in refs})}
                 if resid:
                     rec["note"] = f"隐藏区残留 {resid}：需按重建法重做，仍残留则挂起"
                 with open(os.path.join(txt_dir, os.path.basename(p) + ".sheets.json"), "w",
@@ -421,27 +606,38 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str) -> dict:
                 with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
                           encoding="utf-8") as fh:
                     fh.write(txt)
+            elif kind == "png" or ext in (".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"):
+                rec["readable"] = False
+                rec["note"] = "图片：无 OCR"
             elif kind == "zip-ooxml" or ext == ".zip":
                 rec["readable"] = False
                 rec["note"] = "压缩包：未解压审核"
-            elif kind == "png":
-                rec["readable"] = False
-                rec["note"] = "图片：无 OCR"
             else:
                 rec["readable"] = False
                 rec["note"] = f"未支持格式 magic={kind}"
         except Exception as e:
             rec["readable"] = False
             rec["note"] = f"{type(e).__name__}: {e}"
+        return rec, extracted
+
+    i = 0
+    while i < len(queue):
+        p, origin = queue[i]
+        i += 1
+        rec, extracted = process(p, origin)
         inv.append(rec)
-        print(f"[{'OK ' if rec.get('readable') else 'NG '}] {rel}  {rec.get('note', '')}",
+        for ex in extracted:                      # 解压产物继续按同一套逻辑处理
+            queue.append((ex, rec["path"]))
+        print(f"[{'OK ' if rec.get('readable') else 'NG '}] {rec['path']}  {rec.get('note', '')}",
               flush=True)
 
+    payload = {"items": inv, "archives": archives}
     inv_path = os.path.join(case, "材料盘点.json")
     with open(inv_path, "w", encoding="utf-8") as fh:
-        json.dump(inv, fh, ensure_ascii=False, indent=1)
+        json.dump(payload, fh, ensure_ascii=False, indent=1)
     return {"inventory": inv_path, "items": len(inv),
-            "readable": sum(1 for r in inv if r.get("readable"))}
+            "readable": sum(1 for r in inv if r.get("readable")),
+            "archives": archives}
 
 
 def main() -> int:
@@ -460,8 +656,13 @@ def main() -> int:
     result = prepare(case, src_dir,
                      os.path.abspath(args.txt or os.path.join(case, "提取")),
                      os.path.abspath(args.work or os.path.join(case, "工作版")))
-    print(f"\n盘点 {result['items']} 件；可读 {result['readable']} / "
+    print(f"\n盘点 {result['items']} 件（含解压产物）；可读 {result['readable']} / "
           f"不可读 {result['items'] - result['readable']}；盘点表 {result['inventory']}")
+    for a in result.get("archives", []):
+        print(f"  解压 {os.path.basename(a['archive'])}：{len(a['extracted'])}/{a['entries']} 项 → "
+              f"{os.path.relpath(a['destDir'], os.path.abspath(args.case))}"
+              + (f"（隔离跳过 {len(a['skippedIsolation'])}）" if a["skippedIsolation"] else "")
+              + (f"（{'; '.join(a['capabilityGaps'])}）" if a["capabilityGaps"] else ""))
     missing = missing_deps()
     if missing:
         print(f"提示：缺少可选依赖 {', '.join(missing)}——对应格式可能读不到，"

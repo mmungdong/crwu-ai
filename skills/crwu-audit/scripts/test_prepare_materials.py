@@ -71,8 +71,11 @@ class PrepareMaterialsContractTest(unittest.TestCase):
             str(self.case / "提取"), str(self.case / "工作版"),
         )
 
-    def _inventory(self):
+    def _payload(self):
         return json.loads((self.case / "材料盘点.json").read_text(encoding="utf-8"))
+
+    def _inventory(self):
+        return self._payload()["items"]
 
     # ---- 1 缓存值优先 ----------------------------------------------------
     def test_cached_value_wins_over_formula_string(self):
@@ -304,6 +307,115 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         rec = self._inventory()[0]["workbook"]
         self.assertEqual([], rec["hiddenRefs"])
         self.assertEqual([], rec["calcChainNotReproducible"])
+
+    # ---- 4d 压缩包：下载后必须先解压再审核 --------------------------------
+    def test_archive_is_extracted_and_contents_are_processed(self):
+        """归档必须先解压，且解压产物随同一套逻辑继续处理（xlsx 也要出工作版）。"""
+        import openpyxl
+        import zipfile
+        d = self.src / "参考材料"
+        d.mkdir()
+        inner = self.case / "tmp_inner.xlsx"
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = "底稿"
+        wb.save(inner)
+        with zipfile.ZipFile(d / "测算表.zip", "w") as z:
+            z.write(inner, "13-工业变性住宅-测算底稿.xlsx")
+        inner.unlink()
+
+        self._run()
+
+        payload = self._payload()
+        self.assertEqual(1, len(payload["archives"]))
+        self.assertEqual(["13-工业变性住宅-测算底稿.xlsx"], payload["archives"][0]["extracted"])
+        extracted = [r for r in self._inventory() if r.get("originArchive")]
+        self.assertEqual(1, len(extracted), self._inventory())
+        self.assertEqual("材料-源/参考材料/测算表.zip", extracted[0]["originArchive"])
+        self.assertTrue(extracted[0]["workbook"]["workVersion"].startswith("工作版/"),
+                        "解压出的 xlsx 必须同样重建工作版")
+
+    def test_archive_with_gbk_filenames_is_decoded(self):
+        """zip 内中文名常为 GBK（无 UTF-8 标志位）→ 必须正确解码，文件名可读。
+
+        注意：`zipfile.writestr` 遇到非 ASCII 名会自动置 UTF-8 标志位，造不出真实 GBK 包；
+        故用同长度 ASCII 占位写入后，在字节层替换为 GBK 字节（标志位保持 0）。
+        """
+        import zipfile
+        d = self.src / "参考材料"
+        d.mkdir()
+        raw = "13-轻型汽车-土地使用权-工业变性住宅-测算底稿.xlsx".encode("gbk")
+        placeholder = "A" * len(raw)
+        path = d / "gbk.zip"
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr(placeholder, b"x")
+        blob = path.read_bytes()
+        assert placeholder.encode("ascii") in blob
+        path.write_bytes(blob.replace(placeholder.encode("ascii"), raw))
+        with zipfile.ZipFile(path) as z:          # 自检：确实是"无 UTF-8 标志位"的 GBK 名
+            info = z.infolist()[0]
+            self.assertEqual(0, info.flag_bits & 0x800)
+            self.assertEqual(raw.decode("cp437"), info.filename)   # cp437 读出的乱码名（真实情形）
+
+        self._run()
+
+        names = self._payload()["archives"][0]["extracted"]
+        self.assertEqual(["13-轻型汽车-土地使用权-工业变性住宅-测算底稿.xlsx"], names)
+
+    def test_archive_entries_escaping_or_symlinked_are_refused(self):
+        """zip-slip / 绝对路径 / 符号链接一律拒绝，并如实记账。"""
+        import zipfile
+        d = self.src / "参考材料"
+        d.mkdir()
+        with zipfile.ZipFile(d / "evil.zip", "w") as z:
+            z.writestr("ok.txt", "fine")
+            z.writestr("../escape.txt", "bad")
+            z.writestr("/abs/escape.txt", "bad")
+            link = zipfile.ZipInfo("link")
+            link.external_attr = (0o120777 << 16)
+            z.writestr(link, "/etc/passwd")
+
+        self._run()
+
+        arec = self._payload()["archives"][0]
+        self.assertEqual(["ok.txt"], arec["extracted"])
+        self.assertEqual(3, len(arec["failures"]), arec["failures"])
+        self.assertFalse((self.case / "escape.txt").exists())
+        self.assertFalse((self.src / ".." / "escape.txt").resolve().exists())
+
+    def test_archive_entries_that_are_review_records_are_not_extracted(self):
+        """阶段一隔离门禁优先于解压：归档内复核记录类文件不解压。"""
+        import zipfile
+        d = self.src / "参考材料"
+        d.mkdir()
+        with zipfile.ZipFile(d / "mixed.zip", "w") as z:
+            z.writestr("测算底稿.xlsx", "x")
+            z.writestr("三级复核意见.docx", "secret")
+
+        self._run()
+
+        arec = self._payload()["archives"][0]
+        self.assertEqual(["测算底稿.xlsx"], arec["extracted"])
+        self.assertEqual(["三级复核意见.docx"], arec["skippedIsolation"])
+        blob = (self.case / "材料盘点.json").read_text(encoding="utf-8")
+        self.assertIn("三级复核意见.docx", blob)      # 只记名字
+        self.assertNotIn("secret", blob)              # 不得带出内容
+
+    def test_unsupported_archive_records_capability_gap_not_silence(self):
+        """不支持的归档格式（.rar/.7z 且无外部工具）必须记 capability gap，不得静默跳过。"""
+        import shutil as sh
+        d = self.src / "参考材料"
+        d.mkdir()
+        (d / "扫描件.rar").write_bytes(b"Rar!\x1a\x07\x00dummy")
+        saved = sh.which
+        sh.which = lambda name: None
+        try:
+            self._run()
+        finally:
+            sh.which = saved
+
+        arec = self._payload()["archives"][0]
+        self.assertTrue(arec["capabilityGaps"], arec)
+        self.assertIn("未安装", arec["capabilityGaps"][0])
 
     # ---- 5 格式语义 ------------------------------------------------------
     def test_number_format_is_preserved(self):
