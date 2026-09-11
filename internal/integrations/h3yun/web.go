@@ -22,6 +22,16 @@ import (
 
 const webBaseURL = "https://www.h3yun.com"
 
+// defaultWebTimeout bounds the ordinary web-console metadata calls
+// (records/forms/files list, token refresh).  Record attachments are working
+// papers that can reach tens of MB; reading such a body over the web console
+// routinely exceeds 30s, so downloads run under attachmentDownloadTimeout
+// instead of the shared client timeout.
+const (
+	defaultWebTimeout         = 30 * time.Second
+	attachmentDownloadTimeout = 10 * time.Minute
+)
+
 // SessionClaims is the decoded (unsigned) payload of the H3Yun session JWT.
 // The CLI decodes it only to read routing/expiry metadata; the gateway verifies
 // the signature.
@@ -100,7 +110,7 @@ func NewWebClient(config WebConfig) (*WebClient, error) {
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = &http.Client{Timeout: defaultWebTimeout}
 	}
 	return &WebClient{
 		token:      token,
@@ -286,7 +296,14 @@ func (c *WebClient) DownloadAttachment(ctx context.Context, attachmentID string)
 	if c.engineCode != "" {
 		request.Header.Set("EngineCode", c.engineCode)
 	}
-	response, err := c.http.Do(request)
+	// Attachment bodies are read in full; give them a timeout that a large
+	// working paper can actually finish within, without relaxing the bound on
+	// the ordinary metadata calls that share this client.
+	downloadClient := *c.http
+	if downloadClient.Timeout < attachmentDownloadTimeout {
+		downloadClient.Timeout = attachmentDownloadTimeout
+	}
+	response, err := downloadClient.Do(request)
 	if err != nil {
 		return nil, "", fmt.Errorf("H3Yun attachment download request: %w", err)
 	}
