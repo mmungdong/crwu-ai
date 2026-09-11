@@ -9,6 +9,20 @@
 
 ---
 
+## 2026-09-11 · feat(skills) · 新增「AI 审核六维评分卡 + 审核错误项」（自评，量化工种差距）
+
+- **需求**：一级复核时要记录 AI 自身的审核错误项并给自己打分；二级审核在同一张卡上打分，但**只是在一级基础上做分数补充与校正**。目的是**检测 AI 审核与人工复核的差距**。四项口径经确认：① 卡片**用表格呈现**（不用图表卡片）；② **两个级次均由 AI 自评**（不需要页面交互 → 保持"renderer 只呈现不改写"红线）；③ 综合分＝**六维均值按 0.5 取整**（两个口径：AI 单机 / 含人机复核闭环）；④ 错误项**新增独立结构**。
+- **口径来源（重要）**：知识库《审核统计与台账规范》§1 只定义 `review_level`（初审/复审/终审，受控取值）与 A–G 组统计字段，**没有 AI 评分维度与算法** → 六维与取整算法作为**技能内受控取值**实现，并在 spec 中显式声明；若要回填台账/氚云字段，需先在知识库登记（列为知识库侧待办，技能不擅自回填未登记字段）。
+- **schema**（`audit_result.schema.json`，顶层新增且进入 `required`）：`aiScorecard{level∈初审/复审/终审, dimensions[6]{key 受控 enum, label, score(0–10, 0.5 步长), max=10, basis 必填}, composites{aiOnly, withHumanLoop}, corrections[]{key,from,to,reason}}`；`selfAuditErrors[]{errorId, kind∈假阳性/事实更正/漏检/表述, discoveredAt∈级次, description, evidence, correction, status, issueId}`。
+- **校验**（`audit_delivery.py`）：六维必须恰好覆盖、0–10 且 0.5 整数倍、`basis` 不得空、`aiOnly` 可由均值 0.5 取整复算、校正 `from` 必须等于初审分（**只增不覆盖**）且必须给理由、`level=初审` 禁 corrections/withHumanLoop、`level=复审` 必须给可复算的 `withHumanLoop`、错误项 kind/级次取值与 id 唯一。取整用**四舍五入**（非银行家舍入）。
+- **渲染**（`audit_delivery.py` 新增 `_scorecard_section`）：员工端新增区块 `#ai-scorecard`（§3 表登记为 06b），**表格**呈现：`维度 × 初审分 × 复审校正 × 最终分 × 打分依据` ＋ 综合分两行 ＋ 校正明细 ＋ 错误项表；文本全部来自受控标签常量或输入数据（通过 §12.2 渲染红线测试）。
+- **流程**（`SKILL.md`）：步骤 11 加"同批产出初审自评与错误项（冻结前）"；步骤 12 加"复审自评＝在初审分上只做补充与校正 + 追加错误项"。
+- **spec**（`references/11-html-delivery-spec.md`）：新增 §6.3「AI 审核评分卡（自评·表格呈现）」——级次/六维/分值/综合分/只增不覆盖/级次约束/错误项/渲染八项口径 + 口径来源声明；§3 区块表加 06b 行。
+- **契约测试**：`test_audit_delivery` 30 → **41** 项（缺维、越界/步长、空依据、aiOnly 不可复算、校正 from 不符、校正缺理由、初审禁校正、复审必给可复算 withHumanLoop、错误项 kind/重复 id、以及"评分卡渲染为表格"）。
+- **⚠️ breaking（同前例）**：`aiScorecard`/`selfAuditErrors` 进入顶层 `required` → 既有交付件需补这两个字段；样例 `audit-result.sample.json` 已同步。本案 BG0312 v1.3 若需带评分卡，属案例侧动作（另行执行）。
+- **知识库侧待办（不在本仓执行）**：① 若要把六维分数与错误项纳入台账/氚云字段，先在《审核统计与台账规范》§1 登记字段与受控取值（含维度词表）；② 是否把六维词表收进《标签词典》。
+- **验证**：`kb_tool.py validate --skill-root skills` error=0/warn=0；六套件全绿；`git diff --check` 通过。
+
 ## 2026-09-11 · feat(skills) · 阶段二复核对照加「在件核验」三态与闭环核验，并固化阶段二取回脚本
 
 - **问题（真实判例，源自 2024-300149-LX0551-BG0312 三轮回溯）**：人工复核意见提出于审前轮次，被审件是最终版；

@@ -346,5 +346,82 @@ class ReviewerOnlyInFileResolutionTest(unittest.TestCase):
 
 
 
+class AiScorecardTest(unittest.TestCase):
+    """AI 审核评分卡（自评六维 + 复审校正 + 审核错误项）的校验契约。"""
+
+    def _result(self, **over):
+        r = load_sample()
+        if "level" in over:
+            r["aiScorecard"]["level"] = over["level"]
+        return r
+
+    def _dim(self, r, key):
+        return next(d for d in r["aiScorecard"]["dimensions"] if d["key"] == key)
+
+    def test_sample_scorecard_is_valid(self):
+        self.assertEqual([], delivery.validate(load_sample()))
+
+    def test_missing_dimension_is_rejected(self):
+        r = load_sample()
+        r["aiScorecard"]["dimensions"] = [d for d in r["aiScorecard"]["dimensions"]
+                                          if d["key"] != "judgment_quality"]
+        self.assertTrue(any("恰好覆盖六维" in e for e in delivery.validate(r)))
+
+    def test_score_out_of_range_or_step_is_rejected(self):
+        for bad in (10.5, -0.5, 6.3):
+            r = load_sample()
+            self._dim(r, "self_correction")["score"] = bad
+            self.assertTrue(any("0–10 且 0.5 的整数倍" in e for e in delivery.validate(r)), bad)
+
+    def test_empty_basis_is_rejected(self):
+        r = load_sample()
+        self._dim(r, "coverage_completeness")["basis"] = " "
+        self.assertTrue(any("basis 不得为空" in e for e in delivery.validate(r)))
+
+    def test_ai_only_must_be_recomputable(self):
+        r = load_sample()
+        r["aiScorecard"]["composites"]["aiOnly"] = 9.5
+        self.assertTrue(any("aiOnly 必须可由六维均值" in e for e in delivery.validate(r)))
+
+    def test_correction_from_must_equal_first_score(self):
+        r = load_sample()
+        r["aiScorecard"]["corrections"][0]["from"] = 5.0
+        self.assertTrue(any("只增不覆盖" in e for e in delivery.validate(r)))
+
+    def test_correction_requires_reason(self):
+        r = load_sample()
+        r["aiScorecard"]["corrections"][0]["reason"] = ""
+        self.assertTrue(any("校正必须给理由" in e for e in delivery.validate(r)))
+
+    def test_first_review_with_corrections_is_rejected(self):
+        r = self._result(level="初审")
+        r["aiScorecard"]["corrections"] = []
+        r["aiScorecard"]["composites"].pop("withHumanLoop", None)
+        self.assertEqual([], delivery.validate(r))
+        r["aiScorecard"]["corrections"] = [{"key": "self_correction", "from": 7.0, "to": 7.5, "reason": "x"}]
+        self.assertTrue(any("初审不得事后校正" in e for e in delivery.validate(r)))
+
+    def test_second_review_requires_recomputable_with_human_loop(self):
+        r = load_sample()
+        r["aiScorecard"]["composites"]["withHumanLoop"] = 9.0
+        self.assertTrue(any("withHumanLoop 必须可由复审校正后" in e for e in delivery.validate(r)))
+
+    def test_invalid_error_kind_and_duplicate_id_are_rejected(self):
+        r = load_sample()
+        r["selfAuditErrors"][0]["kind"] = "typo"
+        r["selfAuditErrors"][1]["errorId"] = r["selfAuditErrors"][0]["errorId"]
+        errors = delivery.validate(r)
+        self.assertTrue(any("kind 取值非法" in e for e in errors))
+        self.assertTrue(any("errorId 重复" in e for e in errors))
+
+    def test_scorecard_renders_as_tables(self):
+        html = delivery.render(load_sample())
+        self.assertIn('id="ai-scorecard"', html)
+        for label in ("本次 AI 审核六维评分卡", "初审分", "复审校正", "最终分",
+                      "综合·AI 单机", "综合·含人机复核闭环", "AI 审核错误项"):
+            self.assertIn(label, html)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

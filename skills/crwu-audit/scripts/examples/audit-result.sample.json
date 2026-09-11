@@ -406,5 +406,113 @@
   "renderPolicy": {
     "printTrail": false,
     "language": "zh-CN"
-  }
+  },
+  "aiScorecard": {
+    "level": "复审",
+    "dimensions": [
+      {
+        "key": "first_delivery_correctness",
+        "label": "首轮交付正确性",
+        "score": 6.0,
+        "max": 10,
+        "basis": "（示意）依据本维度对应证据与复核对照结果打分",
+        "evidence": [
+          "professionalTrail.checkRecords"
+        ]
+      },
+      {
+        "key": "self_correction",
+        "label": "自我纠错与定位",
+        "score": 7.0,
+        "max": 10,
+        "basis": "（示意）依据本维度对应证据与复核对照结果打分",
+        "evidence": [
+          "professionalTrail.checkRecords"
+        ]
+      },
+      {
+        "key": "incremental_value",
+        "label": "增量发现价值",
+        "score": 8.0,
+        "max": 10,
+        "basis": "（示意）依据本维度对应证据与复核对照结果打分",
+        "evidence": [
+          "professionalTrail.checkRecords"
+        ]
+      },
+      {
+        "key": "coverage_completeness",
+        "label": "覆盖完整性",
+        "score": 7.0,
+        "max": 10,
+        "basis": "（示意）依据本维度对应证据与复核对照结果打分",
+        "evidence": [
+          "professionalTrail.checkRecords"
+        ]
+      },
+      {
+        "key": "process_discipline",
+        "label": "过程纪律与可追溯",
+        "score": 7.0,
+        "max": 10,
+        "basis": "（示意）依据本维度对应证据与复核对照结果打分",
+        "evidence": [
+          "professionalTrail.checkRecords"
+        ]
+      },
+      {
+        "key": "judgment_quality",
+        "label": "本轮判断质量",
+        "score": 6.0,
+        "max": 10,
+        "basis": "（示意）依据本维度对应证据与复核对照结果打分",
+        "evidence": [
+          "professionalTrail.checkRecords"
+        ]
+      }
+    ],
+    "composites": {
+      "aiOnly": 7.0,
+      "withHumanLoop": 7.5
+    },
+    "corrections": [
+      {
+        "key": "first_delivery_correctness",
+        "from": 6.0,
+        "to": 7.5,
+        "reason": "（示意）人工复核指出 1 条漏检，已在复审补审闭环，首轮正确性按闭环后校正"
+      },
+      {
+        "key": "judgment_quality",
+        "from": 6.0,
+        "to": 7.0,
+        "reason": "（示意）复核对照后原判据得到印证，判断质量上调"
+      }
+    ]
+  },
+  "selfAuditErrors": [
+    {
+      "errorId": "SAE-001",
+      "kind": "false_positive",
+      "discoveredAt": "初审",
+      "description": "（示意）初审阶段自查发现 1 条结论不成立，已撤回。",
+      "evidence": [
+        "issues[ISS-DC-003]"
+      ],
+      "correction": "撤回该条",
+      "status": "closed",
+      "issueId": "ISS-DC-003"
+    },
+    {
+      "errorId": "SAE-002",
+      "kind": "omission",
+      "discoveredAt": "复审",
+      "description": "（示意）人工复核提出而 AI 未命中 1 条，属漏检，已按在件核验定性为 L-open 并补审。",
+      "evidence": [
+        "reviewComparison.reviewerOnlyItems[RO-001]"
+      ],
+      "correction": "隔离补审后新增条目",
+      "status": "closed"
+    }
+  ]
 }

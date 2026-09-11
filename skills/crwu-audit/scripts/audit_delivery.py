@@ -151,6 +151,35 @@ CHECK_RECORD_REQUIRED = [
     "executor",
 ]
 REVIEWER_ONLY_REQUIRED = ["itemId", "title", "reviewerEvidence", "handling", "inFileResolution"]
+# ---- AI 审核评分卡（自评；量化工种差距。维度与算法为技能内受控取值，知识库暂无对应词表） ----
+SCORECARD_DIMENSIONS = [
+    ("first_delivery_correctness", "首轮交付正确性"),
+    ("self_correction", "自我纠错与定位"),
+    ("incremental_value", "增量发现价值"),
+    ("coverage_completeness", "覆盖完整性"),
+    ("process_discipline", "过程纪律与可追溯"),
+    ("judgment_quality", "本轮判断质量"),
+]
+SCORECARD_DIMENSION_KEYS = [key for key, _label in SCORECARD_DIMENSIONS]
+SCORECARD_LEVELS = ("初审", "复审", "终审")
+SCORECARD_ERROR_KINDS = {"false_positive", "correction", "omission", "wording"}
+SCORECARD_ERROR_KIND_LABEL = {
+    "false_positive": "假阳性（原判不成立）",
+    "correction": "事实更正（结论成立但表述有误）",
+    "omission": "漏检（人工复核已提出而 AI 未命中）",
+    "wording": "表述修正",
+}
+
+
+def _round_half_up(value: float) -> float:
+    """按 0.5 取整（四舍五入，非银行家舍入）。"""
+    import math
+    return math.floor(value * 2 + 0.5) / 2.0
+
+
+def _mean_score(dimensions: list) -> float:
+    scores = [float(d.get("score")) for d in dimensions]
+    return _round_half_up(sum(scores) / len(scores))
 IN_FILE_RESOLUTION_VALUES = {"L-resolved", "L-open", "L-unclosed", "L-uncheckable"}
 IN_FILE_RESOLUTION_LABEL = {
     "L-resolved": "复核已提出 · 被审件已落实",
@@ -704,6 +733,117 @@ def validate(result: dict, rendered: bool = False, expect_renderer: bool = False
 
     # 敏感信息（§10.1 / §12.2）
     errors.extend(scan_sensitive(result))
+
+    # ---- AI 审核评分卡（自评）+ 审核错误项 ----
+    scorecard = result.get("aiScorecard")
+    if not isinstance(scorecard, dict):
+        errors.append("aiScorecard 必须是对象")
+        scorecard = {}
+    level = scorecard.get("level")
+    if level not in SCORECARD_LEVELS:
+        errors.append("aiScorecard.level 必须为 初审/复审/终审（与台账 review_level 一致）")
+    dimensions = scorecard.get("dimensions")
+    if not isinstance(dimensions, list):
+        errors.append("aiScorecard.dimensions 必须是数组")
+        dimensions = []
+    seen_keys = []
+    for idx, dim in enumerate(dimensions):
+        where = "aiScorecard.dimensions[{0}]".format(idx)
+        if not isinstance(dim, dict):
+            errors.append("{0} 必须是对象".format(where))
+            continue
+        key = dim.get("key")
+        if key not in SCORECARD_DIMENSION_KEYS:
+            errors.append("{0}.key 取值非法：{1}".format(where, key))
+        else:
+            seen_keys.append(key)
+        score = dim.get("score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            errors.append("{0}.score 必须是数值".format(where))
+        elif not (0 <= float(score) <= 10) or abs(float(score) * 2 - round(float(score) * 2)) > 1e-9:
+            errors.append("{0}.score 必须为 0–10 且 0.5 的整数倍".format(where))
+        if dim.get("max") != 10:
+            errors.append("{0}.max 必须为 10".format(where))
+        if not _is_nonempty_str(dim.get("basis")):
+            errors.append("{0}.basis 不得为空（禁止无依据给分）".format(where))
+    if sorted(seen_keys) != sorted(SCORECARD_DIMENSION_KEYS):
+        errors.append("aiScorecard.dimensions 必须恰好覆盖六维：{0}".format(SCORECARD_DIMENSION_KEYS))
+
+    composites = scorecard.get("composites")
+    if not isinstance(composites, dict):
+        errors.append("aiScorecard.composites 必须是对象")
+        composites = {}
+    corrections = scorecard.get("corrections") or []
+    if not isinstance(corrections, list):
+        errors.append("aiScorecard.corrections 必须是数组")
+        corrections = []
+    by_key = {d.get("key"): d.get("score") for d in dimensions if isinstance(d, dict)}
+
+    if dimensions:
+        expected_ai_only = _mean_score(dimensions)
+        if composites.get("aiOnly") != expected_ai_only:
+            errors.append("aiScorecard.composites.aiOnly 必须可由六维均值按 0.5 取整复算（应为 {0}）".format(expected_ai_only))
+
+    def _final_score(key):
+        score = by_key.get(key)
+        for cor in corrections:
+            if isinstance(cor, dict) and cor.get("key") == key:
+                score = cor.get("to")
+        return score
+
+    for idx, cor in enumerate(corrections):
+        where = "aiScorecard.corrections[{0}]".format(idx)
+        if not isinstance(cor, dict):
+            errors.append("{0} 必须是对象".format(where))
+            continue
+        key = cor.get("key")
+        if key not in SCORECARD_DIMENSION_KEYS:
+            errors.append("{0}.key 取值非法：{1}".format(where, key))
+            continue
+        if cor.get("from") != by_key.get(key):
+            errors.append("{0}.from 必须等于初审该维分数（只增不覆盖：不得改写初审分）".format(where))
+        if not _is_nonempty_str(cor.get("reason")):
+            errors.append("{0}.reason 不得为空（校正必须给理由）".format(where))
+
+    expected_loop = _round_half_up(
+        sum(float(_final_score(k)) for k in SCORECARD_DIMENSION_KEYS) / len(SCORECARD_DIMENSION_KEYS)
+    ) if dimensions else None
+    if level == "初审":
+        if corrections:
+            errors.append("aiScorecard.corrections 仅在复审/终审填写（初审不得事后校正）")
+        if composites.get("withHumanLoop") is not None:
+            errors.append("aiScorecard.composites.withHumanLoop 仅在复审/终审填写")
+    elif level in ("复审", "终审"):
+        if composites.get("withHumanLoop") != expected_loop:
+            errors.append("aiScorecard.composites.withHumanLoop 必须可由复审校正后六维均值按 0.5 取整复算（应为 {0}）".format(expected_loop))
+
+    self_errors = result.get("selfAuditErrors")
+    if not isinstance(self_errors, list):
+        errors.append("selfAuditErrors 必须是数组")
+        self_errors = []
+    error_ids = set()
+    for idx, item in enumerate(self_errors):
+        where = "selfAuditErrors[{0}]".format(idx)
+        if not isinstance(item, dict):
+            errors.append("{0} 必须是对象".format(where))
+            continue
+        for field in ("errorId", "kind", "discoveredAt", "description"):
+            if field not in item:
+                errors.append("{0} 缺少字段 {1}".format(where, field))
+        error_id = item.get("errorId")
+        if _is_nonempty_str(error_id):
+            if error_id in error_ids:
+                errors.append("selfAuditErrors.errorId 重复：{0}".format(error_id))
+            error_ids.add(error_id)
+        if item.get("kind") not in SCORECARD_ERROR_KINDS:
+            errors.append("{0}.kind 取值非法：{1}".format(where, item.get("kind")))
+        if item.get("discoveredAt") not in SCORECARD_LEVELS:
+            errors.append("{0}.discoveredAt 必须为 初审/复审/终审".format(where))
+        if not _is_nonempty_str(item.get("description")):
+            errors.append("{0}.description 不得为空".format(where))
+        if item.get("status") is not None and item.get("status") not in ("open", "closed"):
+            errors.append("{0}.status 取值非法：{1}".format(where, item.get("status")))
+
     return errors
 
 
@@ -898,6 +1038,102 @@ def _manual_item(item) -> str:
             ]
         ),
     )
+
+
+
+SCORECARD_DIMENSION_LABEL = dict(SCORECARD_DIMENSIONS)
+SCORECARD_COMPOSITE_LABEL = {"aiOnly": "综合·AI 单机", "withHumanLoop": "综合·含人机复核闭环"}
+SCORECARD_LABEL = "本次 AI 审核六维评分卡"
+SCORECARD_LEVEL_LABEL = "审核级次"
+SCORECARD_CORRECTION_LABEL = "复审校正（只增不覆盖）"
+SELF_ERROR_LABEL = "AI 审核错误项"
+SCORECARD_COL_DIMENSION = "维度"
+SCORECARD_COL_FIRST = "初审分"
+SCORECARD_COL_CORRECTION = "复审校正"
+SCORECARD_COL_FINAL = "最终分"
+SCORECARD_COL_BASIS = "打分依据"
+SCORECARD_COL_REASON = "校正理由"
+SCORECARD_COL_ERROR_ID = "编号"
+SCORECARD_COL_ERROR_KIND = "错误类型"
+SCORECARD_COL_ERROR_AT = "发现级次"
+SCORECARD_COL_ERROR_DESC = "说明"
+SCORECARD_COL_ERROR_FIX = "处置"
+
+
+def _scorecard_section(scorecard, self_errors) -> str:
+    """AI 审核评分卡（表格呈现）：六维分数 + 复审校正 + 综合分 + 审核错误项。"""
+    corrections = {c.get("key"): c for c in (scorecard.get("corrections") or []) if isinstance(c, dict)}
+    rows = []
+    for dim in scorecard.get("dimensions") or []:
+        key = dim.get("key")
+        cor = corrections.get(key)
+        rows.append(
+            "<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td></tr>".format(
+                _text(dim.get("label")),
+                _text(dim.get("score")),
+                _text(cor.get("to")) if cor else _text(EMPTY_TEXT),
+                _text(cor.get("to") if cor else dim.get("score")),
+                _text(dim.get("basis")),
+            )
+        )
+    composites = scorecard.get("composites") or {}
+    comp_rows = []
+    for field in ("aiOnly", "withHumanLoop"):
+        if field == "withHumanLoop" and composites.get(field) is None:
+            continue
+        comp_rows.append(
+            "<tr><th scope=\"row\">{0}</th><td>{1}</td></tr>".format(
+                _text(SCORECARD_COMPOSITE_LABEL[field]), _text(composites.get(field))
+            )
+        )
+    cor_rows = []
+    for cor in scorecard.get("corrections") or []:
+        cor_rows.append(
+            "<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td></tr>".format(
+                _text(SCORECARD_DIMENSION_LABEL.get(cor.get("key"), cor.get("key"))),
+                _text(cor.get("from")), _text(cor.get("to")), _text(cor.get("reason")),
+            )
+        )
+    err_rows = []
+    for item in self_errors or []:
+        err_rows.append(
+            "<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td></tr>".format(
+                _text(item.get("errorId")),
+                _text(SCORECARD_ERROR_KIND_LABEL.get(item.get("kind"), item.get("kind"))),
+                _text(item.get("discoveredAt")),
+                _text(item.get("description")),
+                _text(item.get("correction")),
+            )
+        )
+    parts = ["<section id=\"ai-scorecard\">", "<h3>{0}</h3>".format(_text(SCORECARD_LABEL))]
+    parts.append("<table class=\"kv\"><tr><th scope=\"row\">{0}</th><td>{1}</td></tr></table>".format(
+        _text(SCORECARD_LEVEL_LABEL), _text(scorecard.get("level"))))
+    parts.append("<table><thead><tr><th>{0}</th><th>{1}</th><th>{2}</th><th>{3}</th><th>{4}</th></tr></thead><tbody>".format(
+        _text(SCORECARD_COL_DIMENSION), _text(SCORECARD_COL_FIRST), _text(SCORECARD_COL_CORRECTION),
+        _text(SCORECARD_COL_FINAL), _text(SCORECARD_COL_BASIS)))
+    parts.extend(rows)
+    parts.append("</tbody></table>")
+    if comp_rows:
+        parts.append("<table class=\"kv\">{0}</table>".format("".join(comp_rows)))
+    if cor_rows:
+        parts.append("<h4>{0}</h4>".format(_text(SCORECARD_CORRECTION_LABEL)))
+        parts.append("<table><thead><tr><th>{0}</th><th>{1}</th><th>{2}</th><th>{3}</th></tr></thead><tbody>".format(
+            _text(SCORECARD_COL_DIMENSION), _text(SCORECARD_COL_FIRST), _text(SCORECARD_COL_FINAL),
+            _text(SCORECARD_COL_REASON)))
+        parts.extend(cor_rows)
+        parts.append("</tbody></table>")
+    parts.append("<h4>{0}</h4>".format(_text(SELF_ERROR_LABEL)))
+    if err_rows:
+        parts.append("<table><thead><tr><th>{0}</th><th>{1}</th><th>{2}</th><th>{3}</th><th>{4}</th></tr></thead><tbody>".format(
+            _text(SCORECARD_COL_ERROR_ID), _text(SCORECARD_COL_ERROR_KIND),
+            _text(SCORECARD_COL_ERROR_AT), _text(SCORECARD_COL_ERROR_DESC),
+            _text(SCORECARD_COL_ERROR_FIX)))
+        parts.extend(err_rows)
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p class=\"empty\">{0}</p>".format(_text(EMPTY_TEXT)))
+    parts.append("</section>")
+    return "".join(parts)
 
 
 def _reviewer_only_item(item) -> str:
@@ -1181,6 +1417,9 @@ def render(result: dict, print_trail: bool = None) -> str:
     else:
         parts.append('<p class="empty">{0}</p>'.format(_text(EMPTY_TEXT)))
     parts.append("</section>")
+
+    # 06.5 AI 审核评分卡（自评；初审自评 → 复审补充与校正）
+    parts.append(_scorecard_section(result.get("aiScorecard") or {}, result.get("selfAuditErrors") or []))
 
     # 07 审核范围与未检查项
     parts.append('<section id="scope-and-not-checked">')
