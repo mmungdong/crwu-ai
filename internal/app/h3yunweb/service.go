@@ -441,6 +441,34 @@ func (s *Service) Download(ctx context.Context, schemaCode, objectID, outDir str
 	return written, nil
 }
 
+// DownloadOne downloads a single record attachment by file id and writes it to
+// outPath. It never lists or downloads the record's other attachments — this is
+// the primitive the audit phase-1 isolation gate relies on (review-record files
+// must not be fetched).
+func (s *Service) DownloadOne(ctx context.Context, fileID, outPath string) error {
+	if strings.TrimSpace(fileID) == "" {
+		return errors.New("attachment file id is required")
+	}
+	if strings.TrimSpace(outPath) == "" {
+		return errors.New("output file path is required")
+	}
+	client, _, err := s.client(ctx)
+	if err != nil {
+		return err
+	}
+	data, _, err := client.DownloadAttachment(ctx, strings.TrimSpace(fileID))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
 func uniquePath(dir, name string, used map[string]bool) string {
 	candidate := filepath.Join(dir, filepath.Base(name))
 	if !used[candidate] {

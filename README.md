@@ -84,6 +84,7 @@ keyring — it is never printed or shared with the AI host. A DevTools-based
 ./bin/darwin/crwu h3yun records get    --schema <schemaCode> --id <recordId>
 ./bin/darwin/crwu h3yun files list     --schema <schemaCode> --id <recordId>
 ./bin/darwin/crwu h3yun file download  --schema <schemaCode> --id <recordId> --out ./files
+./bin/darwin/crwu h3yun file get       --id <fileId> --out ./files/report.pdf
 ```
 
 > 🔒 **Where do credentials live?** Only in the OS credential store
@@ -133,6 +134,7 @@ keyring — it is never printed or shared with the AI host. A DevTools-based
 | --- | --- |
 | `crwu h3yun files list --schema <code> --id <id>` | List the record's attachment files |
 | `crwu h3yun file download --schema <code> --id <id> --out <dir>` | Download all attachments — deduplicated, original names |
+| `crwu h3yun file get --id <fileId> --out <file>` | Download a single attachment to a path |
 
 ### ⚡ Agent gateway (`h3pat`)
 

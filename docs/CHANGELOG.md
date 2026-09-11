@@ -9,6 +9,15 @@
 
 ---
 
+## 2026-09-11 · feat(cli) · 新增 `crwu h3yun file get` 单附件下载（打通审核阶段一「定向取源材料」门禁）
+
+- **背景**：审核阶段一安全下载门禁要求「只下源材料、不下复核件」。原 `crwu h3yun file download` 会下载整条记录全部附件，若记录混有复核意见类附件则阶段一被迫中止。经排查，服务层 `DownloadAttachment(ctx, attachmentID)`（`GET /Form/Download/?AttachmentID=<id>`）早已支持按 FileId 下载单附件，只是未暴露为 CLI 子命令。
+- **新增命令**：`crwu h3yun file get --id <fileId> --out <文件路径>` —— 按 FileId 下载单个附件到指定路径（FileId 来自 `crwu h3yun files list`）。服务层新增 `h3yunweb.Service.DownloadOne(ctx, fileID, outPath) error`。
+- **影响命令**：新增 `h3yun file get`；`h3yun file download` 行为不变（整单，阶段一仍禁用于含复核件的记录）。
+- **文档**：`docs/cli-manual.md`（附件命令表 + 典型流程 + 已知坑）、`README.md`/`README.zh-CN.md` 命令表同步；`crwu scheme` 目录自动收录 `h3yun file get`。
+- **测试**：`internal/app/h3yunweb/service_test.go` +2（写文件、缺 fileId 报错）；`internal/transport/cli/cli_test.go` +2（定向下载、缺参数报错）+ 目录断言。
+- **后续**：`crwu-audit` 阶段一门禁据此改为「`files list` 取元数据 → 源材料逐件 `file get`、复核件只入排除清单」，不再要求整单下载后隔离。
+
 ## 2026-09-11 · feat(skills) · 数据校对新增 C7「计算链重算」引擎（可见区公式独立重算比对）
 
 - **需求**：评估审核要覆盖「计算表的计算」——对测算/明细表可见区公式做**独立重算**，与表内缓存值比对，找出重算不一致的公式格（不是只扫 `#REF!` 等错误字面量）。

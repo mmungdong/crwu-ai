@@ -36,6 +36,7 @@ type H3YunWebService interface {
 	RecordsGet(ctx context.Context, schemaCode, objectID string) (json.RawMessage, error)
 	Files(ctx context.Context, schemaCode, objectID string) ([]h3yunweb.Attachment, error)
 	Download(ctx context.Context, schemaCode, objectID, outDir string) ([]string, error)
+	DownloadOne(ctx context.Context, fileID, outPath string) error
 }
 
 func envH3YunOps(getenv func(string) string) H3YunOpsService {
@@ -446,6 +447,25 @@ func newFileCommand(web H3YunWebService, examples map[string][]schemeExample) *c
 				return err
 			}
 			return writeJSON(cmd.OutOrStdout(), map[string]any{"ok": true, "data": map[string]any{"files": written}})
+		}))
+	file.AddCommand(buildLeaf("get", "Download one attachment by file id.", "", "  crwu h3yun file get --id <fileId> --out <file>", examples, "h3yun file get",
+		func(command *cobra.Command) {
+			command.Flags().String("id", "", "attachment file id (from `h3yun files list`)")
+			command.Flags().String("out", "", "output file path")
+		},
+		func(cmd *cobra.Command, _ []string) error {
+			if web == nil {
+				return errors.New("H3Yun session service is unavailable")
+			}
+			fileID, _ := cmd.Flags().GetString("id")
+			outPath, _ := cmd.Flags().GetString("out")
+			if strings.TrimSpace(fileID) == "" || strings.TrimSpace(outPath) == "" {
+				return errors.New("required flags --id and --out are missing")
+			}
+			if err := web.DownloadOne(cmd.Context(), strings.TrimSpace(fileID), strings.TrimSpace(outPath)); err != nil {
+				return err
+			}
+			return writeJSON(cmd.OutOrStdout(), map[string]any{"ok": true, "data": map[string]any{"file": outPath}})
 		}))
 	return file
 }

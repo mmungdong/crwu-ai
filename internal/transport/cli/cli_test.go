@@ -102,7 +102,7 @@ func TestSchemeCatalog(t *testing.T) {
 		found[command.Name] = true
 		names = append(names, command.Name)
 	}
-	for _, want := range []string{"version", "scheme", "h3yun session login", "h3yun apps search", "h3yun file download"} {
+	for _, want := range []string{"version", "scheme", "h3yun session login", "h3yun apps search", "h3yun file download", "h3yun file get"} {
 		if !found[want] {
 			t.Fatalf("catalog missing %q in [%s]", want, names)
 		}
@@ -140,6 +140,8 @@ type fakeWeb struct {
 	lastKeyword string
 	lastPage    int
 	lastSize    int
+	lastFileID  string
+	lastOutPath string
 }
 
 func (f *fakeWeb) EnsureFresh(context.Context) error {
@@ -185,6 +187,10 @@ func (f *fakeWeb) Download(context.Context, string, string, string) ([]string, e
 		return nil, f.err
 	}
 	return []string{"/tmp/a.docx"}, nil
+}
+func (f *fakeWeb) DownloadOne(_ context.Context, fileID, outPath string) error {
+	f.lastFileID, f.lastOutPath = fileID, outPath
+	return f.err
 }
 
 func depsWith(ops H3YunOpsService, web H3YunWebService) Dependencies {
@@ -235,6 +241,28 @@ func TestRecordsListForwardsFilterAndKeyword(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"rows":[]`) {
 		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestFileGetDownloadsOneAttachment(t *testing.T) {
+	web := &fakeWeb{}
+	code, stdout, stderr := runCLI(depsWith(nil, web), "h3yun", "file", "get", "--id", "id9", "--out", "/tmp/x.docx")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+	if web.lastFileID != "id9" || web.lastOutPath != "/tmp/x.docx" {
+		t.Fatalf("fileId/outPath = %q/%q", web.lastFileID, web.lastOutPath)
+	}
+	if !strings.Contains(stdout, `"ok":true`) {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestFileGetRequiresFlags(t *testing.T) {
+	web := &fakeWeb{}
+	code, _, stderr := runCLI(depsWith(nil, web), "h3yun", "file", "get", "--id", "id9")
+	if code == 0 || !strings.Contains(stderr, "--out") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
 	}
 }
 

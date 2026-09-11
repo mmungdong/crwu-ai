@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -196,6 +198,30 @@ func TestRecordsWithoutFilterOmitsFilter(t *testing.T) {
 	}
 	if client.lastQuery.Filter != nil {
 		t.Fatalf("Records() sent a filter without --filter: %#v", client.lastQuery.Filter)
+	}
+}
+
+func TestDownloadOneWritesFile(t *testing.T) {
+	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
+	service := testService(store, &fakeClient{})
+	out := filepath.Join(t.TempDir(), "sub", "a.docx")
+	if err := service.DownloadOne(context.Background(), "id1", out); err != nil {
+		t.Fatalf("DownloadOne() error = %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read %s: %v", out, err)
+	}
+	if string(data) != "PK file" {
+		t.Fatalf("content = %q", data)
+	}
+}
+
+func TestDownloadOneRequiresFileID(t *testing.T) {
+	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
+	service := testService(store, &fakeClient{})
+	if err := service.DownloadOne(context.Background(), "  ", "/tmp/x.docx"); err == nil {
+		t.Fatal("DownloadOne() error = nil, want missing-file-id error")
 	}
 }
 

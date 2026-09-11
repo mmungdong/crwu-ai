@@ -113,6 +113,7 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 |---|---|
 | `crwu h3yun files list --schema <编码> --id <记录ID>` | 列出该记录全部附件（字段/文件名/类型/大小/下载URL） |
 | `crwu h3yun file download --schema <编码> --id <记录ID> --out <目录>` | 下载全部附件到本地（原名 + 自动去重） |
+| `crwu h3yun file get --id <FileId> --out <文件路径>` | **只下载单个附件**到指定路径（FileId 来自 `files list`） |
 
 ### Agent 网关（`h3pat`，需氚云开通数据面）
 
@@ -143,7 +144,11 @@ crwu h3yun records list --schema <code> --filter "Status = 1 and Name Contains '
 crwu h3yun records get  --schema <编码> --id <ObjectId>
 crwu h3yun files list   --schema <编码> --id <ObjectId>
 crwu h3yun file download --schema <编码> --id <ObjectId> --out ./附件
+crwu h3yun file get      --id <FileId> --out ./附件/估值报告.pdf
 ```
+
+> 审核阶段一隔离：`file get` 只取单个附件，是「只下源材料、不下复核件」的唯一放行命令；
+> 复核件应只用 `files list` 看元数据并记入排除清单，禁止 `file download` 整单下载。
 
 **纪律**：`appCode`/`schemaCode`/`recordId` 一律来自上一步命令的返回值，**禁止猜测或编造编码**；
 关键字搜不到先放宽关键字或换表单，不要硬试 ID；`--filter` 字段写错会直接报错，先跑一次
@@ -158,7 +163,7 @@ crwu h3yun file download --schema <编码> --id <ObjectId> --out ./附件
 
 已知坑：
 - 单条"详情"务必用 `records get`（走过滤查询）；氚云 `loaddata` 接口会返回空壳，不要用。
-- 附件下载 URL 为 `www.h3yun.com/Form/Download/?AttachmentID=<FileId>`，需带会话鉴权；`file download` 已封装。
+- 附件下载 URL 为 `www.h3yun.com/Form/Download/?AttachmentID=<FileId>`，需带会话鉴权；`file download`（整单）与 `file get`（单件，按 FileId）均已封装。
 - 记录字段输出含 `*_Original` 冗余结构属正常；人员/部门字段同时有 `*_Name` 可读名。
 - 氚云记录查询没有 SQL `Like`；`--filter` 里的 `Like` 自动映射为 `Contains`（包含匹配），前缀/后缀用 `StartWith`/`EndWith`。
 

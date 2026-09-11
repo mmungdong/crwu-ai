@@ -79,6 +79,7 @@ make test
 ./bin/darwin/crwu h3yun records get     --schema <表单编码> --id <记录ID>
 ./bin/darwin/crwu h3yun files list      --schema <表单编码> --id <记录ID>
 ./bin/darwin/crwu h3yun file download   --schema <表单编码> --id <记录ID> --out ./附件
+./bin/darwin/crwu h3yun file get        --id <文件ID> --out ./附件/估值报告.pdf
 ```
 
 > 🔒 **凭证存在哪里？** 只存本机 OS 凭据存储（`internal/platform/h3yuncreds`）
@@ -128,6 +129,7 @@ make test
 | --- | --- |
 | `crwu h3yun files list --schema <编码> --id <ID>` | 列出记录的全部附件 |
 | `crwu h3yun file download --schema <编码> --id <ID> --out <目录>` | 下载全部附件——原名 + 自动去重 |
+| `crwu h3yun file get --id <文件ID> --out <文件路径>` | 只下载单个附件到指定路径 |
 
 ### ⚡ Agent 网关（`h3pat`）
 
