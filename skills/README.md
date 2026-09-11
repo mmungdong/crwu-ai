@@ -16,7 +16,18 @@
 | [`h3yun-query`](h3yun-query/SKILL.md) | 提示型 | 交互式 H3Yun 查询：系统→表单→记录，20 条/页，支持标题关键词查找 |
 | [`crwu-audit`](crwu-audit/SKILL.md) | 提示型 | 报告审核能力族**总路由**（≤300 行入口 + `references/` 运行材料）：维护全部 crwu-audit-* 路由注册表；画像=报告形态→经济行为主线（受控角度词表）→对象→方法（附件名+抽验）→监管覆盖层（国资/证券/司法/金融）；字段画像先行、弱结构化名称兜底；细分未命中降级父大方向→汇总输出（自身不做审核判断）；**兜底/🅿️⏳ 命中时自动附《待建子技能提案》**（references/04：补哪个子技能/管什么/审什么）；画像必含 **scenario 装配键**（评估目的×方法双键，refs/00 §3 / 01）；**两阶段输出：阶段一独立审核（意见定稿前不下载/读取/参考复核记录）→ 阶段二复核对照 A/B/C + 综合对比（AI∩复核/AI 新增/复核独有=漏检候选）**；交付按技能内 **`references/11-html-delivery-spec.md`（CRWU 审核意见 HTML 送达规范 v1.0）**：AuditResult JSON 单一事实源 + 双证据链 + 《本次审核记录清单》+ **每个项目只交付一个自包含单文件 HTML `审核意见.<项目ID>.html`（可离线、A4 可打印、含折叠专业审核轨迹）**；改前先读 `references/99-维护说明.md` |
 | [`crwu-audit-leaf-common`](crwu-audit/references/12-leaf-common-contract.md) | 契约 | 资产/业务叶子的**共同约束**（轴边界·输入·一级根装配·二级选择·执行顺序·条目状态·来源优先级·证据出处·capability gap）：公共规则只写这一份，叶子引用不复制 |
-| [`crwu-audit-asset-realestate`](crwu-audit-asset-realestate/SKILL.md) | 提示型 | 房地产（不动产/房产）**一级资产 Skill**：映射 `02-资产类型/房地产/` 一级根，运行时经 crwu-dws 递归下载根内全部支持正文；执行对象适用性 + 生成审核关注点，细分对象（如土地使用权）在已下载目录包内二次选用；业务要求由业务轴 Skill 并集提供，不建资产×业务组合 Skill |
+| [`crwu-audit-asset-realestate`](crwu-audit-asset-realestate/SKILL.md) | 提示型 | 房地产（不动产/房产）**一级资产 Skill**：映射 `02-资产类型/01-房地产/` 一级根，运行时经 crwu-dws 递归下载根内全部支持正文；执行对象适用性 + 生成审核关注点，细分对象（如土地使用权）在已下载目录包内二次选用；业务要求由业务轴 Skill 并集提供，不建资产×业务组合 Skill |
+| [`crwu-audit-asset-equipment`](crwu-audit-asset-equipment/SKILL.md) | 提示型 | 机器设备**一级资产 Skill**：映射 `02-资产类型/02-机器设备/` 一级根，递归下载根内全部正文；执行对象适用性 + 生成审核关注点，业务要求由业务轴并集提供 |
+| [`crwu-audit-asset-enterprise-value`](crwu-audit-asset-enterprise-value/SKILL.md) | 提示型 | 企业价值**一级资产 Skill**：映射 `02-资产类型/03-企业价值/` 一级根，细分对象（股东全部/部分权益）在目录包内二次选用 |
+| [`crwu-audit-asset-intangible`](crwu-audit-asset-intangible/SKILL.md) | 提示型 | 无形资产**一级资产 Skill**：映射 `02-资产类型/04-无形资产/` 一级根，细分对象（专利权/商标权/著作权/特许经营权/数据资产/商誉/其它）在目录包内二次选用 |
+| [`crwu-audit-asset-mining-right`](crwu-audit-asset-mining-right/SKILL.md) | 提示型 | 矿业权**一级资产 Skill**：映射 `02-资产类型/05-矿业权/` 一级根，细分对象（采矿权/探矿权）在目录包内二次选用 |
+| [`crwu-audit-asset-inventory`](crwu-audit-asset-inventory/SKILL.md) | 提示型 | 存货**一级资产 Skill**：映射 `02-资产类型/06-存货/` 一级根 |
+| [`crwu-audit-asset-debt`](crwu-audit-asset-debt/SKILL.md) | 提示型 | 债权**一级资产 Skill**：映射 `02-资产类型/07-债权/` 一级根 |
+| [`crwu-audit-asset-portfolio`](crwu-audit-asset-portfolio/SKILL.md) | 提示型 | 资产组合**一级资产 Skill**：映射 `02-资产类型/08-资产组合/` 一级根 |
+| [`crwu-audit-asset-transport-equipment`](crwu-audit-asset-transport-equipment/SKILL.md) | 提示型 | 交通运输设备**一级资产 Skill**：映射 `02-资产类型/09-交通运输设备/` 一级根，细分对象（车辆/船舶）在目录包内二次选用 |
+| [`crwu-audit-asset-asset-group-goodwill`](crwu-audit-asset-asset-group-goodwill/SKILL.md) | 提示型 | 资产组-含商誉**一级资产 Skill**：映射 `02-资产类型/10-资产组-含商誉/` 一级根 |
+| [`crwu-audit-asset-scrap-materials`](crwu-audit-asset-scrap-materials/SKILL.md) | 提示型 | 废旧物资**一级资产 Skill**：映射 `02-资产类型/11-废旧物资/` 一级根 |
+| [`crwu-audit-asset-other`](crwu-audit-asset-other/SKILL.md) | 提示型 | 其他**一级资产 Skill**：映射 `02-资产类型/12-其他/` 一级根 |
 | [`crwu-audit-biz-asset-operation`](crwu-audit-biz-asset-operation/SKILL.md) | 提示型 | 资产经营**一级业务 Skill**：映射 `01-业务路线/01-资产经营/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
 | [`crwu-audit-biz-transaction-disposal`](crwu-audit-biz-transaction-disposal/SKILL.md) | 提示型 | 交易与处置**一级业务 Skill**：映射 `01-业务路线/02-交易与处置/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |
 | [`crwu-audit-biz-financial-reporting`](crwu-audit-biz-financial-reporting/SKILL.md) | 提示型 | 财务报告**一级业务 Skill**：映射 `01-业务路线/03-财务报告/` 一级根，递归下载根内全部正文；先执行共用层 `共同审核点`（若存在），再按命中子业务执行 `01-业务通用审核要点`；子业务在已下载目录包内选用，不各建 Skill |

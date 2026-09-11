@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-11 · feat(skills) · 资产轴补齐 11 个一级资产 Skill 并对齐路由（知识库 `02-资产类型/` 由 1 个一级根扩至 12 个）
+
+- **背景**：知识库更新后 `02-资产类型/` 从「只有 01-房地产」扩到 12 个一级根（机器设备/企业价值/无形资产/矿业权/存货/债权/资产组合/交通运输设备/资产组-含商誉/废旧物资/其他），全部有真实审核条目正文（本次经 `crwu-dws` 实时下载逐份核对，无空文档/待补/TODO 占位）。
+- **新增技能**：`crwu-audit-asset-equipment`（设备→机器设备 改名）、`crwu-audit-asset-enterprise-value`、`crwu-audit-asset-intangible`、`crwu-audit-asset-mining-right`、`crwu-audit-asset-inventory`、`crwu-audit-asset-debt`、`crwu-audit-asset-portfolio`、`crwu-audit-asset-transport-equipment`、`crwu-audit-asset-asset-group-goodwill`、`crwu-audit-asset-scrap-materials`、`crwu-audit-asset-other`，全部 `available`（四件套 + 引用 `12-leaf-common-contract.md`）。
+- **移除登记**：`数据资产`（现为无形资产细分对象 `05-数据资产`）、`森林资源`（库内已消失）不再作为一级资产标签。
+- **范围轴对齐**：`企业价值`/`资产组合` 在 scope 轴改为 `profile-only`（范围画像保留，审核内容由 asset 轴 `crwu-audit-asset-enterprise-value`/`crwu-audit-asset-portfolio` 承接），不再映射 pending scope 技能。
+- **业务轴修正**：`04-business-classification.md` 财务报告子业务补 `合并对价分摊`（此前叶子已有、分类表漏）。
+- **同步**：`07-skill-registry.md`、`02/03/04-*-classification.md`、`08-union-dispatch-rules.md`（示例更新 设备→机器设备、pending→available）、`test_audit_multiaxis_router.py`、`check_audit_skill_mappings.py` 的 `KNOWN_SKILL_SUFFIXES`、`skills/README.md` 技能表；校准表 `07-kb-skill-map.md` 用最新目录刷新。
+- **验证**：`check_audit_skill_mappings.py --catalog <本次快照>` error=0；`test_audit_skill_maintainer.py` 58/58、`test_audit_multiaxis_router.py` 11/11、`test_dws_source_contract.py` 7/7、`kb_tool.py validate` error=0 通过。
+
 ## 2026-09-11 · feat(cli) · 新增 `crwu h3yun file get` 单附件下载（打通审核阶段一「定向取源材料」门禁）
 
 - **背景**：审核阶段一安全下载门禁要求「只下源材料、不下复核件」。原 `crwu h3yun file download` 会下载整条记录全部附件，若记录混有复核意见类附件则阶段一被迫中止。经排查，服务层 `DownloadAttachment(ctx, attachmentID)`（`GET /Form/Download/?AttachmentID=<id>`）早已支持按 FileId 下载单附件，只是未暴露为 CLI 子命令。
