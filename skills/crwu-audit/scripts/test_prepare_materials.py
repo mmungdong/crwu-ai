@@ -308,6 +308,43 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual([], rec["hiddenRefs"])
         self.assertEqual([], rec["calcChainNotReproducible"])
 
+    # ---- 4d2 多版本隐藏结构比对（H0 元数据级）----------------------------
+    def test_same_named_versions_with_different_hidden_structure_flag_drift(self):
+        """同名定稿/送审稿隐藏结构不一致 → 输出元数据级提示，且不读隐藏内容。"""
+        import openpyxl
+        for stage, hide_col in (("定稿", "O"), ("送审稿", None)):
+            d = self.src / stage
+            d.mkdir()
+            wb = openpyxl.Workbook()
+            wb.active["A1"] = "值"
+            wb.active["O1"] = 999999
+            if hide_col:
+                wb.active.column_dimensions[hide_col].hidden = True
+            wb.save(d / "13-评估明细表-20231231.xlsx")
+
+        self._run()
+
+        drift = self._payload().get("hiddenStructureDrift", [])
+        self.assertEqual(1, len(drift), drift)
+        variants = drift[0]["variants"]
+        self.assertEqual(2, len(variants), variants)
+        blob = (self.case / "材料盘点.json").read_text(encoding="utf-8")
+        self.assertNotIn("999999", blob, "比对只出隐藏元数据，不得带出隐藏内容值")
+
+    def test_same_named_versions_with_identical_hidden_structure_do_not_flag(self):
+        import openpyxl
+        for stage in ("定稿", "送审稿"):
+            d = self.src / stage
+            d.mkdir()
+            wb = openpyxl.Workbook()
+            wb.active["A1"] = "值"
+            wb.active.column_dimensions["O"].hidden = True
+            wb.save(d / "13-评估明细表-20231231.xlsx")
+
+        self._run()
+
+        self.assertEqual([], self._payload().get("hiddenStructureDrift", []))
+
     # ---- 4d 压缩包：下载后必须先解压再审核 --------------------------------
     def test_archive_is_extracted_and_contents_are_processed(self):
         """归档必须先解压，且解压产物随同一套逻辑继续处理（xlsx 也要出工作版）。"""

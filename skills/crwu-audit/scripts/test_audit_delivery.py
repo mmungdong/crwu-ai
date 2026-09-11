@@ -284,5 +284,67 @@ class AuditDeliveryCliTest(unittest.TestCase):
             self.assertFalse(out.exists(), "校验失败时不得产出 HTML")
 
 
+class ReviewerOnlyInFileResolutionTest(unittest.TestCase):
+    """复核独有项在件核验三态（L-resolved/open/unclosed/uncheckable）的校验契约。
+
+    以样例为基底，只改 phaseControl.reviewComparison，隔离断言目标字段，
+    不触发与三态无关的其他校验。
+    """
+
+    def _reviewer_item(self, **over):
+        item = {
+            "itemId": "R-1",
+            "title": "人工复核独有项",
+            "reviewerEvidence": {"file": "复核意见.pdf", "locator": "P3", "quote": "……"},
+            "inFileResolution": "L-open",
+            "inFileEvidence": {"file": "定稿.docx", "locator": "P12"},
+            "handling": "进入隔离补审",
+        }
+        item.update(over)
+        return item
+
+    def _result(self, reviewer_item):
+        result = load_sample()
+        result["reviewComparison"] = {
+            "status": "not_performed",
+            "bands": {"overlap": 0, "aiOnly": 0, "divergent": 0, "reviewerOnly": 1},
+            "reviewerOnlyItems": [reviewer_item],
+            "metrics": {"denominator": "人工复核共 5 项"},
+        }
+        return result
+
+    def _errors(self, item):
+        return delivery.validate(self._result(item))
+
+    def test_missing_inFileResolution_is_rejected(self):
+        it = self._reviewer_item(); del it["inFileResolution"]
+        self.assertTrue(any("inFileResolution" in e for e in self._errors(it)))
+
+    def test_invalid_resolution_value_is_rejected(self):
+        self.assertTrue(any("inFileResolution" in e for e in self._errors(self._reviewer_item(inFileResolution="L-foo"))))
+
+    def test_L_open_requires_inFileEvidence(self):
+        it = self._reviewer_item(); del it["inFileEvidence"]
+        self.assertTrue(any("inFileEvidence.file" in e for e in self._errors(it)))
+
+    def test_L_unclosed_requires_closureEvidence(self):
+        it = self._reviewer_item(inFileResolution="L-unclosed")
+        self.assertTrue(any("closureEvidence" in e for e in self._errors(it)))
+
+    def test_L_uncheckable_allows_missing_inFileEvidence(self):
+        it = self._reviewer_item(inFileResolution="L-uncheckable"); del it["inFileEvidence"]
+        self.assertFalse(any("inFileEvidence" in e for e in self._errors(it)), self._errors(it))
+
+    def test_dual_denominator_is_accepted(self):
+        it = self._reviewer_item()
+        r = self._result(it)
+        r["reviewComparison"]["metrics"] = {
+            "denominator": "含 L-resolved：5 项", "aiHitRate": "60%",
+            "denominatorExclResolved": "仅 L-open：2 项", "aiHitRateExclResolved": "50%",
+        }
+        self.assertFalse(any("denominator" in e for e in delivery.validate(r)), delivery.validate(r))
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

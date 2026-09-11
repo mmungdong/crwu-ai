@@ -7,14 +7,25 @@
     "engineVersion": "audit-skill v0.1",
     "profile": {
       "objectType": "企业价值评估（示意）",
-      "methods": ["市场法", "收益法"],
+      "methods": [
+        "市场法",
+        "收益法"
+      ],
       "scenario": "股权转让（示意）",
       "stage": "报告审核",
       "routeProfile": {
-        "scope_types": ["企业价值"],
-        "asset_types": ["房地产"],
-        "business_types": ["股权转让"],
-        "overlays": ["证券"],
+        "scope_types": [
+          "企业价值"
+        ],
+        "asset_types": [
+          "房地产"
+        ],
+        "business_types": [
+          "股权转让"
+        ],
+        "overlays": [
+          "证券"
+        ],
         "weak_structured": false
       }
     }
@@ -95,8 +106,14 @@
         }
       ],
       "flowStatus": "pending_response",
-      "confidence": {"level": "high", "reason": "规则与两份材料均可定位（示意）"},
-      "reviewComparison": {"status": "performed", "category": "A"}
+      "confidence": {
+        "level": "high",
+        "reason": "规则与两份材料均可定位（示意）"
+      },
+      "reviewComparison": {
+        "status": "performed",
+        "category": "A"
+      }
     },
     {
       "issueId": "ISS-DC-003",
@@ -146,8 +163,14 @@
         }
       ],
       "flowStatus": "pending_response",
-      "confidence": {"level": "high", "reason": "两个数值均可定位（示意）"},
-      "reviewComparison": {"status": "performed", "category": "B"}
+      "confidence": {
+        "level": "high",
+        "reason": "两个数值均可定位（示意）"
+      },
+      "reviewComparison": {
+        "status": "performed",
+        "category": "B"
+      }
     }
   ],
   "manualConfirmationItems": [
@@ -157,7 +180,9 @@
       "locationSummary": "评估说明.docx 第 41 页 收益法参数",
       "observation": "折现率取 10.5%，未见来源说明（示意）。",
       "questionToConfirm": "该取值是否有内部或外部依据文件支持？（示意）",
-      "evidence": ["评估说明.docx 第 41 页 收益法参数 折现率 10.5%（示意）"],
+      "evidence": [
+        "评估说明.docx 第 41 页 收益法参数 折现率 10.5%（示意）"
+      ],
       "suggestedAction": "请项目负责人提供参数来源或补充说明（示意）。"
     }
   ],
@@ -175,8 +200,12 @@
         "kbRelativePath": "03-评估方法/市场法/规则文件.md",
         "exportedAt": "2026-09-10T09:00:00+08:00",
         "usageCount": 1,
-        "purposes": ["评估方法规则核对"],
-        "usedByIssueIds": ["ISS-MKT-007"]
+        "purposes": [
+          "评估方法规则核对"
+        ],
+        "usedByIssueIds": [
+          "ISS-MKT-007"
+        ]
       },
       {
         "ruleId": "RULE-RPT-004",
@@ -190,22 +219,45 @@
         "kbRelativePath": "06-规则库/M-数据对齐-勾稽与一致性/清单-数据校对.md",
         "exportedAt": "2026-09-10T09:05:00+08:00",
         "usageCount": 1,
-        "purposes": ["数据勾稽覆盖核查"],
-        "usedByIssueIds": ["ISS-DC-003"]
+        "purposes": [
+          "数据勾稽覆盖核查"
+        ],
+        "usedByIssueIds": [
+          "ISS-DC-003"
+        ]
       }
     ],
     "ruleMap": {
-      "external_formal": {"valuation_standard": ["RULE-MKT-001"]},
-      "internal_auxiliary": {"crwu_kb": ["RULE-RPT-004"]}
+      "external_formal": {
+        "valuation_standard": [
+          "RULE-MKT-001"
+        ]
+      },
+      "internal_auxiliary": {
+        "crwu_kb": [
+          "RULE-RPT-004"
+        ]
+      }
     },
     "knowledgeBaseFiles": [
-      {"path": "03-评估方法/市场法/规则文件.md", "exportedAt": "2026-09-10T09:00:00+08:00"},
-      {"path": "06-规则库/M-数据对齐-勾稽与一致性/清单-数据校对.md", "exportedAt": "2026-09-10T09:05:00+08:00"}
+      {
+        "path": "03-评估方法/市场法/规则文件.md",
+        "exportedAt": "2026-09-10T09:00:00+08:00"
+      },
+      {
+        "path": "06-规则库/M-数据对齐-勾稽与一致性/清单-数据校对.md",
+        "exportedAt": "2026-09-10T09:05:00+08:00"
+      }
     ]
   },
   "reviewComparison": {
     "status": "performed",
-    "bands": {"overlap": 1, "aiOnly": 1, "divergent": 0, "reviewerOnly": 1},
+    "bands": {
+      "overlap": 1,
+      "aiOnly": 1,
+      "divergent": 0,
+      "reviewerOnly": 1
+    },
     "reviewerOnlyItems": [
       {
         "itemId": "RO-001",
@@ -215,19 +267,56 @@
           "locator": "第 2 页 条目 1-3",
           "quote": "评估范围披露不完整，请补充（示意摘录）"
         },
-        "handling": "漏检候选：先查适用规则集快照与逐条裁定表归因；确属本次审核面则走隔离补审（示意）。"
+        "handling": "漏检候选：先查适用规则集快照与逐条裁定表归因；确属本次审核面则走隔离补审（示意）。",
+        "inFileResolution": "L-open",
+        "inFileEvidence": {
+          "file": "13-评估说明-轻型汽车-定稿.docx",
+          "locator": "评估范围章节",
+          "quote": "（示意）被审件中未落实该披露"
+        }
       }
     ],
-    "metrics": {"aiHitRate": "0.50", "denominator": "2 条复核事项（示意）"}
+    "metrics": {
+      "aiHitRate": "0.50",
+      "denominator": "2 条复核事项（示意）",
+      "denominatorExclResolved": "1 条未落实",
+      "aiHitRateExclResolved": "0.00"
+    }
   },
   "scope": {
     "inputs": [
-      {"fileId": "F-001", "displayName": "报告.docx", "version": "v1.0", "readable": true},
-      {"fileId": "F-002", "displayName": "评估说明.docx", "version": "v1.0", "readable": true},
-      {"fileId": "F-004", "displayName": "测算明细表.xlsx", "version": "v1.0", "readable": true},
-      {"fileId": "F-009", "displayName": "权属附件扫描件.pdf", "version": "v1.0", "readable": false}
+      {
+        "fileId": "F-001",
+        "displayName": "报告.docx",
+        "version": "v1.0",
+        "readable": true
+      },
+      {
+        "fileId": "F-002",
+        "displayName": "评估说明.docx",
+        "version": "v1.0",
+        "readable": true
+      },
+      {
+        "fileId": "F-004",
+        "displayName": "测算明细表.xlsx",
+        "version": "v1.0",
+        "readable": true
+      },
+      {
+        "fileId": "F-009",
+        "displayName": "权属附件扫描件.pdf",
+        "version": "v1.0",
+        "readable": false
+      }
     ],
-    "checkDomains": ["报告正文", "评估说明", "测算明细表", "数据勾稽", "监管覆盖核查"],
+    "checkDomains": [
+      "报告正文",
+      "评估说明",
+      "测算明细表",
+      "数据勾稽",
+      "监管覆盖核查"
+    ],
     "notCheckedItems": [
       {
         "itemId": "NC-001",
@@ -236,10 +325,15 @@
         "reason": "扫描件质量不足，OCR 无法可靠识别（示意）。",
         "impact": "权属披露类检查点无法确认（示意）。",
         "requiredAction": "重新提供可读电子件或交人工复核（示意）。",
-        "relatedFiles": ["权属附件扫描件.pdf"]
+        "relatedFiles": [
+          "权属附件扫描件.pdf"
+        ]
       }
     ],
-    "limitations": ["扫描件 OCR 质量（示意）", "宏与外部链接未执行（示意）"]
+    "limitations": [
+      "扫描件 OCR 质量（示意）",
+      "宏与外部链接未执行（示意）"
+    ]
   },
   "professionalTrail": {
     "applicableRuleSnapshot": {
@@ -248,18 +342,32 @@
       "未装载原因": "无（示意）"
     },
     "adjudications": [
-      {"recordId": "CHK-MKT-001", "itemRef": "可比案例选择与修正（示意）", "result": "difference"},
-      {"recordId": "CHK-MKT-002", "itemRef": "可比案例数量与来源（示意）", "result": "pass"}
+      {
+        "recordId": "CHK-MKT-001",
+        "itemRef": "可比案例选择与修正（示意）",
+        "result": "difference"
+      },
+      {
+        "recordId": "CHK-MKT-002",
+        "itemRef": "可比案例数量与来源（示意）",
+        "result": "pass"
+      }
     ],
     "checkRecords": [
       {
         "recordId": "AI-001",
         "domain": "AI 检查",
         "checkItem": "折现率取值与来源核对（示意）",
-        "targets": ["评估说明.docx 第 41 页"],
-        "evidence": ["折现率 10.5%，未见来源说明（示意）"],
+        "targets": [
+          "评估说明.docx 第 41 页"
+        ],
+        "evidence": [
+          "折现率 10.5%，未见来源说明（示意）"
+        ],
         "result": "difference",
-        "linkedIssueIds": ["ISS-MKT-007"],
+        "linkedIssueIds": [
+          "ISS-MKT-007"
+        ],
         "performedAt": "2026-09-09T09:30:00+08:00",
         "executor": "crwu-audit-market-approach（示意）"
       },
@@ -267,10 +375,17 @@
         "recordId": "DC-003",
         "domain": "数据核查",
         "checkItem": "汇总与报告结论勾稽（示意）",
-        "targets": ["测算明细表.xlsx 汇总!B12", "报告.docx 第 12 页"],
-        "evidence": ["1234.00 与 1244.00（示意数值）"],
+        "targets": [
+          "测算明细表.xlsx 汇总!B12",
+          "报告.docx 第 12 页"
+        ],
+        "evidence": [
+          "1234.00 与 1244.00（示意数值）"
+        ],
         "result": "difference",
-        "linkedIssueIds": ["ISS-DC-003"],
+        "linkedIssueIds": [
+          "ISS-DC-003"
+        ],
         "performedAt": "2026-09-09T09:40:00+08:00",
         "executor": "crwu-audit-datacheck（示意）"
       }
@@ -288,5 +403,8 @@
     "sourceDigest": "",
     "embeddedJsonDigest": ""
   },
-  "renderPolicy": {"printTrail": false, "language": "zh-CN"}
+  "renderPolicy": {
+    "printTrail": false,
+    "language": "zh-CN"
+  }
 }

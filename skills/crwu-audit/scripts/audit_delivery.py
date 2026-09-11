@@ -150,7 +150,14 @@ CHECK_RECORD_REQUIRED = [
     "performedAt",
     "executor",
 ]
-REVIEWER_ONLY_REQUIRED = ["itemId", "title", "reviewerEvidence", "handling"]
+REVIEWER_ONLY_REQUIRED = ["itemId", "title", "reviewerEvidence", "handling", "inFileResolution"]
+IN_FILE_RESOLUTION_VALUES = {"L-resolved", "L-open", "L-unclosed", "L-uncheckable"}
+IN_FILE_RESOLUTION_LABEL = {
+    "L-resolved": "复核已提出 · 被审件已落实",
+    "L-open": "复核已提出 · 被审件未落实",
+    "L-unclosed": "复核答复称已改 · 被审件未落地",
+    "L-uncheckable": "材料缺失或不可读 · 未能核验",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -510,6 +517,33 @@ def validate(result: dict, rendered: bool = False, expect_renderer: bool = False
                     errors.append("{0}.reviewerEvidence.{1} 不得为空".format(where, field))
         if not _is_nonempty_str(item.get("handling")):
             errors.append("{0}.handling 不得为空".format(where))
+        resolution = item.get("inFileResolution")
+        if resolution not in IN_FILE_RESOLUTION_VALUES:
+            errors.append("{0}.inFileResolution 必须为 L-resolved/L-open/L-unclosed/L-uncheckable".format(where))
+        else:
+            if resolution in ("L-resolved", "L-open", "L-unclosed"):
+                in_file = item.get("inFileEvidence") or {}
+                for field in ("file", "locator"):
+                    if not _is_nonempty_str(in_file.get(field)):
+                        errors.append("{0}.inFileResolution={1} 必须给出 inFileEvidence.{2}（被审件在件位置）".format(where, resolution, field))
+            if resolution == "L-unclosed":
+                closure = item.get("closureEvidence") or {}
+                if not (_is_nonempty_str(closure.get("file")) and _is_nonempty_str(closure.get("locator"))):
+                    errors.append("{0}.inFileResolution=L-unclosed 必须给出 closureEvidence（答复出处）".format(where))
+    hidden_access = comparison.get("hiddenRegionAccess")
+    if hidden_access is not None:
+        if not isinstance(hidden_access, list):
+            errors.append("reviewComparison.hiddenRegionAccess 必须是数组")
+        else:
+            for idx, entry in enumerate(hidden_access):
+                where = "reviewComparison.hiddenRegionAccess[{0}]".format(idx)
+                if not isinstance(entry, dict):
+                    errors.append("{0} 必须是对象".format(where))
+                    continue
+                for field in ("authorizedBy", "authorizedAt", "authorization", "scope"):
+                    if not _is_nonempty_str(entry.get(field)):
+                        errors.append("{0}.{1} 不得为空".format(where, field))
+
     if status == "performed":
         expected_bands = {
             "overlap": review_categories["A"],
@@ -868,20 +902,25 @@ def _manual_item(item) -> str:
 
 def _reviewer_only_item(item) -> str:
     evidence = item.get("reviewerEvidence") or {}
+    in_file = item.get("inFileEvidence") or {}
+    closure = item.get("closureEvidence") or {}
+    resolution = item.get("inFileResolution")
+    rows = [
+        ("编号", item.get("itemId")),
+        ("复核文件", evidence.get("file")),
+        ("定位", evidence.get("locator")),
+        ("原文摘录", evidence.get("quote")),
+        ("在件核验", IN_FILE_RESOLUTION_LABEL.get(resolution, resolution)),
+        ("被审件文件", in_file.get("file", "")),
+        ("被审件定位", in_file.get("locator", "")),
+        ("处理", item.get("handling")),
+    ]
+    if resolution == "L-unclosed":
+        rows.insert(6, ("答复文件", closure.get("file", "")))
+        rows.insert(7, ("答复定位", closure.get("locator", "")))
     return (
         "<h4>{0}</h4><table class=\"kv\">{1}</table>"
-    ).format(
-        _text(item.get("title")),
-        _rows(
-            [
-                ("编号", item.get("itemId")),
-                ("复核文件", evidence.get("file")),
-                ("定位", evidence.get("locator")),
-                ("原文摘录", evidence.get("quote")),
-                ("处理", item.get("handling")),
-            ]
-        ),
-    )
+    ).format(_text(item.get("title")), _rows(rows))
 
 
 def _not_checked_item(item) -> str:
@@ -1129,6 +1168,8 @@ def render(result: dict, print_trail: bool = None) -> str:
                     ("仅人工复核发现", (comparison.get("bands") or {}).get("reviewerOnly")),
                     ("命中率", (comparison.get("metrics") or {}).get("aiHitRate")),
                     ("分母口径", (comparison.get("metrics") or {}).get("denominator")),
+                    ("命中率（仅未落实）", (comparison.get("metrics") or {}).get("aiHitRateExclResolved")),
+                    ("分母口径（仅未落实）", (comparison.get("metrics") or {}).get("denominatorExclResolved")),
                 ]
             )
         )

@@ -508,6 +508,7 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
     os.makedirs(work_dir, exist_ok=True)
     extract_dir = os.path.abspath(extract_dir or os.path.join(case, "解压"))
     inv, seen_xlsx, archives = [], set(), []
+    hidden_by_stem = {}   # 同名（跨版本）文件的隐藏结构，用于元数据级跨版本比对
     queue = []
     for root, _, fs in os.walk(src_dir):
         for f in sorted(fs):
@@ -594,6 +595,10 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                                    "hiddenRefsCount": len(refs),
                                    "calcChainNotReproducible": sorted(
                                        {f"{h['sheet']}!{h['cell']}" for h in refs})}
+                # 跨版本隐藏结构比对（只比对元数据，不读隐藏内容）
+                stem = os.path.basename(p).split(".")[0]
+                hidden_by_stem.setdefault(stem, []).append(
+                    {"path": rel, "stage": rec["stage"], "hiddenMeta": hidden})
                 if resid:
                     rec["note"] = f"隐藏区残留 {resid}：需按重建法重做，仍残留则挂起"
                 with open(os.path.join(txt_dir, os.path.basename(p) + ".sheets.json"), "w",
@@ -631,7 +636,25 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
         print(f"[{'OK ' if rec.get('readable') else 'NG '}] {rec['path']}  {rec.get('note', '')}",
               flush=True)
 
-    payload = {"items": inv, "archives": archives}
+    drift = []
+    for stem, entries in hidden_by_stem.items():
+        metas = {}
+        for e in entries:
+            key = json.dumps(e["hiddenMeta"], ensure_ascii=False, sort_keys=True)
+            metas.setdefault(key, []).append({"path": e["path"], "stage": e["stage"]})
+        if len(metas) > 1:
+            drift.append({
+                "stem": stem,
+                "note": "同一材料多版本隐藏结构不一致（仅元数据比对，未读隐藏内容）——可见区表格规范提示",
+                "variants": sorted(
+                    ({"stages": sorted({e["stage"] for e in v}),
+                      "hiddenSheets": list(next(iter(v)).get("hiddenMeta", {}).get("hiddenSheets", [])),
+                      "hiddenRowsCount": sum(len(x) for x in next(iter(v)).get("hiddenMeta", {}).get("hiddenRows", {}).values()),
+                      "hiddenColsCount": sum(len(x) for x in next(iter(v)).get("hiddenMeta", {}).get("hiddenCols", {}).values())}
+                     for v in metas.values()),
+                    key=lambda d: sorted(d["stages"]))
+            })
+    payload = {"items": inv, "archives": archives, "hiddenStructureDrift": drift}
     inv_path = os.path.join(case, "材料盘点.json")
     with open(inv_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=1)

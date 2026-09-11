@@ -293,6 +293,21 @@
       "required": ["status", "bands", "reviewerOnlyItems", "metrics"],
       "properties": {
         "status": {"enum": ["not_performed", "performed"]},
+        "hiddenRegionAccess": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorizedBy", "authorizedAt", "authorization", "scope", "notRead"],
+            "properties": {
+              "authorizedBy": {"type": "string", "minLength": 1},
+              "authorizedAt": {"type": "string", "minLength": 1},
+              "authorization": {"type": "string", "minLength": 1},
+              "scope": {"type": "string", "minLength": 1},
+              "notRead": {"type": "string"},
+              "resultingIssueIds": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
         "bands": {
           "type": "object",
           "required": ["overlap", "aiOnly", "divergent", "reviewerOnly"],
@@ -307,7 +322,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["itemId", "title", "reviewerEvidence", "handling"],
+            "required": ["itemId", "title", "reviewerEvidence", "handling", "inFileResolution"],
             "properties": {
               "itemId": {"type": "string", "minLength": 1},
               "title": {"type": "string", "minLength": 1},
@@ -320,6 +335,25 @@
                   "quote": {"type": "string", "minLength": 1}
                 }
               },
+              "inFileResolution": {"enum": ["L-resolved", "L-open", "L-unclosed", "L-uncheckable"]},
+              "inFileEvidence": {
+                "type": "object",
+                "required": ["file", "locator"],
+                "properties": {
+                  "file": {"type": "string", "minLength": 1},
+                  "locator": {"type": "string", "minLength": 1},
+                  "quote": {"type": "string"}
+                }
+              },
+              "closureEvidence": {
+                "type": "object",
+                "required": ["file", "locator"],
+                "properties": {
+                  "file": {"type": "string", "minLength": 1},
+                  "locator": {"type": "string", "minLength": 1},
+                  "quote": {"type": "string"}
+                }
+              },
               "handling": {"type": "string", "minLength": 1}
             }
           }
@@ -329,7 +363,9 @@
           "required": ["denominator"],
           "properties": {
             "aiHitRate": {"type": "string"},
-            "denominator": {"type": "string", "minLength": 1}
+            "denominator": {"type": "string", "minLength": 1},
+            "denominatorExclResolved": {"type": "string"},
+            "aiHitRateExclResolved": {"type": "string"}
           }
         }
       }

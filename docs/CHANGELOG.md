@@ -9,6 +9,39 @@
 
 ---
 
+## 2026-09-11 · feat(skills) · 阶段二复核对照加「在件核验」三态与闭环核验，并固化阶段二取回脚本
+
+- **问题（真实判例，源自 2024-300149-LX0551-BG0312 三轮回溯）**：人工复核意见提出于审前轮次，被审件是最终版；
+  定稿已修复的事项 AI 报不出来才是正确行为。原步骤 12 把「复核独有」直接当漏检候选 → 会把人工工作成果误计为
+  AI 失分（本项目实测把 1 条真漏检高估为 8 条）；且「复核答复称已改」不能当落实证据——本项目 4 项未闭环。
+- **步骤 12 重写**（`skills/crwu-audit/SKILL.md`）：复核独有项先做**在件核验**再定性——核验该事项在被审件最终版中
+  是否已落实，给出**在件位置**（文件+行号/单元格）与复核原文并列留痕；三态 `L-resolved`（已落实→不计漏检、不进命中率
+  分母）/ `L-open`（未落实→隔离补审）/ `L-uncheckable`（不可读→记未检查项）；复核答复文本仅阶段二读取，**闭环核验**
+  答复称已改是否落地，未落地单列 `L-unclosed`（优先回客户）。禁止跳过在件核验直接补审或计漏检。
+- **schema + 校验器 + 渲染（同批原子）**：`audit_result.schema.json` 顶层 `reviewComparison` 的 `reviewerOnlyItems[]`
+  新增 `inFileResolution`（enum 四态）+ `inFileEvidence`（被审件在件位置）+ `closureEvidence`（答复出处），`metrics` 加
+  `denominatorExclResolved`/`aiHitRateExclResolved`（两个分母并列，只报「含 L-resolved」会低估 AI）；顶层加
+  `hiddenRegionAccess[]`（H1 授权留痕：authorizedBy/authorizedAt/authorization/scope/notRead）。
+  `audit_delivery.py` 校验三态取值与在件/答复证据、`hiddenRegionAccess` 结构，渲染拆为逐单元格单一输入值
+  （不拼接，守住 §12.2 渲染红线）。样例 `audit-result.sample.json` 同步补字段。
+  **注意**：`reviewerOnlyItems` 新增 required 字段是**加法但含 breaking**——旧阶段二产物需同步补字段（本案 v1.3
+  `status=not_performed`、该数组为空，不受影响）。
+- **spec 同步**（`references/11-html-delivery-spec.md`）：§3.1 术语映射加 L 四态；§6.1 表格加 L-resolved/open/unclosed/
+  uncheckable 三行；§6.2 加「在件核验证据」与「命中率分母并列」两条。
+- **H0/H1 补两条**（`references/00-input-and-route-profile.md`）：H0 加**多版本隐藏结构不一致**→ 元数据级可见区提示
+  （定稿/送审稿隐藏结构不同，只比对隐藏元数据不读内容）；H1 加**留痕字段**（hiddenRegionAccess + `hidden_authorized_read_*`
+  evidenceRole）与**隐藏列求和排除合计行/小计行**（以可见区正式合计为准）。
+- **阶段二取回脚本固化**：新增 `skills/crwu-audit/scripts/fetch_review_records.py`（只接受阶段一排除清单内的 fileId、
+  落 `复核-人工/`、禁写 `材料-源/`、逐件校验字节数、写 `.fetch-manifest.json` 留痕）+ 契约测试 4 例；SKILL.md 步骤 2 补
+  「阶段一排除清单 → 阶段二按清单取回」闭环。`prepare_materials.py` 新增**多版本隐藏结构比对**（输出
+  `hiddenStructureDrift`，元数据级）+ 契约测试 2 例。
+- **契约测试增量**：`test_audit_delivery` +6（三态校验与双分母）、`test_prepare_materials` +2（隐藏结构漂移）、
+  `test_fetch_review_records` 新增 4；全绿。
+- **知识库侧待办（不在本仓执行）**：3.1「成本法方法层应披露事项」CHK 落点 `06-规则库/清单-M-成本法/不动产-房产-成本法-
+  报告审核`（该清单是无人认领的旗舰清单，须先确认方法轴是否装配）；完成后用 crwu-dws 实时拉取验证 CHK 存在，再改
+  `crwu-audit-asset-realestate/references/02-review-focus.md`（3.2）。本轮不动。
+- **验证**：`kb_tool.py validate --skill-root skills` error=0/warn=0；五套件全绿；`git diff --check` 通过。
+
 ## 2026-09-11 · fix(skills) · 材料准备补"压缩包先解压再审核"（含 GBK 文件名解码与 zip-slip 防护）
 
 - **触发（真实漏检）**：BG0312 一案 `材料-源/参考材料/2022年土地房屋测算表.zip` 内是 **2 份测算底稿**，其中
