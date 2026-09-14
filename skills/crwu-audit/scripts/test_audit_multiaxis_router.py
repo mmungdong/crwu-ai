@@ -169,6 +169,27 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "root router must not retain the active L1/L2 routing model",
         )
 
+    def test_excel_delivery_evidence_must_use_original_coordinates(self):
+        profile_path = AUDIT_SKILL_ROOT / "references/00-input-and-route-profile.md"
+        profile_text = profile_path.read_text(encoding="utf-8")
+        required_terms = (
+            "交付物中的 Excel 证据定位",
+            "必须使用 raw 原件坐标",
+            "工作版坐标仅限审核执行内部使用",
+            "映射回原件坐标",
+            "无法可靠映射",
+            "不得下发该定位",
+            "待人工确认事项",
+            "capability gap",
+        )
+        missing = [term for term in required_terms if term not in profile_text]
+
+        self.assertEqual(
+            [],
+            missing,
+            f"Excel delivery coordinate contract is incomplete: missing={missing}",
+        )
+
     def test_union_dispatch_rules_define_stable_unique_algorithm(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
