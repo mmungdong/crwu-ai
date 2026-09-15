@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · recalc_check 函数参数丢索引：未实现运算符被静默丢弃，产生 1,914 条假差异
+
+- **缺陷（实测定位）**：`_function` 的局部 `ev()` 写成 `return self._expr(tokens, s)[0]`，**丢弃了消费位置**。于是 `IF(A1&B1="x", a, b)` 只解析 `A1`，`&B1="x"` 被静默忽略、条件走错分支——引擎给出一个**自信的错误值**并按"已重算"参与比对；`%` 同理。
+- **两个方向都危险**：① 假阳性——错误值与缓存值不等 → 记为差异（真实案例 `3-资产基础法.xlsx` 实测 3,462 条差异中 **1,914 条**由此产生）；② 假阴性——错误值恰好等于缓存值 → 被记成"已核"，即"没算却报已核"。本次样本 `matched` 未受影响（9,095，不变），但方向性风险确实存在：微用例 `=IF(1&2=12,111,222)` 返回了碰巧正确的 111。
+- **整改**：`ev()` 校验参数范围内 token 全部消费，未消费即抛 `Unavailable("解析失败：函数参数存在未消费的片段 …")`，按脚本既有契约归入「未重算」。全文件仅此一处丢索引，其余 10 个解析调用点均正确保留位置。
+- **同步**：`crwu-audit-datacheck/SKILL.md` 的 C7 段本就写明"百分比 `%`、文本拼接 `&`、未列函数不实现 → 标「未重算」，绝不猜值"——**文档是对的，是实现违反了文档**，故本次不改文档。
+- **验证**：真实案例 `3-资产基础法.xlsx` 差异 **3,462 → 1,548**（−1,914），`matched` 不变、`engineErrors` 0；`test_recalc_check.py` 13 → **15** 项（新增 `&`、`%` 出现在函数参数内必须报未重算两例）；`kb_tool.py validate --skill-root skills` error=0。
+
 ## 2026-09-15 · fix(skills) · recalc_check 求值异常兜底：类型不匹配不再打穿整表，引擎缺陷单独计数
 
 - **缺陷（实测定位）**：`recalc_check.py`（C7 计算链重算）只捕获 `Unavailable`，而 `_arith` / `_compare` / `_round_half_away` / `SUM` 的 `float()` 转换抛出的是裸 `TypeError`/`ValueError`。真实案例 `3-资产基础法.xlsx` 的 `=A1-B1`（A1 日期、B1 文本）→ `TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'str'` **打穿 `run()`**，整个 datacheck 崩溃、该表完全不可用。Excel 对同式报 `#VALUE!`，故这属"该格不可重算"，不是引擎缺陷。
