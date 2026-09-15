@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · recalc_check 求值异常兜底：类型不匹配不再打穿整表，引擎缺陷单独计数
+
+- **缺陷（实测定位）**：`recalc_check.py`（C7 计算链重算）只捕获 `Unavailable`，而 `_arith` / `_compare` / `_round_half_away` / `SUM` 的 `float()` 转换抛出的是裸 `TypeError`/`ValueError`。真实案例 `3-资产基础法.xlsx` 的 `=A1-B1`（A1 日期、B1 文本）→ `TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'str'` **打穿 `run()`**，整个 datacheck 崩溃、该表完全不可用。Excel 对同式报 `#VALUE!`，故这属"该格不可重算"，不是引擎缺陷。
+- **整改**：`Evaluator.eval()` 收成唯一入口并统一兜底——`Unavailable` 原样透出；单元格值的类型/数值问题（`TypeError`/`ValueError`/`ArithmeticError`/`InvalidOperation`，即 Excel 会报 `#VALUE!`/`#DIV/0!` 的那类）→ 标「未重算：类型不匹配或计算失败」；**其余非预期异常** → 新增 `EngineError(Unavailable)` 子类，逐格标 `engineError: true` 并在摘要新增 `engineErrors` 计数。`run()` 另加一层 `except Exception` 兜底，保证**任何单格异常都不得中断整表**。
+- **为什么不用一刀切 `except Exception`**：那样会把代码缺陷伪装成"该格数据有问题"，整表静默降级也看不出来。故按异常类型二分：数据/类型问题进普通「未重算」，引擎问题必须**可见**（`engineErrors` 非 0 须排查）。
+- **契约同步**：`crwu-audit-datacheck/SKILL.md` C7 段补「类型不匹配」为未重算情形，并写明 `engineErrors` 非 0 须排查引擎缺陷、不得当作该表数据问题。
+- **验证**：该真实案例由「崩溃、整表不可用」→ **11.9 s 跑完**（18,828 个公式格 / 重算 12,557 / 差异 3,462 / 未重算 6,271 / `engineErrors` 0）。`test_recalc_check.py` 10 → **13** 项（新增类型不匹配不崩、SUM 聚合非数值不崩、非预期异常计数不吞三例）；其余七个契约测试与 `kb_tool.py validate --skill-root skills`（error=0）全通过。
+
 ## 2026-09-15 · fix(skills) · prepare_materials/recalc_check 表格遍历改按"有值格"定界（修游离格式格导致的百万行扫描）
 
 - **缺陷（实测定位）**：`3-资产基础法.xlsx` 的 `4-15-3无形-其他` 表**实际只有 944 个格、42 行有效数据**，但第 **1048575** 行第 6 列存在一个 `value=None`、`has_style=True` 的游离格式格（整列刷格式残留）。两处按矩形遍历的代码因此各扫 **2614 万个坐标**：`xlsx_visible` 重建循环 55.7 s、`audit_hidden_references` 69.9 s；同一案例 `报告附件/` 与 `报告附件_回填/` 各一份 → 合计约 280 s。26 MB 的测算表只要 2 s，说明**与文件大小无关，只与表的形状有关**。
