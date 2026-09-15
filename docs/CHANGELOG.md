@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · crwu-dws 快照 schema 口径自相矛盾致缓存被拒收；检查器报错改为可行动
+
+- **缺陷（实测定位）**：`~/.crwu/knowledge/dws-dir-cache/<库>/目录快照.json` 无法作为 `--catalog` 输入——`check_audit_skill_mappings.py` 报 `unsupported catalog schema: 'crwu.kb-dir-cache.snapshot.v1'`，整条映射/路径键校验链不可用（`test_audit_skill_maintainer.py` 2 项因此报错）。
+- **根因（生产侧口径自相矛盾）**：`crwu-dws/SKILL.md` §8 P4 写"缓存 meta 与快照 **`fetched_at`** 一致"，而 `references/00` §2/§3 与 `references/02` §107 定义的是 **`generated_at`**。模型跟了 SKILL.md，于是该缓存同时偏离四处：`schema` 字面混成 `crwu.kb-dir-cache.snapshot.v1`（由 `.cache-meta.json` 的 `crwu.kb-dir-cache.meta.v1` 与快照名混合而成，本仓历史中从未存在）、时间字段写成 `fetched_at`、缺 `profile`/`mode`/`stats.complete`、`nodes` 用了 `node-index.json` 的**扁平自带 `path`** 形态。
+- **整改（修生产侧口径，不放宽消费侧）**：
+  - `crwu-dws/references/00` §3 新增硬门禁：`schema` 字面与必填键逐字固定；三个 schema 名与时间字段名不得混用；`nodes` 必须为嵌套 `children`（扁平 `path` 形态属 `node-index.json`，禁止写入快照）。
+  - `crwu-dws/SKILL.md` §8 P4 新增"写缓存前先校验快照 schema"门禁；`crwu-dws` 内 10 处 `fetched_at` 全部归一（快照语义 → `generated_at`；`.cache-meta.json` 描述 → `last_successful_at`）。
+  - `check_audit_skill_mappings.py`：不可解析 schema 的报错由"只报名字"改为**列出可接受集合 + 重建指引**（点明快照字面与"扁平 `path` 是 node-index 形态"）。**不为该漂移字面开别名**——那会把漂移固化成契约。
+  - `test_audit_skill_maintainer.py`：实时缓存不可解析时，两个 live 回归**显式 skip**（skip 消息附 checker 原始报错），不再抛 `JSONDecodeError`；新增 1 项锁住"可行动报错"契约（58 → **59** 项）。
+- **验证**：全套 8 个契约测试通过（`test_audit_skill_maintainer.py` 为 `OK (skipped=2)`）、`kb_tool.py validate --skill-root skills` error=0、`git diff --check` clean。
+- **待人工执行（运行时动作，本仓不代做）**：用 `crwu-dws` M1 重建该库目录缓存（新缓存须满足上述四条）；重建后两个 live 回归会自动恢复实跑（不再 skip）。
+
 ## 2026-09-15 · fix(skills) · 立"非单元格证据不得据工作版判缺失"口径并登记原件媒体数
 
 - **缺陷（实测定位）**：重建工作版只复制单元格值与 `number_format`，**必然**丢弃 `xl/media`、`xl/drawings`、页眉页脚、批注、形状与图表；而 router 只把工作版交给叶子，于是"证据不在单元格里"的检查项被**结构性**判成"缺失"。实测 2026-302150-LX9757-BG8677：`MKT-004` 判"可比实例位置图为空、询价截图缺失"，而原件 `04评估计算表.xlsx` 实有 **26 个媒体对象**（工作版 0），其中 `1-2市场案例位置图` 的图正是带 4.6/5.4/3.8 km 标注的可比案例位置图。属**假阳性**，须回撤。

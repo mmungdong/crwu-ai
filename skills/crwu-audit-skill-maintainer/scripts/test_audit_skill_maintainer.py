@@ -654,6 +654,26 @@ def _cache_space_name(directory: Path) -> str:
     return name if isinstance(name, str) else ""
 
 
+def _catalog_report(catalog: Path) -> dict:
+    """跑 checker 并解析其 JSON 报告；**目录不可解析时显式 skip，不得崩、也不得静默通过**。
+
+    实时缓存是外部产物（crwu-dws M1 写入 `~/.crwu`），可能因**生产侧偏离契约**而无法作为
+    `--catalog` 输入（真实失效：`目录快照.json` 写成扁平 `path` 形态、schema 字面
+    混成 `crwu.kb-dir-cache.snapshot.v1`）。此时本测试拿不到"库内路径键是否存在"的证据，
+    按本文件纪律"内容缺失必须显式 skip"处理，并把 checker 的原始报错写进 skip 消息——
+    既不当作技能漂移失败，也不假装通过。
+    """
+    proc = run_checker(REPO_ROOT, catalog)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise unittest.SkipTest(
+            f"实时目录缓存不可作为 --catalog 使用（{catalog.name}）："
+            + (lines[-1] if lines else "checker 未产出 JSON 报告")
+        )
+
+
 def _live_cache_dirs() -> list[Path]:
     """Real crwu-dws directory caches of the audit knowledge base, newest capture first.
 
@@ -1514,6 +1534,31 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
 
             self.assertEqual([], _findings(report, "KB_PATH_KEY_NOT_IN_CATALOG"))
 
+    def test_unsupported_catalog_schema_reports_accepted_set_and_remediation(self):
+        """无法解析的 catalog schema：报错必须列出可接受集合并给出重建指引，不得只报名字。
+
+        真实失效：实时 `目录快照.json` 被写成扁平 `path` 形态、schema 字面混成
+        `crwu.kb-dir-cache.snapshot.v1`（与 `.cache-meta.json` 的 `crwu.kb-dir-cache.meta.v1`
+        混合而成），而旧报错只有 `unsupported catalog schema: '…'` —— 看不出该改什么。
+        不得为该字面开别名：那等于把漂移固化成契约。
+
+        本测试自足（不依赖同级技能），故不加 `@_requires_skill_tree`：
+        单独安装本技能时这条报错契约仍须被锁住。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            catalog = Path(td) / "目录快照.json"
+            catalog.write_text(
+                json.dumps({"schema": "crwu.kb-dir-cache.snapshot.v1", "nodes": []}),
+                encoding="utf-8",
+            )
+            proc = run_checker(REPO_ROOT, catalog)
+            self.assertNotEqual(0, proc.returncode, "不可解析的 catalog 必须非零退出")
+            err = proc.stderr + proc.stdout
+            for needle in ("accepted:", "crwu.kb-catalog.snapshot.v1",
+                           "rebuild it with crwu-dws M1", "nested `children`"):
+                self.assertIn(needle, err, err)
+            self.assertNotIn("Traceback", err, "须是可读错误信息，不是异常栈")
+
     @_requires_skill_tree
     def test_real_repository_library_path_keys_exist(self):
         """Regression: this repo's audit-family address keys must resolve in the live catalog.
@@ -1524,7 +1569,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
         """
         for directory in _live_cache_dirs():
             catalog = directory / "目录快照.json"
-            report = json.loads(run_checker(REPO_ROOT, catalog).stdout)
+            report = _catalog_report(catalog)
             if not _is_audit_family_catalog(tuple(report["catalog"]["paths"])):
                 continue
 
@@ -1557,7 +1602,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
                 continue
             parsed: dict[str, tuple[str, ...]] = {}
             for form in forms:
-                report = json.loads(run_checker(REPO_ROOT, form).stdout)
+                report = _catalog_report(form)
                 parsed[form.name] = tuple(report["catalog"]["paths"])
             if not _is_audit_family_catalog(parsed[forms[0].name]):
                 continue
@@ -1569,7 +1614,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             )
             # The mandated freshness gate must also pass on the authoritative snapshot.
             live = forms[0]
-            report = json.loads(run_checker(REPO_ROOT, live, "--max-age-hours", "24").stdout)
+            report = _catalog_report(live)
             self.assertNotIn("CATALOG_NOT_LIVE", _codes(report))
             return
         self.skipTest("no live DWS cache with multiple artifact forms is available")

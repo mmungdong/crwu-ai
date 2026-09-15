@@ -24,6 +24,13 @@ KB_NODE_INDEX_SCHEMA = "crwu.kb-node-index.v1"
 # Older nested/legacy shapes kept accepted so existing fixtures and snapshots still load.
 SNAPSHOT_SCHEMA = "crwu.kb-catalog.snapshot.v1"
 NODE_INDEX_SCHEMA = "crwu.kb-dir-cache.nodeindex.v1"
+# 明确列出可接受集合：错误信息要能告诉人"该改什么"，只报 schema 名不够
+# （真实失效：实时缓存把 node-index 形态写进 目录快照.json，并把 schema 字面写成
+#  `crwu.kb-dir-cache.snapshot.v1`——与 .cache-meta.json 的 `crwu.kb-dir-cache.meta.v1`
+#  混合而成，历史上从未存在过这个名字。不得为它开别名，否则等于把漂移固化成契约。
+ACCEPTED_CATALOG_SCHEMAS = (
+    DIR_SNAPSHOT_SCHEMA, KB_NODE_INDEX_SCHEMA, SNAPSHOT_SCHEMA, NODE_INDEX_SCHEMA,
+)
 REQUIRED_REFERENCES = (
     "00-applicability.md",
     "01-kb-assembly.md",
@@ -414,7 +421,14 @@ def load_catalog(path: Path) -> Catalog:
             _snapshot_is_complete(data),
             tuple(sorted(set(_paths_from_node_index(data)))),
         )
-    raise ValueError(f"unsupported catalog schema: {schema!r}")
+    raise ValueError(
+        f"unsupported catalog schema: {schema!r}; accepted: "
+        + ", ".join(repr(s) for s in ACCEPTED_CATALOG_SCHEMAS)
+        + f". If this file is a crwu-dws directory cache, rebuild it with crwu-dws M1: "
+          f"the snapshot schema literal must be exactly {SNAPSHOT_SCHEMA!r}, carry "
+          f"generated_at/profile/mode and stats.complete, and use **nested `children`** nodes "
+          f"(a flat node list carrying its own `path` is the node-index shape, not the snapshot)."
+    )
 
 
 def _table_cells(line: str) -> tuple[str, ...] | None:
