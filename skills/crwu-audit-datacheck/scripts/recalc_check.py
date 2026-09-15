@@ -357,32 +357,38 @@ def run(workbook: str):
         hidden_rows = set(hidden["hiddenRows"].get(ws.title, []))
         hidden_cols = set(hidden["hiddenCols"].get(ws.title, []))
         ev.sheet = ws.title
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.row in hidden_rows or get_column_letter(cell.column) in hidden_cols:
-                    continue
-                formula = cell.value
-                if not isinstance(formula, str) or not formula.startswith("="):
-                    continue
-                formula_cells += 1
-                cached = wbv[ws.title].cell(cell.row, cell.column).value
-                try:
-                    recalculated = ev.eval(formula)
-                except Unavailable as exc:
-                    not_recomputable.append(
-                        {"sheet": ws.title, "cell": cell.coordinate, "formula": formula,
-                         "reason": str(exc)})
-                    continue
-                recomputed += 1
-                if cached is None or not _close(recalculated, cached):
-                    mismatched += 1
-                    differences.append({
-                        "sheet": ws.title, "cell": cell.coordinate, "formula": formula,
-                        "recalculated": recalculated, "cached": cached,
-                        "note": "重算值与缓存值不一致" if cached is not None else "有公式但无缓存值",
-                    })
-                else:
-                    matched += 1
+        # 只遍历**实际存在**的格（精确集合），不用 `ws.iter_rows()`——后者按声明 dimension
+        # 扫满矩形；原件常带游离的 `has_style=True`、`value=None` 空格（如整列刷格式残留），
+        # 会把百万行全走一遍（2026-302135-LX9619-BG8634 实测：单表 1,048,575 行 → 长时间无响应）。
+        # 与 crwu-audit 的 prepare_materials.py 同一口径。按 (行, 列) 排序以保持
+        # 与原 `iter_rows()` 一致的行优序 —— 差异清单顺序必须可复现。
+        for (row_i, col_i), cell in sorted(getattr(ws, "_cells", {}).items()):
+            if not (isinstance(row_i, int) and isinstance(col_i, int)):
+                continue
+            if row_i in hidden_rows or get_column_letter(col_i) in hidden_cols:
+                continue
+            formula = cell.value
+            if not isinstance(formula, str) or not formula.startswith("="):
+                continue
+            formula_cells += 1
+            cached = wbv[ws.title].cell(row_i, col_i).value
+            try:
+                recalculated = ev.eval(formula)
+            except Unavailable as exc:
+                not_recomputable.append(
+                    {"sheet": ws.title, "cell": cell.coordinate, "formula": formula,
+                     "reason": str(exc)})
+                continue
+            recomputed += 1
+            if cached is None or not _close(recalculated, cached):
+                mismatched += 1
+                differences.append({
+                    "sheet": ws.title, "cell": cell.coordinate, "formula": formula,
+                    "recalculated": recalculated, "cached": cached,
+                    "note": "重算值与缓存值不一致" if cached is not None else "有公式但无缓存值",
+                })
+            else:
+                matched += 1
 
     return {
         "file": workbook,

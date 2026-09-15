@@ -11,6 +11,8 @@
 3. 同名消歧 —— 定稿与送审稿同名时，工作版必须两份都在、来源可区分、不得静默覆盖。
 4. 「值不可得」登记 —— 无缓存值的公式格单独计数，不混进"数据缺失"。
 5. 源材料目录只读 —— 运行后源目录文件集合不变。
+6. 表格遍历四层边界 —— 扫描边界按**有值格**（不按 dimension、也不按"存在的格"）；
+   声明用区远大于有值区时登记表格规范提示；单表超规模上限时记 capability gap 并跳过。
 """
 from __future__ import annotations
 
@@ -578,6 +580,72 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self._run()      # 仍须在正常时间内完成
         meta = [i for i in self._inventory() if i["name"] == "虚增维度.xlsx"][0]["workbook"]
         self.assertEqual(1, meta["sheets"][0]["maxRow"])
+
+
+    # ---- 9 表格遍历的四层边界（B1 扫描 / B2 内容 / B3 异常 / B4 护栏） ------
+    def test_orphan_styled_cell_does_not_force_full_sheet_scan(self):
+        """游离格式格（`value=None` 但有样式）落在末行：边界须按**有值格**定，并登记规范提示。
+
+        真实失效（2026-302135-LX9619-BG8634 的 `4-15-3无形-其他`）：
+        944 个存在格中 697 个纯格式 + 1 个游离在第 1048575 行
+        → 重建循环 26,214,375 次、单表 56 s；隐藏引用审计再扫满 → 70 s。
+        只按"存在的格"（`_cells`）定界**仍会踩到**——那个游离格就在 `_cells` 里。
+        """
+        import openpyxl
+        from openpyxl.styles import Font
+        d = self.src / "定稿"
+        d.mkdir()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "合计"
+        ws["A2"] = 42
+        ws.cell(row=1048575, column=6).font = Font(bold=True)      # 只有样式、没有值
+        wb.save(d / "游离格式格.xlsx")
+
+        src_ws = openpyxl.load_workbook(d / "游离格式格.xlsx").active
+        self.assertEqual((2, 1), self.module._sheet_bounds(src_ws),
+                         "边界须按有值格定，不得被游离格式格顶到 1048575 行")
+
+        self._run()                                                 # 且须在正常时间内完成
+
+        meta = [i for i in self._inventory() if i["name"] == "游离格式格.xlsx"][0]["workbook"]
+        self.assertEqual(2, meta["sheets"][0]["maxRow"])
+        anomalies = [a for a in self._payload().get("sheetAnomalies", [])
+                     if a["path"].endswith("游离格式格.xlsx")]
+        self.assertEqual(1, len(anomalies), "声明用区远大于实际有值区时须登记表格规范提示")
+        self.assertGreater(anomalies[0]["orphanRows"], 1000)
+        self.assertIn("1048575", anomalies[0]["declaredDim"])
+        self.assertEqual(1, anomalies[0]["styleOnlyCells"])
+        self.assertEqual({"maxRow": 1048575, "maxCol": 6}, meta["sheets"][0]["declaredSpan"],
+                         "声明用区与有值区不一致时须一并留痕（低于 B3 阈值时更要有）")
+        rebuilt = openpyxl.load_workbook(self.case / "工作版/游离格式格.xlsx", data_only=True)
+        self.assertEqual("合计", rebuilt.active["A1"].value)
+        self.assertEqual(42, rebuilt.active["A2"].value)
+
+    def test_oversized_sheet_records_capability_gap_not_silence(self):
+        """单表有值格超上限：记 capability gap 并跳过该表，其余表继续，不得静默。"""
+        import openpyxl
+        orig = self.module.MAX_SHEET_CELLS
+        self.module.MAX_SHEET_CELLS = 5
+        try:
+            d = self.src / "定稿"
+            d.mkdir()
+            wb = openpyxl.Workbook()
+            big = wb.active
+            big.title = "超限表"
+            for i in range(1, 11):
+                big.cell(row=i, column=1, value=i)
+            wb.create_sheet("正常表")["A1"] = "ok"
+            wb.save(d / "超限.xlsx")
+            self._run()
+        finally:
+            self.module.MAX_SHEET_CELLS = orig
+
+        rec = [i for i in self._inventory() if i["name"] == "超限.xlsx"][0]
+        self.assertTrue(rec.get("capabilityGaps"), "超限必须记 capability gap，不得静默跳过")
+        self.assertIn("未完整处理", " ".join(rec["capabilityGaps"]))
+        self.assertEqual(["正常表"], [s["sheet"] for s in rec["workbook"]["sheets"]],
+                         "超限表不进工作版，其余表照常处理")
 
 
 if __name__ == "__main__":

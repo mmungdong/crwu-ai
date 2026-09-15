@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · prepare_materials/recalc_check 表格遍历改按"有值格"定界（修游离格式格导致的百万行扫描）
+
+- **缺陷（实测定位）**：`3-资产基础法.xlsx` 的 `4-15-3无形-其他` 表**实际只有 944 个格、42 行有效数据**，但第 **1048575** 行第 6 列存在一个 `value=None`、`has_style=True` 的游离格式格（整列刷格式残留）。两处按矩形遍历的代码因此各扫 **2614 万个坐标**：`xlsx_visible` 重建循环 55.7 s、`audit_hidden_references` 69.9 s；同一案例 `报告附件/` 与 `报告附件_回填/` 各一份 → 合计约 280 s。26 MB 的测算表只要 2 s，说明**与文件大小无关，只与表的形状有关**。
+- **根因**：`_sheet_bounds` 上一版已改为扫 `_cells`（避免虚增 dimension），但 **`_cells` 里的格 ≠ 有值格**——游离格式格同样在 `_cells` 里，边界仍被顶到 104 万行。
+- **整改（四层边界，口径写进脚本注释与 `references/00`）**：**B1 扫描边界** ＝ **有值**格（缓存值 ∪ 公式串）的精确集合，不按矩形扫、无阈值；**B2 内容边界** ＝ 同一集合的 max 行列；**B3 异常阈值** ＝ 声明用区与有值区之差 >1000 行/列 → 记 `sheetAnomalies[]`（**仅提示，不改变遍历**）；**B4 硬护栏** ＝ 单表有值格 >2,000,000 → 记 `capabilityGaps` 并跳过该表（照 `extract_archive` 的 `MAX_ENTRIES` 形态，**不静默**）。
+- **不丢信息**：声明用区与有值区不一致的 sheet 逐个在 `stats[].declaredSpan` 留痕（实测某案例 85 个 sheet），其中超 B3 阈值的再进 `sheetAnomalies`。
+- **同批**：`crwu-audit-datacheck/scripts/recalc_check.py` 的 `ws.iter_rows()` 同型扫描一并改为扫 `_cells`。
+- **明确不改**：行号语义（仍是「1..有值末行 减去隐藏行」）、隐藏区剔除、H0/H1 分层、`hiddenStructureDrift` 形态、**保存后重新打开工作版验证隐藏区为 0**（`references/00` 契约要求，保留）。
+- **验证**：真实案例 `prepare_materials.py` 全量 **332.8 s → 12.3 s（约 27×）**；工作版产物与修复前**逐格比对 305,977 格、差异 0**；`sheets[].cells`、`valueUnavailable`、`hiddenMeta`、`hiddenRefs*` 全部不变（仅 `maxRow/maxCol/visibleRows` 回到"真实用区"语义）。`test_prepare_materials.py` 22/22（新增游离格式格、超限护栏两例），其余六个契约测试与 `kb_tool.py validate --skill-root skills`（error=0）全通过。
+
 ## 2026-09-15 · refactor(skills) · crwu-audit-external-data 单源化：移除万得校验，同花顺 iFinD 支持两条取数路径
 
 - **背景**：本技能原先按知识库表 D 做"同花顺主源 + 万得副源"双源复核。实际环境里万得连接器常年未启用（实测 `~/.workbuddy` 中 `wind-finance` 为 `declared_disabled`），双源分支只能一直降级；同时同花顺 iFinD 在 WorkBuddy 是宿主连接器（`ifind-mcp`），在 DeepSeek Harness 是 `ifind-finance-data` 技能，两者调用方式不能互相套用。
