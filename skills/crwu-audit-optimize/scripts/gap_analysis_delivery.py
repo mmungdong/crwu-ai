@@ -437,7 +437,7 @@ def render(result: dict) -> str:
 
 
 def _cmd_validate(args) -> int:
-    result = load_result(Path(args.path))
+    result = load_result(Path(args.input))
     errors = validate(result)
     if errors:
         for error in errors:
@@ -448,9 +448,9 @@ def _cmd_validate(args) -> int:
 
 
 def _cmd_render(args) -> int:
-    result = load_result(Path(args.path))
+    result = load_result(Path(args.input))
     document = render(result)
-    output = Path(args.out)
+    output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(document, encoding="utf-8")
     print(output)
@@ -461,11 +461,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="CRWU AI—人工审核差距分析校验与单文件 HTML 渲染")
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate", help="校验 GapAnalysis JSON")
-    validate_parser.add_argument("path")
+    validate_parser.add_argument("--input", required=True)
     validate_parser.set_defaults(func=_cmd_validate)
     render_parser = subparsers.add_parser("render", help="渲染自包含单文件 HTML")
-    render_parser.add_argument("path")
-    render_parser.add_argument("--out", required=True)
+    render_parser.add_argument("--input", required=True)
+    render_parser.add_argument("--output", required=True)
     render_parser.set_defaults(func=_cmd_render)
     args = parser.parse_args(argv)
     return args.func(args)

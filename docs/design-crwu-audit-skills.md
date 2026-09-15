@@ -128,6 +128,9 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - 公共逻辑只在大方向技能维护一份；细分能力只写自己的增量清单/关注点，禁止复制大方向正文；
 - 规则/覆盖/路径类优化统一经 `crwu-audit-optimize`（族维护元技能，不经路由）：先输出拟改文件方案、
   用户确认后按 99 流程执行并跑 `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py` 校验回归（validate error=0 / 装配两跑一致 / 试点回归不劣化）；
+- 审核后存在人工复核文件时，`crwu-audit-optimize` 进入 AI—人工差距分析模式：用同次 `knowledge/` + manifest
+  做历史归因，并用 crwu-dws 最新只读正文判断缺口现状；报告以固定 HTML 模板输出表格、ECharts 和
+  `L-* → 根因 → FIX-*` 关系。知识库项只生成 `manual_only` 人工修复单，AI 不写知识库；Skill 项逐项批准后才可改源仓；
 - 变更/新增后按 crwu-ai `AGENTS.md` 在 `docs/CHANGELOG.md` 追加纪要。
 
 ### 7.1 资产/业务一级目录维护模型（2026-09-10）
@@ -135,7 +138,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - 新架构中的资产 Skill 使用 `crwu-audit-asset-*`，每个 Skill 映射 `02-资产类型/` 下一个一级资产目录；业务 Skill 使用 `crwu-audit-biz-*`，每个 Skill 映射 `01-业务路线/` 下一个一级业务目录。
 - 命中一级 Skill 后，`crwu-dws` 按目录请求递归下载该一级根内全部支持正文。资产目录中的细分对象与业务目录中的子业务只作为父 Skill 内部二级选择，不创建独立 Skill 或资产×业务组合 Skill。
 - 资产父 Skill 始终执行共性参考，并叠加命中细分对象的评估审核条目；业务父 Skill根据评估目的等原始证据识别子业务，并执行其业务通用审核要点及关联文件。
-- `crwu-audit-skill-maintainer` 负责把目录树、classification、registry 和真实 Skill 做只读盘点，并在确认后执行创建、修复和重映射；`crwu-audit-optimize` 仍负责漏检/误检的根因诊断。
+- `crwu-audit-skill-maintainer` 负责把目录树、classification、registry 和真实 Skill 做只读盘点，并在确认后执行创建、修复和重映射；`crwu-audit-optimize` 负责漏检/误检根因诊断、AI—人工差距 HTML 与修复计划，其中知识库修复始终由用户人工完成。
 - 旧 `crwu-audit-business-*` 和组合 Skill 属迁移对象。迁移状态必须如实登记，不得在真实目录与一级根合同完成前标为 available。
 
 ### 7.2 业务轴落地与叶子共同约束（2026-09-10 二次落地）
@@ -178,6 +181,6 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] `skills/crwu-audit-external-data/`（2026-09-15）：公共轴外部数据核验能力（`methods[]` 命中收益法/市场法时装配）；装配知识库 `M-外部数据核验` 模块规程；宿主连接器发现（`references/01-connector-access.md` + `scripts/connector_probe.py`，只读、不读凭据）；连接器缺失/未认证按表 D 降级并在交付 HTML《外部数据核验》区显式声明；AuditResult 增 `externalDataVerification`（`11-html-delivery-spec.md` §05b）。**待办（知识库侧，用户操作）**：`审核模块注册表` §1 与 `标签词典` §5 登记 `M-外部数据核验`，并按总纲 §3.2 三处登记
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
 - [x] `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py`：**2026-09-10 收窄**为 `validate --skill-root`（引用卫生 + 实时协议 lint）；随本地知识库根模型废止，删除 index/assemble/query/resolve/release/extract/selftest（装配清单改由叶子 `01-kb-assembly.md` 声明、crwu-dws 实时下载）
-- [x] `skills/crwu-audit-optimize/`（2026-09-07）：族维护/优化入口（反馈→单子画像定位→分桶→拟改文件方案→用户确认→99 流程执行→kb_tool 校验回归；不经 crwu-audit 路由、不产审核判断）
+- [x] `skills/crwu-audit-optimize/`（2026-09-15）：族维护/优化入口（常规反馈定位与分桶；审核后 AI—人工差距分析；固定 HTML 模板 + 离线 ECharts；`L-* ↔ FIX-*` 双向追踪；知识库 `manual_only`、Skill 逐项确认后执行；不经 crwu-audit 路由、不产审核判断）
 - [ ] references 试点回测：跨形态 8~10 条 + BG8169/300673 回归
 - [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/equipment/advisory/财务报告 等大方向

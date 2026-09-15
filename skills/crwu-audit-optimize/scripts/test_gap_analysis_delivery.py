@@ -5,6 +5,7 @@ import copy
 import json
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -123,6 +124,18 @@ class GapAnalysisRenderTest(unittest.TestCase):
 
     def test_root_cause_chart_excludes_non_actionable_items(self):
         self.assertEqual({"K2": 1, "S2": 1}, delivery.actionable_cause_counts(self.result))
+
+    def test_documented_cli_flags_validate_and_render(self):
+        self.assertEqual(0, delivery.main(["validate", "--input", str(SAMPLE)]))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "report.html"
+            self.assertEqual(
+                0,
+                delivery.main(
+                    ["render", "--input", str(SAMPLE), "--output", str(output)]
+                ),
+            )
+            self.assertIn("AI—人工审核差距分析", output.read_text(encoding="utf-8"))
 
 
 class SkillIntegrationTest(unittest.TestCase):

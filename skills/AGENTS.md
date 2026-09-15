@@ -47,10 +47,12 @@
 
 | 想改什么 | 归口 | 说明 |
 | --- | --- | --- |
-| 规则/清单**内容**（库里 `06-规则库/` 条目写错、漏项）、词表取值、叶子**算法与流程** | `crwu-audit-optimize` | 从漏检/误检/复核反馈诊断根因后执行；内容变更按知识库维护流程另办 |
+| 规则/清单**内容**（库里 `06-规则库/` 条目写错、漏项）、词表取值、叶子**算法与流程** | `crwu-audit-optimize` | 从漏检/误检/复核反馈诊断根因；知识库项只生成 `manual_only` 人工修复单，Skill 项逐项确认后执行 |
 | **结构/映射**：一级 Skill 的新增改名、一级根、registry、classification、遗留命名迁移 | `crwu-audit-skill-maintainer` | 四模式 `audit`/`create`/`repair`/`remap`；`audit` 只读并同步校准表 |
 
 - 两者都遵守**先逐文件方案、用户确认后才动文件**；门禁与校验口径只在 `crwu-audit-skill-maintainer/references/04`、`05` 定义一次，`crwu-audit-optimize` 不重复定义。
+- 审核后同时存在 AI 结果与人工复核文件时，由 `crwu-audit-optimize` 输出 `L-* → 根因 → FIX-*` 差距报告；
+  知识库对 AI/CLI 永远只读，即使用户接受方案也必须由用户人工修改。
 - 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-audit-optimize` 只给根因与最低改动集，**交接** `crwu-audit-skill-maintainer` 执行；交接不继承修改授权。
 - 现状速查：读 `crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
 

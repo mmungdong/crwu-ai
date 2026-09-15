@@ -9,6 +9,15 @@
 
 ---
 
+## 2026-09-15 · feat(skills) · crwu-audit-optimize 新增 AI—人工差距分析与可执行修复计划
+
+- **新增模式**：审核结束且存在同源人工复核文件时，逐条对齐 AI 与人工结果；仅人工发现项使用稳定 `L-*`，区分 `L-resolved`、`L-open`、未闭环、不可核验与人工意见可疑，避免把已在最终件修复的问题误计为 AI 漏检。
+- **根因追踪**：按输入、画像、路由、装配、知识、Skill、执行、输出八层追踪；用同次审核 `knowledge/` + manifest 解释历史原因，再以 crwu-dws 最新只读正文判断当前是否仍缺，明确区分知识库缺失、Skill 缺陷、路由装配、执行与输出问题。
+- **双向关系**：每个可执行 `L-open.linkedFixIds[]` 必须指向一个或多个 `FIX-*`，每个 `FIX-*.sourceGapIds[]` 必须反向指回来源；校验器拒绝断链、重复 ID、非可执行状态进入计划及不可重算汇总。
+- **HTML 交付**：新增 `scripts/gap_analysis_delivery.py`、JSON schema、样例与固定 `template/gap-analysis-report.html`；离线内嵌 Apache ECharts 5.6.0，输出表格、根因/状态图、执行轨迹、`L → 根因 → FIX` 映射、修复操作中心和 A4 打印版。
+- **权限边界**：知识库计划强制 `kb_manual + manual_only`，只说明目标文档、缺失内容、修改位置、人工步骤与验证方法，AI/CLI 禁止修改知识库；Skill 修复只在用户明确批准具体 `FIX-*` 后生成可复制 prompt 并修改批准的源仓文件，禁止写运行时目录。
+- **验证**：新增差距数据校验、HTML 离线/打印、根因统计、权限隔离、批准门禁及 Skill 集成测试；全量回归结果见本次交付记录。
+
 ## 2026-09-15 · fix(skills) · crwu-dws v0.6：取数按节点 `extension` 双通道分流，修复「原生 `.md` 正文必然失败且被误记为 failure」
 
 - **缺陷（实测定位）**：知识库文档节点的 `nodeType` **恒为 `file`**，格式信息只在 `extension`/`contentType`；`dws doc +export` **仅支持 `extension=adoc`**。crwu-dws 整改前对所有文档一律调用 `doc +export`，于是「中瑞世联评估审核知识库」中 **25 个原生 `.md` 正文**（整个 `03-评估方法/`，含 `RULE-01-02-281~305` 评估方法准则 25 条、方法缺陷清单）**每次审核都必然失败并被记成 failure**；`crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 声明的 `VALUATION_METHOD_INTERFACE` 路径（`03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/`，6 个文件）全部落在此列 → 每次房地产审核丢 6 条，方法准则层整层不可用。
