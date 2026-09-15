@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-15 · feat(skills) · 新增 public 轴能力技能 `crwu-audit-external-data`（收益法/市场法的外部数据核验 + 同花顺 iFinD / 万得连接器发现与兜底）
+
+- **背景**：知识库已新增模块规程 `06-规则库/M-外部数据核验/01-模块-外部数据核验`（表 A 触发范围 / 表 B 数据项触及 / 表 C 组合映射 / 表 D 万得条件与降级 / 结论档位 / 留痕 / 未检查项 / 员工补录机制）。本次把该模块落成 crwu-audit 族的执行能力。
+- **新增技能**：`crwu-audit-external-data`（能力型、public 轴插拔，与 `crwu-audit-datacheck` 同版式）——`SKILL.md` + `references/00-KB装配表.md` + `references/01-connector-access.md` + `scripts/connector_probe.py` + `scripts/test_connector_probe.py`。
+- **触发**：`route_profile.methods[]` 命中 `收益法`/`市场法` 时由 router 并入 `public_skills`（是否真正取数再由该技能按知识库表 A 三条自行判定，缺一记"不在本模块范围"）。
+- **基准日纪律（三档）**：所有取数以 `record_context.base_date` 为锚，区间/窗口由基准日推导；**禁止取数时点的滚动窗口**（否则复跑不可比、双源比对失效）。基准日状态分三档处理，**不得整线停载**：①唯一确定 → 正常取数；②**多候选（ROUTE003 挂起）→ 条件性取数**（按候选日分别取数；结论一致可出并注明"已在候选基准日下逐一核验，结论一致"，不一致则出"请说明"的条件性结论、不得判"不符合"）；③缺失/不可解析 → 只核不依赖基准日的项（公司属性事实、报告期固定的财报数、政策文件现行有效性），其余记"未检查"。门禁只**消费** router 的 `base_date`/`base_date_status`，不自行判定 ROUTE 冲突（判定权在 `06-overlay-classification.md`），并按 `08` 的 ROUTE003 口径保留"不依赖冲突字段的检查仍须执行"。
+- **连接器兜底**：宿主会话未暴露 MCP 工具时，按 `references/01` 读宿主连接器声明（默认根 `~/.workbuddy`，可用 `CRWU_CONNECTOR_ROOT` 覆盖）；无连接器 / 未启用 / 未认证 → 按知识库表 D 降级（W2/W4 降为"单源 + 请说明"），并**在交付 HTML《外部数据核验》区显式声明**"未配置 / 未认证的数据源，相关条目未经双源复核"。
+- **交付层**：AuditResult 新增可选 `externalDataVerification`（`baseDate` / `unavailableDeclaration` / `sources[]` / `checks[]`）；HTML 新增《外部数据核验》区（左侧目录第 05b 项），逐项给出**报告值 / 各源取值 / 各源口径 / 基准日 / 与哪一源出入较大 / 判定（符合·不符合·请说明·未检查）**——"符合"同样入表，不只列问题。缺失该字段时页面显式显示"本次未执行外部数据核验"。
+- **概览分区（可读性）**：审核结果概览不再只给一行问题总数——新增"**问题按模块分布**"（模块/问题数/高/中/低）与"**外部数据核验结果**"（判定·项数；以及"与哪一数据源出入较大"·项数）两个分块，全部由 `issues[].module` 与 `externalDataVerification.checks` 确定性推导，不与问题总数混列；渲染器仍不自造句子（计数按输入重算，测试相应放行纯整数文本节点）。
+- **"出入较大"三态（避免 `—` 混淆）**：`deviationAgainst` 语义明确为 —— 有出入写源名 / 无出入写 `—` / **判定"未检查"的写"未取数"**（渲染器对空值与 `—` 归一化）；概览该分块每行必须有明确含义（源名 / `无出入（符合）` / `未取数` / `未列明来源`），行项数之和等于核验项数，且有测试钉住"不得出现无标签的 `—` 行"。
+- **契约变更**：`12-leaf-common-contract.md` §1 增"外部数据取数是唯一例外"（仅该技能可直连取数，须留痕并向编排层回执）；`08-union-dispatch-rules.md` 的 `public_skills` 增条件项与示例；`07-skill-registry.md` 增 public 行；`99-maintenance.md` owner 表更新；`11-html-delivery-spec.md` 增第 05b 区与 `externalDataVerification` 字段规则。
+- **凭据纪律**：探测脚本只读连接器**键名与启用状态**，不读取/不输出任何令牌与 Authorization 值（URL 只输出主机名）。
+- **验证**：`test_audit_multiaxis_router.py` 14/14、`test_audit_delivery.py` 57/57、`test_connector_probe.py` 11/11、`kb_tool.py validate --skill-root skills` error=0/warn=0；真实环境探测（2026-09-15）返回同花顺 iFinD `available`（凭据引用存在）、万得 `available`（已启用且曾连接）。
+- **待办（用户侧，知识库）**：`00-总纲/治理/审核模块注册表` §1 增 `M-外部数据核验` 行 + 接口契约；`00-总纲/治理/标签词典` §5 增同名 `modules` 取值；按总纲 §3.2 三处登记（目录地图 / 知识库大纲与进度总表 / 所在目录 README）。未登记则规则装配漏配。
+
 ## 2026-09-11 · feat(skills) · 资产轴补齐 11 个一级资产 Skill 并对齐路由（知识库 `02-资产类型/` 由 1 个一级根扩至 12 个）
 
 - **背景**：知识库更新后 `02-资产类型/` 从「只有 01-房地产」扩到 12 个一级根（机器设备/企业价值/无形资产/矿业权/存货/债权/资产组合/交通运输设备/资产组-含商誉/废旧物资/其他），全部有真实审核条目正文（本次经 `crwu-dws` 实时下载逐份核对，无空文档/待补/TODO 占位）。
