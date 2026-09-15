@@ -157,8 +157,46 @@ SLASH_TREE_LINE = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>[/-])\s+(?P<name>\S
 
 
 def _parse_markdown_tree(text: str) -> tuple[str, ...]:
-    """A pasted directory tree, in either published form (icon tree first, then slash tree)."""
-    return _parse_icon_tree(text) or _parse_slash_tree(text)
+    """A pasted directory tree, in any published form.
+
+    Order: icon tree (`- 📁 name`) → slash tree (`/ <folder>` / `- <doc>`) → box tree
+    (`├─ name/ [F]`, the form `crwu-dws/references/00` §4 actually prescribes for
+    `目录树.md`). The box form used to be unparseable, so the mandated artifact could not
+    be used as a `--catalog` input at all.
+    """
+    return _parse_icon_tree(text) or _parse_slash_tree(text) or _parse_box_tree(text)
+
+
+BOX_TREE_LINE = re.compile(r"^(?P<prefix>(?:[│ ]{3})*)(?P<branch>├─|└─) (?P<rest>.+?)\s*$")
+
+
+def _parse_box_tree(text: str) -> tuple[str, ...]:
+    """`crwu-dws/references/00` §4 规定的 `目录树.md`：`├─`/`└─`，每级缩进 3 字符
+    （`│  ` 或 `   `）；folder 行尾 `[F]`，文档行尾为 `extension`（`ext:未提供` 表缺席）。
+    """
+    paths: set[str] = set()
+    folders: list[str] = []
+    for line in text.splitlines():
+        match = BOX_TREE_LINE.match(line)
+        if not match:
+            continue
+        level = len(match.group("prefix")) // 3
+        rest = match.group("rest").strip()
+        is_folder = rest.endswith("[F]")
+        if is_folder:
+            name = rest[: -len("[F]")].strip().rstrip("/").strip()
+        else:
+            # 文档名与行尾 extension 之间由多个空格分隔；名称本身可含单空格
+            name = re.split(r"\s{2,}", rest)[0].strip().rstrip("/")
+        if not name:
+            continue
+        folders = folders[:level]
+        normalized = _normalize_path("/".join([*folders, name]), folder=is_folder)
+        if normalized:
+            paths.add(normalized)
+        if is_folder:
+            folders.append(name)
+    return tuple(sorted(paths))
 
 
 def _parse_icon_tree(text: str) -> tuple[str, ...]:

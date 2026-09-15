@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · 按权威 schema 重建目录缓存；修 crwu-dws 递归漏 `--workspace` 与"规定的目录树形态不被解析"
+
+- **背景**：上一笔（`83f580d`）修完生产侧口径后，用 crwu-dws M1 重建 `中瑞世联评估审核知识库` 目录缓存，过程中又暴露两处缺陷。
+- **缺陷 1（文档与实现不符，递归必失败）**：`crwu-dws/SKILL.md` §4 P1 的递归写法只写 `--folder <folderId> --page-all`，而 `dws wiki +node-list --help` 明示 **`--workspace` 是必填**——照文档写子层调用必然 `rc=3`，遍历只能停在根层。另 `--page-limit` 默认仅 20 页（× `--limit` 50 = 最多 1000 条），大库会被静默截断成"遍历完成"。已补明 `--workspace` 必填与 `--page-limit` 须显式放大。
+- **缺陷 2（三种形态互不一致，"规定的产物"反而不可解析）**：`目录树.md` 的**规范形态**是 `crwu-dws/references/00` §4 的 box-drawing（`├─`/`└─`、folder 标 `[F]`、文档标 `extension`），**旧产物**是图标树（`- 📁`／`- 📄`），而 `check_audit_skill_mappings.py` 只认图标树与 slash 树 → 规定的 `目录树.md` 无法作为 `--catalog` 输入。已为 checker 增补 box-drawing 解析（`_parse_box_tree`），并保留既有两种以便粘贴树仍可用。
+- **重建结果**：`目录快照.json`（`crwu.kb-catalog.snapshot.v1`，嵌套 `children`、`generated_at`/`profile`/`mode`/`stats.complete` 齐备、`failures=[]`）、`node-index.json`（`crwu.kb-dir-cache.nodeindex.v1`）、`.cache-meta.json`（`crwu.kb-dir-cache.meta.v1`，`last_successful_at`）、`目录树.md`（box 形态）四件套原子替换；**300 节点 / 127 folder / 173 文档 / 深度 5 / complete=true**。
+- **验证**：映射检查器对真实缓存 `source_schema=crwu.kb-catalog.snapshot.v1`、`paths=300`、`complete=true`，**`KB_PATH_KEY_NOT_IN_CATALOG` 为零**（164 个寻址键全部命中），唯一 finding 是既知方法轴缺口 `ASSEMBLY_GAP_METHOD_LAYER`×3；`test_audit_skill_maintainer.py` **59 → 60 项、零 skip**——两个 live 回归恢复实跑，"三种产物形态指向同一棵树"通过（300 路径三方一致）；`kb_tool.py validate --skill-root skills` error=0。
+
 ## 2026-09-15 · fix(skills) · crwu-dws 快照 schema 口径自相矛盾致缓存被拒收；检查器报错改为可行动
 
 - **缺陷（实测定位）**：`~/.crwu/knowledge/dws-dir-cache/<库>/目录快照.json` 无法作为 `--catalog` 输入——`check_audit_skill_mappings.py` 报 `unsupported catalog schema: 'crwu.kb-dir-cache.snapshot.v1'`，整条映射/路径键校验链不可用（`test_audit_skill_maintainer.py` 2 项因此报错）。

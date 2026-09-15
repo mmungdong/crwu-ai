@@ -62,7 +62,10 @@ metadata:
 3. 判据：`requestedType` 与请求范围一致；`autoPageComplete=true` 才可用"缺席"证无；命中 0 → 报告范围+相似候选，不编造；命中 ≥1 → 全部进入处理列表，保留真实 `workspaceId/spaceType`（只取服务端真实返回）与范围标注。
 
 ## 4. P2 目录遍历（三模式共用，只读，DFS 递归）
-1. 根层 `dws wiki +node-list --workspace <ID> --page-all --format json`；对 `type=folder` 递归 `--folder <folderId> --page-all`，直至无 folder。
+1. 根层与每一层都用同一条命令，**`--workspace` 是必填**（`+node-list --help` 明示；只给 `--folder` 会 `rc=3`）：
+   `dws wiki +node-list --workspace <ID> --page-all --page-limit 200 --format json`
+   （子层追加 `--folder <folderId>`），直至无 folder。
+   **`--page-limit` 默认仅 20 页**（× `--limit` 50 = 最多 1000 条），大库必须显式放大，否则会静默截断成"遍历完成"。
 2. 纪律：每层记录分页证据并写入快照；`hasChildren` 仅提示不作剪枝；folder 按 nodeId 去重（二次展开停+标注）；节点字段只取真实返回，未知 type 原样保留；**文档节点必须同时记录 `extension`/`contentType`**（服务端真实返回，缺席记 `null` 不推断）——它们是 §6.2 取数通道分流的唯一判据；体量上限 10,000 节点 / 20 层 → 停止并如实报告部分结果。
 3. 遍历结果 = 内存树（前序展开序）；任何一次**成功完整遍历**都更新目录缓存（P3-M1 原子替换）。
 

@@ -1559,6 +1559,36 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
                 self.assertIn(needle, err, err)
             self.assertNotIn("Traceback", err, "须是可读错误信息，不是异常栈")
 
+    def test_mandated_directory_tree_form_is_parseable(self):
+        """`crwu-dws/references/00` §4 规定的 `目录树.md` 形态（`├─`/`└─` + `[F]`/extension）
+        必须能作为 `--catalog` 读取。
+
+        三种形态历史上互不一致：**规范**是 box-drawing（`├─`/`└─`、folder 标 `[F]`、文档标
+        `extension`），**旧产物**是图标树（`- 📁`／`- 📄`），而 checker 只认图标树与 slash 树——
+        结果"规定的产物"反而解析不了，`目录树.md` 无法作为目录输入。
+
+        本测试自足（不依赖同级技能），故不加 `@_requires_skill_tree`。
+        """
+        tree = textwrap.dedent("""\
+            # 某知识库 目录树
+            > workspaceId: w ｜ spaceType: orgWikiSpace ｜ 扫取: 2026-09-15T00:00:00+08:00 ｜ profile: p
+            > 节点 4（folder 2 / 文档 2）/ 深度 2 ｜ complete: true
+
+            ├─ 01-业务路线/                    [F]
+            │  ├─ 01-资产经营/                    [F]
+            │  │  └─ 共同审核点                    adoc
+            └─ 根层文档名                    ext:未提供
+            """)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "目录树.md"
+            path.write_text(tree, encoding="utf-8")
+            report = json.loads(run_checker(REPO_ROOT, path).stdout)
+            self.assertEqual(
+                ("01-业务路线/", "01-业务路线/01-资产经营/",
+                 "01-业务路线/01-资产经营/共同审核点", "根层文档名"),
+                tuple(report["catalog"]["paths"]),
+            )
+
     @_requires_skill_tree
     def test_real_repository_library_path_keys_exist(self):
         """Regression: this repo's audit-family address keys must resolve in the live catalog.
