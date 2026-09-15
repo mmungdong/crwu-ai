@@ -472,5 +472,113 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual("0.00%", rebuilt.active["A1"].number_format)
 
 
+    # ---- 6 隐藏区区段展开（防"隐藏列漏剔"假阳性）------------------------
+    @staticmethod
+    def _hide_columns(path: Path, sheet_name: str, lo: int, hi: int):
+        """按 raw XML 写 `<col min lo max hi hidden="1"/>`（含区段，覆盖假阳性根因场景）。
+
+        注意：openpyxl 的 `ws.column_dimensions` 只把该区段挂在**首列**上，这正是此前
+        `_hidden_metadata()` 漏剔区段内其余列、把人工隐藏内容读进工作版的根因。
+        """
+        import re
+        tmp = path.with_suffix(".hide.xlsx")
+        with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            names = dict(re.findall(
+                r'<sheet[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"',
+                zin.read("xl/workbook.xml").decode("utf-8")))
+            rels = {}
+            for rel in re.finditer(r"<Relationship\b([^>]*)/?>",
+                                   zin.read("xl/_rels/workbook.xml.rels").decode("utf-8")):
+                a = dict(re.findall(r'([A-Za-z_:][\w:.-]*)\s*=\s*"([^"]*)"', rel.group(1)))
+                if a.get("Id") and a.get("Target"):
+                    rels[a["Id"]] = a["Target"]
+            target = rels[names[sheet_name]].lstrip("/")
+            target = target if target.startswith("xl/") else "xl/" + target
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == target:
+                    text = data.decode("utf-8")
+                    cols = '<cols><col min="{0}" max="{1}" hidden="1"/></cols>'.format(lo, hi)
+                    text = re.sub(r"<sheetData", cols + "<sheetData", text, count=1)
+                    data = text.encode("utf-8")
+                zout.writestr(item, data)
+        shutil.move(str(tmp), str(path))
+
+    def test_hidden_column_range_is_fully_excluded(self):
+        """隐藏列**区段**（min<max）内每一列都不得进入工作版（此前只剔首列 → 假阳性）。"""
+        import openpyxl
+        d = self.src / "定稿"
+        d.mkdir()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "汇总表"
+        ws["A1"] = "序号"
+        ws["J1"] = "隐藏段首列"
+        ws["K1"] = "隐藏段第二列(曾漏剔)"
+        wb.save(d / "区段隐藏.xlsx")
+        self._hide_columns(d / "区段隐藏.xlsx", "汇总表", lo=10, hi=11)   # J:K
+
+        self._run()
+
+        rebuilt = openpyxl.load_workbook(self.case / "工作版/区段隐藏.xlsx")
+        rws = rebuilt["汇总表"]
+        self.assertEqual("序号", rws["A1"].value)
+        self.assertIsNone(rws["J1"].value, "区段内首列 J 应被剔除")
+        self.assertIsNone(rws["K1"].value, "区段内其余列 K 也必须被剔除（本条即历史失效点）")
+        meta = [i for i in self._inventory() if i["name"] == "区段隐藏.xlsx"][0]["workbook"]
+        self.assertIn("K", meta["hiddenMeta"]["hiddenCols"]["汇总表"])
+
+    # ---- 7 表名含首尾空格时隐藏区引用审计仍须命中 ------------------------
+    def test_hidden_reference_audit_matches_sheet_name_with_spaces(self):
+        """表名含首尾空格时，隐藏**列**引用仍须被审计命中（此前恒返回 0 处 → 漏报）。"""
+        import openpyxl
+        d = self.src / "定稿"
+        d.mkdir()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "报价表  "          # 尾空格，历史失效场景
+        ws["A1"] = 1
+        ws["B1"] = "=A1*2"
+        wb.save(d / "空格表名.xlsx")
+        self._hide_columns(d / "空格表名.xlsx", "报价表  ", lo=1, hi=1)   # 隐藏 A 列
+
+        self._run()
+
+        meta = [i for i in self._inventory() if i["name"] == "空格表名.xlsx"][0]["workbook"]
+        self.assertGreaterEqual(meta["hiddenRefsCount"], 1,
+                                "表名含空格时不得漏报隐藏列引用（归一化缺失的回归）")
+        self.assertTrue(any(r["kind"] == "引用隐藏列" for r in meta["hiddenRefs"]), meta["hiddenRefs"])
+
+    # ---- 8 虚增 dimension 不得拖垮遍历 ----------------------------------
+    def test_inflated_dimension_does_not_force_full_sheet_scan(self):
+        """`dimension` 被虚增（如 A1:Y1048575）时，遍历边界须取**真实用区**。"""
+        import openpyxl
+        d = self.src / "定稿"
+        d.mkdir()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "合计"
+        wb.save(d / "虚增维度.xlsx")
+        p = d / "虚增维度.xlsx"
+        tmp = p.with_suffix(".dim.xlsx")
+        with zipfile.ZipFile(p) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename.startswith("xl/worksheets/sheet"):
+                    text = data.decode("utf-8")
+                    text = text.replace('ref="A1"', 'ref="A1:Y1048575"', 1)
+                    data = text.encode("utf-8")
+                zout.writestr(item, data)
+        shutil.move(str(tmp), str(p))
+
+        src_ws = openpyxl.load_workbook(p).active
+        max_row, max_col = self.module._sheet_bounds(src_ws)
+        self.assertEqual((1, 1), (max_row, max_col), "虚增 dimension 不得被当作遍历边界")
+
+        self._run()      # 仍须在正常时间内完成
+        meta = [i for i in self._inventory() if i["name"] == "虚增维度.xlsx"][0]["workbook"]
+        self.assertEqual(1, meta["sheets"][0]["maxRow"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

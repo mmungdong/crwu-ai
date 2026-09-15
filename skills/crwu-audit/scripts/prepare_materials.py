@@ -354,15 +354,130 @@ def _collapsed_outline_cols(ws) -> set:
     return out
 
 
-def _hidden_metadata(wb_value, wb_formula) -> dict:
-    """只读结构元数据以识别隐藏区；隐藏 sheet 只记名字，不枚举其行列。"""
-    hidden = {"hiddenSheets": [], "hiddenRows": {}, "hiddenCols": {}}
+def _norm_sheet(name: str) -> str:
+    """工作表名归一：去首尾空白 + 全角空格 + 统一大小写。
+
+    用于隐藏结构 key 与 openpyxl `ws.title` 的比较——**两侧都必须归一**。
+    历史失效：只对一侧 strip()，凡表名含首尾空格（如 `2-1市场法询价记录  `）即恒返回 0 处引用（漏报）。
+    不做 casefold：公式里的表名是**大小写敏感字面量**，折大小写会把 `'Sheet1'!A1` 与 `Sheet1` 混同，
+    从而漏判“引用隐藏工作表”。
+    """
+    if not isinstance(name, str):
+        return ""
+    return name.replace("\u3000", " ").strip()
+
+
+def _xml_attrs(tag_body: str) -> dict:
+    """把标签体解析为属性字典。
+
+    **不能假设属性顺序**：openpyxl 写 `Target=/xl/… Id=rId1`，而 Excel 常见 `Id=… Target=…`。
+    早期实现用单条 `Id="…" Target="…"` 正则，遇到倒序即静默取空 → 隐藏行/列恒为空集
+    （真实失效：workbook.xml.rels 中 Target 在 Id 之前，导致修复前 `_raw_xml_hidden` 永远返回空集合）。
+    """
+    import re
+    return {m.group(1): m.group(2)
+            for m in re.finditer(r'([A-Za-z_:][\w:.-]*)\s*=\s*"([^"]*)"', tag_body)}
+
+
+def _raw_xml_hidden(p: str):
+    """从 xlsx 包内 XML 直读隐藏结构（**区段展开**），返回 {sheetName: {"state":…, "cols":set,"rows":set}}。
+
+    为什么必须读原始 XML：openpyxl 把 `<col min="10" max="11" hidden="1"/>` 这样的**区段**只挂在首列
+    （J）上，`ws.column_dimensions` 因此看不到 K —— 只按它取隐藏集合会**漏剔区段内的其余列**，
+    把人工隐藏的内容当成可见内容读进工作版，进而产出假阳性意见（2026-302150-LX9757-BG8677 实测：
+    03/04 两簿共 10 个真实隐藏列被误当可见）。行同理（`<row r="…" hidden="1"/>`）。
+    """
+    import re
+    import zipfile
+
+    out = {}
+    try:
+        z = zipfile.ZipFile(p)
+    except Exception:
+        return out
+    with z:
+        try:
+            wb = z.read("xl/workbook.xml").decode("utf-8", "replace")
+        except KeyError:
+            return out
+        rels = ""
+        try:
+            rels = z.read("xl/_rels/workbook.xml.rels").decode("utf-8", "replace")
+        except KeyError:
+            pass
+        targets = {}
+        for rel in re.finditer(r"<Relationship\b([^>]*)/?>", rels):
+            a = _xml_attrs(rel.group(1))
+            rid, tgt = a.get("Id"), a.get("Target")
+            if rid and tgt:
+                targets[rid] = tgt
+        for m in re.finditer(r"<sheet\b([^>]*)/?>", wb):
+            a = _xml_attrs(m.group(1))
+            name = a.get("name")
+            if not name:
+                continue
+            state = a.get("state") or "visible"
+            target = targets.get(a.get("r:id") or "", "")
+            cols, rows = set(), set()
+            if target:
+                # Target 三种写法都要认：`/xl/worksheets/sheet1.xml`（绝对，openpyxl 即此）
+                # / `worksheets/sheet1.xml`（相对 rels 所在的 xl/） / `xl/…`（已带前缀）。
+                # 早期实现直接 `"xl/" + target.lstrip("/")` 把绝对路径拼成 `xl/xl/…`，
+                # KeyError 被 except 吞掉 → 隐藏行/列**恒为空集**（本次修复的真正根因）。
+                t = target.replace("\\", "/").lstrip("/")
+                for cand in (t, "xl/" + t):
+                    try:
+                        xml = z.read(cand).decode("utf-8", "replace")
+                        break
+                    except KeyError:
+                        continue
+                else:
+                    xml = ""
+                for c in re.finditer(r"<col\b([^>]*)/?>", xml):
+                    ca = _xml_attrs(c.group(1))
+                    if str(ca.get("hidden", "")).lower() not in ("1", "true"):
+                        continue
+                    if "min" not in ca:
+                        continue
+                    lo = int(ca["min"])
+                    hi = int(ca["max"]) if ca.get("max") else lo
+                    for i in range(lo, hi + 1):          # 区段展开：这是本函数存在的理由
+                        cols.add(i)
+                for r_ in re.finditer(r"<row\b([^>]*)/?>", xml):
+                    ra = _xml_attrs(r_.group(1))
+                    if str(ra.get("hidden", "")).lower() not in ("1", "true"):
+                        continue
+                    if ra.get("r"):
+                        rows.add(int(ra["r"]))
+            out[name] = {"state": state, "cols": cols, "rows": rows}
+    return out
+
+
+def _hidden_metadata(wb_value, wb_formula, path: str | None = None) -> dict:
+    """只读结构元数据以识别隐藏区；隐藏 sheet 只记名字，不枚举其行列。
+
+    `cols/rows` 优先取 raw XML 的**展开后**真实集合（`path` 给出时）；raw XML 不可得才退回
+    openpyxl（此时区段内其余列会漏，属降级，会在 note 中体现为 hiddenMetaSource）。
+    """
+    from openpyxl.utils import get_column_letter
+
+    raw = _raw_xml_hidden(path) if path else {}
+    hidden = {"hiddenSheets": [], "hiddenRows": {}, "hiddenCols": {},
+              "hiddenMetaSource": "raw-xml" if raw else "openpyxl"}
     for ws in wb_value.worksheets:
+        rinfo = raw.get(ws.title)
+        if rinfo and rinfo["state"] != "visible":
+            hidden["hiddenSheets"].append(ws.title)
+            continue
         if ws.sheet_state != "visible":
             hidden["hiddenSheets"].append(ws.title)
             continue
-        rows = {r for r, d in ws.row_dimensions.items() if d.hidden} | _collapsed_outline_rows(ws)
-        cols = {c for c, d in ws.column_dimensions.items() if d.hidden} | _collapsed_outline_cols(ws)
+        if rinfo:
+            rows = set(rinfo["rows"]) | _collapsed_outline_rows(ws)
+            cols = {get_column_letter(i) for i in rinfo["cols"]} | _collapsed_outline_cols(ws)
+        else:
+            rows = {r for r, d in ws.row_dimensions.items() if d.hidden} | _collapsed_outline_rows(ws)
+            cols = {c for c, d in ws.column_dimensions.items() if d.hidden} | _collapsed_outline_cols(ws)
         if rows:
             hidden["hiddenRows"][ws.title] = sorted(rows)
         if cols:
@@ -399,19 +514,30 @@ def audit_hidden_references(wbf, hidden: dict):
 
     只读可见格的公式串；隐藏行/列/隐藏 sheet 的单元格**一律不读**（H0）。
     用途：判定"可见结果是否依赖不可见的计算输入" → 计算链不可复核。
+
+    表名归一：工作表名常带首尾空格（如 `2-1市场法询价记录  `），此前用 strip() 后的名字与未 strip 的
+    `ws.title` 比较，**凡表名含首尾空格即恒返回 0 处引用**（漏报）。此处双方统一 `_norm_sheet()` 归一，
+    并在"隐藏结构里出现了但没有任何可见表与之匹配"时抛错，**不得静默返回 0**。
     """
-    from openpyxl.utils import column_index_from_string, get_column_letter
-    hidden_sheets = set(hidden.get("hiddenSheets", []))
-    hid_rows = {s: set(v) for s, v in hidden.get("hiddenRows", {}).items()}
+    from openpyxl.utils import column_index_from_string
+    hidden_sheets = {_norm_sheet(s) for s in hidden.get("hiddenSheets", [])}
+    hid_rows = {_norm_sheet(s): set(v) for s, v in hidden.get("hiddenRows", {}).items()}
     # 忽略清单里列用字母（给人看），比对时必须换算成列序号
-    hid_cols = {s: {column_index_from_string(c) for c in v}
+    hid_cols = {_norm_sheet(s): {column_index_from_string(c) for c in v}
                 for s, v in hidden.get("hiddenCols", {}).items()}
+    visible = [ws for ws in wbf.worksheets if ws.sheet_state == "visible"]
+    visible_norm = {_norm_sheet(ws.title) for ws in visible}
+    declared = set(hid_rows) | set(hid_cols)
+    unmatched = sorted(declared - visible_norm)
+    if unmatched:
+        raise RuntimeError(
+            "隐藏区引用审计无法完成：隐藏结构中的工作表 {0} 与任何可见工作表名不匹配"
+            "（表名归一后仍不一致）→ 不得视为'0 处引用'".format(unmatched))
     hits, seen = [], set()
-    for ws in wbf.worksheets:
-        if ws.sheet_state != "visible":
-            continue                      # H0：隐藏 sheet 整体不读
-        rows_h = hid_rows.get(ws.title, set())
-        cols_h = hid_cols.get(ws.title, set())          # 列序号集合
+    for ws in visible:
+        key_title = _norm_sheet(ws.title)
+        rows_h = hid_rows.get(key_title, set())
+        cols_h = hid_cols.get(key_title, set())          # 列序号集合
         for row in ws.iter_rows():
             for c in row:
                 if c.row in rows_h or c.column in cols_h:
@@ -420,11 +546,11 @@ def audit_hidden_references(wbf, hidden: dict):
                 if not isinstance(f, str) or not f.startswith("="):
                     continue
                 for m in _REF_RE.finditer(f):
-                    sheet = (m.group("q") or m.group("s") or ws.title).strip()
+                    sheet = _norm_sheet(m.group("q") or m.group("s") or ws.title)
                     kind = None
                     if sheet in hidden_sheets:
                         kind = "引用隐藏工作表"
-                    elif sheet == ws.title:
+                    elif sheet == key_title:
                         rows, cols = _span(m.group("a"), m.group("b"))
                         if rows & rows_h:
                             kind = "引用隐藏行"
@@ -440,17 +566,45 @@ def audit_hidden_references(wbf, hidden: dict):
     return hits
 
 
+def _sheet_bounds(ws) -> tuple:
+    """真实用区上界 (maxRow, maxCol)：只按**实际存在**的单元格算，用于遍历边界。
+
+    不能直接用 `ws.max_row/max_column`：原件常带被虚增的 dimension（如 `A1:Y1048575`），
+    按它遍历会退化成百万行循环（2026-302135-LX9619-BG8634 实测长时间无响应）。
+    `calculate_dimension()` 同源，故这里显式扫 `_cells`。超时保护：仅取用区上界，不改变"遍历即可见格"的语义。
+    """
+    try:
+        rows = getattr(ws, "_cells", None)
+        if rows:
+            keys = [k for k in rows.keys() if isinstance(k, tuple) and len(k) == 2]
+            if keys:
+                return max(k[0] for k in keys), max(k[1] for k in keys)
+    except Exception:
+        pass
+    dim = ws.calculate_dimension(force=True)
+    m = re.match(r"^[A-Z]+(\d+)(?::[A-Z]+(\d+))?$", dim or "")
+    if m:
+        from openpyxl.utils import column_index_from_string
+        parts = (dim.split(":") + [dim])[:2]
+        cols = [column_index_from_string(re.match(r"^([A-Z]+)", x).group(1)) for x in parts]
+        rows_ = [int(re.search(r"(\d+)$", x).group(1)) for x in parts]
+        return max(rows_), max(cols)
+    return ws.max_row, ws.max_column
+
+
 def xlsx_visible(p: str, outdir: str, out_name: str):
     """重建法：新建簿，只复制「可见 sheet × 可见行 × 可见列」的值（缓存值优先）与格式。
 
     禁止用 delete_rows/delete_cols 逐行列删除（会残留维度元数据）。
+    隐藏集合取 **raw XML 展开后的真实区段**（`_hidden_metadata(..., path=p)`），
+    遍历边界取真实用区（`_sheet_bounds`），避免"隐藏区漏剔"与"虚增 dimension 长循环"两类失效。
     """
     import openpyxl
     from openpyxl.utils import get_column_letter
 
     src = openpyxl.load_workbook(p, data_only=True)      # 缓存值
     srcf = openpyxl.load_workbook(p, data_only=False)    # 公式串
-    hidden = _hidden_metadata(src, srcf)
+    hidden = _hidden_metadata(src, srcf, path=p)
 
     dst = openpyxl.Workbook()
     dst.remove(dst.active)
@@ -462,10 +616,11 @@ def xlsx_visible(p: str, outdir: str, out_name: str):
         hidden_rows = set(hidden["hiddenRows"].get(ws.title, []))
         hidden_cols = set(hidden["hiddenCols"].get(ws.title, []))
         o = dst.create_sheet(ws.title[:31])
-        vis_rows = [r for r in range(1, ws.max_row + 1) if r not in hidden_rows]
+        max_row, max_col = _sheet_bounds(ws)
+        vis_rows = [r for r in range(1, max_row + 1) if r not in hidden_rows]
         used = no_cached = 0
         for ri, r in enumerate(vis_rows, 1):
-            for c in range(1, ws.max_column + 1):
+            for c in range(1, max_col + 1):
                 if get_column_letter(c) in hidden_cols:
                     continue  # H0：隐藏列不读
                 v = ws.cell(r, c).value
@@ -485,7 +640,7 @@ def xlsx_visible(p: str, outdir: str, out_name: str):
         if no_cached:
             unavailable.append({"sheet": ws.title, "cells": no_cached})
         stats.append({"sheet": ws.title, "visibleRows": len(vis_rows), "cells": used,
-                      "maxRow": ws.max_row, "maxCol": ws.max_column,
+                      "maxRow": max_row, "maxCol": max_col,
                       "valueUnavailable": no_cached})
     os.makedirs(outdir, exist_ok=True)
     out = os.path.join(outdir, out_name)
