@@ -42,7 +42,7 @@
 | [`crwu-audit-optimize`](crwu-audit-optimize/SKILL.md) | 提示型（维护/元技能） | 审核能力族**维护/优化入口**（不经 crwu-audit 路由、不产审核判断）：用户反馈驱动的 规则/覆盖/路径 演进——先定位单子画像与缺口分桶（A 规则内容/B 覆盖缺失/C 词表/D 算法/E 漂移）→ 输出《优化方案》（拟改文件清单，源仓+运行时双份）→ **用户确认后**按 99 流程执行 + kb_tool 校验回归。规范见其 references/00-02 |
 | [`crwu-audit-skill-maintainer`](crwu-audit-skill-maintainer/SKILL.md) | 提示型（维护/元技能） | 资产/业务 Skill 的盘点、创建、修复和重映射：读取目录树或 DWS 快照，识别缺失的一级资产/业务 Skill、遗留命名、失效根映射及细分审核文件缺口；资产用 `crwu-audit-asset-*`、业务用 `crwu-audit-biz-*`，细分对象和子业务只进入父 Skill 索引；修改 source 前先给逐文件方案并等待确认 |
 
-| [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联评估审核知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
+| [`crwu-dws`](crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联评估审核知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据（含 `extension` 通道判据）；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；**取数按节点 `extension` 双通道分流**——`adoc`→`doc +export`，可读原生文本 `md`/`txt`→`drive +download`（原件即正文），其余类型记 `skipped` 不伪造正文；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
 
 ## crwu-audit 审核能力族（分轴并集）
 
@@ -61,7 +61,8 @@
 ## crwu-dws（钉钉知识库只读域：M1 目录查询+缓存 / M2 按清单实时下载 / M3 路径·缓存兜底查找）
 
 - 独立能力线，与 crwu-audit 族**平级、互为上下游**：M1 查询钉钉知识库层级目录并写无正文缓存；M2 按 crwu-audit 路由/装配确定的本次清单实时下载到案例目录与源审核数据文件同级的 `knowledge/`，清单可混合单文件和目录路径；M3 供 skill 按文件名/nodeId/库内层级路径查找，正文仍现场下载。
-- 缓存语义（用户口径）：**目录可缓存、正文不缓存**——目录缓存只存结构与 nodeId/全路径索引，正文每次实时从钉钉导出（本次下载物只属本次审核），保证"员工钉钉更新 → AI 取到的正文永远最新"。
+- 缓存语义（用户口径）：**目录可缓存、正文不缓存**——目录缓存只存结构与 nodeId/全路径索引，正文每次实时从钉钉取回（本次下载物只属本次审核），保证"员工钉钉更新 → AI 取到的正文永远最新"。
+- 取数通道（v0.6）：知识库文档的 `nodeType` 恒为 `file`，**格式只在 `extension` 里**；`doc +export` 仅支持 `adoc`。故 M2/M3 一律按 `extension` 分流——`adoc`→`doc +export`；`md`/`txt`→`drive +download`（原件即正文）；其余→`skipped`（**不是 failure**）。禁止"先 export 试一次失败再换通道"。节点 `extension`/`contentType` 由 M1 遍历写入快照与 node-index；旧缓存缺该字段时逐节点补查 `wiki +node-get`，不按名称后缀猜。
 - 缓存名一致性（v0.3.1/D12）：缓存目录身份 = `.cache-meta.space`（name+workspaceId）；缓存库名与目标不一致（改名/换库/历史残留）→ **先清理缓存目录、再在线重下目标库目录结构**（防跨库误命中；见 SKILL.md §5.0 与 design §10）。
 - 口径：钉钉知识库是知识正文唯一来源；案例 `knowledge/` 是本次审核工作集，跨审核必须重新下载；目录缓存只用于查找加速且无正文。audit 族实时引用协议见 [`docs/design-audit-live-kb-protocol.md`](../docs/design-audit-live-kb-protocol.md)（R1–R5）。
 - 设计/决策点与改动纪律见 [`docs/design-crwu-dws.md`](../docs/design-crwu-dws.md)；改动只落源仓，运行时部署由用户 skills 管理机制负责（不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）。

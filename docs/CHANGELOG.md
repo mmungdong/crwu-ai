@@ -9,6 +9,19 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · crwu-dws v0.6：取数按节点 `extension` 双通道分流，修复「原生 `.md` 正文必然失败且被误记为 failure」
+
+- **缺陷（实测定位）**：知识库文档节点的 `nodeType` **恒为 `file`**，格式信息只在 `extension`/`contentType`；`dws doc +export` **仅支持 `extension=adoc`**。crwu-dws 整改前对所有文档一律调用 `doc +export`，于是「中瑞世联评估审核知识库」中 **25 个原生 `.md` 正文**（整个 `03-评估方法/`，含 `RULE-01-02-281~305` 评估方法准则 25 条、方法缺陷清单）**每次审核都必然失败并被记成 failure**；`crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 声明的 `VALUATION_METHOD_INTERFACE` 路径（`03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/`，6 个文件）全部落在此列 → 每次房地产审核丢 6 条，方法准则层整层不可用。
+- **波及表述修正**：这不是"没有权限"或"内容缺失"——同一批节点用 `dws drive +download` **27/27 全部取回成功**（方法轴 25 个文件合计 75,207 字节）。缺陷性质是**取数通道选错**。
+- **整改（按 `extension` 分流，硬规则）**：`adoc`→`dws doc +export --export-format markdown`；可读原生文本 `md`/`txt`→`dws drive +download`（原件即正文，不转换）；其余类型（`pdf`/`docx`/`xlsx`/`exe` …）→ 记 `skipped` + 真实 `extension`，**不是 failure**、不伪造正文。**明令禁止"先 `doc +export` 试一次、失败再换通道"**——试错会把必然失败记成偶发错误并掩盖通道缺陷。
+- **只读白名单**：由「doc 域仅 `+export`」扩为「wiki 域 6 命令 / doc 域 `+export` / **drive 域仅 `+download`**」；仍对钉钉零写（`+download` 为 `effect=read risk=low confirmation=not_required idempotent`，产物只落本地工作目录）。
+- **快照与索引补 `extension`/`contentType`**（M1/P2 遍历强制记录，缺席记 `null` 不推断）：这是 M2 快路径判通道的唯一依据。旧缓存缺该字段时逐节点补查 `dws wiki +node-get`（只读，记入 `evidence.extensionSource=catalog|node-get`），**不按名称后缀猜**。`type` 字段明确为"只表示节点形态、不承载格式信息"（整改前 schema 文档把它当格式白名单 `folder|adoc|axls|…`，与真实返回 `folder|file` 不符，是本次误判的根源）。
+- **manifest 契约（`crwu.audit-download.manifest.v1`）**：entry 新增必填 `extension` + `channel ∈ {export,download}`；新增 `skipped` 行（含真实 `extension` 与原因）；**`skipped` 必须与 `failure` 分开统计**，禁止把类型不支持并入 failure。摘要口径由「成功/失败」改为「成功/跳过/失败」。
+- **同步文件**：`crwu-dws/SKILL.md`（description、§0、§2 白名单与分流表、§4 P2、§6.2 M2、§7 M3、§8 自查、§10 错误路径）、`references/00-目录快照schema.md`（v3）、`references/01-审核下载与manifest规范.md`（v4）、`references/02-缓存与兜底查找规范.md`（v1.3）、`skills/README.md`、`docs/design-crwu-dws.md`（v0.6 新增 §3.1 分流表与验收用例）。
+- **门禁补强**：`crwu-dws/scripts/test_dws_source_contract.py` 新增 5 个契约测试（只读白名单含 `+download` 且不含 `+upload/+move/+delete`；通道由 `extension` 判定且禁止试错；`skipped` 不得记为 failure 且 manifest 三态齐全；快照与索引携带 `extension`/`contentType` 且缺失时补查 `node-get`；`type` 不得当格式判据、目录树按 `extension` 标注）。**非空验证**：在 `HEAD` 干净工作树上运行新测试，5 个新测试全失败；改动后 12/12 通过。
+- **验证**：`test_dws_source_contract.py` 12/12；`kb_tool.py validate --skill-root skills` error=0/warn=0；`check_audit_skill_mappings.py --catalog <2026-09-15 在线快照>` error=0/warning=0；真实环境 `dws drive +download` 27/27 成功。
+- **待办（用户侧，知识库）**：无。本整改不需要改钉钉端内容（方案①零内容改写）；若日后选择"把 `03-评估方法/` 转为 adoc"（方案②），需同步 `crwu-audit-asset-realestate` 的 `VALUATION_METHOD_INTERFACE` 与映射校准表。
+
 ## 2026-09-15 · feat(skills) · 新增 public 轴能力技能 `crwu-audit-external-data`（收益法/市场法的外部数据核验 + 同花顺 iFinD / 万得连接器发现与兜底）
 
 - **背景**：知识库已新增模块规程 `06-规则库/M-外部数据核验/01-模块-外部数据核验`（表 A 触发范围 / 表 B 数据项触及 / 表 C 组合映射 / 表 D 万得条件与降级 / 结论档位 / 留痕 / 未检查项 / 员工补录机制）。本次把该模块落成 crwu-audit 族的执行能力。
