@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-15 · fix(skills) · 立"非单元格证据不得据工作版判缺失"口径并登记原件媒体数
+
+- **缺陷（实测定位）**：重建工作版只复制单元格值与 `number_format`，**必然**丢弃 `xl/media`、`xl/drawings`、页眉页脚、批注、形状与图表；而 router 只把工作版交给叶子，于是"证据不在单元格里"的检查项被**结构性**判成"缺失"。实测 2026-302150-LX9757-BG8677：`MKT-004` 判"可比实例位置图为空、询价截图缺失"，而原件 `04评估计算表.xlsx` 实有 **26 个媒体对象**（工作版 0），其中 `1-2市场案例位置图` 的图正是带 4.6/5.4/3.8 km 标注的可比案例位置图。属**假阳性**，须回撤。
+- **根因**：既有铁律"任何'未列示/缺失/为空'类结论下发前必须回 raw 原件复读"**只覆盖了单元格**——回 raw 只看单元格同样看不到图，缺"直读 raw 包部件"这一半。
+- **整改（口径 + 数据依据）**：
+  - `crwu-audit/references/00-input-and-route-profile.md` §Excel 补五条：① "工作版中不存在" ≠ "原件中不存在"；② 媒体类证据必须解析 raw 包的 `xl/media/*` 与 `drawing*.xml` 锚点，并据锚点定位 sheet 与行；③ 解析不到只能出「未核验」，**未核 ≠ 缺失**；④ **H0 扩展到图形锚点**（锚点落在隐藏行/列/隐藏 sheet 的媒体对象整体跳过；媒体呈现隐藏区内容属 H1）；⑤ 编排层在 `nonCellEvidence` 登记原件媒体数，叶子据此知道"有待核证据"，实际读取由编排层按清单放行。
+  - `crwu-audit-datacheck/SKILL.md` 同步同一禁令（询价截图/位置图/现场照片等内嵌图不得据工作版判缺失）。
+  - `crwu-audit/references/11-html-delivery-spec.md` §4.3 补**非单元格证据的 `locator` 受控写法**（`<sheet>!图片#<序号>（锚点 <起始行>:<结束行>）`、`!页眉`、`!页脚`、`!批注!<单元格>`、`!图形#<序号>`、扫描件 `#第<N>页`），并明确未核验写「未核验」、`excerptOrValue` 不得用"无/空"替代未核。
+  - `audit_result.schema.json` 6 处 `locator` 补 `description`（同一词表；`locator` 仍为自由字符串，不改结构）。
+  - `prepare_materials.py` 新增 `_raw_media_count()`，逐文件登记 `rawMediaCount` 与 `mediaCarriedOver: 0`，并在 `材料盘点.json` 汇总为顶层 `nonCellEvidence` 与 CLI 摘要提示。
+- **验证**：真实案例 `04评估计算表.xlsx` 计数 26（工作版 0），案例汇总 4 个文件 / 72 个媒体对象；`test_prepare_materials.py` 22 → **23** 项（新增媒体计数与 `nonCellEvidence` 登记）；`test_audit_delivery.py` 61/61；`kb_tool.py validate --skill-root skills` error=0。
+
 ## 2026-09-15 · fix(skills) · recalc_check 函数参数丢索引：未实现运算符被静默丢弃，产生 1,914 条假差异
 
 - **缺陷（实测定位）**：`_function` 的局部 `ev()` 写成 `return self._expr(tokens, s)[0]`，**丢弃了消费位置**。于是 `IF(A1&B1="x", a, b)` 只解析 `A1`，`&B1="x"` 被静默忽略、条件走错分支——引擎给出一个**自信的错误值**并按"已重算"参与比对；`%` 同理。

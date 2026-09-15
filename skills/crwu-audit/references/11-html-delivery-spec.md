@@ -174,6 +174,22 @@
 | 审核规则依据 | 法律法规、资产评估准则、评估方法规则、监管规则、协会要求、内部审核规则、CRWU 知识库规则、历史风险案例 | 规则名称 + 版本 + 条款；知识库相对路径 + exportedAt | authorityClass、sourceType、ruleId、title、version、clause、quote、kbRelativePath、exportedAt |
 | 被审核材料证据 | 报告正文、评估说明、测算明细表、附件、答复材料等本次实际读取文件 | 文件名 + 页码/章节/段落或 Sheet + 单元格/区域 | fileId、displayName、section、locator、excerptOrValue、evidenceRole、contentHash（可选） |
 
+**非单元格证据的 `locator` 形态**（图片/页眉页脚/批注/形状/图表等；`locator` 是自由字符串，下列为受控写法）：
+
+| 证据形态 | `locator` 写法 | 说明 |
+| --- | --- | --- |
+| xlsx 内嵌图 | `<sheet>!图片#<序号>（锚点 <起始行>:<结束行>）` | 序号与锚点来自 raw 原件包 `xl/media` + `drawing*.xml` 解析 |
+| 独立图片/扫描件 | `<文件名>#第<N>页` 或 `<文件名>（整图）` | 逐页扫描件须给页码 |
+| 页眉/页脚 | `<sheet>!页眉` / `<sheet>!页脚` | 重建工作版不含，须直读 raw |
+| 批注 | `<sheet>!批注!<单元格>` | 同上 |
+| 形状/图表 | `<sheet>!图形#<序号>` | 同上 |
+
+- 该形态的证据**只能来自 raw 原件直读**；工作版不含这些部件，据工作版得出的"为空/缺失"结论无效
+  （口径见 `00-input-and-route-profile.md` §Excel）。**未核验**的媒体证据写「未核验」，
+  **不得**写成"缺失/为空/未列示"。
+- `excerptOrValue` 写**从证据本身读到的事实**（如"位置图标注起点与三个案例 4.6/5.4/3.8 km"），
+  不得写"无""空"来替代未核。
+
 ### 4.4 五段式判定链
 
 1.  规则：陈述适用于本项目的要求，并引用规则条款与来源。

@@ -647,6 +647,42 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual(["正常表"], [s["sheet"] for s in rec["workbook"]["sheets"]],
                          "超限表不进工作版，其余表照常处理")
 
+    # ---- 10 非单元格证据（媒体）不得因工作版丢失而被判"缺失" ----------------
+    def test_raw_media_is_counted_and_flagged_as_non_cell_evidence(self):
+        """原件含内嵌媒体时：登记 `rawMediaCount`，汇总进 `nonCellEvidence` 并提示不得据工作版判缺失。
+
+        真实失效（2026-302150-LX9757-BG8677）：重建工作版丢失全部 `xl/media`（审核对象已非送审件原貌），
+        导致 `MKT-004` 判"可比实例位置图为空、询价截图缺失"，而原件实有 26 个媒体对象。
+        """
+        import openpyxl
+        import shutil
+        import zipfile
+        d = self.src / "定稿"
+        d.mkdir()
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = "x"
+        p = d / "带图.xlsx"
+        wb.save(p)
+        tmp = p.with_suffix(".media.xlsx")          # openpyxl 不写图，直接补 zip 部件模拟内嵌图
+        with zipfile.ZipFile(p) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                zout.writestr(item, zin.read(item.filename))
+            zout.writestr("xl/media/image1.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+        shutil.move(str(tmp), str(p))
+
+        self._run()
+
+        rec = [i for i in self._inventory() if i["name"] == "带图.xlsx"][0]["workbook"]
+        self.assertEqual(1, rec["rawMediaCount"], "须登记原件媒体数")
+        self.assertEqual(0, rec["mediaCarriedOver"], "重建法不复制媒体，须如实记账")
+        self.assertIn("禁止依据工作版", rec["nonCellEvidenceNote"])
+        nce = self._payload()["nonCellEvidence"]
+        self.assertEqual((1, 1), (nce["filesWithMedia"], nce["rawMediaCount"]))
+        rebuilt = self.case / "工作版/带图.xlsx"
+        self.assertEqual(
+            [], [n for n in zipfile.ZipFile(rebuilt).namelist() if n.startswith("xl/media/")],
+            "工作版不得残留媒体——正因如此，媒体类结论必须回 raw 原件")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

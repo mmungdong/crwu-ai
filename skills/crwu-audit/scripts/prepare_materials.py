@@ -462,6 +462,25 @@ def _raw_xml_hidden(p: str):
     return out
 
 
+def _raw_media_count(p: str) -> int:
+    """raw 原件 `xl/media/` 内的媒体对象数（图片等）。
+
+    重建工作版只复制单元格值与格式，**必然**丢掉全部媒体；而审核对象是工作版，
+    于是"证据不在单元格里"的检查项会被判成"缺失"。
+    真实失效（2026-302150-LX9757-BG8677）：`MKT-004` 判"可比实例位置图为空、
+    询价截图缺失"，而原件 `04评估计算表.xlsx` 实有 27 张内嵌图（含带 4.6/5.4/3.8 km
+    标注的位置图）——工作版 media 为 0，审核对象已非送审件原貌。
+    故这里登记原件媒体数，让"未核 ≠ 缺失"有据可依。
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(p) as z:
+            return sum(1 for n in z.namelist()
+                       if n.startswith("xl/media/") and not n.endswith("/"))
+    except Exception:
+        return 0
+
+
 def _hidden_metadata(wb_value, wb_formula, path: str | None = None) -> dict:
     """只读结构元数据以识别隐藏区；隐藏 sheet 只记名字，不枚举其行列。
 
@@ -841,6 +860,7 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                 out, hidden, stats, resid, unavailable, refs, anomalies, wb_gaps = \
                     xlsx_visible(p, work_dir, out_name)
                 rec["readable"] = True
+                media_n = _raw_media_count(p)
                 rec["workbook"] = {"workVersion": os.path.relpath(out, case),
                                    "sheets": stats, "hiddenResidual": resid,
                                    "hiddenMeta": hidden,
@@ -849,6 +869,15 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                                    "hiddenRefsCount": len(refs),
                                    "sheetAnomalies": anomalies,
                                    "capabilityGaps": wb_gaps,
+                                   # 重建法**必然**丢弃全部媒体（图片/形状/图表）与页眉页脚/批注：
+                                   # openpyxl 新建簿只复制单元格值与 number_format。
+                                   # 这里登记原件媒体数，供"禁止依据工作版判缺失"这条铁律有据可依。
+                                   "rawMediaCount": media_n,
+                                   "mediaCarriedOver": 0,
+                                   "nonCellEvidenceNote": (
+                                       "工作版不含媒体/页眉页脚/批注等非单元格证据；"
+                                       "凡'不存在/缺失/为空/未列示'类结论禁止依据工作版下判断，"
+                                       "必须回 raw 原件直读" if media_n else None),
                                    "calcChainNotReproducible": sorted(
                                        {f"{h['sheet']}!{h['cell']}" for h in refs})}
                 for a in anomalies:                       # B3：表格规范提示，逐表登记
@@ -915,14 +944,26 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                      for v in metas.values()),
                     key=lambda d: sorted(d["stages"]))
             })
+    # 非单元格证据：重建工作版必然丢媒体，汇总登记（供"未核 ≠ 缺失"与"原件直读"口径使用）
+    non_cell = [{"path": r["path"], "stage": r.get("stage"),
+                 "rawMediaCount": r["workbook"]["rawMediaCount"]}
+                for r in inv
+                if r.get("workbook", {}).get("rawMediaCount")]
     payload = {"items": inv, "archives": archives, "hiddenStructureDrift": drift,
-               "sheetAnomalies": sheet_anomalies}
+               "sheetAnomalies": sheet_anomalies,
+               "nonCellEvidence": {
+                   "note": "工作版不含媒体/页眉页脚/批注等非单元格证据；"
+                           "凡'不存在/缺失/为空/未列示'类结论禁止依据工作版下判断，必须回 raw 原件直读",
+                   "filesWithMedia": len(non_cell),
+                   "rawMediaCount": sum(x["rawMediaCount"] for x in non_cell),
+                   "files": non_cell}}
     inv_path = os.path.join(case, "材料盘点.json")
     with open(inv_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=1)
     return {"inventory": inv_path, "items": len(inv),
             "readable": sum(1 for r in inv if r.get("readable")),
-            "archives": archives, "sheetAnomalies": sheet_anomalies}
+            "archives": archives, "sheetAnomalies": sheet_anomalies,
+            "nonCellEvidence": payload["nonCellEvidence"]}
 
 
 def main() -> int:
@@ -958,6 +999,12 @@ def main() -> int:
                   f"多出 {a['orphanRows']}行/{a['orphanCols']}列，纯格式格 {a['styleOnlyCells']}")
         if len(anomalies) > 10:
             print(f"  ……另有 {len(anomalies) - 10} 处")
+    nce = result.get("nonCellEvidence") or {}
+    if nce.get("rawMediaCount"):
+        print(f"\n非单元格证据提示：{nce['filesWithMedia']} 个原件含媒体对象共 "
+              f"{nce['rawMediaCount']} 个（图片等），**工作版不含媒体**。"
+              f"凡'不存在/缺失/为空'类结论禁止依据工作版下判断，须回 raw 原件直读"
+              f"（明细见 材料盘点.json 的 nonCellEvidence）。")
     missing = missing_deps()
     if missing:
         print(f"提示：缺少可选依赖 {', '.join(missing)}——对应格式可能读不到，"
