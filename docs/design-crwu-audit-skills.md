@@ -63,7 +63,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 | L2 | ~~crwu-audit-realestate-rent~~ | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值） | 组合模型废止；租赁类业务要求改由业务轴 Skill 承载 | ❌ 2026-09-10 下架 |
 | L2 能力 | crwu-audit-datacheck | 跨方向 · 材料含测算/明细/汇总表（任何对象） | M-数据校对口径：C1–C6 差异清单（**仅可见区**；H0：人工隐藏区 sheet/行/列/折叠组 强制跳过、禁读禁报） | ✅ v0.1 |
 | L2 能力（public） | crwu-audit-public-general-standards | 任何报告形态（与对象/业务/方法/监管无关，恒装配） | `06-规则库/02-通用准则-报告与披露/`（`RULE-01-02-251~279`）＋`06-规则库/03-通用准则-程序与档案/`（程序准则旧版 `101~127`、2026 版 `001~028`、质控指南 `401~456`） | ✅ 2026-09-10（P0-1：通用披露层归属 + 同型程序质控层同批认领） |
-| L2 能力（public） | crwu-audit-external-data | 跨方向 · `methods[]` 命中收益法/市场法（是否取数再由其按知识库表 A 三条自行判定） | `06-规则库/M-外部数据核验/01-模块-外部数据核验`（表 A 触发范围 / 表 B 数据项触及 / 表 C 组合映射 / 表 D 万得条件与降级 / 留痕 / 未检查项 / 员工补录）；经宿主连接器（同花顺 iFinD 主源、万得副源）取数，以报告基准日为锚；交付 HTML《外部数据核验》区 | ✅ 2026-09-15 v0.1 |
+| L2 能力（public） | crwu-audit-external-data | 跨方向 · `methods[]` 命中收益法/市场法（是否取数再由其按知识库表 A 三条自行判定） | `06-规则库/M-外部数据核验/01-模块-外部数据核验`（表 A 触发范围 / 表 B 数据项触及 / 表 C 组合映射 / 表 D 源启用条件与降级 / 留痕 / 未检查项 / 员工补录）；唯一数据源为**同花顺 iFinD**（取数路径随宿主而异：WorkBuddy 宿主连接器 `ifind-mcp` / DeepSeek Harness 的 `ifind-finance-data` 技能），不启用万得，以报告基准日为锚；交付 HTML《外部数据核验》区 | ✅ 2026-09-15 v0.1（v0.2：单源 iFinD + 两条取数路径） |
 | L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值（股权/产权转让、股东变动、收购并购、增资主线） | 企业价值 50 | 🅿️ P1 |
 | L1 | crwu-audit-intangible | 评估报告 × 无形资产 | 知识产权 42；无形资产总纲待精编 | 🅿️ |
 | L1 | crwu-audit-equipment | 评估报告 × 设备/存货等单项资产（含报废残值处置） | 空白（先补 L2+精编）；基线第二大对象 1,882 | 🅿️ P1 |
@@ -178,7 +178,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] ~~`skills/crwu-audit-realestate-rent/SKILL.md`~~（L2 商铺租金/经营性物业市值专项）——**2026-09-10 下架**：资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载
 - [x] `skills/crwu-audit-datacheck/SKILL.md`（跨轴数据/表格勾稽能力）
 - [x] `skills/crwu-audit-public-general-standards/`（2026-09-10，P0-1）：公共轴通用准则能力（报告披露层 + 程序质控层），`public` 轴无条件装配；见 §7.3
-- [x] `skills/crwu-audit-external-data/`（2026-09-15）：公共轴外部数据核验能力（`methods[]` 命中收益法/市场法时装配）；装配知识库 `M-外部数据核验` 模块规程；宿主连接器发现（`references/01-connector-access.md` + `scripts/connector_probe.py`，只读、不读凭据）；连接器缺失/未认证按表 D 降级并在交付 HTML《外部数据核验》区显式声明；AuditResult 增 `externalDataVerification`（`11-html-delivery-spec.md` §05b）。**待办（知识库侧，用户操作）**：`审核模块注册表` §1 与 `标签词典` §5 登记 `M-外部数据核验`，并按总纲 §3.2 三处登记
+- [x] `skills/crwu-audit-external-data/`（2026-09-15，v0.2 单源化）：公共轴外部数据核验能力（`methods[]` 命中收益法/市场法时装配）；装配知识库 `M-外部数据核验` 模块规程；唯一数据源为同花顺 iFinD，取数路径发现覆盖 WorkBuddy 宿主连接器与 DeepSeek Harness 的 `ifind-finance-data` 技能（`references/01-connector-access.md` + `scripts/connector_probe.py`，只读、不读凭据）；**不启用万得、不做双源复核**；两条取数路径都不可用时按库内降级口径降级并在交付 HTML《外部数据核验》区显式声明；AuditResult 增 `externalDataVerification`（`11-html-delivery-spec.md` §05b）。**待办（知识库侧，用户操作）**：`审核模块注册表` §1 与 `标签词典` §5 登记 `M-外部数据核验`，并按总纲 §3.2 三处登记；库内 `M-外部数据核验` 模块规程按单源修订稿 `docs/2026-09-15-M-外部数据核验-模块规程-v0.2.md` 人工更新（表 B 去万得列、表 C 源列统一 iFinD、表 D 改为取数失败与降级）
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
 - [x] `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py`：**2026-09-10 收窄**为 `validate --skill-root`（引用卫生 + 实时协议 lint）；随本地知识库根模型废止，删除 index/assemble/query/resolve/release/extract/selftest（装配清单改由叶子 `01-kb-assembly.md` 声明、crwu-dws 实时下载）
 - [x] `skills/crwu-audit-optimize/`（2026-09-15）：族维护/优化入口（常规反馈定位与分桶；审核后 AI—人工差距分析；固定 HTML 模板 + 离线 ECharts；`L-* ↔ FIX-*` 双向追踪；知识库 `manual_only`、Skill 逐项确认后执行；不经 crwu-audit 路由、不产审核判断）

@@ -9,6 +9,17 @@
 
 ---
 
+## 2026-09-15 · refactor(skills) · crwu-audit-external-data 单源化：移除万得校验，同花顺 iFinD 支持两条取数路径
+
+- **背景**：本技能原先按知识库表 D 做"同花顺主源 + 万得副源"双源复核。实际环境里万得连接器常年未启用（实测 `~/.workbuddy` 中 `wind-finance` 为 `declared_disabled`），双源分支只能一直降级；同时同花顺 iFinD 在 WorkBuddy 是宿主连接器（`ifind-mcp`），在 DeepSeek Harness 是 `ifind-finance-data` 技能，两者调用方式不能互相套用。
+- **单源化**：`crwu-audit-external-data` 的唯一数据源改为**同花顺 iFinD**，移除全部万得校验——连接器探测目标只剩 `ifind`、技能正文/装配表/交付字段不再出现"万得/副源/双源"；库内表 D 按单源降级口径执行。
+- **知识库修订稿**：新增 `docs/2026-09-15-M-外部数据核验-模块规程-v0.2.md`（v0.2 单源版）——表 B 去掉"万得条件"列、表 C 源列统一为同花顺 iFinD、表 D 由「万得启用条件与降级」改为「取数失败与降级（D1–D4）」、§0/§1/§7/§8/§9 的双源表述收敛。知识库正文只读，需由维护人按该稿人工更新。
+- **两条取数路径（新增说明）**：`SKILL.md` 新增「数据源与两条取数路径」表，`references/01-connector-access.md` 重写为 §1 路径对照 / §3 WorkBuddy 连接器声明 / §4 DeepSeek Harness 的 `ifind-finance-data` 技能目录 / §5 兜底 / §6 留痕（新增 `access_path`、`source_note`），并把"本仓不提供该技能"写明。
+- **探测脚本**：`scripts/connector_probe.py` 升到 `crwu.external-data.connector-probe.v2`——宿主连接器与 Harness 技能目录两条路径分别探测后合并；新增 `--skills-root`（可重复）与 `CRWU_SKILLS_ROOT`，默认扫描 `$CRWU_SKILLS_ROOT` → 本技能所在 skills 根 → `~/.agents/skills` 等常见位置；退出码改为 0 = 至少一条路径预检可用、2 = 无可用路径。仍只读、不解析 `mcp_config.json`、不输出任何凭据。
+- **交付层**：`unavailableDeclaration` 措辞由"未经双源复核"改为"未经外部数据核验"（`audit_delivery.py` 的 `EXT_DATA_UNAVAILABLE_TEXT` 与校验文案同步）；`audit_result.schema.json` 的 `externalDataVerification` / `deviationAgainst` 描述改为单源 iFinD 口径；样例 `examples/audit-result.sample.json` 删除万得来源与降级声明。
+- **router / 契约同步**：`crwu-audit/SKILL.md`、`references/08-union-dispatch-rules.md`、`references/11-html-delivery-spec.md`（§3 概览与 05b、字段规则）、`references/12-leaf-common-contract.md` 全部改为单源 iFinD 表述；`skills/README.md` 与 `docs/design-crwu-audit-skills.md` 同步。
+- **验证**：`test_connector_probe.py` 14/14（新增 Harness 技能路径、退出码、无万得残留用例）；`test_audit_delivery.py` 61/61（不可用源声明与校验用例改为构造 iFinD 不可用）；`kb_tool.py validate --skill-root skills` error=0；真实环境探测（2026-09-15）返回 `host_connector` 可用，并识别 `~/.agents/skills/ifind-finance-data`。
+
 ## 2026-09-15 · feat(skills) · crwu-audit-optimize 新增 AI—人工差距分析与可执行修复计划
 
 - **新增模式**：审核结束且存在同源人工复核文件时，逐条对齐 AI 与人工结果；仅人工发现项使用稳定 `L-*`，区分 `L-resolved`、`L-open`、未闭环、不可核验与人工意见可疑，避免把已在最终件修复的问题误计为 AI 漏检。
