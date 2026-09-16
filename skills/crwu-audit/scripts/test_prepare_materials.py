@@ -310,10 +310,11 @@ class PrepareMaterialsContractTest(unittest.TestCase):
 
     # ---- 4c 隐藏区引用审计（只坐标，不读内容）-------------------------------
     def test_hidden_reference_audit_flags_visible_results_depending_on_hidden_inputs(self):
-        """可见公式引用隐藏列/行/隐藏表 → 标记"计算链不可复核"；且不得读隐藏内容。
+        """可见公式引用隐藏列/行/隐藏表 → 记**人工建议检查项**（不是 AI 问题）；且不得读隐藏内容。
 
         对应真实案件：土地表隐藏列 N（账面价值）被 32 处可见公式引用、底稿隐藏评分列
         被 24 处引用 —— 这类隐藏列**是计算输入**，一刀切剔除会让结果不可复核。
+        去向（2026-09-16 用户口径）：审核只要可见区公式计算正确即可 → 只出建议项、不出 `issues[]`。
         """
         import openpyxl
         d = self.src / "定稿"
@@ -342,12 +343,15 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         cells = {h["cell"] for h in rec["hiddenRefs"]}
         self.assertEqual({"P1", "P2", "P5"}, cells, "只报真正引用隐藏区的可见格")
         self.assertEqual(["土地表!P1", "土地表!P2", "土地表!P5"], rec["calcChainNotReproducible"])
+        self.assertIn("manualConfirmationItems", rec["hiddenRefDisposition"],
+                      "去向必须随数据走：人工建议检查项，不作为 AI 问题")
+        self.assertIn("不作为 AI 问题", rec["hiddenRefDisposition"])
         blob = (self.case / "材料盘点.json").read_text(encoding="utf-8")
         for sentinel in ("999999", "888888"):
             self.assertNotIn(sentinel, blob, "引用审计只出坐标，绝不能带出隐藏区内容")
 
     def test_hidden_reference_audit_is_quiet_when_hidden_columns_are_unreferenced(self):
-        """隐藏列仅被隐藏区内部自引用（可见区无引用）→ 不产生"不可复核"结论。"""
+        """隐藏列仅被隐藏区内部自引用（可见区无引用）→ 不产生建议项元数据（无声即无噪声）。"""
         import openpyxl
         d = self.src / "定稿"
         d.mkdir()
@@ -365,6 +369,7 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         rec = self._inventory()[0]["workbook"]
         self.assertEqual([], rec["hiddenRefs"])
         self.assertEqual([], rec["calcChainNotReproducible"])
+        self.assertIsNone(rec["hiddenRefDisposition"], "无引用时不出任何建议项元数据")
 
     # ---- 4d2 多版本隐藏结构比对（H0 元数据级）----------------------------
     def test_same_named_versions_with_different_hidden_structure_flag_drift(self):

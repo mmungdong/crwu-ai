@@ -567,7 +567,10 @@ def audit_hidden_references(wbf, hidden: dict):
     """逐「可见格公式」解析其引用坐标，判定是否指向隐藏行/列/隐藏工作表。
 
     只读可见格的公式串；隐藏行/列/隐藏 sheet 的单元格**一律不读**（H0）。
-    用途：判定"可见结果是否依赖不可见的计算输入" → 计算链不可复核。
+    用途：判定"可见结果是否依赖不可见的计算输入" → **人工建议检查项**（`manualConfirmationItems[]`）。
+
+    去向（2026-09-16 用户口径）：审核只要**可见区公式计算正确**即可，因此"引用了隐藏区"**不得**出成 AI 问题、
+    不得据此升级严重度；本函数只产出**审计元数据**（供生成建议项）。可见区**自身**算错仍按普通可见区缺陷定级。
 
     表名归一：工作表名常带首尾空格（如 `2-1市场法询价记录  `），此前用 strip() 后的名字与未 strip 的
     `ws.title` 比较，**凡表名含首尾空格即恒返回 0 处引用**（漏报）。此处双方统一 `_norm_sheet()` 归一，
@@ -912,7 +915,13 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                                        "凡'不存在/缺失/为空/未列示'类结论禁止依据工作版下判断，"
                                        "必须回 raw 原件直读" if media_n else None),
                                    "calcChainNotReproducible": sorted(
-                                       {f"{h['sheet']}!{h['cell']}" for h in refs})}
+                                       {f"{h['sheet']}!{h['cell']}" for h in refs}),
+                                   # 去向随数据一起走：引用隐藏区只出人工建议检查项，不作 AI 问题
+                                   # （2026-09-16 用户口径；定级见 references/12-leaf-common-contract.md §7.1）
+                                   "hiddenRefDisposition": (
+                                       "manualConfirmationItems（人工建议检查项，不作为 AI 问题；"
+                                       "只为被可见公式引用的隐藏区出；可见区自身算错照常出问题）"
+                                       if refs else None)}
                 for a in anomalies:                       # B3：表格规范提示，逐表登记
                     sheet_anomalies.append({"path": rel, "stage": rec["stage"], **a})
                 for g in wb_gaps:                         # B4：超限未处理，如实记账
