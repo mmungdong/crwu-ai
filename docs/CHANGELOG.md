@@ -9,6 +9,36 @@
 
 ---
 
+## 2026-09-16 · fix(skills) · 建"媒体证据通道"：内嵌图/复核件图导出并放行，修"图片被跳过"
+
+- **缺陷（实测定位）**：上一笔只登记"原件媒体数"，**没有读取通道**——规则正文要求叶子"解析 raw 原件包的
+  `xl/media` + `drawing*.xml` 锚点"，而 raw 只由编排层持有，编排层脚本只有计数；`docx/doc/pdf/独立图片`
+  更连计数都没有（`docx_to_text` 静默丢图，独立图片只写"图片：无 OCR"）。实测：带 2 张内嵌图的 xlsx
+  重建后工作版 0 张、盘点仅一个数字；带图 docx 的提取文本只剩"以下为询价截图："与空行；png 无任何可读路径。
+  于是"证据在图片里"的检查项仍被结构性判成"为空/缺失"，且**复核意见附件里的图完全不可见**
+  （人工用截图提出的问题会被误判成 `B·AI 新增`）。
+- **修复**：
+  - 新增 `crwu-audit/scripts/media_extract.py`（媒体抽取库）：xlsx（`xl/media` + `drawing*.xml` 锚点 →
+    sheet/起止行，`oneCellAnchor`/`twoCellAnchor` 都认，命名空间前缀容错）、docx（正文内联图 → 段落序 + 前文提示）、
+    `.doc`（`textutil -convert docx` 中转）、PDF（`pypdf` 页内嵌图 + 页号；缺依赖记未核）、独立图片（原样落盘）；
+    统一 sha256/sizeBytes 与单件媒体数/总量护栏。
+  - `prepare_materials.py`：所有格式统一导出到 `<案例>/媒体证据/` 并写放行清单 `<案例>/媒体索引.json`
+    （`mediaId` / 受控 `locator` / `localPath` / `sha256` / `evidenceChannel=host-vision`）；`nonCellEvidence`
+    汇总覆盖全部格式（`exportedMediaCount`/`hiddenSkippedCount`/`unresolvedCount`）；新增 `--media` / `--extract` /
+    `--inventory` / `--label`，**阶段二复核件用 `--src 复核-人工 --label 复核` 复跑**（产出 `复核盘点.json` /
+    `复核媒体索引.json` / `媒体证据-复核/`），绝不覆盖阶段一冻结的 `材料盘点.json`。
+  - **H0 扩展到媒体锚点并统一 fail-closed**：锚点落在隐藏 sheet/行/列的媒体不导出、不定位，只记数量
+    （此前 `rawMediaCount` 连隐藏锚点的图也计入）；锚点不可判定（`absoluteAnchor`、未被引用部件、页眉页脚、
+    图表）与隐藏结构不可得时一律不导出，并记 `unresolvedReasons[]`（未核 ≠ 缺失）。
+  - 叶子口径同步：编排层导出媒体并**放行**给叶子（消除"叶子必须解析 raw / 叶子拿不到 raw"的死结）；
+    `references/00-input-and-route-profile.md` §Excel 重写为非单元格证据通道 + H0 + 未核；
+    `references/11-html-delivery-spec.md` §4.3 的 `locator` 逐字取自 `媒体索引.json` 并补 docx/doc、PDF 行；
+    `SKILL.md` 步骤 3 / 11 / 12（步骤 12 新增复核件媒体抽取）；`crwu-audit-datacheck/SKILL.md` 同口径。
+- **验证**：新增 `test_media_extract.py` **13 项**（锚点导出、twoCell 起止行、隐藏行/列 H0、隐藏结构不可得
+  fail-closed、绝对锚点未核、docx 段落序、页眉页脚未核、独立图片、缺 pypdf、`.xls` gap、上限护栏）；
+  `test_prepare_materials.py` 23 → **26** 项（docx/独立图片进媒体索引、未被引用媒体留痕、阶段二复跑
+  `材料盘点.json` sha256 不变）；探针案例导出 xlsx 锚点图 + docx 段图 + 独立图片共 3 条。
+
 ## 2026-09-15 · fix(skills) · 按权威 schema 重建目录缓存；修 crwu-dws 递归漏 `--workspace` 与"规定的目录树形态不被解析"
 
 - **背景**：上一笔（`83f580d`）修完生产侧口径后，用 crwu-dws M1 重建 `中瑞世联评估审核知识库` 目录缓存，过程中又暴露两处缺陷。

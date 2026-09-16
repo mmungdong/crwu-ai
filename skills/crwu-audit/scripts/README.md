@@ -32,6 +32,33 @@ python3 scripts/test_audit_delivery.py
 
 退出码：`0` 通过；`1` 校验失败（错误逐条打印到 stderr，且**拒绝渲染**）。
 
+## 材料准备与媒体证据通道（阶段一 / 阶段二复核件）
+
+| 文件 | 作用 | 对应口径 |
+| --- | --- | --- |
+| `prepare_materials.py` | 材料盘点 + 隐藏区隔离（工作版重建）+ 归档解压 + **媒体证据导出与放行清单** | `references/00-input-and-route-profile.md` §Excel 隐藏数据隔离 |
+| `media_extract.py` | 媒体抽取库：xlsx 绘图锚点 / docx·doc 正文图（段落序）/ PDF 内嵌图 / 独立图片；H0 与 fail-closed | 同上 §非单元格证据 |
+| `test_prepare_materials.py`、`test_media_extract.py` | 上述两脚本的契约测试 | — |
+
+```bash
+# 阶段一：盘点 + 工作版 + 媒体证据（产出 材料盘点.json / 媒体索引.json / 提取/ / 工作版/ / 媒体证据/）
+python3 scripts/prepare_materials.py --case <案例目录>
+
+# 阶段二：复核件（复核意见附件里的图同样要抽取；产物名加后缀，绝不覆盖阶段一冻结产物）
+python3 scripts/prepare_materials.py --case <案例目录> --src 复核-人工 --label 复核
+
+# 契约测试
+python3 scripts/test_prepare_materials.py
+python3 scripts/test_media_extract.py
+```
+
+- `媒体索引.json` 是**媒体放行清单**：逐条含 `mediaId`、`kind`、受控 `locator`、`localPath`（案例内相对路径）、
+  `sha256`、`evidenceChannel=host-vision`。叶子只按该清单消费（经宿主多模态读图），**不得自行解析 raw 原件包**。
+- **H0**：锚点落在隐藏 sheet / 隐藏行 / 隐藏列的媒体**不导出、不定位**，只记 `hiddenSkippedCount`；
+  锚点不可判定或隐藏结构不可得时 fail-closed 不导出，并记 `unresolvedReasons[]` —— **未核 ≠ 缺失**。
+- 可选依赖：`openpyxl`（xlsx）、`pypdf`（PDF 内嵌图）。缺 `pypdf` 时 PDF 媒体本次未核，脚本会在盘点与
+  标准输出显式汇报，**不得**当作"材料缺失"。
+
 ## 编排层接入（脚本映射）
 
 调用者唯一：`crwu-audit` 编排层（router）。叶子不得调用校验器/渲染器，也不得生成页面或定义最终字段。

@@ -23,11 +23,19 @@ H0 人工隐藏区**整体排除审核范围**：sheet / 行 / 列 / 折叠分�
 4. **不得改变格式语义**：逐格复制 `number_format`，重建后数值/日期语义与原件一致；
    对"疑似被日期化的数值列"，结论前须回 raw 原件核对格式。
 5. 只读源材料：源目录**不写入任何派生文件**（`textutil` 等中间产物落系统临时目录）。
+6. **媒体（图片）证据必须导出并放行**：重建法必然丢掉 `xl/media`、`word/media` 等部件，只登记
+   一个计数等于没有通道。本脚本把可见锚点的媒体导出到 `<案例>/媒体证据/` 并写
+   `媒体索引.json`，供宿主多模态读图；读不到只能出「未核验」——**未核 ≠ 缺失**。
+   H0 同样适用于媒体锚点：锚点落在隐藏区 / 隐藏结构不可得 / 锚点不可判定者**一律不导出**，
+   只记数量与未核原因。实现见本技能 `scripts/media_extract.py`。
 
-产出：`材料盘点.json`、`提取/<文件>.txt`、`工作版/<文件>.xlsx`。
+产出：`材料盘点.json`、`媒体索引.json`、`提取/<文件>.txt`、`工作版/<文件>.xlsx`、
+`媒体证据/<来源子目录>/<文件>/…`。
 
 用法：
     python3 scripts/prepare_materials.py --case <案例目录> [--src 材料-源] [--work 工作版]
+    # 阶段二复核件（复核意见附件里的图同样要抽取；产物名加后缀，绝不覆盖阶段一冻结产物）
+    python3 scripts/prepare_materials.py --case <案例目录> --src 复核-人工 --label 复核
 """
 from __future__ import annotations
 
@@ -38,6 +46,24 @@ import re
 import shutil
 import subprocess
 import tempfile
+
+def _import_media_extract():
+    """按文件位置加载同目录的 `media_extract.py`。
+
+    本脚本既能作为 `python3 scripts/prepare_materials.py` 运行（脚本目录已在 `sys.path`），
+    也会被契约测试用 `importlib` 以任意模块名加载（此时脚本目录不在 `sys.path`）——
+    两种入口都要能拿到媒体抽取通道，故按 `__file__` 定位而不是靠 `sys.path`。
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "crwu_media_extract", os.path.join(here, "media_extract.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+media_extract = _import_media_extract()
 
 HIDDEN_SHEET = "[隐藏]"
 
@@ -769,15 +795,22 @@ def xlsx_visible(p: str, outdir: str, out_name: str):
 
 
 def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
-            extract_dir: str = None) -> dict:
-    """盘点 + 隔离 + 解压 + 工作版重建。
+            extract_dir: str = None, media_dir: str = None,
+            inventory_name: str = "材料盘点.json",
+            media_index_name: str = "媒体索引.json") -> dict:
+    """盘点 + 隔离 + 解压 + 工作版重建 + 媒体证据导出。
 
     队列式处理：源材料先入队；**归档解压后的文件以同一套逻辑继续处理**（again 提取文本、
-    重建工作版），并在盘点中记录来源归档（originArchive），可追溯。
+    重建工作版、导出媒体），并在盘点中记录来源归档（originArchive），可追溯。
+
+    阶段二复跑复核件时必须换 `inventory_name` / `media_index_name`（见 `--label`）：
+    `材料盘点.json` 属阶段一冻结产物，不得被第二次运行覆盖。
     """
     os.makedirs(txt_dir, exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)
     extract_dir = os.path.abspath(extract_dir or os.path.join(case, "解压"))
+    media_dir = os.path.abspath(media_dir or os.path.join(case, "媒体证据"))
+    media_entries, budget = [], media_extract._Budget()
     inv, seen_xlsx, archives = [], set(), []
     hidden_by_stem = {}   # 同名（跨版本）文件的隐藏结构，用于元数据级跨版本比对
     sheet_anomalies = []  # B3：声明用区远大于实际有值区的表（表格规范提示，非审核范围变更）
@@ -902,8 +935,8 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                           encoding="utf-8") as fh:
                     fh.write(txt)
             elif kind == "png" or ext in (".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"):
-                rec["readable"] = False
-                rec["note"] = "图片：无 OCR"
+                rec["readable"] = False       # 文本抽取口径：图片本机无 OCR，仍不是"文本可读"
+                rec["note"] = "图片：本机无 OCR；媒体证据由媒体通道导出，判读交宿主多模态（见 mediaEvidence）"
             elif kind == "zip-ooxml" or ext == ".zip":
                 rec["readable"] = False
                 rec["note"] = "压缩包：未解压审核"
@@ -913,6 +946,21 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
         except Exception as e:
             rec["readable"] = False
             rec["note"] = f"{type(e).__name__}: {e}"
+
+        # 媒体证据通道（所有格式统一走这里）：把可见锚点的图片/独立图片导出到
+        # `媒体证据/`，并登记计数与未核原因。H0：隐藏锚点不导出、只记数量。
+        try:
+            hidden_meta = (rec.get("workbook") or {}).get("hiddenMeta")
+            mres = media_extract.plan_media(
+                p, ext, kind, hidden_meta, media_dir, case, rel, rec["stage"],
+                origin=origin, budget=budget)
+            if mres["entries"]:
+                media_entries.extend(mres["entries"])
+            if mres["summary"]:
+                rec["mediaEvidence"] = mres["summary"]
+        except Exception as e:                            # noqa: BLE001
+            rec["capabilityGaps"] = list(rec.get("capabilityGaps") or []) + [
+                f"媒体证据导出失败（{type(e).__name__}: {e}）：该件图片本次未核，未核 ≠ 缺失"]
         return rec, extracted
 
     i = 0
@@ -944,44 +992,99 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                      for v in metas.values()),
                     key=lambda d: sorted(d["stages"]))
             })
-    # 非单元格证据：重建工作版必然丢媒体，汇总登记（供"未核 ≠ 缺失"与"原件直读"口径使用）
-    non_cell = [{"path": r["path"], "stage": r.get("stage"),
-                 "rawMediaCount": r["workbook"]["rawMediaCount"]}
-                for r in inv
-                if r.get("workbook", {}).get("rawMediaCount")]
+    # 非单元格证据：工作版必然丢媒体，汇总登记（供"未核 ≠ 缺失"与"原件直读"口径使用）。
+    # 覆盖**全部格式**（此前只登记 xlsx 的 xl/media 计数；docx/doc/pdf/独立图片全无痕迹）。
+    non_cell = []
+    for r in inv:
+        m = r.get("mediaEvidence") or {}
+        raw_n = (r.get("workbook") or {}).get("rawMediaCount") or 0
+        if not (m or raw_n):
+            continue
+        non_cell.append({
+            "path": r["path"], "stage": r.get("stage"),
+            "rawMediaCount": raw_n,
+            "exportedCount": m.get("exportedCount", 0),
+            "hiddenSkippedCount": m.get("hiddenSkippedCount", 0),
+            "unresolvedCount": m.get("unresolvedCount", 0),
+            "unresolvedReasons": m.get("unresolvedReasons", []),
+            "localDir": m.get("localDir"),
+        })
+    non_cell_summary = {
+        "note": "工作版不含媒体/页眉页脚/批注等非单元格证据；图片证据已由编排层导出到"
+                "`媒体证据/`（清单见 `" + media_index_name + "`），判读须经宿主多模态读图；"
+                "凡'不存在/缺失/为空/未列示'类结论禁止依据工作版下判断，读不到只能出「未核验」"
+                "——未核 ≠ 缺失",
+        "evidenceChannel": "host-vision",
+        "mediaIndexPath": media_index_name,
+        "filesWithMedia": len(non_cell),
+        "rawMediaCount": sum(x["rawMediaCount"] for x in non_cell),
+        "exportedMediaCount": sum(x["exportedCount"] for x in non_cell),
+        "hiddenSkippedCount": sum(x["hiddenSkippedCount"] for x in non_cell),
+        "unresolvedCount": sum(x["unresolvedCount"] for x in non_cell),
+        "files": non_cell,
+    }
     payload = {"items": inv, "archives": archives, "hiddenStructureDrift": drift,
                "sheetAnomalies": sheet_anomalies,
-               "nonCellEvidence": {
-                   "note": "工作版不含媒体/页眉页脚/批注等非单元格证据；"
-                           "凡'不存在/缺失/为空/未列示'类结论禁止依据工作版下判断，必须回 raw 原件直读",
-                   "filesWithMedia": len(non_cell),
-                   "rawMediaCount": sum(x["rawMediaCount"] for x in non_cell),
-                   "files": non_cell}}
-    inv_path = os.path.join(case, "材料盘点.json")
+               "nonCellEvidence": non_cell_summary}
+    inv_path = os.path.join(case, inventory_name)
     with open(inv_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=1)
+    media_index_path = os.path.join(case, media_index_name)
+    with open(media_index_path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "note": "本次（本阶段）可从原件判读的媒体证据放行清单；"
+                    "`locator` 为受控写法，与交付物一致；锚点落在隐藏区的媒体按 H0 不在清单内",
+            "evidenceChannel": "host-vision",
+            "count": len(media_entries),
+            "budget": {"maxItems": budget.items, "maxBytes": budget.nbytes,
+                       "stopped": budget.stopped},
+            "entries": media_entries,
+        }, fh, ensure_ascii=False, indent=1)
     return {"inventory": inv_path, "items": len(inv),
             "readable": sum(1 for r in inv if r.get("readable")),
             "archives": archives, "sheetAnomalies": sheet_anomalies,
-            "nonCellEvidence": payload["nonCellEvidence"]}
+            "nonCellEvidence": non_cell_summary,
+            "mediaIndex": media_index_path,
+            "mediaExported": len(media_entries),
+            "mediaHiddenSkipped": non_cell_summary["hiddenSkippedCount"]}
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="阶段一材料准备：可读性核查 + 隐藏数据隔离 + 工作版重建")
+    ap = argparse.ArgumentParser(description="阶段一材料准备：可读性核查 + 隐藏数据隔离 + 工作版重建 + 媒体证据导出")
     ap.add_argument("--case", default=os.getcwd(), help="案例目录（默认当前目录）")
     ap.add_argument("--src", default=None, help="源材料目录（默认 <案例>/材料-源）")
     ap.add_argument("--txt", default=None, help="文本提取目录（默认 <案例>/提取）")
     ap.add_argument("--work", default=None, help="工作版目录（默认 <案例>/工作版）")
+    ap.add_argument("--media", default=None, help="媒体证据目录（默认 <案例>/媒体证据）")
+    ap.add_argument("--extract", default=None, help="归档解压目录（默认 <案例>/解压）")
+    ap.add_argument("--inventory", default=None, help="盘点文件名（默认 材料盘点.json）")
+    ap.add_argument("--label", default=None,
+                    help="阶段标签（如 复核）：各产物名加后缀（提取-复核/工作版-复核/…），"
+                         "避免阶段二复跑覆盖阶段一冻结产物；须与 --src 一起指向复核件目录")
     args = ap.parse_args()
 
     case = os.path.abspath(args.case)
-    src_dir = os.path.abspath(args.src or os.path.join(case, "材料-源"))
+
+    def _under_case(value, default_name):
+        """相对路径一律相对 `--case` 解析（否则 `--src 复核-人工` 会落到当前工作目录）。"""
+        if not value:
+            return os.path.join(case, default_name)
+        return os.path.abspath(value) if os.path.isabs(value) else os.path.join(case, value)
+
+    src_dir = _under_case(args.src, "材料-源")
     if not os.path.isdir(src_dir):
         print(f"error: 源材料目录不存在：{src_dir}")
         return 2
-    result = prepare(case, src_dir,
-                     os.path.abspath(args.txt or os.path.join(case, "提取")),
-                     os.path.abspath(args.work or os.path.join(case, "工作版")))
+    label = (args.label or "").strip()
+    suffix = f"-{label}" if label else ""
+    result = prepare(
+        case, src_dir,
+        _under_case(args.txt, "提取" + suffix),
+        _under_case(args.work, "工作版" + suffix),
+        extract_dir=_under_case(args.extract, "解压" + suffix),
+        media_dir=_under_case(args.media, "媒体证据" + suffix),
+        inventory_name=args.inventory or (f"{label}盘点.json" if label else "材料盘点.json"),
+        media_index_name=f"{label}媒体索引.json" if label else "媒体索引.json")
     print(f"\n盘点 {result['items']} 件（含解压产物）；可读 {result['readable']} / "
           f"不可读 {result['items'] - result['readable']}；盘点表 {result['inventory']}")
     for a in result.get("archives", []):
@@ -992,7 +1095,7 @@ def main() -> int:
     anomalies = result.get("sheetAnomalies", [])
     if anomalies:
         print(f"\n表格规范提示 {len(anomalies)} 处（声明用区远大于实际有值区，本次按有值区处理，"
-              f"不影响审核范围；明细见 材料盘点.json 的 sheetAnomalies）：")
+              f"不影响审核范围；明细见 {os.path.basename(result['inventory'])} 的 sheetAnomalies）：")
         for a in anomalies[:10]:
             print(f"  {a['path']} [{a['sheet']}] 声明 {a['declaredDim']}，"
                   f"实际有值 {a['contentRows']}行×{a['contentCols']}列，"
@@ -1000,11 +1103,16 @@ def main() -> int:
         if len(anomalies) > 10:
             print(f"  ……另有 {len(anomalies) - 10} 处")
     nce = result.get("nonCellEvidence") or {}
-    if nce.get("rawMediaCount"):
-        print(f"\n非单元格证据提示：{nce['filesWithMedia']} 个原件含媒体对象共 "
-              f"{nce['rawMediaCount']} 个（图片等），**工作版不含媒体**。"
-              f"凡'不存在/缺失/为空'类结论禁止依据工作版下判断，须回 raw 原件直读"
-              f"（明细见 材料盘点.json 的 nonCellEvidence）。")
+    if nce.get("filesWithMedia"):
+        print(f"\n媒体证据提示：{nce['filesWithMedia']} 个原件含媒体对象（原件媒体部件 "
+              f"{nce['rawMediaCount']} 个），本次**导出可判读媒体 {nce.get('exportedMediaCount', 0)} 个** → "
+              f"{os.path.basename(result['mediaIndex'])}；隐藏区锚点按 H0 跳过 "
+              f"{nce.get('hiddenSkippedCount', 0)} 个（不导出、不定位）；未核原因 "
+              f"{nce.get('unresolvedCount', 0)} 条。**工作版不含媒体**：图片证据须经宿主多模态读图，"
+              f"读不到只能出「未核验」——未核 ≠ 缺失；凡'不存在/缺失/为空'类结论禁止依据工作版下判断。")
+        for f in nce.get("files", [])[:10]:
+            if f.get("unresolvedCount"):
+                print(f"  [{f['path']}] 未核原因：" + "；".join(f.get("unresolvedReasons", [])[:3]))
     missing = missing_deps()
     if missing:
         print(f"提示：缺少可选依赖 {', '.join(missing)}——对应格式可能读不到，"

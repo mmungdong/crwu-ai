@@ -169,6 +169,24 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - **业务轴修正**：`04-business-classification.md` 财务报告子业务补 `合并对价分摊`。
 - **映射检查器**：最新目录 error=0；`KNOWN_SKILL_SUFFIXES` 补齐新标签；`test_audit_multiaxis_router.py` 注册表断言更新；校准表 `07-kb-skill-map.md` 已刷新。方法轴／监管轴仍 `pending`（`03-评估方法/` 内容已齐备、`04-监管覆盖/` 仅 README），属下一批落地目标。
 
+### 7.5 媒体证据通道（2026-09-16）
+
+- **问题**：重建"工作版"只复制单元格值与 `number_format`，必然丢弃 `xl/media`/`word/media` 等图片部件；
+  上一批只在盘点里登记了"原件媒体数"，**没有读取通道**，而规则正文却要求叶子"解析 raw 原件包"——
+  raw 只由编排层持有，叶子拿不到。结果 `docx/doc/pdf` 与独立图片连痕迹都没有，xlsx 内嵌图只能出「未核验」，
+  复核意见附件里的图完全不可见（人工用截图提出的问题被误判成 `B·AI 新增`）。
+- **落地**：新增 `crwu-audit/scripts/media_extract.py`，由 `prepare_materials.py` 统一调用，把可见锚点媒体
+  导出到 `<案例>/媒体证据/` 并写放行清单 `媒体索引.json`（`mediaId`/受控 `locator`/`localPath`/`sha256`）；
+  阶段二复核件以 `--src 复核-人工 --label 复核` 复跑，产出独立命名产物，不覆盖阶段一冻结的 `材料盘点.json`。
+- **H0**：锚点落在隐藏 sheet/行/列的媒体不导出、不定位（只记 `hiddenSkippedCount`）；锚点不可判定
+  （`absoluteAnchor`、未被引用部件、页眉页脚、图表）与隐藏结构不可得时 fail-closed 不导出，记
+  `unresolvedReasons[]`（未核 ≠ 缺失）。
+- **判读能力边界**：本机不保证 OCR/渲染（`tesseract`/`pdftoppm`/`soffice`/`PyMuPDF` 可能全缺），媒体判读由
+  宿主多模态（DeepSeek Harness `read_image`）承担；读不到逐条进 `scope.notCheckedItems`
+  （`reasonCode=unreadable|unsupported`）——**未核 ≠ 缺失**，不得据工作版写"为空/缺失"。
+- **验证**：`test_media_extract.py` 13 项 + `test_prepare_materials.py` 26 项；探针案例（xlsx 内嵌图 +
+  docx 段图 + 独立图片 + 复核件 docx 图）逐条导出。
+
 ## 8. 本期交付
 
 - [x] 本文档 v0.2（分层路由模型）
@@ -177,6 +195,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - [x] 11 个一级资产 Skill（2026-09-11）：`crwu-audit-asset-{equipment,enterprise-value,intangible,mining-right,inventory,debt,portfolio,transport-equipment,asset-group-goodwill,scrap-materials,other}`，映射 `02-资产类型/02~12-*/` 一级根，见 §7.4
 - [x] ~~`skills/crwu-audit-realestate-rent/SKILL.md`~~（L2 商铺租金/经营性物业市值专项）——**2026-09-10 下架**：资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载
 - [x] `skills/crwu-audit-datacheck/SKILL.md`（跨轴数据/表格勾稽能力）
+- [x] `skills/crwu-audit/scripts/media_extract.py`（2026-09-16，v0.1）：**媒体证据通道**（xlsx 锚点图 / docx·doc 正文图 / PDF 内嵌图 / 独立图片 / 复核件图导出 + 放行清单 `媒体索引.json`；H0 锚点跳过与 fail-closed）；见 §7.5
 - [x] `skills/crwu-audit-public-general-standards/`（2026-09-10，P0-1）：公共轴通用准则能力（报告披露层 + 程序质控层），`public` 轴无条件装配；见 §7.3
 - [x] `skills/crwu-audit-external-data/`（2026-09-15，v0.2 单源化）：公共轴外部数据核验能力（`methods[]` 命中收益法/市场法时装配）；装配知识库 `M-外部数据核验` 模块规程；唯一数据源为同花顺 iFinD，取数路径发现覆盖 WorkBuddy 宿主连接器与 DeepSeek Harness 的 `ifind-finance-data` 技能（`references/01-connector-access.md` + `scripts/connector_probe.py`，只读、不读凭据）；**不启用万得、不做双源复核**；两条取数路径都不可用时按库内降级口径降级并在交付 HTML《外部数据核验》区显式声明；AuditResult 增 `externalDataVerification`（`11-html-delivery-spec.md` §05b）。**待办（知识库侧，用户操作）**：`审核模块注册表` §1 与 `标签词典` §5 登记 `M-外部数据核验`，并按总纲 §3.2 三处登记；库内 `M-外部数据核验` 模块规程按单源修订稿 `docs/2026-09-15-M-外部数据核验-模块规程-v0.2.md` 人工更新（表 B 去万得列、表 C 源列统一 iFinD、表 D 改为取数失败与降级）
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）

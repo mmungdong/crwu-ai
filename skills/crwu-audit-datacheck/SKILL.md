@@ -48,10 +48,13 @@ description: >-
 - `.xls`（老二进制）与**公式重算**：需 LibreOffice headless：
   `soffice --headless --convert-to xlsx --outdir <dir> <file.xls>`（含 `.xls→xlsx`、公式重算需 `--convert-to xlsx:Calc MS Excel 2007 XML` 后以 data_only 读取，或用 macro 强制重算）；
   环境中无 soffice → 如实声明"该表未能重算/未能解析"，计入未核表清单，禁止猜测。
-- **媒体/版式类证据不得据工作版判"缺失"**（重建法必然丢 `xl/media`、页眉页脚、批注、形状、图表）：
-  询价截图、位置图、现场照片等**内嵌图**必须解析 raw 原件包的 `xl/media/*` + `drawing*.xml` 锚点后判断，
-  并据锚点定位到 sheet 与行；只看单元格（含 raw 的单元格）会把"证据在图片里"误判为"为空/缺失"。
-  解析不到或条件不具备时只能出「**未核验**」，**未核 ≠ 缺失**。锚点落在隐藏行/列的媒体对象按 H0 **整体跳过**。
+- **媒体/版式类证据不得据工作版判"缺失"**（重建法必然丢 `xl/media`、`word/media`、页眉页脚、批注、形状、图表）：
+  询价截图、位置图、现场照片等**内嵌图/独立图片**已由编排层导出到 `媒体证据/` 并列入 `<阶段>媒体索引.json`；
+  本能力**只按该放行清单的 `locator`/`localPath` 消费**，经宿主多模态读图（DSH `read_image`）判读——
+  **不得自行解析 raw 原件包**（raw 只由编排层持有），也**不得**只看单元格（含 raw 的单元格）：
+  那会把"证据在图片里"误判为"为空/缺失"。清单外（未导出）或宿主无视觉能力时只能出「**未核验**」，
+  并逐条进 `scope.notCheckedItems`（`reasonCode=unreadable|unsupported`）——**未核 ≠ 缺失**。
+  锚点落在隐藏区的媒体按 H0 **不进清单、不得引用**。
   （真实失效 2026-302150-LX9757-BG8677：`MKT-004` 判"位置图为空、询价截图缺失"，
   而原件实有 26 个媒体对象、位置图带 4.6/5.4/3.8 km 标注。口径详见 `crwu-audit/references/00` §Excel。）
 - 安装（如允许）：`python3 -m pip install --user openpyxl`；LibreOffice 需按系统安装。
