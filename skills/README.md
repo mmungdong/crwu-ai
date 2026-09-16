@@ -52,6 +52,7 @@
 - **资产轴** `crwu-audit-asset-*`：一个 Skill 恰好映射 `02-资产类型/` 下一个一级资产目录。
 - **业务轴** `crwu-audit-biz-*`：一个 Skill 恰好映射 `01-业务路线/` 下一个一级业务目录（`crwu-audit-business-*` 为待迁移遗留前缀）。
 - 一级根按 `request_kind=directory`、`recursive=true` 递归下载根内全部支持正文；**细分对象与子业务不各建 Skill**，由父 Skill 在已下载目录包内二次选用。
+- **方法轴与覆盖层技能为 `pending` 期间，其知识库内容仍必须被装配**：下载清单 = 命中叶子装配表 ＋ 公共执行契约 ＋ **router 按本次 `methods[]`/`overlays[]` 命中项追加的方法层与覆盖层目录**（映射唯一事实源：`crwu-audit/references/08-union-dispatch-rules.md`）。`pending` 表示能力未落地，不表示内容可以不装。
 
 设计、能力树与路由表见 [`docs/design-crwu-audit-skills.md`](../docs/design-crwu-audit-skills.md)。
 总路由 `crwu-audit` 入口与知识库仓库解耦（不预读知识库入口文档/路径）；**叶子技能执行期按 RULE/CHK 编号 + 库内层级路径寻址，经 crwu-dws 按本次清单实时下载规则正文后引用（文件零缓存；不复制正文——实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md）**。
