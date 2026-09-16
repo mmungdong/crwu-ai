@@ -809,6 +809,28 @@ class StructuredReviewComparisonTest(unittest.TestCase):
         self.assertEqual(metrics["exactRate"], 0.0)
         self.assertNotEqual(metrics["hitRate"], metrics["exactRate"])
 
+    def test_out_of_scope_items_are_registered_and_rendered(self):
+        """能力边界条目：不计分但必须登记备查、可见可展开，且不得混入命中率明细。"""
+        result = with_structured_review_comparison()
+        comparison = result["reviewComparison"]
+        comparison["outOfScopeItems"] = [{
+            "itemId": "RV-900", "title": "底稿层面意见（不计分）", "module": "工作底稿与程序",
+            "reviewerEvidence": {"file": "01-一级复核意见.docx", "locator": "底稿第1条", "quote": "未见底稿。"},
+            "handling": "交人工底稿审核",
+            "exclusionReason": "AI 当前不具备底稿审核能力，不计入命中率口径。",
+        }]
+        self.assertEqual([], delivery.validate(result))
+        document = delivery.render(result)
+        self.assertIn("展开不计入命中率的登记备查条目（共 1 条）", document)
+        self.assertIn("底稿层面意见（不计分）", document)
+        # 不得混入命中率明细
+        comparison["outOfScopeItems"][0]["itemId"] = comparison["reviewItems"][0]["itemId"]
+        self.assertTrue(any("不得混入命中率明细" in e for e in delivery.validate(result)))
+        # 缺 exclusionReason 必须报错
+        comparison["outOfScopeItems"][0]["itemId"] = "RV-901"
+        del comparison["outOfScopeItems"][0]["exclusionReason"]
+        self.assertTrue(any("exclusionReason" in e for e in delivery.validate(result)))
+
     def test_hit_explanation_is_required_and_consistent(self):
         result = with_structured_review_comparison()
         item = result["reviewComparison"]["reviewItems"][0]

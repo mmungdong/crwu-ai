@@ -180,6 +180,8 @@ CHECK_RECORD_REQUIRED = [
     "executor",
 ]
 REVIEWER_ONLY_REQUIRED = ["itemId", "title", "reviewerEvidence", "handling", "inFileResolution"]
+# 能力边界条目：AI 当前不具备该层能力（如底稿审核），不计分母/不计漏检，但必须登记备查并渲染
+OUT_OF_SCOPE_REQUIRED = ["itemId", "title", "reviewerEvidence", "handling", "exclusionReason"]
 # ---- AI 审核评分卡（自评；量化工种差距。维度与算法为技能内受控取值，知识库暂无对应词表） ----
 SCORECARD_DIMENSIONS = [
     ("first_delivery_correctness", "首轮交付正确性"),
@@ -783,6 +785,37 @@ def validate(result: dict, rendered: bool = False, expect_renderer: bool = False
                     errors.append(
                         "reviewComparison.metrics.{0} 必须可由 reviewItems 重算（应为 {1}）".format(key, expected)
                     )
+    out_of_scope = comparison.get("outOfScopeItems")
+    if out_of_scope is not None:
+        if not isinstance(out_of_scope, list):
+            errors.append("reviewComparison.outOfScopeItems 必须是数组（无则省略或空数组）")
+        else:
+            scope_ids = set()
+            for index, item in enumerate(out_of_scope):
+                where = "reviewComparison.outOfScopeItems[{0}]".format(index)
+                if not isinstance(item, dict):
+                    errors.append("{0} 必须是对象".format(where))
+                    continue
+                for field in OUT_OF_SCOPE_REQUIRED:
+                    if field not in item:
+                        errors.append("{0} 缺少字段 {1}".format(where, field))
+                item_id = item.get("itemId")
+                if not _is_nonempty_str(item_id):
+                    errors.append("{0}.itemId 不得为空".format(where))
+                elif item_id in item_ids:
+                    errors.append("{0}.itemId 与 reviewItems 重复：{1}（能力边界条目不得混入命中率明细）".format(where, item_id))
+                elif item_id in scope_ids:
+                    errors.append("outOfScopeItems.itemId 重复：{0}".format(item_id))
+                else:
+                    scope_ids.add(item_id)
+                evidence = item.get("reviewerEvidence") or {}
+                for field in ("file", "locator", "quote"):
+                    if not _is_nonempty_str(evidence.get(field)):
+                        errors.append("{0}.reviewerEvidence.{1} 不得为空".format(where, field))
+                for field in ("title", "handling", "exclusionReason"):
+                    if not _is_nonempty_str(item.get(field)):
+                        errors.append("{0}.{1} 不得为空".format(where, field))
+
     hidden_access = comparison.get("hiddenRegionAccess")
     if hidden_access is not None:
         if not isinstance(hidden_access, list):
@@ -1487,7 +1520,34 @@ def _review_comparison_section(comparison) -> str:
             _text("展开{0}意见（共 {1} 条）".format(level, len(level_items)))))
         parts.extend(_review_item_card(item) for item in level_items)
         parts.append("</details></section>")
+    parts.append(_out_of_scope_block(comparison))
     parts.append("</section>")
+    return "".join(parts)
+
+
+def _out_of_scope_block(comparison) -> str:
+    """能力边界条目：不计分母、不计漏检，但必须登记备查、可见可展开。"""
+    items = comparison.get("outOfScopeItems") or []
+    if not items:
+        return ""
+    parts = ['<details class="review-out-of-scope"><summary>{0}</summary>'.format(
+        _text("展开不计入命中率的登记备查条目（共 {0} 条）".format(len(items))))]
+    parts.append('<p class="formula">{0}</p>'.format(
+        _text("以下条目属 AI 当前不具备的能力层（如底稿审核），不计入命中率分母、不计漏检、不作评分，仅登记备查并交人工复核。")))
+    for item in items:
+        evidence = item.get("reviewerEvidence") or {}
+        rows = [
+            ("编号", item.get("itemId")),
+            ("问题方向", item.get("module")),
+            ("复核文件", evidence.get("file")),
+            ("复核定位", evidence.get("locator")),
+            ("复核原文", evidence.get("quote")),
+            ("不计分原因", item.get("exclusionReason")),
+            ("处理", item.get("handling")),
+        ]
+        parts.append('<article class="review-item"><h4>{0}</h4><table class="kv">{1}</table></article>'.format(
+            _text(item.get("title")), _rows(rows)))
+    parts.append("</details>")
     return "".join(parts)
 
 

@@ -333,6 +333,7 @@
 | 部分命中率（层次） | `partialHits / evaluable × 100%`。 |
 | 未命中率（层次） | `misses / evaluable × 100%`。 |
 | 兼容别名 | `strictHitRate`=`exactRate`、`coverageRate`=`hitRate`，仅为历史 JSON 兼容保留，展示名分别降为「精确命中率」「命中率」。 |
+| 能力边界条目 | `reviewComparison.outOfScopeItems[]`：AI 当前**不具备该层能力**（如底稿审核）而无法作命中/漏检判定的复核条目。必填 `itemId`/`title`/`reviewerEvidence`/`handling`/`exclusionReason`；`itemId` 不得与 `reviewItems` 重复。**不计分母、不计漏检、不作评分**，但必须登记备查并在《人工复核对照》区可见可展开（不得因移出命中率而在交付件中消失）。 |
 | 展示维度 | 至少按复核级次、问题模块分组展示总数、排除项、可评价数、精确/部分/未命中及两类百分比。 |
 | 综合值 | 由全部 `reviewItems[]` 加权汇总重算；不平均各组百分比。 |
 | 闭环异常 | `L-unclosed` 必须醒目标出“已称修复但实际未落实”，并并列展示复核答复证据与被审件证据。 |
