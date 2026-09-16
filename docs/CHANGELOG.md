@@ -25,6 +25,46 @@
 - **验证**：扩充契约测试，覆盖信息顺序、折叠行为、复核文件顺序、逐级明细、百分比重算、分母排除、
   L-unclosed 证据和假阳性一致性。
 
+## 2026-09-16 · fix(crwu-audit) · 引用隐藏区只出"人工建议检查项"，不再作为 AI 问题
+
+- **口径变更（反转 2026-09-15 口径）**：审核只要可见区公式计算正确即可。可见格公式引用了隐藏行/列/隐藏表时，
+  该可见结果记 `manualConfirmationItems[]`（人工建议检查项、`review_required=true`），**不出 `issues[]`、
+  不计入 `fail`、不据此升级严重度**；建议项只为"被可见公式引用的隐藏区"出，表内仅存在隐藏行/列而不参与计算的不出。
+- **不变边界**：H0 仍禁读隐藏区值/公式（要读属 H1 授权）；**可见区自身**算错（勾稽不符、重算≠缓存值）
+  照常按普通可见区缺陷出问题，不因涉及隐藏区加严或放松。
+- **落点**：`references/00-input-and-route-profile.md` §Excel、`references/12-leaf-common-contract.md` §7.1、
+  `SKILL.md` 步骤 3、`crwu-audit-datacheck/SKILL.md`（C7 去向 + 边界纪律）、
+  `scripts/prepare_materials.py`（新增 `hiddenRefDisposition` 元数据，`hiddenRefs`/`calcChainNotReproducible`
+  字段名与行为不变）、契约测试。
+- **验证**：`test_prepare_materials.py` 27/27、`test_media_extract.py` 13/13、router 15/15、`kb_tool validate` error=0。
+
+## 2026-09-16 · docs(crwu-audit) · 加"长任务 3 分钟介入准则"，禁止 agent 空转
+
+- **背景**：编排层要跑附件下载、知识库批量下载、材料准备、交付渲染等外部长任务，此前无统一停滞判据，
+  agent 可能静默等待或空轮询，既拖长交付又掩盖真实故障。
+- **内容**：`crwu-audit/SKILL.md` 在「输入」与「路由流程」之间新增「执行纪律」节（执行前先读）：
+  同一命令/后台作业连续 **3 分钟无新输出且无状态变化**即视为停滞；3 分钟是**介入触发器**（查状态 → 查原因 →
+  处置 → 留痕），不是无条件终止；能修则修（补参数/缩小范围/改分批或后台周期查看），确认无法推进才终止并记
+  `capability gap`。禁止静默等待、空轮询，禁止把停滞表述为"材料缺失/无数据"。人工等待（确认、授权、提供材料、
+  扫码）不适用，不得因"无动静"终止流程。
+- **覆盖**：只写编排层一处，正文明确"包括叶子与子任务里启动的命令"。
+- **验证**：router 契约 15/15、`kb_tool validate` error=0、`git diff --check`。
+
+## 2026-09-16 · refactor(skills) · 审核族分出 crwu-dev-audit- 前缀（optimize / public-general-standards）
+
+- **变更**：`skills/crwu-audit-optimize/` → `skills/crwu-dev-audit-optimize/`、
+  `skills/crwu-audit-public-general-standards/` → `skills/crwu-dev-audit-public-general-standards/`（`git mv` 保历史）。
+- **同步**：技能自名、`crwu-audit/references/07-skill-registry.md`、`08-union-dispatch-rules.md`、router `SKILL.md`
+  步骤 7/13、`10-capability-gap-proposal.md`、`99-maintenance.md`、资产/外部数据/datacheck 叶子引用、
+  `skills/README.md`、`skills/AGENTS.md`、现行设计文档；带日期的历史记录不回改。
+- **门禁双前缀**：`kb_tool.py` 的 `AUDIT_DIR_PREFIXES` 与 `check_audit_skill_mappings.py` 的
+  `AUDIT_FAMILY_PREFIX`/`_SKILL_TOKEN_RE`/真实目录解析改为覆盖 `crwu-audit*` 与 `crwu-dev-audit-*`——
+  否则 dev 前缀技能会静默掉出"三不写" lint 与装配路径键/R4 技能名校验；新增 3 条回归用例钉住。
+- **部署影响（用户操作）**：需重新同步运行时并删除旧目录 `~/.skills-manager/skills/crwu-audit-optimize`、
+  `crwu-audit-public-general-standards`（及 `~/.dsh`、`~/.workbuddy` 同名软链），否则新旧并存。
+- **验证**：router 15/15、maintainer 63 项（1 项既有 live-cache 漂移失败，与本次无关）、dws 12/12、
+  `kb_tool validate` error=0。
+
 ## 2026-09-16 · refactor(skills) · 氚云技能统一 crwu- 前缀：`h3yun-login`/`h3yun-query` 改名
 
 - **变更**：`skills/h3yun-login` → `skills/crwu-h3yun-login`、`skills/h3yun-query` → `skills/crwu-h3yun-query`
