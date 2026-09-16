@@ -9,6 +9,20 @@
 
 ---
 
+## 2026-09-16 · feat(crwu-audit) · 交付 HTML 增「AI 独立发现」标识与分级统计（renderer 1.2.2）
+
+- **位置**：`crwu-audit/scripts/audit_delivery.py`（`RENDERER_VERSION` 1.2.1 → 1.2.2）、
+  `crwu-audit/template/audit-report.html`、`crwu-audit/references/11-html-delivery-spec.md`、
+  `crwu-audit/scripts/README.md`、`crwu-audit/scripts/examples/audit-result.sample.json`、
+  `crwu-audit/scripts/test_audit_delivery.py`。
+- **行为**：阶段二复核已执行（`reviewComparison.status=performed`）时，
+  `reviewComparison.category=B`（AI 仅检出、未与人工复核意见重叠）的问题项在
+  「AI 检出的问题项」区单列 **AI 独立检出总数与高/中/低分布**，卡片标题区显示「AI 独立发现」徽标与
+  「未与人工复核意见重叠，请优先核验其准确性」提示；`status != performed` 时**不显示**该统计与徽标
+  （避免把「尚未对照」误写为「AI 独立发现」）。
+- **测试**：`test_audit_delivery.py` 增 2 项（分级统计与徽标呈现；未执行阶段二时不出现），**86/86 通过**。
+- **验证**：`kb_tool validate` error=0；映射检查器 error=0；四项契约测试全过；`git diff --check`。
+
 ## 2026-09-16 · fix(skills) · 方法层与覆盖层装配补齐：路由层按画像追加 + 检查器扩监视 + 目录树解析修正
 
 - **背景（实测）**：知识库 `04-监管覆盖/`（覆盖 80.7% 项目）、`03-评估方法/02-收益法|03-资产基础法|04-方法选择/`、
