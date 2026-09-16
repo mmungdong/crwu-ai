@@ -9,6 +9,19 @@
 
 ---
 
+## 2026-09-16 · refactor(skills) · 氚云技能统一 crwu- 前缀：`h3yun-login`/`h3yun-query` 改名
+
+- **变更**：`skills/h3yun-login` → `skills/crwu-h3yun-login`、`skills/h3yun-query` → `skills/crwu-h3yun-query`
+  （`git mv` 保历史），与 `crwu-audit*`/`crwu-dws`/`crwu-init` 统一到 `crwu-` 前缀，便于按前缀识别/安装本仓技能。
+- **同步**：两技能 `SKILL.md` 的 frontmatter `name`、标题与相互引用（`crwu-h3yun-query` ↔ `crwu-h3yun-login`）；
+  `skills/README.md` 技能表；`skills/crwu-init/SKILL.md` 的"不触发"清单 `h3yun-*` → `crwu-h3yun-*`。
+  CHANGELOG 中的历史条目按纪律**不回改**（旧名保留在历史记录里）。
+- **部署影响（用户操作）**：改名后需重新执行 crwu-init / skills 管理机制同步；已安装目录里的旧
+  `h3yun-login`/`h3yun-query`（含 `~/.dsh/skills` 等软链）**需手工删除**，否则新旧两份同时存在、
+  触发词重复。技能能力与 `crwu h3yun ...` CLI 命令**零变化**。
+- **验证**：`kb_tool.py validate --skill-root skills` error=0；两技能 frontmatter `name` 与目录名一致；
+  全仓无残留旧名引用（CHANGELOG 历史条目除外）。
+
 ## 2026-09-16 · fix(skills) · 建"媒体证据通道"：内嵌图/复核件图导出并放行，修"图片被跳过"
 
 - **缺陷（实测定位）**：上一笔只登记"原件媒体数"，**没有读取通道**——规则正文要求叶子"解析 raw 原件包的

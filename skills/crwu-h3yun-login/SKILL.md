@@ -1,27 +1,27 @@
 ---
-name: h3yun-login
+name: crwu-h3yun-login
 description: >-
   当用户/员工需要【登录/绑定/重新登录/续期/换账号】H3Yun（氚云）会话，或任何
   h3yun 查询提示"没有会话/会话过期/请先登录/无法读取数据"时，自动使用本技能。
   它自动打开本机浏览器，由员工用钉钉扫码完成登录，会话直接写入本机凭据存储；
   令牌全程不显示、不进对话、不发送给任何 AI 宿主。非登录诉求（查数据）不要使用，
-  改走 h3yun-query。
+  改走 crwu-h3yun-query。
 ---
 
-# H3Yun 员工自助登录（h3yun-login）
+# H3Yun 员工自助登录（crwu-h3yun-login）
 
 ## 自动触发规则
 
 - **触发**：用户说"帮我登录/绑定/扫码/登录不上/会话过期/需要重新登录氚云"，
   或运行 h3yun 命令返回无会话/过期类错误（如 `session expired; run crwu h3yun session login`）。
-- **不触发**：用户只是要查应用/表单/记录/附件（走 `h3yun-query`），或明确表示不愿扫码。
+- **不触发**：用户只是要查应用/表单/记录/附件（走 `crwu-h3yun-query`），或明确表示不愿扫码。
 - **命中后的第一步**：执行 `crwu h3yun session login`，把输出中的引导原文展示给
   用户，让其用手机钉钉扫码；成功后再执行 `crwu h3yun session status` 确认，
-  然后可转交 `h3yun-query` 继续查询。
+  然后可转交 `crwu-h3yun-query` 继续查询。
 
 
 用 `crwu` 帮当前用户（员工本人、非程序员）完成 H3Yun 网页会话的**本机绑定**，
-让后续 `h3yun-query` 等只读查询能以其权限执行。**这是绑定入口；不要在对话中
+让后续 `crwu-h3yun-query` 等只读查询能以其权限执行。**这是绑定入口；不要在对话中
 索要、展示或转发任何令牌。**
 
 ## 什么时候用
@@ -64,7 +64,7 @@ crwu h3yun session login
 crwu h3yun session status
 ```
 
-应显示 `engineCode`、`userId` 与剩余有效期。然后即可使用 `h3yun-query` 等技能。
+应显示 `engineCode`、`userId` 与剩余有效期。然后即可使用 `crwu-h3yun-query` 等技能。
 
 ## 回退（受信 IT/自助二选一，仅当扫码自动流程不可用时）
 
@@ -100,5 +100,5 @@ crwu h3yun session bind --token '<JWT>'
 
 ## 更多
 
-命令与细节以 `crwu scheme` 为准；登录成功后即可使用 `h3yun-query` 技能
+命令与细节以 `crwu scheme` 为准；登录成功后即可使用 `crwu-h3yun-query` 技能
 进行查询。
