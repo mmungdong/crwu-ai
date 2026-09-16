@@ -148,9 +148,9 @@ _REQUIRED_SIBLINGS = (
     "crwu-audit",
     "crwu-audit-asset-realestate",
     "crwu-audit-biz-asset-operation",
-    "crwu-audit-public-general-standards",
+    "crwu-dev-audit-public-general-standards",
     "crwu-audit-datacheck",
-    "crwu-audit-optimize",
+    "crwu-dev-audit-optimize",
     "crwu-audit-skill-maintainer",
     "crwu-dws",
 )
@@ -612,6 +612,57 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
         errors, _warnings = module.live_protocol_lint(str(MAINTAINER_SKILL), [])
 
         self.assertEqual([], errors)
+
+    def test_audit_family_gates_cover_both_prefixes(self):
+        """门禁必须同时覆盖 `crwu-audit*` 与 `crwu-dev-audit-*` 两组前缀。
+
+        2026-09-16 改名：`crwu-dev-audit-optimize` / `crwu-dev-audit-public-general-standards`
+        移到 `crwu-dev-audit-`。若门禁只认 `crwu-audit`，这两个技能会**静默掉出**"三不写"
+        lint（kb_tool）与装配路径键/frontmatter/真实目录解析（映射检查器）的扫描范围——
+        正是"改名反而更难维护"的根因，故用本用例钉住。
+        """
+        kb_tool = self._kb_tool()
+        self.assertIn("crwu-audit", kb_tool.AUDIT_DIR_PREFIXES)
+        self.assertIn("crwu-dev-audit", kb_tool.AUDIT_DIR_PREFIXES)
+
+        # 以模块方式载入检查器（dataclass 需要模块先注册进 sys.modules，Py3.9 尤其如此）
+        checker_spec = importlib.util.spec_from_file_location("checker_for_prefix_test", CHECKER)
+        checker = importlib.util.module_from_spec(checker_spec)
+        sys.modules[checker_spec.name] = checker
+        try:
+            checker_spec.loader.exec_module(checker)
+        finally:
+            sys.modules.pop(checker_spec.name, None)
+        self.assertIn("crwu-audit", tuple(checker.AUDIT_FAMILY_PREFIX))
+        self.assertIn("crwu-dev-audit", tuple(checker.AUDIT_FAMILY_PREFIX))
+        # 裸名 `crwu-audit`（router）由 ROUTER_SKILL 单独覆盖，token 正则只匹配具体技能名
+        for name in ("crwu-audit-public-general-standards", "crwu-dev-audit-optimize",
+                     "crwu-dev-audit-public-general-standards"):
+            self.assertIn(name, checker._SKILL_TOKEN_RE.findall("路由点名 `" + name + "`。"),
+                          f"{name} 必须被 _SKILL_TOKEN_RE 认出（否则 R4 漏检）")
+
+    def test_live_protocol_lint_covers_dev_prefixed_directories(self):
+        """`crwu-dev-audit-*` 目录里的技能正文必须同样受"三不写"lint 约束。"""
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _write(root / "crwu-dev-audit-canary" / "SKILL.md",
+                   '---\nname: crwu-dev-audit-canary\n---\n\nCRWU_KB_ROOT = "/tmp/kb"\n')
+
+            errors, _warnings = module.live_protocol_lint(str(root), [])
+
+            self.assertTrue(any("canary" in e for e in errors),
+                            f"dev 前缀目录未被 lint 覆盖：{errors}")
+
+    @_requires_skill_tree
+    def test_renamed_dev_prefix_skills_are_on_disk_with_matching_names(self):
+        """改名后的两个技能目录与 frontmatter 名必须一致（防止源码/登记再次漂移）。"""
+        for name in ("crwu-dev-audit-optimize", "crwu-dev-audit-public-general-standards"):
+            skill_md = SKILLS_ROOT / name / "SKILL.md"
+            self.assertTrue(skill_md.is_file(), f"{name}/SKILL.md 不存在")
+            front = [line for line in skill_md.read_text(encoding="utf-8").splitlines()
+                     if line.startswith("name:")]
+            self.assertEqual([f"name: {name}"], front, f"{name} 的 frontmatter name 与目录名不一致")
 
 
 def _codes(report: dict) -> set[str]:
@@ -2049,7 +2100,7 @@ class PublicAxisMappingTest(unittest.TestCase):
     its references, and no mapping finding would fire.
     """
 
-    PUBLIC_SKILL = "crwu-audit-public-general-standards"
+    PUBLIC_SKILL = "crwu-dev-audit-public-general-standards"
     PUBLIC_ROOTS = ("06-规则库/02-通用准则-报告与披露/", "06-规则库/03-通用准则-程序与档案/")
 
     def _repo_with_public_row(self, root: Path) -> Path:
@@ -2164,7 +2215,7 @@ class PublicAxisMappingTest(unittest.TestCase):
             )
 
     def test_public_skill_path_keys_are_checked_against_the_catalog(self):
-        """`inspect_path_keys` walks every crwu-audit* directory, public axis included."""
+        """`inspect_path_keys` walks every audit-family (crwu-audit*/crwu-dev-audit-*) directory, public axis included."""
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             repo = self._repo_with_public_row(root)

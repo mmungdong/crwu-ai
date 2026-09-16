@@ -47,14 +47,21 @@
 
 | 想改什么 | 归口 | 说明 |
 | --- | --- | --- |
-| 规则/清单**内容**（库里 `06-规则库/` 条目写错、漏项）、词表取值、叶子**算法与流程** | `crwu-audit-optimize` | 从漏检/误检/复核反馈诊断根因；知识库项只生成 `manual_only` 人工修复单，Skill 项逐项确认后执行 |
+| 规则/清单**内容**（库里 `06-规则库/` 条目写错、漏项）、词表取值、叶子**算法与流程** | `crwu-dev-audit-optimize` | 从漏检/误检/复核反馈诊断根因；知识库项只生成 `manual_only` 人工修复单，Skill 项逐项确认后执行 |
 | **结构/映射**：一级 Skill 的新增改名、一级根、registry、classification、遗留命名迁移 | `crwu-audit-skill-maintainer` | 四模式 `audit`/`create`/`repair`/`remap`；`audit` 只读并同步校准表 |
 
-- 两者都遵守**先逐文件方案、用户确认后才动文件**；门禁与校验口径只在 `crwu-audit-skill-maintainer/references/04`、`05` 定义一次，`crwu-audit-optimize` 不重复定义。
-- 审核后同时存在 AI 结果与人工复核文件时，由 `crwu-audit-optimize` 输出 `L-* → 根因 → FIX-*` 差距报告；
+- 两者都遵守**先逐文件方案、用户确认后才动文件**；门禁与校验口径只在 `crwu-audit-skill-maintainer/references/04`、`05` 定义一次，`crwu-dev-audit-optimize` 不重复定义。
+- 审核后同时存在 AI 结果与人工复核文件时，由 `crwu-dev-audit-optimize` 输出 `L-* → 根因 → FIX-*` 差距报告；
   知识库对 AI/CLI 永远只读，即使用户接受方案也必须由用户人工修改。
-- 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-audit-optimize` 只给根因与最低改动集，**交接** `crwu-audit-skill-maintainer` 执行；交接不继承修改授权。
+- 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-dev-audit-optimize` 只给根因与最低改动集，**交接** `crwu-audit-skill-maintainer` 执行；交接不继承修改授权。
 - 现状速查：读 `crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
+
+### 审核族前缀（两组，门禁都覆盖）
+
+- `crwu-audit-*`：审核族（router、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、`crwu-audit-external-data`、`crwu-audit-skill-maintainer`）。
+- `crwu-dev-audit-*`：开发/维护侧成员（`crwu-dev-audit-optimize`、`crwu-dev-audit-public-general-standards`；2026-09-16 由 `crwu-audit-*` 迁入）。
+- **两组前缀都必须被门禁扫描**：`crwu-audit-skill-maintainer` 的 `scripts/kb_tool.py`（"三不写"实时协议 lint）与 `scripts/check_audit_skill_mappings.py`（装配路径键、frontmatter、真实目录解析、R4 技能名解析）都按两组前缀收目录。**新增或迁移前缀时两处常量必须同批更新**，否则该前缀下的技能会静默掉出校验范围。
+- 前缀改名的最低同步面：技能自名、`07-skill-registry.md`、`08-union-dispatch-rules.md`、router `SKILL.md`、叶子引用、两个门禁脚本的常量/名单、三个契约测试、`skills/README.md` 与现行设计文档、变更纪要；带日期的历史记录不回改。
 
 ## 技能自洽性：不得引用代码仓库（硬规则）
 

@@ -77,13 +77,16 @@ LEAF_OWNED_REFERENCES = ("00-applicability.md", "01-kb-assembly.md", "02-review-
 AXIS_DISPATCH_INPUT = {"asset": "asset_skills", "business": "business_skills"}
 # Concrete skill names only: excludes wildcards (crwu-audit-asset-*) and placeholders
 # (crwu-audit-<axis>-<label>) and longer identifiers such as design-crwu-audit-skills.md.
-_SKILL_TOKEN_RE = re.compile(r"(?<![a-z0-9-])crwu-audit-[a-z0-9][a-z0-9-]*(?![a-z0-9*<-])")
+# 两组前缀都认：审核族 `crwu-audit-*` 与开发/维护侧 `crwu-dev-audit-*`
+# （2026-09-16 改名：optimize / public-general-standards 移至 crwu-dev-audit-；
+#  若只认前者，路由正文里这两个名字会连 token 都提不出来 → R4 静默漏检）。
+_SKILL_TOKEN_RE = re.compile(r"(?<![a-z0-9-])crwu-(?:dev-)?audit-[a-z0-9][a-z0-9-]*(?![a-z0-9*<-])")
 _REFERENCE_TOKEN_RE = re.compile(r"(?<![0-9a-z-])(\d\d-[a-z0-9-]+\.md)")
 # Skills that are deliberately not axis leaves (router, maintainers, cross-axis
 # capabilities), so they are exempt from the asset/biz leaf naming rule.
 NON_LEAF_SKILLS = {
     "crwu-audit",
-    "crwu-audit-optimize",
+    "crwu-dev-audit-optimize",
     "crwu-audit-skill-maintainer",
     "crwu-audit-datacheck",
 }
@@ -594,7 +597,10 @@ def _declared_first_level_roots(text: str) -> set[str]:
 _BACKTICKED_RE = re.compile(r"`([^`\n]+)`")
 # Placeholders / globs / ellipses are examples, not addressing keys.
 _PATH_PLACEHOLDER_RE = re.compile(r"[…*<>]|某|示例|待建|不存在|省略")
-AUDIT_FAMILY_PREFIX = "crwu-audit"
+# 审核族目录前缀（含开发/维护侧 `crwu-dev-audit-*`）：装配路径键、frontmatter 名与
+# "真实存在的技能目录"解析都按这两组前缀收集——只认 `crwu-audit` 会让改到 dev 前缀的
+# 技能静默掉出扫描范围（2026-09-16 改名时同步修正）。
+AUDIT_FAMILY_PREFIX = ("crwu-audit", "crwu-dev-audit")
 
 
 def _catalog_top_levels(paths: set[str]) -> dict[str, str]:
@@ -875,14 +881,15 @@ def inspect_routing_layer(
             )
 
     # R4: every concrete skill name the routing layer names must exist or be registered.
-    # Resolution covers any real crwu-audit* directory (leaves *and* non-leaf skills such
-    # as the optimizer or datacheck), plus every name the registry claims.
+    # Resolution covers any real audit-family directory (`crwu-audit*` leaves *and* non-leaf
+    # skills such as the optimizer or datacheck, plus `crwu-dev-audit*` maintenance-side
+    # members), plus every name the registry claims.
     skills_root = repo_root / "skills"
     on_disk = (
         {
             child.name
             for child in skills_root.iterdir()
-            if child.is_dir() and child.name.startswith("crwu-audit")
+            if child.is_dir() and child.name.startswith(AUDIT_FAMILY_PREFIX)
         }
         if skills_root.is_dir()
         else set()
@@ -1306,7 +1313,8 @@ def inspect_repository(
     # the declared skill directory must exist, match its frontmatter name, and declare a KB
     # assembly table (either the standard `01-kb-assembly.md` or the cross-cutting
     # `00-KB装配表.md` used by `crwu-audit-datacheck`). Their assembly path keys are already
-    # covered globally by inspect_path_keys(), which walks every crwu-audit* directory.
+    # covered globally by inspect_path_keys(), which walks every audit-family
+    # (crwu-audit*/crwu-dev-audit-*) directory.
     for row in sorted(
         {(r.label, r.skill, r.status): r for r in public_rows}.values(),
         key=lambda r: (r.label, r.skill),
@@ -1360,13 +1368,13 @@ def inspect_repository(
                 path=str(public_references),
             )
 
-    # A crwu-audit skill that is neither an axis leaf nor a known non-leaf skill is a
+    # An audit-family skill that is neither an axis leaf nor a known non-leaf skill is a
     # leftover combined/legacy skill; register it or migrate it onto a real axis prefix.
     registered_names = set(rows_by_skill)
     if skills_root.is_dir():
         for child in sorted(skills_root.iterdir()):
             name = child.name
-            if not child.is_dir() or not name.startswith("crwu-audit"):
+            if not child.is_dir() or not name.startswith(AUDIT_FAMILY_PREFIX):
                 continue
             if name in NON_LEAF_SKILLS or name in registered_names:
                 continue

@@ -1,5 +1,5 @@
 ---
-name: crwu-audit-optimize
+name: crwu-dev-audit-optimize
 description: >-
   审核能力族的【维护/优化入口（元技能；不经 crwu-audit 路由，禁止用于出具审核意见）】。
   用户反馈审核规则/检查点问题，或指出"缺 XX 文档对 XX 文档 / 某业务路线·资产类型 的审核"时：
@@ -15,7 +15,7 @@ description: >-
   AI—人工差距分析见 references/03-AI人工差距分析流程.md。
 ---
 
-# crwu-audit-optimize（审核能力族 · 维护/优化入口）
+# crwu-dev-audit-optimize（审核能力族 · 维护/优化入口）
 
 > 本技能**不是审核叶子**：不产出任何审核意见、不参与 crwu-audit 分发。它是"按真实反馈演进族技能与
 > 知识库"的总入口：先诊断定位 → 出方案 → **等用户确认** → 按 99-维护说明流程执行 → 校验回归汇报。

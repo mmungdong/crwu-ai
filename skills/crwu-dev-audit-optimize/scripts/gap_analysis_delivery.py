@@ -190,7 +190,7 @@ def build_skill_prompt(result: dict, approved_fix_ids: list[str]) -> str:
             result.get("reportId", ""), "、".join(approved_fix_ids)
         ),
         "",
-        "请使用 crwu-audit-optimize 执行上述已批准计划。先核对报告证据、源仓当前状态和依赖；涉及知识库依赖时，只允许通过 crwu-dws 只读重新下载核验，不得对知识库执行任何写操作。",
+        "请使用 crwu-dev-audit-optimize 执行上述已批准计划。先核对报告证据、源仓当前状态和依赖；涉及知识库依赖时，只允许通过 crwu-dws 只读重新下载核验，不得对知识库执行任何写操作。",
         "",
         "执行要求：",
         "1. 仅修改以下批准计划列明的源仓 Skill 文件，不修改运行时目录，不扩大范围。",
@@ -372,7 +372,7 @@ def _render_sections(result: dict) -> str:
             '<section id="validation-plan"><h2>依赖与验证</h2><div class="table-wrap"><table><thead><tr>'
             '<th>计划</th><th>对应漏检</th><th>依赖</th><th>验证</th></tr></thead>'
             f'<tbody>{_render_validation(result)}</tbody></table></div></section>',
-            '<footer>由 crwu-audit-optimize 差距分析模式生成 · 表格是证据主载体，图表仅用于汇总与导航</footer>',
+            '<footer>由 crwu-dev-audit-optimize 差距分析模式生成 · 表格是证据主载体，图表仅用于汇总与导航</footer>',
         ]
     )
 
