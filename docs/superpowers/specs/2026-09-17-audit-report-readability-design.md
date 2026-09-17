@@ -14,7 +14,8 @@
 - 员工进入报告后，先看结构化结论，不必先读长段总结。
 - 每个问题卡片清楚回答“到哪个文件、哪个位置核对”。
 - “AI 检出的问题项”和“需要人工确认事项”连续呈现。
-- 保留当前 AuditResult JSON 的兼容性，不新增业务结论或重复维护字段。
+- AuditResult JSON 与 HTML 展示逐字段对应，后续监控统计可直接以配套 JSON 为准。
+- 保留当前 AuditResult JSON 的字段兼容性，不新增业务结论或重复维护字段。
 - 修正现有问题描述校验与规范不一致的问题。
 
 ## 不在本次范围
@@ -92,6 +93,30 @@
 - 模板层：提供摘要列表、位置面板、响应式和打印样式。
 - 文档层：同步送达规范、脚本说明、Skill 入口、样例和变更记录。
 
+## JSON 与 HTML 一致性契约
+
+AuditResult JSON 继续作为唯一事实源，不为 HTML 单独维护另一份统计或摘要。页面新增内容按以下固定映射渲染：
+
+| HTML 内容 | AuditResult JSON 来源 | 一致性校验 |
+| --- | --- | --- |
+| AI 检出问题数字 | `summary.counts.issuesTotal` | 必须由 `issues[]` 重算一致 |
+| 待人工确认数字 | `summary.counts.pendingConfirmation` | 必须等于 `manualConfirmationItems[]` 数量 |
+| 未检查项数字 | `summary.counts.notChecked` | 必须等于 `scope.notCheckedItems[]` 数量 |
+| 高风险摘要 | `issues[].severity == high` 的标题与 ID | 数量和条目均来自同一数组 |
+| 中低风险摘要 | 其余 `issues[]` 的标题与 ID | 数量和条目均来自同一数组 |
+| 人工确认摘要 | `manualConfirmationItems[]` 的标题与 ID | 数量和条目均来自同一数组 |
+| 问题位置面板 | `issues[].locationSummary`、`materialEvidence[].displayName/locator` | 不允许 HTML 自行补写位置 |
+| 完整审核说明 | `summary.narrative` | 原文呈现，不改写 |
+
+交付流程采用严格的两阶段门禁：
+
+1. **JSON 校验阶段**：先执行 `validate`。问题描述、摘要计数、问题位置来源、人工确认、未检查项、敏感信息和其余业务契约都在 JSON 层校验。任一项不合规时，以具体 JSON 路径输出错误并退回 AI 修正；此时不得进入 HTML 渲染，也不得产生任何 HTML 或配套归档 JSON。
+2. **HTML 渲染阶段**：只有 JSON 校验零错误后才执行 `render`。renderer 不补写、不纠正、不猜测任何业务内容，只把已合规 JSON 映射成页面结构。
+
+`render` 在同一次运行中生成一对内部归档产物：配套 AuditResult JSON 与员工 HTML。命令显式接收 `--json-out`，在全部预检和渲染后自检通过后才写出两份文件。配套 JSON 是补齐本次 `fileTrace.rendererVersion`、`sourceDigest` 与 `embeddedJsonDigest` 后的最终对象；HTML 的 `#audit-result` 内嵌对象必须与该 JSON 逐字段完全相等。写出过程不能出现“HTML 已生成但 JSON 未生成”或反向的半成品状态。
+
+员工对外交付仍可只发送 HTML；内部归档和后续审核监控使用配套 JSON。测试直接解析 HTML 内嵌 JSON，并与 `--json-out` 文件做对象级相等比较，避免页面统计和监控统计漂移。
+
 ## 测试设计
 
 按测试先行实施：
@@ -103,11 +128,14 @@
 5. 新增失败测试，证明问题位置面板展示 `locationSummary` 及去重后的材料文件和 locator，且动态文本被转义。
 6. 新增失败测试，证明正文与侧栏中“需要人工确认事项”紧跟“AI 检出的问题项”。
 7. 新增打印和窄屏断言，确保摘要、定位面板、跳转卡片和章节顺序可读。
-8. 运行交付脚本测试、相关技能族契约测试、样例 validate/render、`git diff --check` 与技能自洽性门禁。
+8. 新增 CLI 失败测试，证明 `render` 同时输出配套 JSON 与 HTML，且配套 JSON 与 HTML 内嵌 AuditResult 完全相等。
+9. 新增门禁测试，证明问题描述或其他 JSON 字段不合规时只返回带 JSON 路径的校验错误，HTML 和配套 JSON 均不生成。
+10. 新增一致性测试，证明三条摘要、三个跳转数字与问题位置都能回指固定 JSON 字段，数量可重算。
+11. 运行交付脚本测试、相关技能族契约测试、样例 validate/render、`git diff --check` 与技能自洽性门禁。
 
 ## 版本与兼容性
 
-- AuditResult 不新增字段，`schemaVersion` 保持 1.x。
+- AuditResult 不新增业务字段，`schemaVersion` 保持当前 1.1.0；最终配套 JSON 只回填既有 `fileTrace` 字段。
 - renderer 行为变化，`RENDERER_VERSION` 从当前未提交改动的 `renderer/1.2.3` 提升到 `renderer/1.2.4`。
 - HTML 送达规范从当前未提交改动的 v1.3 提升到 v1.4。
 - 旧 JSON 若已满足本轮问题描述写法约束，可直接渲染；不需要数据迁移。
@@ -120,4 +148,6 @@
 - 每个问题卡片都有明显的问题位置面板，至少保留 `locationSummary`，有材料证据时显示文件和 locator。
 - “需要人工确认事项”在正文和目录中都紧跟“AI 检出的问题项”。
 - 单行明细不能通过 `problemDescription` 校验。
+- 任一 JSON 门禁失败时明确退回 AI 修正且不产生 HTML；只有 JSON 零错误才进入渲染。
+- 单次 render 生成配套 JSON 与 HTML，配套 JSON 和 HTML 内嵌 AuditResult 对象完全相等；监控统计字段与页面数字可重算一致。
 - 所有相关自动化测试和仓库门禁通过，且不修改或删除用户现有的无关改动。
