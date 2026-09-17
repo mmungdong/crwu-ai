@@ -1017,10 +1017,55 @@ class AuditDeliveryCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "broken.json"
             out = Path(tmp) / "out.html"
+            json_out = Path(tmp) / "out.json"
             path.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(1, delivery.main(["render", str(path), "--out", str(out)]))
+                self.assertEqual(1, delivery.main([
+                    "render", str(path), "--out", str(out), "--json-out", str(json_out)
+                ]))
             self.assertFalse(out.exists(), "校验失败时不得产出 HTML")
+            self.assertFalse(json_out.exists(), "校验失败时不得产出配套 JSON")
+
+    def test_render_writes_json_matching_html_embedded_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            html_path = Path(temp_dir) / "审核意见.PRJ-2026-0001.html"
+            json_path = Path(temp_dir) / "审核结果.PRJ-2026-0001.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = delivery.main([
+                    "render", str(SAMPLE_PATH),
+                    "--out", str(html_path),
+                    "--json-out", str(json_path),
+                ])
+            self.assertEqual(0, exit_code)
+            archived = json.loads(json_path.read_text(encoding="utf-8"))
+            document = html_path.read_text(encoding="utf-8")
+            embedded = json.loads(re.search(
+                r'<script id="audit-result" type="application/json">(.*?)</script>',
+                document,
+                re.S,
+            ).group(1))
+            self.assertEqual(archived, embedded)
+            self.assertEqual(delivery.RENDERER_VERSION, archived["fileTrace"]["rendererVersion"])
+
+    def test_invalid_json_gate_writes_neither_output(self):
+        result = load_sample()
+        result["issues"][0]["problemDescription"] = "只有一段，不合规。"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "invalid.json"
+            source.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+            html_path = Path(temp_dir) / "result.html"
+            json_path = Path(temp_dir) / "result.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = delivery.main([
+                    "render", str(source),
+                    "--out", str(html_path),
+                    "--json-out", str(json_path),
+                ])
+            self.assertEqual(1, exit_code)
+            self.assertIn("issues[0].problemDescription", stderr.getvalue())
+            self.assertFalse(html_path.exists())
+            self.assertFalse(json_path.exists())
 
 
 class ReviewerOnlyInFileResolutionTest(unittest.TestCase):

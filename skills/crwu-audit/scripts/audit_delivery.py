@@ -687,7 +687,6 @@ def validate(result: dict, rendered: bool = False, expect_renderer: bool = False
             errors.append("issueId 重复：{0}".format(issue_id))
         else:
             seen_issue_ids.add(issue_id)
-            where = "{0}({1})".format(where, issue_id)
         for field, label in (("severity", "severity"), ("issueType", "issueType"), ("decision", "decision")):
             value = issue.get(field)
             table = {"severity": SEVERITY_LABEL, "issueType": ISSUE_TYPE_LABEL, "decision": DECISION_LABEL}[field]
@@ -2559,6 +2558,36 @@ def render(result: dict, print_trail: bool = None) -> str:
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+def embedded_result_from_document(document: str) -> dict:
+    match = re.search(
+        r'<script id="audit-result" type="application/json">(.*?)</script>',
+        document,
+        re.S,
+    )
+    if not match:
+        raise ValueError("HTML 缺少内嵌 AuditResult")
+    return json.loads(match.group(1))
+
+
+def _write_render_pair(html_path: Path, json_path: Path, document: str, rendered: dict) -> None:
+    """全部校验完成后再写临时文件，避免业务校验失败留下半成品。"""
+    if html_path.resolve() == json_path.resolve():
+        raise ValueError("HTML 与配套 JSON 输出路径不得相同")
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    html_temp = html_path.with_name(html_path.name + ".tmp")
+    json_temp = json_path.with_name(json_path.name + ".tmp")
+    try:
+        html_temp.write_text(document, encoding="utf-8")
+        json_temp.write_text(canonical_json(rendered) + "\n", encoding="utf-8")
+        json_temp.replace(json_path)
+        html_temp.replace(html_path)
+    finally:
+        for path in (html_temp, json_temp):
+            if path.exists():
+                path.unlink()
+
+
 def _cmd_validate(args) -> int:
     result = load_result(Path(args.path))
     errors = validate(result, rendered=args.rendered, expect_renderer=args.rendered)
@@ -2579,26 +2608,26 @@ def _cmd_digest(args) -> int:
 
 
 def _cmd_render(args) -> int:
-    path = Path(args.path)
-    result = load_result(path)
+    result = load_result(Path(args.path))
     errors = validate(result, rendered=False)
     if errors:
         for error in errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
-        print("校验失败，拒绝渲染：{0} 项".format(len(errors)), file=sys.stderr)
+        print("JSON 校验失败，已退回修正，未生成 HTML：{0} 项".format(len(errors)), file=sys.stderr)
         return 1
     document = render(result)
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(document, encoding="utf-8")
-    rendered = json.loads(re.search(r'<script id="audit-result" type="application/json">(.*?)</script>', document, re.S).group(1))
+    rendered = embedded_result_from_document(document)
     post_errors = validate(rendered, rendered=True, expect_renderer=True)
     if post_errors:
         for error in post_errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
-        print("渲染后自检失败：{0} 项".format(len(post_errors)), file=sys.stderr)
+        print("渲染后自检失败，未写出交付文件：{0} 项".format(len(post_errors)), file=sys.stderr)
         return 1
+    out_path = Path(args.out)
+    json_out_path = Path(args.json_out)
+    _write_render_pair(out_path, json_out_path, document, rendered)
     print("已渲染：{0}".format(out_path))
+    print("已归档：{0}".format(json_out_path))
     return 0
 
 
@@ -2618,6 +2647,7 @@ def main(argv=None) -> int:
     render_parser = subparsers.add_parser("render", help="渲染自包含单文件 HTML")
     render_parser.add_argument("path", help="AuditResult JSON 路径")
     render_parser.add_argument("--out", required=True, help="输出 HTML 路径")
+    render_parser.add_argument("--json-out", required=True, help="输出与 HTML 内嵌对象完全一致的 AuditResult JSON")
     render_parser.set_defaults(func=_cmd_render)
 
     args = parser.parse_args(argv)
