@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CRWU 审核意见交付工具：AuditResult 校验 + 单文件 HTML 渲染。
 
-实现《CRWU 审核意见 HTML 送达规范 v1.1》
+实现《CRWU 审核意见 HTML 送达规范 v1.3》
 （正文：本技能 references/11-html-delivery-spec.md）：
 
 - AuditResult JSON 是唯一事实源；HTML 仅如实呈现，不新增/删除/合并/改写任何结论；
@@ -24,7 +24,7 @@ import re
 import sys
 from pathlib import Path
 
-RENDERER_VERSION = "renderer/1.2.2"
+RENDERER_VERSION = "renderer/1.2.3"
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "template" / "audit-report.html"
 SCHEMA_VERSION_PREFIX = "1."
 
@@ -138,6 +138,45 @@ ABSOLUTE_PATH_PATTERNS = [
     (re.compile(r"file://"), "file:// 地址"),
 ]
 FORBIDDEN_KEY_PATTERN = re.compile(r"(?i)(token|api[_-]?key|cookie|password|passwd|secret|connection[_-]?string|nodeId)")
+
+# ---- §4.6 问题描述写法：员工可读性硬校验（首句 + 明细两段式） ----
+PROBLEM_HEADLINE_MAX = 60
+PROBLEM_DETAIL_MAX_LINES = 4
+PROBLEM_DETAIL_MIN_LINES = 2
+PROBLEM_DETAIL_LINE_MAX = 80
+PROBLEM_TEXT_MAX = 420
+PROBLEM_HEADLINE_FORBIDDEN_LABEL = "规则编号/内部代号"
+PROBLEM_SENTENCE_TERMINATORS = "。；！？"
+PROBLEM_LOCATOR_ANCHOR_PATTERN = re.compile(
+    r"(?<!\d)(?:\.[A-Za-z]{2,5}(?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9])[A-Za-z]{1,3}\d{1,4}(?::[A-Za-z]{1,3}\d{1,4})?"
+    r"|!\s*\S)"
+    r"|第\s*\d+\s*[页条项]"
+    r"|「|」"
+)
+PROBLEM_HEADLINE_FORBIDDEN_PATTERNS = [
+    (re.compile(r"\b(?:RULE|CHK|KB|ISS)-[A-Za-z0-9][A-Za-z0-9._-]*"), PROBLEM_HEADLINE_FORBIDDEN_LABEL),
+    (re.compile(r"kb[_-]?id", re.IGNORECASE), PROBLEM_HEADLINE_FORBIDDEN_LABEL),
+    # 知识库相对路径形如 `06-规则库/…`：`/` 后必须是中文路径段，
+    # 否则区间值（0-50/51-100）与页码（L206-L302）会被误判（真实项目回测修正）。
+    (re.compile(r"\d{2}-[\u4e00-\u9fff][^\s，。；、]{0,}/"), "知识库相对路径"),
+]
+PROBLEM_DETAIL_FORBIDDEN = PROBLEM_HEADLINE_FORBIDDEN_PATTERNS[:2]
+# 首句是员工唯一的“一句话结论”，不得出现公式、区域坐标、文件!表 定位串或案例目录内相对路径；
+# 现象要用普通话描述，精确坐标放明细行。口径源自真实项目回测（ISS-DC-001 等 20 条坐标串堆叠）。
+PROBLEM_HEADLINE_TECHNICAL_PATTERN = re.compile(
+    r"=|\b(?:SUM|AVERAGE|IF|VLOOKUP)\("
+    r"|[A-Za-z]{1,3}\d{1,4}:[A-Za-z]{1,3}\d{1,4}"
+    r"|[^\s，。；]{2,}\.(?:xlsx|xls|docx|doc|pdf)!"
+    r"|(?:工作版|提取|材料-源|raw)/"
+)
+PROBLEM_TEXT_FORBIDDEN_PATTERNS = [
+    (re.compile(r"\d{2}-[\u4e00-\u9fff][^\s，。；、]{0,}/"), "知识库相对路径"),
+    (re.compile(r"(?i)\bnodeId\b"), "nodeId"),
+    (re.compile(r"file://"), "file:// 地址"),
+    (re.compile(r"(?:^|[^A-Za-z0-9])/(?:Users|home|var|tmp|private|Volumes|opt)/"), "绝对路径"),
+    (re.compile(r"\b[A-Za-z]:[\\/]"), "Windows 绝对路径"),
+]
 
 REQUIRED_TOP_LEVEL = [
     "schemaVersion",
@@ -458,6 +497,124 @@ def _parse_time(value: str):
         return None
 
 
+def split_problem_description(value) -> tuple:
+    """按 §4.6 把 problemDescription 拆为（首句, [明细行]）。
+
+    renderer 只做分段与呈现，不改写任何业务句子。校验器与渲染器共用同一解析口径。
+    """
+    if not isinstance(value, str):
+        return "", []
+    blocks = [block.strip() for block in value.split("\n") if block.strip()]
+    if not blocks:
+        return "", []
+    return blocks[0], blocks[1:]
+
+
+def _issue_location_anchors(issue: dict) -> list:
+    """收集本条问题真实存在的材料落点：材料证据文件名 + 建议修改文件名。"""
+    anchors = []
+    for bucket in ("materialEvidence", "recommendedEdits"):
+        items = issue.get(bucket)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and _is_nonempty_str(item.get("displayName")):
+                anchors.append(str(item["displayName"]).strip())
+    return anchors
+
+
+def validate_problem_description(where: str, issue: dict) -> list:
+    """§4.6 问题描述写法硬校验：首句 + 明细两段式，员工可直接核对。
+
+    返回以 where 开头的错误字符串列表；空列表表示通过。
+    """
+    errors = []
+    raw = issue.get("problemDescription")
+    if not _is_nonempty_str(raw):
+        # 空值由字段必填校验统一报错，这里不重复报
+        return errors
+    text = str(raw)
+    headline, details = split_problem_description(text)
+    if not headline:
+        errors.append("{0}.problemDescription 缺少首句（须先一句话说清问题是什么）".format(where))
+        return errors
+    if len(headline) > PROBLEM_HEADLINE_MAX:
+        errors.append(
+            "{0}.problemDescription 首句 {1} 字，超过 {2} 字上限（首句只写问题是什么，其余内容移到明细行）".format(
+                where, len(headline), PROBLEM_HEADLINE_MAX
+            )
+        )
+    if headline[-1] not in PROBLEM_SENTENCE_TERMINATORS:
+        errors.append(
+            "{0}.problemDescription 首句未以句读收尾（须以 。；！？ 之一结束）".format(where)
+        )
+    if PROBLEM_HEADLINE_TECHNICAL_PATTERN.search(headline):
+        errors.append(
+            "{0}.problemDescription 首句含公式/单元格坐标/文件定位串，员工读不懂："
+            "首句用普通话写清现象，精确坐标移到明细行".format(where)
+        )
+    if len(details) < PROBLEM_DETAIL_MIN_LINES:
+        errors.append(
+            "{0}.problemDescription 必须是两段式：明细 {1} 行，少于 {2} 行下限".format(
+                where, len(details), PROBLEM_DETAIL_MIN_LINES
+            )
+        )
+    if len(details) > PROBLEM_DETAIL_MAX_LINES:
+        errors.append(
+            "{0}.problemDescription 明细 {1} 行，超过 {2} 行上限".format(
+                where, len(details), PROBLEM_DETAIL_MAX_LINES
+            )
+        )
+    for position, detail in enumerate(details, start=2):
+        if len(detail) > PROBLEM_DETAIL_LINE_MAX:
+            errors.append(
+                "{0}.problemDescription 明细第 {1} 行 {2} 字，超过 {3} 字上限（请拆成短句）".format(
+                    where, position - 1, len(detail), PROBLEM_DETAIL_LINE_MAX
+                )
+            )
+        if detail[-1] in PROBLEM_SENTENCE_TERMINATORS:
+            continue
+        if PROBLEM_LOCATOR_ANCHOR_PATTERN.search(detail):
+            # 以文件名/单元格/页码等落点收尾的明细行本身就是可核对指令，不强行加句号
+            continue
+        errors.append(
+            "{0}.problemDescription 明细第 {1} 行既未以句读收尾（。；！？），"
+            "也未以文件、sheet、单元格或页码等可核对落点收尾".format(where, position - 1)
+        )
+    if len(text) > PROBLEM_TEXT_MAX:
+        errors.append(
+            "{0}.problemDescription 共 {1} 字，超过 {2} 字上限（规则要求与判定链放 gapAnalysis）".format(
+                where, len(text), PROBLEM_TEXT_MAX
+            )
+        )
+    for pattern, label in PROBLEM_HEADLINE_FORBIDDEN_PATTERNS:
+        if pattern.search(headline):
+            errors.append(
+                "{0}.problemDescription 首句含{1}，员工看不懂：请改为具体现象，编号与路径放规则依据".format(where, label)
+            )
+    for pattern, label in PROBLEM_DETAIL_FORBIDDEN:
+        if pattern.search(" ".join(details)):
+            errors.append(
+                "{0}.problemDescription 明细含{1}，请移除（规则出处放「展开判断依据与规则」）".format(where, label)
+            )
+    for pattern, label in PROBLEM_TEXT_FORBIDDEN_PATTERNS:
+        if pattern.search(text):
+            errors.append("{0}.problemDescription 含{1}，禁止出现在员工交付内容中".format(where, label))
+
+    anchors = _issue_location_anchors(issue)
+    detail_text = " ".join(details)
+    has_anchor = any(anchor and anchor in detail_text for anchor in anchors) or bool(
+        PROBLEM_LOCATOR_ANCHOR_PATTERN.search(detail_text)
+    )
+    if not has_anchor:
+        errors.append(
+            "{0}.problemDescription 明细未给出可核对的文件与位置："
+            "请写明本次材料中的具体文件名（如 报告.docx、评估说明.xlsx），以及 sheet 名、"
+            "单元格/区域、第 N 页或章节名".format(where)
+        )
+    return errors
+
+
 def validate(result: dict, rendered: bool = False, expect_renderer: bool = False):
     errors = []
     for key in REQUIRED_TOP_LEVEL:
@@ -538,6 +695,7 @@ def validate(result: dict, rendered: bool = False, expect_renderer: bool = False
         for field in ("title", "problemDescription", "handlingRequirement", "locationSummary", "module"):
             if not _is_nonempty_str(issue.get(field)):
                 errors.append("{0}.{1} 不得为空".format(where, field))
+        errors.extend(validate_problem_description(where, issue))
 
         severity = issue.get("severity")
         if severity in severity_counts and issue.get("decision") == "fail":
@@ -1310,6 +1468,23 @@ def _ai_only_summary(issues, comparison) -> str:
     return "".join(parts)
 
 
+def _problem_block(value) -> str:
+    """§4.6 问题描述按两段式分行呈现：首句单行突出 + 明细逐行，不拼接、不改写。"""
+    headline, details = split_problem_description(value)
+    if not headline and not details:
+        return '<p class="problem"><span class="problem-label">问题描述</span>{0}</p>'.format(_text(EMPTY_TEXT))
+    parts = ['<div class="problem"><span class="problem-label">问题描述</span>']
+    if headline:
+        parts.append('<p class="problem-headline">{0}</p>'.format(_span("problem-description", headline)))
+    if details:
+        parts.append('<ul class="problem-details">')
+        for detail in details:
+            parts.append("<li>{0}</li>".format(_text(detail)))
+        parts.append("</ul>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _issue_card(issue) -> str:
     ai_only = _is_ai_only_issue(issue)
     card_classes = ["issue-card", SEVERITY_CLASS.get(issue.get("severity"), "")]
@@ -1337,11 +1512,7 @@ def _issue_card(issue) -> str:
     cards.append('</div><p class="issue-location"><strong>{0}</strong>{1}</p>'.format(
         _text("问题位置："), _text(issue.get("locationSummary"))))
     cards.append("</header>")
-    cards.append(
-        '<p class="problem">{0}{1}</p>'.format(
-            _span("problem-label", "问题描述"), _span("problem-description", issue.get("problemDescription"))
-        )
-    )
+    cards.append(_problem_block(issue.get("problemDescription")))
 
     recommended_edits = issue.get("recommendedEdits") or []
     cards.append('<details class="issue-edits"><summary>{0}</summary>'.format(
@@ -2363,7 +2534,7 @@ def _cmd_render(args) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="CRWU AuditResult 校验与单文件 HTML 渲染（送达规范 v1.1）")
+    parser = argparse.ArgumentParser(description="CRWU AuditResult 校验与单文件 HTML 渲染（送达规范 v1.3）")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate_parser = subparsers.add_parser("validate", help="校验 AuditResult JSON")

@@ -286,6 +286,144 @@ class AuditResultValidationTest(unittest.TestCase):
         errors = delivery.validate(result)
         self.assertTrue(any("nodeId" in error for error in errors), errors)
 
+    def _problem_errors(self, description):
+        result = load_sample()
+        result["issues"][0]["problemDescription"] = description
+        return delivery.validate(result)
+
+    def test_problem_description_must_be_two_block_plain_language(self):
+        """§4.6：首句结论 + 员工话明细两段式；样例即为合规写法。"""
+        self.assertEqual([], self._problem_errors(load_sample()["issues"][0]["problemDescription"]))
+
+        errors = self._problem_errors("可比案例交易日期与基准日存在时间差异，未见修正，也未见不调整的分析与理由。")
+        self.assertTrue(any("必须是两段式" in error for error in errors), errors)
+
+        errors = self._problem_errors(
+            "三个案例都没有做交易时间修正。\n"
+            "案例成交日与基准日相差越远，价格可比性越弱；现在看不出这个差异有没有影响结论。\n"
+            "请打开 市场法测算表.xlsx 的「市场法」表 F18:F22 核对。"
+        )
+        self.assertEqual([], errors)
+
+    def test_problem_description_requires_at_least_two_detail_lines(self):
+        result = load_sample()
+        issue = result["issues"][0]
+        issue["problemDescription"] = (
+            "三个可比案例均未进行时间修正。\n"
+            "请打开 市场法测算表.xlsx 的「市场法」表 F18:F22 核对。"
+        )
+        errors = delivery.validate(result)
+        self.assertTrue(
+            any("明细 1 行，少于 2 行下限" in error for error in errors),
+            errors,
+        )
+
+    def test_problem_description_limits_headline_and_detail_length(self):
+        result = load_sample()
+        issue = result["issues"][0]
+        location = "请打开 市场法测算表.xlsx 的「市场法」表 F18:F22，对照 评估说明.docx 第 35 页核对。"
+        issue["problemDescription"] = (
+            "三个可比案例的交易日期与评估基准日之间存在明显的时间差异，但市场法测算表里没有任何时间修正系数，也没有关于不调整理由的说明。\n"
+            "案例成交日与基准日相差越远，价格可比性越弱，现在看不出这个差异有没有影响结论。\n"
+            "{0}".format(location)
+        )
+        errors = delivery.validate(result)
+        self.assertTrue(any("首句" in error and "超过 60 字上限" in error for error in errors), errors)
+
+        issue["problemDescription"] = "三个案例都没有做交易时间修正。\n" + "、" * 100 + "。"
+        errors = delivery.validate(result)
+        self.assertTrue(any("明细第 1 行" in error and "字上限" in error for error in errors), errors)
+
+        issue["problemDescription"] = "三个案例都没有做交易时间修正。\n" + "\n".join([location] * 5)
+        errors = delivery.validate(result)
+        self.assertTrue(any("超过 4 行上限" in error for error in errors), errors)
+
+        over_budget_line = "、" * 90 + "汇总!B12"
+        over_budget_headline = "、" * 59 + "。"
+        issue["problemDescription"] = over_budget_headline + "\n" + "\n".join([over_budget_line] * 4)
+        errors = delivery.validate(result)
+        self.assertTrue(any("字上限（规则要求与判定链放 gapAnalysis）" in error for error in errors), errors)
+
+    def test_problem_description_detail_line_must_end_with_sentence_or_locator(self):
+        result = load_sample()
+        result["issues"][0]["problemDescription"] = (
+            "三个案例都没有做交易时间修正。\n"
+            "案例成交日与基准日相差越远价格可比性越弱现在看不出这个差异有没有影响结论\n"
+            "请打开 市场法测算表.xlsx 的「市场法」表 F18:F22 核对。"
+        )
+        errors = delivery.validate(result)
+        self.assertTrue(any("明细第 1 行" in error and "可核对落点" in error for error in errors), errors)
+
+    def test_problem_description_headline_must_not_leak_internal_codes(self):
+        result = load_sample()
+        result["issues"][0]["problemDescription"] = (
+            "见 RULE-DC-004 与 06-规则库/清单-数据校对.md。\n"
+            "请打开 市场法测算表.xlsx 的「市场法」表 F18:F22 核对。"
+        )
+        errors = delivery.validate(result)
+        self.assertTrue(any("首句含" in error and "规则编号" in error for error in errors), errors)
+        self.assertTrue(any("知识库相对路径" in error for error in errors), errors)
+
+    def test_numeric_ranges_are_not_mistaken_for_knowledge_base_paths(self):
+        """回测修正：`0-50/51-100/101-150` 这类区间值与 `L206-L302` 不是知识库路径。"""
+        errors = self._problem_errors(
+            "面积修正分级只在底稿，说明未披露。\n"
+            "妇女表分级为 0-50/51-100/101-150/151-200→100/99/98/97，与文澜表区间不同。\n"
+            "请打开 测算明细表.xlsx 的「标准化处理-妇女」表 W16:X19 与说明 L206-L302 核对。"
+        )
+        self.assertEqual([], errors)
+
+    def test_problem_description_detail_must_name_a_material_locator(self):
+        errors = self._problem_errors(
+            "汇总表数据与报告结论对不上。\n"
+            "两个数字相差 10.00，报告正文没有说明差额来源。\n"
+            "请项目负责人重新核实并补充说明。"
+        )
+        self.assertTrue(any("明细未给出可核对的文件与位置" in error for error in errors), errors)
+
+    def test_problem_description_rejects_absolute_paths(self):
+        errors = self._problem_errors(
+            "汇总表数据与报告结论对不上。\n"
+            "两个数字相差 10.00，报告正文没有说明差额来源。\n"
+            "见 /Users/example/报告.docx 与 测算明细表.xlsx 汇总!B12。"
+        )
+        self.assertTrue(any("绝对路径" in error for error in errors), errors)
+
+    def test_problem_description_headline_rejects_raw_formula_and_cell_dump(self):
+        """回测（2026-302514-LX10034-BG8697）：首句塞公式串与区域坐标时员工读不懂。"""
+        result = load_sample()
+        result["issues"][0]["problemDescription"] = (
+            "同一评估对象的年租金存在两个值，04计算底稿!租金评估明细表-妇女 AD11=SUM(AD6:AD10)=472900。\n"
+            "03评估明细表 同一 5 个单元合计 483,800 元，相差 10,900 元。\n"
+            "请打开 03评估明细表-文澜.xlsx 的「明细表」表 AB6:AB10 核对。"
+        )
+        errors = delivery.validate(result)
+        self.assertTrue(any("首句含公式/单元格坐标/文件定位串" in error for error in errors), errors)
+
+    def test_real_report_description_styles_are_all_rejected(self):
+        """回测回归：真实项目里“员工读不懂”的四种典型写法都必须被拦下。"""
+        styles = {
+            "坐标串堆叠": (
+                "年租金在两张表中不一致：04计算底稿!租金评估明细表-妇女 AD11=472900，"
+                "03评估明细表!明细表 AB38=2944800，两者差 10,900 元。"
+            ),
+            "公式串": (
+                "评估明细汇总表 F8=SUM(明细表!AB6:AB10)/10000=48.38，与底稿口径不一致，"
+                "报告结论采用 294.48 万元。"
+            ),
+            "案例目录相对路径": (
+                "工作版/03评估明细表-文澜.xlsx 的 AB6:AB10 与工作版/04计算底稿 的 AD6:AD10 不一致，"
+                "相差 10,900 元，报告未说明。"
+            ),
+        }
+        for name, description in styles.items():
+            with self.subTest(style=name):
+                errors = self._problem_errors(description)
+                self.assertTrue(
+                    any("必须是两段式" in error or "首句" in error for error in errors),
+                    "{0} 未被拦截：{1}".format(name, errors),
+                )
+
     def test_not_checked_reason_code_enum(self):
         result = load_sample()
         result["scope"]["notCheckedItems"][0]["reasonCode"] = "whatever"
@@ -510,6 +648,28 @@ class AuditResultRenderTest(unittest.TestCase):
     def test_render_is_deterministic(self):
         self.assertEqual(self.document, delivery.render(load_sample()))
 
+    def test_problem_description_renders_headline_and_details_separately(self):
+        """§4.6：首句单行突出，明细逐行；不得拼成一整段。"""
+        document = delivery.render(load_sample())
+        self.assertIn('class="problem-headline"', document)
+        self.assertIn('class="problem-details"', document)
+        matches = re.findall(
+            r'<p class="problem-headline"><span class="problem-description">(.*?)</span></p>'
+            r'<ul class="problem-details">(.*?)</ul>',
+            document,
+            re.S,
+        )
+        self.assertEqual(2, len(matches))
+        by_headline = {headline: details for headline, details in matches}
+        self.assertIn("三个可比案例都用基准日之前成交的价格，测算里没有任何时间修正。", by_headline)
+        details = by_headline["三个可比案例都用基准日之前成交的价格，测算里没有任何时间修正。"]
+        detail_items = re.findall(r"<li>(.*?)</li>", details)
+        self.assertEqual(2, len(detail_items))
+        for item in detail_items:
+            self.assertNotIn("\n", item)
+        self.assertIn("请打开 市场法测算表.xlsx 的「市场法」表 F18:F22", detail_items[-1])
+        self.assertIn("评估说明.docx 第 35 页", detail_items[-1])
+
     def test_dynamic_content_is_escaped(self):
         result = load_sample()
         payload = "<script>alert(1)</script>"
@@ -567,11 +727,18 @@ class AuditResultRenderTest(unittest.TestCase):
         collect(self.result)
         allowed.add("中瑞世联AI审核报告 - {0}".format(self.result["auditTask"]["projectId"]))
         allowed.update({"✅", "❌"})
+        for issue in self.result.get("issues", []):
+            # §4.6：问题描述按两段式分行呈现，文本节点即输入数据的分行切片，非渲染器新句
+            headline, details = delivery.split_problem_description(issue.get("problemDescription"))
+            allowed.update({headline} if headline else set())
+            allowed.update(details)
         for node in text_nodes(self.document):
             if re.fullmatch(r"[0-9a-f]{64}", node):
                 continue  # 渲染期计算的来源/嵌入摘要，可由输入确定性重算
             if re.fullmatch(r"[0-9]+", node):
                 continue  # 渲染期按输入确定性重算的计数（如概览分区项数），非业务句子
+            if node in ("问题描述",):
+                continue  # 受控字段标签（§4.6 问题描述区标题），与「规则依据」「材料证据」同类
             if any(re.fullmatch(pattern, node) for pattern in (
                 r"(问题方向|严重程度|问题类型|判定)：.+",
                 r"展开修改意见（共 [0-9]+ 项）",
