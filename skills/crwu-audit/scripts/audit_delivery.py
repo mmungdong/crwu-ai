@@ -1486,6 +1486,36 @@ def _problem_block(value) -> str:
     return "".join(parts)
 
 
+def _issue_location_block(issue: dict) -> str:
+    """把 JSON 中的定位摘要与材料证据落点组合成可扫描面板。"""
+    seen = set()
+    locations = []
+    for evidence in issue.get("materialEvidence") or []:
+        file_name = str(evidence.get("displayName") or "").strip()
+        locator = str(evidence.get("locator") or "").strip()
+        key = (file_name, locator)
+        if not file_name or not locator or key in seen:
+            continue
+        seen.add(key)
+        locations.append(key)
+    parts = ['<section class="issue-location-panel" aria-label="问题位置">']
+    parts.append('<p class="issue-location-heading">{0}</p>'.format(
+        _text("问题位置 · 请到以下位置核对")))
+    parts.append('<p class="issue-location-summary">{0}</p>'.format(
+        _text(issue.get("locationSummary"))))
+    if locations:
+        parts.append('<ul class="issue-location-list">')
+        for file_name, locator in locations:
+            parts.append(
+                '<li><span class="location-file">{0}</span>'
+                '<span class="location-arrow" aria-hidden="true">→</span>'
+                '<span class="location-locator">{1}</span></li>'.format(
+                    _text(file_name), _text(locator)))
+        parts.append("</ul>")
+    parts.append("</section>")
+    return "".join(parts)
+
+
 def _issue_card(issue) -> str:
     ai_only = _is_ai_only_issue(issue)
     card_classes = ["issue-card", SEVERITY_CLASS.get(issue.get("severity"), "")]
@@ -1510,9 +1540,9 @@ def _issue_card(issue) -> str:
         _text("问题类型"), _text(ISSUE_TYPE_LABEL.get(issue.get("issueType"), issue.get("issueType")))))
     cards.append('<span class="meta-chip decision-label">{0}：{1}</span>'.format(
         _text("判定"), _text(DECISION_LABEL.get(issue.get("decision"), issue.get("decision")))))
-    cards.append('</div><p class="issue-location"><strong>{0}</strong>{1}</p>'.format(
-        _text("问题位置："), _text(issue.get("locationSummary"))))
+    cards.append('</div>')
     cards.append("</header>")
+    cards.append(_issue_location_block(issue))
     cards.append(_problem_block(issue.get("problemDescription")))
 
     recommended_edits = issue.get("recommendedEdits") or []

@@ -710,6 +710,44 @@ class AuditResultRenderTest(unittest.TestCase):
         self.assertIn("请打开 市场法测算表.xlsx 的「市场法」表 F18:F22", detail_items[-1])
         self.assertIn("评估说明.docx 第 35 页", detail_items[-1])
 
+    def test_issue_location_panel_shows_summary_and_deduplicated_material_locations(self):
+        result = load_sample()
+        issue = result["issues"][0]
+        duplicate = copy.deepcopy(issue["materialEvidence"][0])
+        issue["materialEvidence"].append(duplicate)
+        document = delivery.render(result)
+        issues_start = document.find('id="actionable-issues"')
+        title_position = document.find(issue["title"], issues_start)
+        card_start = document.rfind('<article class="issue-card', 0, title_position)
+        card_end = document.find('<article class="issue-card', title_position)
+        if card_end == -1:
+            card_end = document.find('</section>', title_position)
+        first_card = document[card_start:card_end]
+        self.assertIn('class="issue-location-panel"', first_card)
+        self.assertIn(issue["locationSummary"], first_card)
+        evidence = issue["materialEvidence"][0]
+        expected = (
+            '<span class="location-file">{0}</span>'
+            '<span class="location-arrow" aria-hidden="true">→</span>'
+            '<span class="location-locator">{1}</span>'
+        ).format(evidence["displayName"], evidence["locator"])
+        self.assertEqual(1, first_card.count(expected))
+
+    def test_issue_location_panel_escapes_file_and_locator(self):
+        result = load_sample()
+        result["issues"][0]["materialEvidence"][0]["displayName"] = "<b>报告.docx</b>"
+        result["issues"][0]["materialEvidence"][0]["locator"] = "<script>bad()</script>"
+        document = delivery.render(result)
+        issues_start = document.find('id="actionable-issues"')
+        title_position = document.find(result["issues"][0]["title"], issues_start)
+        card_start = document.rfind('<article class="issue-card', 0, title_position)
+        card_end = document.find('</section>', title_position)
+        card = document[card_start:card_end]
+        self.assertIn('class="issue-location-panel"', card)
+        self.assertIn("&lt;b&gt;报告.docx&lt;/b&gt;", card)
+        self.assertIn("&lt;script&gt;bad()&lt;/script&gt;", card)
+        self.assertNotIn("<script>bad()</script>", card)
+
     def test_dynamic_content_is_escaped(self):
         result = load_sample()
         payload = "<script>alert(1)</script>"
@@ -766,7 +804,7 @@ class AuditResultRenderTest(unittest.TestCase):
 
         collect(self.result)
         allowed.add("中瑞世联AI审核报告 - {0}".format(self.result["auditTask"]["projectId"]))
-        allowed.update({"✅", "❌"})
+        allowed.update({"✅", "❌", "→"})
         for issue in self.result.get("issues", []):
             # §4.6：问题描述按两段式分行呈现，文本节点即输入数据的分行切片，非渲染器新句
             headline, details = delivery.split_problem_description(issue.get("problemDescription"))

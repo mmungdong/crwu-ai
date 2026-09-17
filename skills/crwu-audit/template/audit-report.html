@@ -197,7 +197,14 @@
       font-weight: 700;
     }
     .meta-chip { padding: 3px 9px; background: #f5f7fa; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
-    .issue-location { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+    .issue-location-panel { margin: 11px 0 0; padding: 12px 13px; background: var(--brand-soft); border: 1px solid #b9cde1; border-left: 4px solid var(--brand); border-radius: 8px; }
+    .issue-location-heading { margin: 0; color: var(--brand-strong); font-size: 13px; font-weight: 700; }
+    .issue-location-summary { margin: 5px 0 0; color: #243b53; font-weight: 700; }
+    .issue-location-list { margin: 8px 0 0; padding: 0; list-style: none; }
+    .issue-location-list li { display: grid; grid-template-columns: minmax(0, .8fr) auto minmax(0, 1.2fr); gap: 8px; align-items: baseline; padding: 5px 0; border-top: 1px solid rgba(23, 75, 114, 0.16); }
+    .location-file { color: var(--brand-strong); font-weight: 700; }
+    .location-arrow { color: var(--muted); }
+    .location-locator { overflow-wrap: anywhere; }
     .issue-review-status { padding: 9px 12px; color: var(--brand-strong); background: var(--brand-soft); border-radius: 7px; }
     .action-panel { padding: 10px 13px; background: #f4faf8; border: 1px solid #c9e7df; border-radius: 8px; }
     .issue-edits { margin: 12px 0; border-color: #badbd3; background: #f4faf8; }
@@ -320,6 +327,8 @@
       th, td { padding: 8px; font-size: 12px; }
       table.kv th { width: 104px; }
       .issue-card { padding: 14px; }
+      .issue-location-list li { grid-template-columns: 1fr; gap: 2px; }
+      .location-arrow { display: none; }
       .summary-kpis, .review-kpis, .score-hero { grid-template-columns: 1fr; }
       .review-file-list li { grid-template-columns: 30px minmax(0, 1fr); }
       .review-file-list li span:last-child, .review-file-list li span:nth-last-child(2) { grid-column: 2; }
@@ -342,6 +351,7 @@
       details:not([open]) > *:not(summary) { display: block; }
       .issue-edits .action-panel { padding: 0; }
       .issue-card { box-shadow: none; break-inside: auto; }
+      .issue-location-panel { background: #fff; border-color: #777; break-inside: avoid; }
       .problem { background: #fff; break-inside: avoid; }
       .issue-card.sev-high, .issue-card.sev-medium, .issue-card.sev-low { background: #fff; }
       thead { display: table-header-group; }
