@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AuditResult 校验与 HTML 渲染的契约测试（送达规范 v1.1）。
+"""AuditResult 校验与 HTML 渲染的契约测试（送达规范 v1.4）。
 
 运行：在技能目录内 `python3 scripts/test_audit_delivery.py`
 本测试**自洽**：只依赖本技能 `scripts/` 内的脚本、schema 与样例，可随技能一起安装。
@@ -1379,6 +1379,32 @@ class AiScorecardTest(unittest.TestCase):
         for label in ("AI 审核表现评分卡", "综合命中率", "综合精确命中率",
                       "按复核级次", "按问题模块", "展开 AI 自查错误记录"):
             self.assertIn(label, html)
+
+
+class DeliveryContractDocumentationTest(unittest.TestCase):
+    """送达版本、JSON-first 命令和展示映射必须在安装包内同步。"""
+
+    def test_v14_contract_versions_and_json_first_terms_are_synchronized(self):
+        skill_root = Path(__file__).resolve().parent.parent
+        repo_root = skill_root.parents[1]
+        spec = (skill_root / "references" / "11-html-delivery-spec.md").read_text(encoding="utf-8")
+        scripts_readme = (skill_root / "scripts" / "README.md").read_text(encoding="utf-8")
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        skills_readme = (repo_root / "skills" / "README.md").read_text(encoding="utf-8")
+        changelog = (repo_root / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+        self.assertEqual("renderer/1.2.4", delivery.RENDERER_VERSION)
+        for content in (spec, scripts_readme, skill, skills_readme, changelog):
+            self.assertIn("v1.4", content)
+        for content in (spec, scripts_readme, skill):
+            self.assertIn("--json-out", content)
+            self.assertIn("JSON 校验", content)
+        self.assertIn("summary.counts.issuesTotal", spec)
+        self.assertIn("issues[].locationSummary", spec)
+        self.assertIn("issues[].materialEvidence[]", spec)
+        self.assertIn("manualConfirmationItems[]", spec)
+        self.assertIn("scope.notCheckedItems[]", spec)
+        self.assertIn("HTML 内嵌", spec)
 
 
 

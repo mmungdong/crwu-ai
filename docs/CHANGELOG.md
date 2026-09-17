@@ -9,6 +9,24 @@
 
 ---
 
+## 2026-09-17 · feat(crwu-audit) · 员工可读报告与 JSON-first 成对交付（送达规范 v1.4 / renderer 1.2.4）
+
+- **员工话问题描述**：`problemDescription` 强制「首句 + 2–4 行明细」两段式；首句 ≤60 字且只说清问题是什么，
+  明细写差异、影响和本次材料落点。规则编号、知识库路径、内部代号、公式串及首句坐标串均由 `validate` 拦截；
+  少于 2 行明细同样拒绝交付。HTML 分行呈现，规则与完整判定链仍默认折叠。
+- **首屏与阅读顺序**：完整 `summary.narrative` 改为按需展开；首屏从现有 JSON 明细确定性生成「优先处理 / 继续核对 /
+  人工确认」三行行动摘要。AI 问题、待人工确认、未检查三张计数卡可直接跳到对应区块；「需要人工确认事项」移动到
+  「AI 检出的问题项」之后，供审核人员连续处理。
+- **问题定位**：问题卡新增醒目的位置面板，先显示 `issues[].locationSummary`，再从
+  `issues[].materialEvidence[]` 去重列出文件名与 locator；修改建议不再被当作发现位置。
+- **JSON-first 与监控一致性**：`render` 新增必填 `--json-out`。执行顺序固定为输入 JSON 校验 → 内存渲染 →
+  HTML 内嵌对象提取 → 渲染态校验 → HTML/配套 JSON 成对写出；输入不合规时返回精确 JSON 路径，二者均不生成。
+  配套 JSON 与 HTML 内嵌 `#audit-result` 解析对象完全一致，后续审核监控与统计直接读取该 JSON。
+- **契约与兼容**：送达规范升至 v1.4、renderer 升至 `renderer/1.2.4`；Schema 仅补展示来源说明，
+  `schemaVersion` 保持 `1.1.0`，未新增业务字段。`SKILL.md`、技能索引、工具 README、样例与测试同批同步。
+- **测试**：契约覆盖描述下限、行动摘要、计数跳转、问题位置去重与转义、区域相邻顺序、JSON 校验硬门禁、
+  HTML/JSON 同源性和版本同步；完整验证结果见本次提交记录。
+
 ## 2026-09-16 · feat(crwu-audit) · 交付 HTML 增「AI 独立发现」标识与分级统计（renderer 1.2.2）
 
 - **位置**：`crwu-audit/scripts/audit_delivery.py`（`RENDERER_VERSION` 1.2.1 → 1.2.2）、

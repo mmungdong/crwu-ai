@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CRWU 审核意见交付工具：AuditResult 校验 + 单文件 HTML 渲染。
 
-实现《CRWU 审核意见 HTML 送达规范 v1.3》
+实现《CRWU 审核意见 HTML 送达规范 v1.4》
 （正文：本技能 references/11-html-delivery-spec.md）：
 
 - AuditResult JSON 是唯一事实源；HTML 仅如实呈现，不新增/删除/合并/改写任何结论；
@@ -10,7 +10,7 @@
 
 用法：
     python3 scripts/audit_delivery.py validate <audit-result.json> [--rendered]
-    python3 scripts/audit_delivery.py render   <audit-result.json> --out <opinion.html>
+    python3 scripts/audit_delivery.py render   <audit-result.json> --out <opinion.html> --json-out <result.json>
 退出码：0 成功；1 校验失败（错误打印到 stderr）。
 """
 
@@ -24,7 +24,7 @@ import re
 import sys
 from pathlib import Path
 
-RENDERER_VERSION = "renderer/1.2.3"
+RENDERER_VERSION = "renderer/1.2.4"
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "template" / "audit-report.html"
 SCHEMA_VERSION_PREFIX = "1."
 
@@ -2632,7 +2632,7 @@ def _cmd_render(args) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="CRWU AuditResult 校验与单文件 HTML 渲染（送达规范 v1.3）")
+    parser = argparse.ArgumentParser(description="CRWU AuditResult 校验与单文件 HTML 渲染（送达规范 v1.4）")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate_parser = subparsers.add_parser("validate", help="校验 AuditResult JSON")
