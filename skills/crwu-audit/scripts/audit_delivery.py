@@ -130,6 +130,7 @@ EXT_DATA_UNAVAILABLE_TEXT = "不可用（未经外部数据核验）"
 EXT_DATA_NOT_FETCHED_TEXT = "未取数"
 EXT_DATA_NO_DEVIATION_TEXT = "无出入（符合）"
 EXT_DATA_UNSPECIFIED_SOURCE_TEXT = "未列明来源"
+SUMMARY_DIGEST_ITEM_LIMIT = 3
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 ABSOLUTE_PATH_PATTERNS = [
@@ -2217,6 +2218,34 @@ def _summary_breakdown_section(rendered_result) -> str:
     return "".join(parts)
 
 
+def _summary_digest_group(label: str, items: list, css_class: str) -> str:
+    """用 JSON 既有标题与计数生成紧凑摘要，不创作新的业务判断。"""
+    visible = items[:SUMMARY_DIGEST_ITEM_LIMIT]
+    parts = ['<article class="summary-action-group {0}">'.format(css_class)]
+    parts.append('<h3><span>{0}</span><strong>{1}</strong></h3>'.format(_text(label), _text(len(items))))
+    if visible:
+        parts.append("<ul>")
+        parts.extend("<li>{0}</li>".format(_text(item.get("title"))) for item in visible)
+        if len(items) > SUMMARY_DIGEST_ITEM_LIMIT:
+            parts.append("<li>{0}</li>".format(
+                _text("另 {0} 项".format(len(items) - SUMMARY_DIGEST_ITEM_LIMIT))))
+        parts.append("</ul>")
+    else:
+        parts.append('<p class="empty">{0}</p>'.format(_text(EMPTY_TEXT)))
+    parts.append("</article>")
+    return "".join(parts)
+
+
+def _summary_action_digest(issues: list, manual_items: list) -> str:
+    high = [item for item in issues if item.get("severity") == "high"]
+    other = [item for item in issues if item.get("severity") != "high"]
+    return '<div class="summary-action-digest">{0}{1}{2}</div>'.format(
+        _summary_digest_group("优先处理", high, "priority"),
+        _summary_digest_group("继续核对", other, "follow-up"),
+        _summary_digest_group("人工确认", manual_items, "manual"),
+    )
+
+
 def render(result: dict, print_trail: bool = None) -> str:
     """确定性渲染：文本节点只来自受控标签或输入数据，不生成新的业务句子。"""
     rendered_result = json.loads(json.dumps(result, ensure_ascii=False))
@@ -2303,18 +2332,26 @@ def render(result: dict, print_trail: bool = None) -> str:
     parts.append('<section id="summary">')
     parts.append("<h2>{0}</h2>".format(_text("本次 AI 审核结论")))
     parts.append('<p class="banner">{0}</p>'.format(_text(OVERALL_LABEL.get(summary.get("overallDecision"), summary.get("overallDecision")))))
-    parts.append('<p>{0}</p>'.format(_span("narrative", summary.get("narrative"))))
     parts.append('<div class="summary-kpis">')
-    for label, value, cls in (
-        ("AI 检出问题", counts.get("issuesTotal"), "danger"),
-        ("待人工确认", counts.get("pendingConfirmation"), "warning"),
-        ("未检查项", counts.get("notChecked"), "neutral"),
-        ("命中率", _format_rate(review_metrics["hitRate"]) if review_items else "数据不足", "primary"),
-        ("实际未落实", unresolved_claims, "danger"),
+    for label, value, cls, href in (
+        ("AI 检出问题", counts.get("issuesTotal"), "danger", "#actionable-issues"),
+        ("待人工确认", counts.get("pendingConfirmation"), "warning", "#manual-confirmation-items"),
+        ("未检查项", counts.get("notChecked"), "neutral", "#not-checked-items"),
+        ("命中率", _format_rate(review_metrics["hitRate"]) if review_items else "数据不足", "primary", None),
+        ("实际未落实", unresolved_claims, "danger", None),
     ):
-        parts.append('<div class="metric-card {0}"><span>{1}</span><strong>{2}</strong></div>'.format(
-            cls, _text(label), _text(value)))
+        if href:
+            parts.append(
+                '<a class="metric-card metric-link {0}" href="{1}"><span>{2}</span><strong>{3}</strong></a>'.format(
+                    cls, href, _text(label), _text(value)))
+        else:
+            parts.append('<div class="metric-card {0}"><span>{1}</span><strong>{2}</strong></div>'.format(
+                cls, _text(label), _text(value)))
     parts.append("</div>")
+    parts.append(_summary_action_digest(sorted_issues, manual_items))
+    parts.append(
+        '<details class="summary-narrative-details"><summary>{0}</summary><p>{1}</p></details>'.format(
+            _text("查看完整 AI 审核说明"), _span("narrative", summary.get("narrative"))))
     parts.append(_header_hit_rate_caliber(rendered_result.get("reviewComparison") or {}))
     parts.append('<details class="summary-details"><summary>{0}</summary>{1}</details>'.format(
         _text("展开问题分布与核验概览"), _summary_breakdown_section(rendered_result)))

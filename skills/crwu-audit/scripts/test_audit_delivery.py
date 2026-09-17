@@ -580,6 +580,46 @@ class AuditResultRenderTest(unittest.TestCase):
         for label in ("AI 检出问题", "待人工确认", "未检查项", "精确命中率", "实际未落实"):
             self.assertIn(label, document)
 
+    def test_summary_narrative_is_folded_and_action_digest_uses_json_facts(self):
+        result = load_sample()
+        document = delivery.render(result)
+        summary_start = document.find('id="summary"')
+        summary_end = document.find('</section>', summary_start)
+        summary = document[summary_start:summary_end]
+        narrative = result["summary"]["narrative"]
+        self.assertIn('class="summary-action-digest"', summary)
+        self.assertIn("优先处理", summary)
+        self.assertIn("继续核对", summary)
+        self.assertIn("人工确认", summary)
+        self.assertIn(result["issues"][0]["title"], summary)
+        self.assertIn(result["manualConfirmationItems"][0]["title"], summary)
+        self.assertRegex(
+            summary,
+            re.compile(
+                r'<details class="summary-narrative-details"><summary>查看完整 AI 审核说明</summary>.*?'
+                + re.escape(narrative),
+                re.S,
+            ),
+        )
+
+    def test_action_kpis_link_to_their_json_backed_sections(self):
+        document = delivery.render(load_sample())
+        for href, label, value in (
+            ("#actionable-issues", "AI 检出问题", 2),
+            ("#manual-confirmation-items", "待人工确认", 1),
+            ("#not-checked-items", "未检查项", 1),
+        ):
+            self.assertRegex(
+                document,
+                re.compile(
+                    r'<a class="metric-card metric-link[^"]*" href="{0}">.*?'
+                    r'<span>{1}</span><strong>{2}</strong>'.format(
+                        re.escape(href), re.escape(label), value
+                    ),
+                    re.S,
+                ),
+            )
+
     def test_issue_reasoning_is_folded_behind_explicit_control(self):
         document = delivery.render(with_structured_review_comparison())
         self.assertIn('class="issue-evidence"', document)
