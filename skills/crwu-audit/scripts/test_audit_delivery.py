@@ -31,10 +31,10 @@ REGION_ORDER = [
     "project-info",
     "summary",
     "actionable-issues",
+    "manual-confirmation-items",
     "external-data-verification",
     "review-comparison",
     "ai-scorecard",
-    "manual-confirmation-items",
     "audit-basis",
     "scope-and-not-checked",
     "professional-trail",
@@ -517,6 +517,27 @@ class AuditResultRenderTest(unittest.TestCase):
             self.assertNotEqual(-1, index, "缺少区域 {0}".format(region))
             positions.append(index)
         self.assertEqual(sorted(positions), positions, "区域顺序必须符合 §3 交付结构")
+
+    def test_manual_confirmation_directly_follows_ai_issues_in_body_and_catalog(self):
+        document = delivery.render(load_sample())
+        body = re.search(r'<main id="audit-report">(.*?)</main>', document, re.S).group(1)
+        self.assertRegex(
+            body,
+            re.compile(
+                r'<section id="actionable-issues">.*?</section>\s*'
+                r'<section id="manual-confirmation-items">',
+                re.S,
+            ),
+        )
+        catalog = re.search(r'<nav class="report-catalog".*?</nav>', document, re.S).group(0)
+        self.assertLess(
+            catalog.find('href="#actionable-issues"'),
+            catalog.find('href="#manual-confirmation-items"'),
+        )
+        self.assertLess(
+            catalog.find('href="#manual-confirmation-items"'),
+            catalog.find('href="#external-data-verification"'),
+        )
 
     def test_renderer_uses_standalone_template_with_sidebar_catalog(self):
         self.assertTrue(TEMPLATE_PATH.is_file(), "HTML 模板必须独立存放在 skill/template/")

@@ -2398,20 +2398,20 @@ def render(result: dict, print_trail: bool = None) -> str:
         parts.append('<p class="empty">{0}</p>'.format(_text(EMPTY_TEXT)))
     parts.append("</section>")
 
-    # 04 AI 外部数据核验
-    parts.append(_external_data_section(rendered_result.get("externalDataVerification")))
-
-    # 05 人工复核对照
-    parts.append(_review_comparison_section(comparison))
-
-    # 06 AI 审核表现评分卡（按明细重算）
-    parts.append(_scorecard_section(comparison, result.get("selfAuditErrors") or []))
-
-    # 07 需要人工确认事项
+    # 04 需要人工确认事项
     parts.append('<section id="manual-confirmation-items">')
     parts.append("<h2>{0}</h2>".format(_text("需要人工确认事项")))
     parts.append(_list_block(manual_items, _manual_item, empty_text=EMPTY_TEXT))
     parts.append("</section>")
+
+    # 05 AI 外部数据核验
+    parts.append(_external_data_section(rendered_result.get("externalDataVerification")))
+
+    # 06 人工复核对照
+    parts.append(_review_comparison_section(comparison))
+
+    # 07 AI 审核表现评分卡（按明细重算）
+    parts.append(_scorecard_section(comparison, result.get("selfAuditErrors") or []))
 
     # 08 本次审核依据（默认收起）
     parts.append('<section id="audit-basis">')
@@ -2455,6 +2455,7 @@ def render(result: dict, print_trail: bool = None) -> str:
     parts.append("</tbody></table>")
     parts.append("<h4>{0}</h4>".format(_text("检查域")))
     parts.append("<ul>" + "".join("<li>{0}</li>".format(_text(domain)) for domain in (scope.get("checkDomains") or [])) + "</ul>")
+    parts.append('<div id="not-checked-items">')
     parts.append("<h4>{0}</h4>".format(_text("未检查项")))
     not_checked = scope.get("notCheckedItems") or []
     if not_checked:
@@ -2468,6 +2469,7 @@ def render(result: dict, print_trail: bool = None) -> str:
         parts.append("</tbody></table>")
     else:
         parts.append('<p class="empty">{0}</p>'.format(_text(EMPTY_TEXT)))
+    parts.append("</div>")
     limitations = scope.get("limitations") or []
     if limitations:
         parts.append("<h4>{0}</h4>".format(_text("能力边界")))
