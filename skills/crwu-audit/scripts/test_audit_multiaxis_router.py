@@ -56,11 +56,15 @@ EXPECTED_REGISTRY_ROWS = (
     ("asset", "房地产", "crwu-audit-asset-realestate", "available", "load"),
     ("asset", "机器设备", "crwu-audit-asset-equipment", "available", "load"),
     ("public", "通用准则", "crwu-dev-audit-public-general-standards", "available", "load always"),
+    ("public", "审核意见屏蔽", "crwu-audit-output-filter", "available", "load always; postprocess before phase1 freeze"),
 )
 
 # Public-axis capabilities are report-shape independent. Every one of them must be
 # reachable from the union algorithm without depending on any professional axis label.
-UNCONDITIONAL_PUBLIC_SKILLS = ("crwu-dev-audit-public-general-standards",)
+UNCONDITIONAL_PUBLIC_SKILLS = (
+    "crwu-dev-audit-public-general-standards",
+    "crwu-audit-output-filter",
+)
 
 # 能力型公共轴技能：有各自的触发条件，不得被写成恒装配。
 CONDITIONAL_PUBLIC_SKILLS = ("crwu-audit-datacheck", "crwu-audit-external-data")
@@ -119,6 +123,7 @@ _REQUIRED_SIBLINGS = (
     "crwu-audit-biz-asset-operation",
     "crwu-dev-audit-public-general-standards",
     "crwu-audit-datacheck",
+    "crwu-audit-output-filter",
     "crwu-dev-audit-optimize",
     "crwu-audit-skill-maintainer",
     "crwu-dws",
@@ -278,6 +283,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
                 "crwu-audit-skill-maintainer",
                 "crwu-audit-datacheck",
                 "crwu-audit-external-data",
+                "crwu-audit-output-filter",
                 "crwu-dev-audit-public-general-standards",
             }
         )
@@ -326,6 +332,11 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             router_text,
             "router SKILL.md must name the unconditional public skill in its public-capability step",
         )
+        self.assertIn(
+            "crwu-audit-output-filter",
+            router_text,
+            "router SKILL.md must name the unconditional output-filter skill",
+        )
 
     @_requires_skill_tree
     def test_public_skill_directory_and_references_exist(self):
@@ -351,6 +362,25 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
                     reference_path.is_file(),
                     f"{skill} is missing required reference: {reference}",
                 )
+
+    @_requires_skill_tree
+    def test_output_filter_uses_only_the_runtime_checklist_before_phase1_freeze(self):
+        skill_dir = SKILLS_ROOT / "crwu-audit-output-filter"
+        entry_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        assembly_text = (skill_dir / "references/01-kb-assembly.md").read_text(encoding="utf-8")
+        router_text = (AUDIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("06-规则库/04-AI审核意见屏蔽/02-屏蔽清单", assembly_text)
+        self.assertNotIn("06-规则库/04-AI审核意见屏蔽/01-维护规则", assembly_text)
+        self.assertIn("候选审核意见汇总完成后", entry_text)
+        self.assertIn("阶段一冻结前", entry_text)
+        self.assertIn("匹配标识", entry_text)
+        self.assertIn("不屏蔽例外", entry_text)
+        self.assertIn("不进入正式审核结果", entry_text)
+
+        filter_pos = router_text.index("crwu-audit-output-filter")
+        freeze_pos = router_text.index("阶段一独立汇总、过滤并冻结")
+        self.assertLess(filter_pos, freeze_pos, "output filter must run before the phase-one freeze")
 
     @_requires_skill_tree
     def test_external_data_skill_is_registered_and_conditionally_dispatched(self):

@@ -150,6 +150,7 @@ _REQUIRED_SIBLINGS = (
     "crwu-audit-biz-asset-operation",
     "crwu-dev-audit-public-general-standards",
     "crwu-audit-datacheck",
+    "crwu-audit-output-filter",
     "crwu-dev-audit-optimize",
     "crwu-audit-skill-maintainer",
     "crwu-dws",

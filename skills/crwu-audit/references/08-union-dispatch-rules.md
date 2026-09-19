@@ -5,7 +5,7 @@
 
 ## 分发算法
 
-先按 02–06 得到各轴全部标签，再逐项查询 07。`available` 技能加入该轴候选列表；`pending` 或未注册标签按 10 逐标签写 gap；`profile-only` 只保留画像。公共能力独立判定，且每个公共能力有各自的触发条件：**通用准则类与报告形态、对象、业务、方法、监管均无关，恒装配**；表格勾稽类按材料是否含表格触发；外部数据核验类按 `methods[]` 是否命中 `收益法`/`市场法` 触发（是否真正取数再由该能力按知识库 `M-外部数据核验` 表 A 三条自行判定）。
+先按 02–06 得到各轴全部标签，再逐项查询 07。`available` 技能加入该轴候选列表；`pending` 或未注册标签按 10 逐标签写 gap；`profile-only` 只保留画像。公共能力独立判定，且每个公共能力有各自的触发条件：**通用准则类与审核意见输出过滤均与报告形态、对象、业务、方法、监管无关，恒装配**；表格勾稽类按材料是否含表格触发；外部数据核验类按 `methods[]` 是否命中 `收益法`/`市场法` 触发（是否真正取数再由该能力按知识库 `M-外部数据核验` 表 A 三条自行判定）。输出过滤能力只在候选 findings 归并完成后、阶段一冻结前执行，不参与专业检查。
 
 ```text
 scope_skills   = available_skills(scope_types[])
@@ -14,6 +14,7 @@ business_skills = available_skills(business_types[])
 method_skills  = available_skills(methods[])
 overlay_skills = available_skills(overlays[])
 public_skills  = [crwu-dev-audit-public-general-standards]        # 恒装配：报告披露 + 程序质控
+               + [crwu-audit-output-filter]                      # 恒装配：汇总后、冻结前按实时清单过滤正式输出
                + [crwu-audit-datacheck] when tabular materials exist
                + [crwu-audit-external-data] when methods include 收益法 or 市场法
 

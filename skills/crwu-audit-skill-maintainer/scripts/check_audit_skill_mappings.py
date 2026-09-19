@@ -89,6 +89,7 @@ NON_LEAF_SKILLS = {
     "crwu-dev-audit-optimize",
     "crwu-audit-skill-maintainer",
     "crwu-audit-datacheck",
+    "crwu-audit-output-filter",
 }
 
 KNOWN_SKILL_SUFFIXES = {
