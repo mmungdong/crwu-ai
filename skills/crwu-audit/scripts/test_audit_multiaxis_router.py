@@ -262,6 +262,55 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "成本法不得误装资产基础法专项清单",
         )
 
+    def test_financial_reporting_coverage_uses_business_trigger(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+        financial_business_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(r"\|\s*business\s*\|\s*`财务报告`\s*\|", line)
+        ]
+        financial_overlay_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(r"\|\s*overlay\s*\|\s*`财务报告`\s*\|", line)
+        ]
+
+        self.assertEqual(
+            1,
+            len(financial_business_rows),
+            "财务报告覆盖规则必须由已存在的 business=财务报告 标签装配",
+        )
+        self.assertIn(
+            "04-监管覆盖/财务报告/",
+            financial_business_rows[0],
+            "财务报告业务映射必须装配财务报告覆盖层规则",
+        )
+        self.assertEqual(
+            [],
+            financial_overlay_rows,
+            "overlays[] 不会产生财务报告标签，不得保留不可达的 overlay 映射",
+        )
+
+        financial_skill_root = SKILLS_ROOT / "crwu-audit-biz-financial-reporting"
+        if not financial_skill_root.is_dir():
+            self.skipTest("未安装财务报告业务技能：跳过其源仓执行契约检查")
+        skill_text = (financial_skill_root / "SKILL.md").read_text(encoding="utf-8")
+        review_text = (financial_skill_root / "references/02-review-focus.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "RULE-01-02-617~629",
+            skill_text,
+            "财务报告业务技能必须执行已下载的财务报告覆盖层规则",
+        )
+        self.assertIn(
+            "04-监管覆盖/财务报告/财务报告覆盖层规则",
+            review_text,
+            "财务报告业务审核关注点必须声明覆盖层规则的实际库内来源",
+        )
+
     def test_union_dispatch_rules_load_four_skills_for_realestate_liquidation_auction(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")

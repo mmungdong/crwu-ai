@@ -49,9 +49,10 @@ python3 scripts/kb_tool.py validate --skill-root <skills 安装根> --forbid-lit
   细分对象与子业务在已下载目录包内二次选用，不各建技能。
 
 **2026-09-16 起，下载清单的第三个来源是 router 的分发规则**：方法轴技能（7 个）与覆盖层技能（4 个）
-均为 `pending`，其知识库目录由 router 按本次 `methods[]` / `overlays[]` 的命中项追加
+均为 `pending`，其知识库目录由 router 按本次 `methods[]` / `overlays[]` 的命中项追加；财务报告补充规则按
+`business_types[]=财务报告` 追加
 （映射唯一事实源：`crwu-audit` 技能的 `references/08-union-dispatch-rules.md`
-§「方法层与覆盖层的库内装配映射」）。**`pending` 表示能力未落地，不表示内容可以不装**；
+§「方法层、覆盖层与财务报告补充规则的库内装配映射」）。**`pending` 表示能力未落地，不表示内容可以不装**；
 因此该分发规则文件在本工具的装配缺口检查中**被承认为合法装配来源**。
 
 映射一致性（registry ↔ classification ↔ 真实技能目录 ↔ 最新知识库目录）

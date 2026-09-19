@@ -32,7 +32,7 @@ description: Use when crwu-audit has selected the canonical 财务报告 busines
 ## 执行与输出
 
 1. 用 `00-applicability.md` 核对画像证据，识别全部 `business_subroutes[]`（含证据、`confidence`、`review_required`），不改变 router 已确定的资产标签。
-2. 用本次 DWS manifest 验证 `01-kb-assembly.md` 的一级根已递归下载；缺失项按库内层级路径和原因记 gap，对应检查不引用、不编造。
-3. **先执行一级共用层**（`共同审核点`，若存在且非占位），再按 `02-review-focus.md` 叠加每个命中子业务的 `01-业务通用审核要点`。
+2. 用本次 DWS manifest 验证 `01-kb-assembly.md` 的一级根，以及 router 按 `business_types[]=财务报告` 追加的财务报告补充规则均已下载；缺失项按库内层级路径和原因记 gap，对应检查不引用、不编造。
+3. **先执行一级共用层**（`共同审核点`，若存在且非占位），再按 `02-review-focus.md` 叠加每个命中子业务的 `01-业务通用审核要点`，最后按适用条件执行财务报告覆盖层 `RULE-01-02-617~629`；不适用条目明确记 `不适用`，不得因目录已下载而强行套用。
 4. 必检项逐项输出 `符合/不符合/不适用/无法核验`；历史高频复核问题逐项输出 `涉及/未涉及/无法核验`；字段要求见共同约束 §7。
 5. 输出业务专业 findings；每条带 `source_skills[]`（至少含 `crwu-audit-biz-financial-reporting`）与本次下载证据（文件、行号、库内路径、运行时 `nodeId`、`exportedAt`）。

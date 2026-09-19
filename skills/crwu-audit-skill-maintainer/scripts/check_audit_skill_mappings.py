@@ -757,9 +757,9 @@ def inspect_method_layer_assembly(
         "06-规则库/清单-M-收益法/",
         "06-规则库/清单-M-资产基础法/",
         "06-规则库/易错点库/",
-        # 2026-09-16：覆盖层 5 层此前完全不在监视范围。overlay 技能 pending 期间，
-        # 覆盖层规则须由 router 按 overlays[] 命中项装配（见 crwu-audit references/08），
-        # 无装载方即为真实缺口，必须在门禁暴露。
+        # 2026-09-16：这 5 个目录此前完全不在监视范围。四类监管 overlay 在技能 pending
+        # 期间由 router 按 overlays[] 装配；财务报告目录按 business_types[]=财务报告装配
+        # （见 crwu-audit references/08）。无装载方即为真实缺口，必须在门禁暴露。
         "04-监管覆盖/国资/",
         "04-监管覆盖/证券/",
         "04-监管覆盖/金融国资/",

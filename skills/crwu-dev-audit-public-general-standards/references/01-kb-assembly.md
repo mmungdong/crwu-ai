@@ -58,7 +58,7 @@
 ## 4. 不装配的内容
 
 - 机构内部制度文本：不在本技能范围（机构层面制度对照属部署方与知识库其他目录）。
-- 方法与监管覆盖正文：属 method / overlay 轴；其库内目录由 router 按本次 `methods[]`/`overlays[]` 命中项追加（映射唯一事实源见 `crwu-audit/references/08-union-dispatch-rules.md` §「方法层与覆盖层的库内装配映射」），本技能只登记公共准则层与上表四项的寻址键。
+- 方法与监管覆盖正文：属 method / overlay 轴；财务报告覆盖规则是按 `business_types[]=财务报告` 追加的业务补充包。它们均由 router 按命中标签动态装配，本技能只登记公共准则层与上表四项的寻址键。
 - 表格勾稽口径：属 public 轴 `crwu-audit-datacheck`，与工程执行契约一并由其装配。
 
 ## 5. 失败与出处

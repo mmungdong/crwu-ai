@@ -29,6 +29,8 @@
 
 关联索引为空文档时按内容缺口处理（见 `02-review-focus.md`）。二级分类结果按 `business_subroutes[]` 返回，只并入本次审核运行记录，不回写 router 已冻结的一级 `route_profile`。
 
-## 3. 其他轴装配
+## 3. 财务报告补充规则与其他轴装配
 
-全局执行契约、方法正文、监管正文与表格勾稽由 router 的其他轴（public / method / overlay）装配，不复制进本业务映射；本技能只登记本一级根的路径键。
+本技能仍只登记一个一级业务根。财务报告覆盖规则由 router 在 `business_types[]=财务报告` 时作为业务补充规则动态追加，不复制为本表第二个一级根，也不虚构同名 overlay；本技能按 `02-review-focus.md` 执行本次 manifest 中已经验证的补充规则。
+
+全局执行契约、方法正文、其余监管正文与表格勾稽仍由 router 的 public / method / overlay 轴装配，不复制进本业务映射。
