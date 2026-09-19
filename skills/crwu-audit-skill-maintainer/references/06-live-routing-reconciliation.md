@@ -63,12 +63,12 @@
 
 | 库内层级路径（模式） | 期望承载方 | 未覆盖时的判定 |
 | --- | --- | --- |
-| `06-规则库/清单-M-市场法/` | 声称可用市场法的叶子装配键（现为 `crwu-audit-asset-realestate` 装配表 §3.1②） | `ASSEMBLY_GAP_METHOD_LAYER` |
+| `06-规则库/清单-M-市场法/` | router 的 `method=市场法 ∧ asset=房地产` 跨轴条件映射 | `ASSEMBLY_GAP_METHOD_LAYER` |
 | `06-规则库/清单-M-成本法/` | router 的 `method=成本法` 独立装配映射；不得与资产基础法共用清单 | `ASSEMBLY_GAP_METHOD_LAYER` |
-| `03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/` | 同上（现为 §3.1①） | `ASSEMBLY_GAP_METHOD_LAYER` |
-| `03-评估方法/01-市场法/`、`05-审核要点/` | 同上（现为 §3.1③④） | `ASSEMBLY_GAP_METHOD_LAYER` |
+| `03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/` | router 对应方法映射中的准则条目 | `ASSEMBLY_GAP_METHOD_LAYER` |
+| `03-评估方法/01-市场法/`、`05-审核要点/` | router 的 `method=市场法` 与“任一方法命中”映射 | `ASSEMBLY_GAP_METHOD_LAYER` |
 | `03-评估方法/02-收益法/`、`03-资产基础法/`、`04-方法选择/` | 采用对应方法作结论的项目，其命中叶子装配键（**当前未指定 → 已知缺口，须登记**） | `ASSEMBLY_GAP_METHOD_LAYER`（已知待处理） |
-| `06-规则库/易错点库/` | 公共轴或 `PITFALL_LIBRARY` 类装配键（现为 §3.1⑤） | `ASSEMBLY_GAP_METHOD_LAYER` |
+| `06-规则库/易错点库/` | 公共通用准则技能的恒装配路径 | `ASSEMBLY_GAP_METHOD_LAYER` |
 
 判定口径：**按目录前缀在全部叶子 `references/01-kb-assembly.md`（及 `00-KB装配表.md`）的路径键集合里查找覆盖**；
 覆盖可以是该目录本身，也可以是其中任一单文件路径键。**只看键集合，不看正文**（正文由 crwu-dws 实时下载）。

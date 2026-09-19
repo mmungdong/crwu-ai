@@ -355,6 +355,72 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "收益法且资产类型为企业价值时必须装配企业价值收益法专项清单",
         )
 
+    def test_market_method_uses_generic_rules_and_realestate_adds_specialized_checklist(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+        market_method_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(r"\|\s*method\s*\|\s*`市场法`\s*\|", line)
+        ]
+        realestate_market_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(
+                r"\|\s*method\+asset\s*\|\s*`市场法`\s*∧\s*`房地产`\s*\|",
+                line,
+            )
+        ]
+
+        self.assertEqual(1, len(market_method_rows), "市场法必须有一条通用方法映射")
+        market_row = market_method_rows[0]
+        self.assertIn(
+            "03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/02-市场法",
+            market_row,
+            "所有市场法项目都必须装配市场法准则条目",
+        )
+        self.assertIn(
+            "03-评估方法/01-市场法/",
+            market_row,
+            "所有市场法项目都必须装配通用市场法说明",
+        )
+        self.assertNotIn(
+            "06-规则库/清单-M-市场法/",
+            market_row,
+            "通用市场法映射不得无条件装配房地产专项清单",
+        )
+        self.assertEqual(
+            1,
+            len(realestate_market_rows),
+            "房地产市场法专项清单必须有独立的 method+asset 条件映射",
+        )
+        self.assertIn(
+            "06-规则库/清单-M-市场法/",
+            realestate_market_rows[0],
+            "市场法且资产类型为房地产时必须追加不动产市场法专项清单",
+        )
+
+        realestate_assembly = (
+            SKILLS_ROOT / "crwu-audit-asset-realestate/references/01-kb-assembly.md"
+        )
+        if not realestate_assembly.is_file():
+            self.skipTest("未安装房地产资产技能：跳过方法层所有权检查")
+        assembly_text = realestate_assembly.read_text(encoding="utf-8")
+        obsolete_keys = (
+            "VALUATION_METHOD_INTERFACE",
+            "MARKET_METHOD_CHECKLIST",
+            "MARKET_METHOD_NOTES",
+            "METHOD_DEFECT_LIST",
+            "PITFALL_LIBRARY",
+        )
+        remaining = [key for key in obsolete_keys if f"`{key}`" in assembly_text]
+        self.assertEqual(
+            [],
+            remaining,
+            f"房地产资产叶子不得无条件持有方法层或公共层装配键: {remaining}",
+        )
+
     def test_union_dispatch_rules_load_four_skills_for_realestate_liquidation_auction(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
