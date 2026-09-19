@@ -9,6 +9,23 @@
 
 ---
 
+## 2026-09-19 · refactor(skills) · 审核族前缀归组：维护器移入 `crwu-dev-audit-*`，通用准则回到 `crwu-audit-*`
+
+- **改名（`git mv` 保历史）**：`skills/crwu-audit-skill-maintainer/` → `skills/crwu-dev-audit-skill-maintainer/`；
+  `skills/crwu-dev-audit-public-general-standards/` → `skills/crwu-audit-public-general-standards/`。
+  归组后 `crwu-audit-*` = 运行时审核能力（router / asset / biz / datacheck / external-data / output-filter / public 轴通用准则），
+  `crwu-dev-audit-*` = 开发维护侧成员（optimize / skill-maintainer）。
+- **影响命令/门禁**：`kb_tool.py validate` 与 `check_audit_skill_mappings.py` 的调用路径随技能目录改名；
+  映射检查器 `NON_LEAF_SKILLS`、registry 的 public 行、三个契约测试名单（`_REQUIRED_SIBLINGS`、公共轴恒装配名单、
+  dev 前缀目录一致性用例）同批同步——只 `mv` 不同步会让 public 技能与维护器同时落入 `LEGACY_COMBINED_SKILL`，
+  并让三套契约测试**静默 skip**（实测 router 20→9、maintainer 63→7、dws 12→12 通过用例被跳过）。
+- **同步面**：技能自名与 frontmatter、`07-skill-registry.md`、`08-union-dispatch-rules.md`、router `SKILL.md`、
+  `12-leaf-common-contract.md`、`10-capability-gap-proposal.md`、叶子与 optimize 的引用、两个门禁脚本常量、
+  三个契约测试、`skills/AGENTS.md`、`skills/README.md`、根 README（中英）、现行设计文档与任务归口备忘。
+  带日期的历史记录（变更纪要旧条目、评审记录、`docs/v0.0.1/superpowers/plans|specs/*`）按约定不回改。
+- **运行时**：源仓改名不改变已安装副本；需由安装流程（`crwu-init`）或 skills-manager 同步新目录名并移除旧名，
+  否则 router 会加载不到 `crwu-audit-public-general-standards`（通用准则能力静默缺失）。
+
 ## 2026-09-18 · feat(crwu-audit) · 最终 AuditResult 自动回传钉钉团队空间
 
 - **固定目标门禁**：仅精确匹配组织 `中瑞世联资产评估集团有限公司`、团队空间

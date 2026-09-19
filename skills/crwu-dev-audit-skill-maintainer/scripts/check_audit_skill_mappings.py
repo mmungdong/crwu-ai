@@ -78,8 +78,9 @@ AXIS_DISPATCH_INPUT = {"asset": "asset_skills", "business": "business_skills"}
 # Concrete skill names only: excludes wildcards (crwu-audit-asset-*) and placeholders
 # (crwu-audit-<axis>-<label>) and longer identifiers such as design-crwu-audit-skills.md.
 # 两组前缀都认：审核族 `crwu-audit-*` 与开发/维护侧 `crwu-dev-audit-*`
-# （2026-09-16 改名：optimize / public-general-standards 移至 crwu-dev-audit-；
-#  若只认前者，路由正文里这两个名字会连 token 都提不出来 → R4 静默漏检）。
+# （2026-09-16 先把 optimize / public-general-standards 移至 crwu-dev-audit-，2026-09-19
+#  归组调整：public-general-standards 回到 crwu-audit-、维护器移入 crwu-dev-audit-；
+#  若只认前者，路由正文里的 dev 成员会连 token 都提不出来 → R4 静默漏检）。
 _SKILL_TOKEN_RE = re.compile(r"(?<![a-z0-9-])crwu-(?:dev-)?audit-[a-z0-9][a-z0-9-]*(?![a-z0-9*<-])")
 _REFERENCE_TOKEN_RE = re.compile(r"(?<![0-9a-z-])(\d\d-[a-z0-9-]+\.md)")
 # Skills that are deliberately not axis leaves (router, maintainers, cross-axis
@@ -87,7 +88,7 @@ _REFERENCE_TOKEN_RE = re.compile(r"(?<![0-9a-z-])(\d\d-[a-z0-9-]+\.md)")
 NON_LEAF_SKILLS = {
     "crwu-audit",
     "crwu-dev-audit-optimize",
-    "crwu-audit-skill-maintainer",
+    "crwu-dev-audit-skill-maintainer",
     "crwu-audit-datacheck",
     "crwu-audit-output-filter",
 }
@@ -1690,7 +1691,7 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
     lines = [
         "# 知识库 ↔ Skill 映射校准表",
         "",
-        "> 本表由 `crwu-audit-skill-maintainer` 在每次 `audit` 后重新生成，供人工一眼查看映射现状。",
+        "> 本表由 `crwu-dev-audit-skill-maintainer` 在每次 `audit` 后重新生成，供人工一眼查看映射现状。",
         "> **事实源**：知识库最新目录（经 `crwu-dws` 实时拉取）+ `crwu-audit/references/07-skill-registry.md` + `skills/` 真实目录。",
         "> 本表是**只读派生视图**：不要手工改状态列；不一致时重新校准，不要手改。",
         "",

@@ -1,6 +1,6 @@
 # 叶子技能共同约束（资产轴 / 业务轴通用）
 
-| 版本 | v1.0 | 状态 | 2026-09-10 定稿 | 维护 | crwu-audit + crwu-audit-skill-maintainer |
+| 版本 | v1.0 | 状态 | 2026-09-10 定稿 | 维护 | crwu-audit + crwu-dev-audit-skill-maintainer |
 | --- | --- | --- | --- | --- |
 
 > 本文件是**所有 `crwu-audit-asset-*` 与 `crwu-audit-biz-*` 叶子**的共同约束：轴边界的公共部分只在这里写一份，叶子不再各自复述，避免同类规则在多个技能里漂移。

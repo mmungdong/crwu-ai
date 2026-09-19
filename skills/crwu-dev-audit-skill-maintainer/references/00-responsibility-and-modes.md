@@ -8,8 +8,8 @@
 
 | 前缀 | 成员 | 说明 |
 | --- | --- | --- |
-| `crwu-audit-*` | 审核族：`crwu-audit`（router）、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、`crwu-audit-external-data`、`crwu-audit-skill-maintainer` | 运行时与维护器同在审核族内 |
-| `crwu-dev-audit-*` | 开发/维护侧成员：`crwu-dev-audit-optimize`、`crwu-dev-audit-public-general-standards` | 2026-09-16 从 `crwu-audit-*` 迁入，便于按前缀区分维护对象 |
+| `crwu-audit-*` | 审核族：`crwu-audit`（router）、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、`crwu-audit-external-data`、`crwu-audit-output-filter`、`crwu-audit-public-general-standards` | 运行时审核能力（含 public 轴恒装配能力）同在审核族内 |
+| `crwu-dev-audit-*` | 开发/维护侧成员：`crwu-dev-audit-optimize`、`crwu-dev-audit-skill-maintainer` | 2026-09-19 归组调整：public 轴通用准则能力回到 `crwu-audit-*`，维护器由 `crwu-audit-*` 移入本组，便于按前缀区分维护对象 |
 
 - **两组前缀都必须被门禁扫描**：`kb_tool.py validate` 的"三不写"实时协议 lint 与 `check_audit_skill_mappings.py` 的装配路径键/frontmatter/真实目录解析都按这两组前缀收目录；只改其中一处会让另一个前缀下的技能**静默掉出**校验范围。
 - 改名/迁移时的最低同步面：技能自身 frontmatter 与正文自名、`crwu-audit/references/07-skill-registry.md`、`08-union-dispatch-rules.md`、router `SKILL.md`、叶子里的技能名引用、本目录的门禁常量与名单、三个契约测试，以及源仓技能清单/现行设计/变更纪要；带日期的历史记录不回改。

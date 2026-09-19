@@ -299,7 +299,7 @@ make test
 make build
 
 # Validate every Skill and its self-containment contract
-python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py \
+python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py \
   validate --skill-root skills
 ```
 

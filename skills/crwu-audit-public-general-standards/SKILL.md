@@ -1,5 +1,5 @@
 ---
-name: crwu-dev-audit-public-general-standards
+name: crwu-audit-public-general-standards
 description: Use when crwu-audit has selected the public 通用准则 capability for report-disclosure and procedure/quality-control review.
 ---
 
@@ -41,5 +41,5 @@ description: Use when crwu-audit has selected the public 通用准则 capability
 3. 用本次 DWS manifest 验证 `01-kb-assembly.md` 所需文件；缺失项按路径和原因记录 gap，对应检查不引用、不编造。
 4. 按 `02-review-focus.md` 分别审核报告、评估说明、测算明细表；报告披露层与程序质控层各自独立出条目状态，不以"未发现问题"笼统概括。
 5. 索引卡类文件**不构成规则条目**，不得作为引用依据；模板参考类文件只做格式基线对照，判定以准则正文条款为准。
-6. 输出通用准则层 findings；每条均带 `source_skills[]`，其中至少包含 `crwu-dev-audit-public-general-standards`。相同事实由其他技能共同支持时保留全部来源，冲突时并列交人工复核。
+6. 输出通用准则层 findings；每条均带 `source_skills[]`，其中至少包含 `crwu-audit-public-general-standards`。相同事实由其他技能共同支持时保留全部来源，冲突时并列交人工复核。
 7. 按本次 DWS 执行契约输出证据与修改建议；出处包含本次下载文件、实际行号、库内路径、本次运行返回的 `nodeId` 和 `exportedAt`（运行时值不写回本技能）。

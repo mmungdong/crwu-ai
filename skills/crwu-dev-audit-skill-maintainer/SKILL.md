@@ -1,5 +1,5 @@
 ---
-name: crwu-audit-skill-maintainer
+name: crwu-dev-audit-skill-maintainer
 description: Use when auditing/inventorying, creating, repairing, or remapping crwu-audit asset and biz skills after a DingTalk wiki directory changes or capability gaps are reported.
 ---
 

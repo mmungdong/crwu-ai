@@ -11,7 +11,7 @@
 
 - **现状**：`method` 轴 7 个标签全 `pending`（资产基础法 / 成本法 / 市场法 / 收益法 / 假设开发法 / 基准地价系数修正法 / 路线价法），`其他方法` profile-only。除房地产对象侧一个「过渡性登记 `VALUATION_METHOD_INTERFACE`」捎带方法准则层外，其余对象（机器设备 / 无形资产 / 企业价值 / 矿业权…）一旦命中收益法/成本法，方法层空转。
 - **知识库现状**：`03-评估方法/` 内容已相当完整——`01-市场法` / `02-收益法` / `03-资产基础法` 各「01-定义与适用前提 / 02-具体方法与计算 / 03-常见错误与审核要点」+ `04-方法选择` + `05-审核要点` + `00-评估方法准则2019-精编`（`RULE-01-02-281~305`）。
-- **动作**（归口 `crwu-audit-skill-maintainer`，`create` 模式）：
+- **动作**（归口 `crwu-dev-audit-skill-maintainer`，`create` 模式）：
   1. 建 `crwu-audit-method-*`，一级根 `03-评估方法/`（方法准则层为其一级共用层）；
   2. 同时认领 `06-规则库/M-收益法/04-模块-收益法`、两个旗舰清单 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核`（CHK-MKT-001~014）、`06-规则库/清单-M-成本法/不动产-房产-成本法-报告审核`（CHK-CST-001~012）；
   3. 方法轴落地后立即剥离 `crwu-audit-asset-realestate/references/01-kb-assembly.md` §3 的过渡登记 `VALUATION_METHOD_INTERFACE`。
@@ -85,7 +85,7 @@
 
 ## 落地归口备忘
 
-- **结构/映射类**（建技能、一级根、registry、classification、遗留命名迁移）→ `crwu-audit-skill-maintainer`（`audit`/`create`/`repair`/`remap`，先逐文件方案、确认后执行）。
+- **结构/映射类**（建技能、一级根、registry、classification、遗留命名迁移）→ `crwu-dev-audit-skill-maintainer`（`audit`/`create`/`repair`/`remap`，先逐文件方案、确认后执行）。
 - **内容/词表/算法类**（频次信号、RULE 内容、词表取值）→ `crwu-audit-optimize`（根因分桶 → 方案 → 确认 → 执行）。
 - **知识库正文**（监管覆盖、待补必检项、风险案例、旗舰清单精编）→ 知识库维护侧，本仓不代改。
 - 任何一级能力落地后，跑一遍 `check_audit_skill_mappings.py --catalog <最新快照> --max-age-hours 2 --emit-map …` 刷新校准表。

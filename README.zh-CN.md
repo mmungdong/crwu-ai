@@ -299,7 +299,7 @@ make test
 make build
 
 # 校验所有 Skill 及其自洽性契约
-python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py \
+python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py \
   validate --skill-root skills
 ```
 

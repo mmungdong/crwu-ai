@@ -148,11 +148,11 @@ _REQUIRED_SIBLINGS = (
     "crwu-audit",
     "crwu-audit-asset-realestate",
     "crwu-audit-biz-asset-operation",
-    "crwu-dev-audit-public-general-standards",
+    "crwu-audit-public-general-standards",
     "crwu-audit-datacheck",
     "crwu-audit-output-filter",
     "crwu-dev-audit-optimize",
-    "crwu-audit-skill-maintainer",
+    "crwu-dev-audit-skill-maintainer",
     "crwu-dws",
 )
 
@@ -617,10 +617,11 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
     def test_audit_family_gates_cover_both_prefixes(self):
         """门禁必须同时覆盖 `crwu-audit*` 与 `crwu-dev-audit-*` 两组前缀。
 
-        2026-09-16 改名：`crwu-dev-audit-optimize` / `crwu-dev-audit-public-general-standards`
-        移到 `crwu-dev-audit-`。若门禁只认 `crwu-audit`，这两个技能会**静默掉出**"三不写"
-        lint（kb_tool）与装配路径键/frontmatter/真实目录解析（映射检查器）的扫描范围——
-        正是"改名反而更难维护"的根因，故用本用例钉住。
+        2026-09-16 先把 `optimize` / `public-general-standards` 移到 `crwu-dev-audit-`；
+        2026-09-19 归组调整：`public-general-standards` 回到 `crwu-audit-`，维护器
+        `crwu-dev-audit-skill-maintainer` 移入 `crwu-dev-audit-`。若门禁只认 `crwu-audit`，
+        dev 前缀下的成员会**静默掉出**"三不写" lint（kb_tool）与装配路径键/frontmatter/
+        真实目录解析（映射检查器）的扫描范围——正是"改名反而更难维护"的根因，故用本用例钉住。
         """
         kb_tool = self._kb_tool()
         self.assertIn("crwu-audit", kb_tool.AUDIT_DIR_PREFIXES)
@@ -638,7 +639,7 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
         self.assertIn("crwu-dev-audit", tuple(checker.AUDIT_FAMILY_PREFIX))
         # 裸名 `crwu-audit`（router）由 ROUTER_SKILL 单独覆盖，token 正则只匹配具体技能名
         for name in ("crwu-audit-public-general-standards", "crwu-dev-audit-optimize",
-                     "crwu-dev-audit-public-general-standards"):
+                     "crwu-dev-audit-skill-maintainer"):
             self.assertIn(name, checker._SKILL_TOKEN_RE.findall("路由点名 `" + name + "`。"),
                           f"{name} 必须被 _SKILL_TOKEN_RE 认出（否则 R4 漏检）")
 
@@ -657,8 +658,8 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
 
     @_requires_skill_tree
     def test_renamed_dev_prefix_skills_are_on_disk_with_matching_names(self):
-        """改名后的两个技能目录与 frontmatter 名必须一致（防止源码/登记再次漂移）。"""
-        for name in ("crwu-dev-audit-optimize", "crwu-dev-audit-public-general-standards"):
+        """dev 前缀技能（维护器与优化器）目录与 frontmatter 名必须一致（防止源码/登记再次漂移）。"""
+        for name in ("crwu-dev-audit-optimize", "crwu-dev-audit-skill-maintainer"):
             skill_md = SKILLS_ROOT / name / "SKILL.md"
             self.assertTrue(skill_md.is_file(), f"{name}/SKILL.md 不存在")
             front = [line for line in skill_md.read_text(encoding="utf-8").splitlines()
@@ -1240,7 +1241,7 @@ class AuditSkillMaintainerFindingCoverageTest(unittest.TestCase):
             )
             calibration = (
                 repo
-                / "skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md"
+                / "skills/crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md"
             )
 
             first = json.loads(
@@ -2101,7 +2102,7 @@ class PublicAxisMappingTest(unittest.TestCase):
     its references, and no mapping finding would fire.
     """
 
-    PUBLIC_SKILL = "crwu-dev-audit-public-general-standards"
+    PUBLIC_SKILL = "crwu-audit-public-general-standards"
     PUBLIC_ROOTS = ("06-规则库/02-通用准则-报告与披露/", "06-规则库/03-通用准则-程序与档案/")
 
     def _repo_with_public_row(self, root: Path) -> Path:

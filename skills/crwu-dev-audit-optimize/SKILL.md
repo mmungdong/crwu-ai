@@ -69,8 +69,8 @@ description: >-
    → 监管覆盖（→ `04-监管覆盖`）。提取细则见 references/01 §2。
 3. 若存在历史审核产物（审核意见单 json/md、路由路径、适用规则集快照），先读——它就是"现状基线"，
    证明当前命中面与真实审核的差异。
-4. 机器辅助定位（调用 `crwu-audit-skill-maintainer` 技能的 `scripts/kb_tool.py validate`；两技能安装在同一 skills 根下，下同）：
-   - `python3 "$SKILLS_ROOT/crwu-audit-skill-maintainer/scripts/kb_tool.py" validate --skill-root <源仓 skills> --skill-root <运行时真身 skills>` → 引用卫生与漂移线索
+4. 机器辅助定位（调用 `crwu-dev-audit-skill-maintainer` 技能的 `scripts/kb_tool.py validate`；两技能安装在同一 skills 根下，下同）：
+   - `python3 "$SKILLS_ROOT/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py" validate --skill-root <源仓 skills> --skill-root <运行时真身 skills>` → 引用卫生与漂移线索
      （旧树残留标记 / `KB/…` 省略号 / 已废止的本地根引用与 `CRWU_KB_ROOT` 常量 / "三不写" lint：
      禁知识库名称、禁本地正文路径字面、禁 nodeId 常量）；
    - 库内现有 RULE/CHK 段与装配面：读叶子 `references/01-kb-assembly.md` 的路径键，用 `crwu-dws`
@@ -80,12 +80,12 @@ description: >-
    `00-总纲/README`（知识库总纲与维护契约：§2 目录、§3 三处登记要求）、叶子 `references/01-kb-assembly.md`（技能→知识库寻址键）、
    `00-总纲/治理/回测报告-真实案例覆盖` 与 `00-总纲/治理/校准案例记录`（案例 A/B 已覆盖点）、
    `crwu-audit/references/07-skill-registry.md`（唯一注册表，`available`/`pending`/`profile-only`）；
-   maintainer 的实时校准表 `crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射现状）。
+   maintainer 的实时校准表 `crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射现状）。
 6. 输出一行定位小结：画像五维 + 现行路由路径 + 命中 M/排除 N + 疑似缺口 X（供用户先纠偏画像）。
 
 ## 2. 诊断分桶（根因 → 谁来做）
 
-**职责分界（2026-09-10 重划）**：本技能只做**诊断**（"为什么要改、改哪一层"），并**只亲自执行内容层与算法层**的改动；凡是**结构与映射层**的改动一律交接 `crwu-audit-skill-maintainer`，本技能不自行改 skill 结构、registry、classification。
+**职责分界（2026-09-10 重划）**：本技能只做**诊断**（"为什么要改、改哪一层"），并**只亲自执行内容层与算法层**的改动；凡是**结构与映射层**的改动一律交接 `crwu-dev-audit-skill-maintainer`，本技能不自行改 skill 结构、registry、classification。
 
 | 桶 | 症状 | 落点 | 谁执行 |
 | --- | --- | --- | --- |
@@ -99,7 +99,7 @@ description: >-
 
 ### 2.1 向 Skill 维护器交接（B / E 桶，及 A/C/D 中触及结构的改动）
 
-- 本技能回答"**为什么要改、应改哪一层**"；`crwu-audit-skill-maintainer` 回答"**缺哪些一级 Skill、哪些映射失效、逐文件怎么改**"。
+- 本技能回答"**为什么要改、应改哪一层**"；`crwu-dev-audit-skill-maintainer` 回答"**缺哪些一级 Skill、哪些映射失效、逐文件怎么改**"。
 - 交接内容 = 根因 + 证据 + 影响面 + 最低改动集；**不继承修改授权**——维护器仍须先出逐文件方案并取得用户确认。
 - 维护器接手后先按 `references/06-live-routing-reconciliation.md` **实时拉最新知识库目录**再下结论；其校准表 `references/07-kb-skill-map.md` 是交接时的现状基线。
 - 细化与映射规则（一级根、二级索引、registry/classification 同步）以维护器 `references/04` 为准，本技能不重复定义。
@@ -108,7 +108,7 @@ description: >-
 
 ### 2.2 门禁、方案模板与校验（统一口径）
 
-**不在此重复定义**：两阶段门禁（只读方案 → 用户确认 → 只改批准文件）、逐文件方案必答项、校验与回归命令，一律沿用 `crwu-audit-skill-maintainer/references/04-registry-and-mapping-update.md` 与 `references/05-validation-and-delivery.md`；本技能 references/02 只保留优化方案特有的模板差异。
+**不在此重复定义**：两阶段门禁（只读方案 → 用户确认 → 只改批准文件）、逐文件方案必答项、校验与回归命令，一律沿用 `crwu-dev-audit-skill-maintainer/references/04-registry-and-mapping-update.md` 与 `references/05-validation-and-delivery.md`；本技能 references/02 只保留优化方案特有的模板差异。
 
 ## 3. 《优化方案》输出（必答项，见 references/02 §1）
 
@@ -137,7 +137,7 @@ HTML 必须包含汇总表、ECharts 图、`L → 根因 → FIX` 关系、知�
 3. 登记：源仓的设计文档、技能清单与变更纪要（99 流程；改词表另提示复跑画像基线）；
    涉及知识库规则文件的改动同步更新批次 README/进度总表对应行；
 4. 校验回归（**全过才算完成**）：
-   - `python3 "$SKILLS_ROOT/crwu-audit-skill-maintainer/scripts/kb_tool.py" validate --skill-root <源仓 skills> --skill-root <运行时真身 skills>` error=0
+   - `python3 "$SKILLS_ROOT/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py" validate --skill-root <源仓 skills> --skill-root <运行时真身 skills>` error=0
      （引用卫生 + "三不写" lint：禁知识库名称 / 禁本地正文路径字面 / 禁 nodeId 常量 / 禁旧树残留）；
    - 受影响叶子装配表（含本单画像）两跑导出 `diff` 为空（可复现）；
    - 案例回归：BG8169 / 300673 输出不劣化；
@@ -149,7 +149,7 @@ HTML 必须包含汇总表、ECharts 图、`L → 根因 → FIX` 关系、知�
 - 执行中发现超范围新问题 → 停下，回到 §3 重新出方案；
 - 无发布状态判定与登记机制（口径 2026-09-08：知识库文档即权威、下载即审，不做任何发布/试点状态判定
   与登记；知识库内容侧历史"待发布"标注仅信息残留，AI 不读取判定，清理归知识库维护）；
-- 新增审核叶子能力属 **B 桶 → 交接 `crwu-audit-skill-maintainer`**（`create`）：三处登记
+- 新增审核叶子能力属 **B 桶 → 交接 `crwu-dev-audit-skill-maintainer`**（`create`）：三处登记
   （`07-skill-registry.md` + design + `skills/README.md`）与四件套门禁由维护器执行，本技能不代办；
   新叶子必须自带"仅经 `crwu-audit` 编排调用、禁止单独调用"门禁，并引用
   `crwu-audit/references/12-leaf-common-contract.md`（共同约束只写一份，叶子不复述）；

@@ -48,19 +48,19 @@
 | 想改什么 | 归口 | 说明 |
 | --- | --- | --- |
 | 规则/清单**内容**（库里 `06-规则库/` 条目写错、漏项）、词表取值、叶子**算法与流程** | `crwu-dev-audit-optimize` | 从漏检/误检/复核反馈诊断根因；知识库项只生成 `manual_only` 人工修复单，Skill 项逐项确认后执行 |
-| **结构/映射**：一级 Skill 的新增改名、一级根、registry、classification、遗留命名迁移 | `crwu-audit-skill-maintainer` | 四模式 `audit`/`create`/`repair`/`remap`；`audit` 只读并同步校准表 |
+| **结构/映射**：一级 Skill 的新增改名、一级根、registry、classification、遗留命名迁移 | `crwu-dev-audit-skill-maintainer` | 四模式 `audit`/`create`/`repair`/`remap`；`audit` 只读并同步校准表 |
 
-- 两者都遵守**先逐文件方案、用户确认后才动文件**；门禁与校验口径只在 `crwu-audit-skill-maintainer/references/04`、`05` 定义一次，`crwu-dev-audit-optimize` 不重复定义。
+- 两者都遵守**先逐文件方案、用户确认后才动文件**；门禁与校验口径只在 `crwu-dev-audit-skill-maintainer/references/04`、`05` 定义一次，`crwu-dev-audit-optimize` 不重复定义。
 - 审核后同时存在 AI 结果与人工复核文件时，由 `crwu-dev-audit-optimize` 输出 `L-* → 根因 → FIX-*` 差距报告；
   知识库对 AI/CLI 永远只读，即使用户接受方案也必须由用户人工修改。
-- 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-dev-audit-optimize` 只给根因与最低改动集，**交接** `crwu-audit-skill-maintainer` 执行；交接不继承修改授权。
-- 现状速查：读 `crwu-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
+- 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-dev-audit-optimize` 只给根因与最低改动集，**交接** `crwu-dev-audit-skill-maintainer` 执行；交接不继承修改授权。
+- 现状速查：读 `crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
 
 ### 审核族前缀（两组，门禁都覆盖）
 
-- `crwu-audit-*`：审核族（router、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、`crwu-audit-external-data`、`crwu-audit-skill-maintainer`）。
-- `crwu-dev-audit-*`：开发/维护侧成员（`crwu-dev-audit-optimize`、`crwu-dev-audit-public-general-standards`；2026-09-16 由 `crwu-audit-*` 迁入）。
-- **两组前缀都必须被门禁扫描**：`crwu-audit-skill-maintainer` 的 `scripts/kb_tool.py`（"三不写"实时协议 lint）与 `scripts/check_audit_skill_mappings.py`（装配路径键、frontmatter、真实目录解析、R4 技能名解析）都按两组前缀收目录。**新增或迁移前缀时两处常量必须同批更新**，否则该前缀下的技能会静默掉出校验范围。
+- `crwu-audit-*`：审核族（router、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、`crwu-audit-external-data`、`crwu-audit-output-filter`、`crwu-audit-public-general-standards`）。
+- `crwu-dev-audit-*`：开发/维护侧成员（`crwu-dev-audit-optimize`、`crwu-dev-audit-skill-maintainer`；2026-09-19 归组调整：public 轴通用准则能力回到 `crwu-audit-*`，维护器由 `crwu-audit-*` 移入本组）。
+- **两组前缀都必须被门禁扫描**：`crwu-dev-audit-skill-maintainer` 的 `scripts/kb_tool.py`（"三不写"实时协议 lint）与 `scripts/check_audit_skill_mappings.py`（装配路径键、frontmatter、真实目录解析、R4 技能名解析）都按两组前缀收目录。**新增或迁移前缀时两处常量必须同批更新**，否则该前缀下的技能会静默掉出校验范围。
 - 前缀改名的最低同步面：技能自名、`07-skill-registry.md`、`08-union-dispatch-rules.md`、router `SKILL.md`、叶子引用、两个门禁脚本的常量/名单、三个契约测试、`skills/README.md` 与现行设计文档、变更纪要；带日期的历史记录不回改。
 
 ## 技能自洽性：不得引用代码仓库（硬规则）
@@ -89,7 +89,7 @@
 
 ### 3 脚本归属与目录内聚
 
-- 脚本归口到**唯一**负责它的技能，随技能安装；当前实现：`audit_delivery.py`（+schema/examples）归口 `crwu-audit`；`kb_tool.py` 归口 `crwu-audit-skill-maintainer`；三个契约测试归被测技能的 `scripts/`。
+- 脚本归口到**唯一**负责它的技能，随技能安装；当前实现：`audit_delivery.py`（+schema/examples）归口 `crwu-audit`；`kb_tool.py` 归口 `crwu-dev-audit-skill-maintainer`；三个契约测试归被测技能的 `scripts/`。
 - 脚本与其 `README.md`、schema、`examples/`、`test_*.py` 同目录安置，测试随脚本同批移动。
 - 不得把脚本写成"由部署环境注入可执行路径"。
 
@@ -103,7 +103,7 @@
 > 本节规则与仓库根 `AGENTS.md` §Skill Self-Containment 是同一件事的两处表述：根文件是会话级常驻规范（先读它），本文件是技能维护时的完整清单。改动其一必须同步另一处。
 
 - 搬迁或改写时同批完成：① 脚本内路径常量（如测试的 `REPO_ROOT`/`SKILLS_ROOT` 由 `__file__` 上溯推导）；② 所有**现行**引用点（技能正文、`references`、本文件、`skills/README.md`、源仓设计文档）；③ 新 CHANGELOG 条目。带日期的**历史记录**（变更纪要旧条目、评审记录、`docs/superpowers/plans|specs/*`）**不回改**。
-- **机器门禁**：`python3 <skills 根>/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <skills 根>` 必须 error=0 —— 其中的"技能自洽性 lint"会按上表拦截仓库目录引用（技能正文与技能内脚本都在扫描范围；`skills` 根的 `AGENTS.md`/`README.md` 是源仓文档，不算技能）。
+- **机器门禁**：`python3 <skills 根>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <skills 根>` 必须 error=0 —— 其中的"技能自洽性 lint"会按上表拦截仓库目录引用（技能正文与技能内脚本都在扫描范围；`skills` 根的 `AGENTS.md`/`README.md` 是源仓文档，不算技能）。
 
 ## Skill 与 references 分工
 
@@ -130,9 +130,9 @@
 - 受影响的设计文档、`skills/README.md`、变更记录和测试已同步；
 - 受影响 Skill 通过 skill-creator 的 `quick_validate.py`；
 - router contract 与 DWS source contract 通过；
-- `python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills` 通过。若处于经批准的分阶段迁移，因已知后续同步暂不能通过，必须记录实际命令、失败项和待同步内容，不得把该状态宣称为完整可用；
-- **映射检查器对本次最新目录 error=0**：`python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py --repo-root . --catalog <本次 crwu-dws 快照> --max-age-hours <H>` —— 覆盖一级根精确匹配、轴前缀、registry/classification 一致性、遗留命名、**库内路径键存在性（含公共轴）**；warning 需逐条判断并注明理由；
-- **校准表已刷新**：`--emit-map skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md`，并在其「内容级校准备注」区写明本次正文核对结论与缺口（未下载正文时如实写"未核"，不得留空冒充合格）；
+- `python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills` 通过。若处于经批准的分阶段迁移，因已知后续同步暂不能通过，必须记录实际命令、失败项和待同步内容，不得把该状态宣称为完整可用；
+- **映射检查器对本次最新目录 error=0**：`python3 skills/crwu-dev-audit-skill-maintainer/scripts/check_audit_skill_mappings.py --repo-root . --catalog <本次 crwu-dws 快照> --max-age-hours <H>` —— 覆盖一级根精确匹配、轴前缀、registry/classification 一致性、遗留命名、**库内路径键存在性（含公共轴）**；warning 需逐条判断并注明理由；
+- **校准表已刷新**：`--emit-map skills/crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md`，并在其「内容级校准备注」区写明本次正文核对结论与缺口（未下载正文时如实写"未核"，不得留空冒充合格）；
 - 新增叶子已引用 `crwu-audit/references/12-leaf-common-contract.md` 且未复述共同规则；
 - `git diff --check` 通过，并复核提交范围只包含本次授权改动。
 
@@ -141,14 +141,14 @@
 常用契约命令：
 
 ```bash
-python3 skills/crwu-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
+python3 skills/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
 python3 skills/crwu-dws/scripts/test_dws_source_contract.py
-python3 skills/crwu-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
+python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
 # 映射与路径键一致性（需本次 crwu-dws 快照；--emit-map 同步校准表）
-python3 skills/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
+python3 skills/crwu-dev-audit-skill-maintainer/scripts/check_audit_skill_mappings.py \
   --repo-root . --catalog <快照> --max-age-hours 2 \
-  --emit-map skills/crwu-audit-skill-maintainer/references/07-kb-skill-map.md
+  --emit-map skills/crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md
 git diff --check
 ```
 

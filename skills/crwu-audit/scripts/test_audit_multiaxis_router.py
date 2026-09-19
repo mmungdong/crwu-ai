@@ -55,14 +55,14 @@ REGISTRY_HEADER = ("axis", "label", "skill", "status", "load behavior")
 EXPECTED_REGISTRY_ROWS = (
     ("asset", "房地产", "crwu-audit-asset-realestate", "available", "load"),
     ("asset", "机器设备", "crwu-audit-asset-equipment", "available", "load"),
-    ("public", "通用准则", "crwu-dev-audit-public-general-standards", "available", "load always"),
+    ("public", "通用准则", "crwu-audit-public-general-standards", "available", "load always"),
     ("public", "审核意见屏蔽", "crwu-audit-output-filter", "available", "load always; postprocess before phase1 freeze"),
 )
 
 # Public-axis capabilities are report-shape independent. Every one of them must be
 # reachable from the union algorithm without depending on any professional axis label.
 UNCONDITIONAL_PUBLIC_SKILLS = (
-    "crwu-dev-audit-public-general-standards",
+    "crwu-audit-public-general-standards",
     "crwu-audit-output-filter",
 )
 
@@ -121,11 +121,11 @@ _REQUIRED_SIBLINGS = (
     "crwu-audit",
     "crwu-audit-asset-realestate",
     "crwu-audit-biz-asset-operation",
-    "crwu-dev-audit-public-general-standards",
+    "crwu-audit-public-general-standards",
     "crwu-audit-datacheck",
     "crwu-audit-output-filter",
     "crwu-dev-audit-optimize",
-    "crwu-audit-skill-maintainer",
+    "crwu-dev-audit-skill-maintainer",
     "crwu-dws",
 )
 
@@ -529,11 +529,11 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             not in {
                 "crwu-audit",
                 "crwu-dev-audit-optimize",
-                "crwu-audit-skill-maintainer",
+                "crwu-dev-audit-skill-maintainer",
                 "crwu-audit-datacheck",
                 "crwu-audit-external-data",
                 "crwu-audit-output-filter",
-                "crwu-dev-audit-public-general-standards",
+                "crwu-audit-public-general-standards",
             }
         )
 
@@ -570,14 +570,14 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             )
         self.assertNotIn(
             "else []",
-            expression.split("crwu-dev-audit-public-general-standards", 1)[0],
+            expression.split("crwu-audit-public-general-standards", 1)[0],
             "unconditional public skills must be declared before any conditional branch",
         )
 
         # The router step that builds public_skills must state the unconditional rule too,
         # otherwise the algorithm and the runnable step can drift apart.
         self.assertIn(
-            "crwu-dev-audit-public-general-standards",
+            "crwu-audit-public-general-standards",
             router_text,
             "router SKILL.md must name the unconditional public skill in its public-capability step",
         )
@@ -651,7 +651,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         self.assertIn("crwu-audit-external-data", body, "public_skills must include the external-data capability")
         self.assertNotIn(
             "crwu-audit-external-data] when methods",
-            body.split("crwu-dev-audit-public-general-standards", 1)[0],
+            body.split("crwu-audit-public-general-standards", 1)[0],
             "conditional public skills must be declared after the unconditional one",
         )
 
@@ -710,7 +710,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             SKILLS_ROOT / "README.md",
             AUDIT_SKILL_ROOT / "SKILL.md",
             SKILLS_ROOT / "crwu-audit-asset-realestate/SKILL.md",
-            SKILLS_ROOT / "crwu-audit-skill-maintainer/SKILL.md",
+            SKILLS_ROOT / "crwu-dev-audit-skill-maintainer/SKILL.md",
         )
         forbidden_skill = "crwu-audit-realestate-rent"
         violations = [
@@ -750,7 +750,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
         # Registry<->reality hygiene (a retired-prefix row still marked `available`, or an
         # available row whose skill directory does not exist) is owned by the skill
         # maintainer mapping checker, which reports it with per-row evidence:
-        #   python3 <skills 根>/crwu-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
+        #   python3 <skills 根>/crwu-dev-audit-skill-maintainer/scripts/check_audit_skill_mappings.py
         #   -> LEGACY_BUSINESS_PREFIX / AVAILABLE_SKILL_DIRECTORY_MISSING / REGISTRY_LABEL_NOT_IN_CATALOG
         # It is deliberately not duplicated here, so the in-flight migration has one owner.
 

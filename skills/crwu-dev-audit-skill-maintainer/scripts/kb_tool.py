@@ -129,8 +129,8 @@ def skill_path_problems(skill_root: str):
 
 # 只对审核族目录做"三不写"严格 lint（crwu-dws 等允许按需引用部署常量/默认库名）。
 # 两组前缀都要覆盖：`crwu-audit*`（审核族）与 `crwu-dev-audit-*`（开发/维护侧成员，
-# 如 crwu-dev-audit-optimize、crwu-dev-audit-public-general-standards）——只认前者会让
-# 改到 dev 前缀的技能**静默掉出 lint 范围**（2026-09-16 改名时同步修正）。
+# 如 crwu-dev-audit-optimize、crwu-dev-audit-skill-maintainer）——只认前者会让
+# 改到 dev 前缀的技能**静默掉出 lint 范围**（2026-09-16 引入，2026-09-19 归组调整后仍适用）。
 AUDIT_DIR_PREFIXES = ("crwu-audit", "crwu-dev-audit")
 # ① 本地知识库根常量赋值 / 根路径字面 / 内容副本目录字面（推理引用实时化后一律禁止写死在技能内）
 _LIVE_NO_ROOT_RES = [

@@ -29,17 +29,17 @@ PINNED_CONTRACT_FILES = [
     # Public-axis capabilities are not matched by _leaf_files() (which enumerates only
     # crwu-audit-asset-* / crwu-audit-biz-*), so they must be pinned explicitly or the
     # whole public axis would go unchecked.
-    "crwu-dev-audit-public-general-standards/SKILL.md",
-    "crwu-dev-audit-public-general-standards/references/00-applicability.md",
-    "crwu-dev-audit-public-general-standards/references/01-kb-assembly.md",
-    "crwu-dev-audit-public-general-standards/references/02-review-focus.md",
+    "crwu-audit-public-general-standards/SKILL.md",
+    "crwu-audit-public-general-standards/references/00-applicability.md",
+    "crwu-audit-public-general-standards/references/01-kb-assembly.md",
+    "crwu-audit-public-general-standards/references/02-review-focus.md",
     "crwu-audit-datacheck/SKILL.md",
     "crwu-dev-audit-optimize/SKILL.md",
     "crwu-dev-audit-optimize/references/00-优化规范与文件落点.md",
     "crwu-dev-audit-optimize/references/01-反馈定位与画像流程.md",
-    "crwu-audit-skill-maintainer/SKILL.md",
-    "crwu-audit-skill-maintainer/references/01-kb-source-discovery.md",
-    "crwu-audit-skill-maintainer/references/02-child-skill-contract.md",
+    "crwu-dev-audit-skill-maintainer/SKILL.md",
+    "crwu-dev-audit-skill-maintainer/references/01-kb-source-discovery.md",
+    "crwu-dev-audit-skill-maintainer/references/02-child-skill-contract.md",
 ]
 # 源仓文档（不在 skills 内）：只有源仓维护环境存在；已安装副本内缺失 → 相关断言 skip。
 PINNED_SOURCE_REPO_FILES = [
@@ -102,10 +102,10 @@ _REQUIRED_SIBLINGS = (
     "crwu-audit",
     "crwu-audit-asset-realestate",
     "crwu-audit-biz-asset-operation",
-    "crwu-dev-audit-public-general-standards",
+    "crwu-audit-public-general-standards",
     "crwu-audit-datacheck",
     "crwu-dev-audit-optimize",
-    "crwu-audit-skill-maintainer",
+    "crwu-dev-audit-skill-maintainer",
     "crwu-dws",
 )
 
@@ -176,7 +176,7 @@ class DwsSourceContractTest(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                str(SKILLS_ROOT / "crwu-audit-skill-maintainer/scripts/kb_tool.py"),
+                str(SKILLS_ROOT / "crwu-dev-audit-skill-maintainer/scripts/kb_tool.py"),
                 "validate",
                 "--skill-root",
                 str(SKILLS_ROOT),
