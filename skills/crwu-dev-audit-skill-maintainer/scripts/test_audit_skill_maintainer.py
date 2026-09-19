@@ -326,6 +326,30 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
             tracked = report["calibration"]["method_layer_assembly"]["nonRuntime"]
             self.assertTrue(tracked[0]["runtimeAssembled"])
 
+    def test_prototype_legal_compliance_module_is_tracked_without_runtime_assembly(self):
+        tree_with_prototype = """
+        - 📁 06-规则库/
+          - 📁 M-法律法规合规/
+            - 📄 02-模块-法律法规合规
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            tree = root / "tree.md"
+            tree.write_text(textwrap.dedent(tree_with_prototype).strip(), encoding="utf-8")
+            _create_valid_repo(repo)
+
+            report = json.loads(self.run_checker(repo, tree, "--strict").stdout)
+            tracked = report["calibration"]["method_layer_assembly"]["nonRuntime"]
+
+            self.assertEqual([], report["findings"])
+            self.assertEqual(1, len(tracked))
+            self.assertEqual("06-规则库/M-法律法规合规/", tracked[0]["prefix"])
+            self.assertEqual("prototype/non-runtime", tracked[0]["classification"])
+            self.assertFalse(tracked[0]["runtimeAssembled"])
+            self.assertIn("A 级规则", tracked[0]["reason"])
+            self.assertIn("正式", tracked[0]["enableWhen"])
+
     def test_distinguishes_naming_mapping_and_knowledge_content_gaps(self):
         incomplete_tree = """
         - 📁 01-业务路线/

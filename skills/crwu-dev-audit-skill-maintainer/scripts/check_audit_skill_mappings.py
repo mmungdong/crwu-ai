@@ -68,6 +68,12 @@ NON_RUNTIME_KB_MODULES = (
         "reason": "模块规程仍为原型，规则依据含待编占位，不能作为正式审核依据",
         "enableWhen": "知识库状态改为正式、规则编号补齐且维护人明确后，经人工复核启用",
     },
+    {
+        "prefix": "06-规则库/M-法律法规合规/",
+        "classification": "prototype/non-runtime",
+        "reason": "模块规程仍为原型，A 级规则未发布且规则依据待编，不能作为正式合规依据",
+        "enableWhen": "知识库状态改为正式、规则编号补齐且维护人明确后，经人工复核启用",
+    },
 )
 
 # ---- 路由层（router ↔ 目录 ↔ 注册表 ↔ 真实 Skill）----
