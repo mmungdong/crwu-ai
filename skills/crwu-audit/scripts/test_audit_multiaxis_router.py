@@ -230,6 +230,38 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
 
         self.assertEqual([], missing, f"stable union algorithm is missing inputs: {missing}")
 
+    def test_cost_method_uses_its_own_rule_and_checklist(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+        cost_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(r"\|\s*method\s*\|\s*`成本法`\s*\|", line)
+        ]
+
+        self.assertEqual(
+            1,
+            len(cost_rows),
+            "成本法必须有且只有一条独立装配映射，不能与资产基础法共用映射行",
+        )
+        cost_row = cost_rows[0]
+        self.assertIn(
+            "03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/04-成本法",
+            cost_row,
+            "成本法映射必须装配成本法准则条目",
+        )
+        self.assertIn(
+            "06-规则库/清单-M-成本法/",
+            cost_row,
+            "成本法映射必须装配成本法专项清单",
+        )
+        self.assertNotIn(
+            "06-规则库/清单-M-资产基础法/",
+            cost_row,
+            "成本法不得误装资产基础法专项清单",
+        )
+
     def test_union_dispatch_rules_load_four_skills_for_realestate_liquidation_auction(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
