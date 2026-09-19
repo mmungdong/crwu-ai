@@ -42,6 +42,7 @@ python3 scripts/check_audit_skill_mappings.py \
 | `KB_PATH_KEY_HAS_EXPORT_SUFFIX` | error | 路径键带了 `.md` 导出后缀（或把文件当目录写）；`.md` 只是导出后的本地文件名，不是库内节点名 |
 | `KB_PATH_KEY_FOLDER_NEEDS_SLASH` | error | 路径键指向目录却没以 `/` 结尾（会被当成单文件项而记 failure） |
 | `BUSINESS_COMMON_REVIEW_NOT_REFERENCED` | warning | 一级业务目录存在 `共同审核点`，但该业务 Skill **未以路径键回指**它（必须写出 `<一级根>共同审核点`，节点名可带数字前缀或 `.md`）；仅在该文档确实存在时触发，文档不存在不报。**只提名字不算回指**——写"一级根未提供 `共同审核点`"这种否定句同样会被报出 |
+| `NON_RUNTIME_MODULE_ASSEMBLED` | error | 原型/非运行时知识模块被装入实际审核；满足正式发布、规则编号和维护人等启用条件前移除运行时路径 |
 | `CATALOG_NOT_LIVE` | error | 使用 `--max-age-hours` 时，快照无可解析抓取时间（无法证明是最新） |
 | `CATALOG_STALE` | error | 使用 `--max-age-hours` 时，快照抓取时间超过时限 |
 

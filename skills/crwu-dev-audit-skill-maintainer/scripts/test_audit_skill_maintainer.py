@@ -240,6 +240,92 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
             self.assertEqual([], report["findings"])
             self.assertEqual([], report["proposals"])
 
+    def test_prototype_income_module_is_tracked_without_runtime_assembly(self):
+        tree_with_prototype = """
+        - 📁 06-规则库/
+          - 📁 M-收益法/
+            - 📄 04-模块-收益法
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            tree = root / "tree.md"
+            tree.write_text(textwrap.dedent(tree_with_prototype).strip(), encoding="utf-8")
+            _create_valid_repo(repo)
+
+            report = json.loads(self.run_checker(repo, tree, "--strict").stdout)
+            tracked = report["calibration"]["method_layer_assembly"]["nonRuntime"]
+
+            self.assertEqual([], report["findings"])
+            self.assertEqual(1, len(tracked))
+            self.assertEqual("06-规则库/M-收益法/", tracked[0]["prefix"])
+            self.assertEqual("prototype/non-runtime", tracked[0]["classification"])
+            self.assertFalse(tracked[0]["runtimeAssembled"])
+            self.assertIn("正式", tracked[0]["enableWhen"])
+
+            text_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--repo-root",
+                    str(repo),
+                    "--catalog",
+                    str(tree),
+                    "--format",
+                    "text",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, text_result.returncode, text_result.stderr)
+            self.assertIn("原型/非运行时模块：1", text_result.stdout)
+            self.assertIn("06-规则库/M-收益法/", text_result.stdout)
+            self.assertIn("prototype/non-runtime", text_result.stdout)
+            self.assertIn("规则依据含待编占位", text_result.stdout)
+
+            calibration = root / "map.md"
+            emitted = self.run_checker(repo, tree, "--emit-map", str(calibration))
+            self.assertEqual(0, emitted.returncode, emitted.stderr)
+            calibration_text = calibration.read_text(encoding="utf-8")
+            self.assertIn("## 原型 / 非运行时模块", calibration_text)
+            self.assertIn("06-规则库/M-收益法/", calibration_text)
+
+    def test_prototype_income_module_runtime_assembly_is_an_error(self):
+        tree_with_prototype = """
+        - 📁 06-规则库/
+          - 📁 M-收益法/
+            - 📄 04-模块-收益法
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            tree = root / "tree.md"
+            tree.write_text(textwrap.dedent(tree_with_prototype).strip(), encoding="utf-8")
+            _create_valid_repo(repo)
+            _write(
+                repo / "skills/crwu-audit/references/08-union-dispatch-rules.md",
+                """
+                # 稳定并集
+
+                skills_to_load = stable_unique(scope_skills, asset_skills, business_skills, method_skills, overlay_skills, public_skills)
+
+                | axis | label | path |
+                | --- | --- | --- |
+                | method | 收益法 | `06-规则库/M-收益法/` |
+                """,
+            )
+
+            result = self.run_checker(repo, tree, "--strict")
+            report = json.loads(result.stdout)
+
+            self.assertEqual(1, result.returncode)
+            findings = _findings(report, "NON_RUNTIME_MODULE_ASSEMBLED")
+            self.assertEqual(1, len(findings))
+            self.assertEqual("06-规则库/M-收益法/", findings[0]["path"])
+            tracked = report["calibration"]["method_layer_assembly"]["nonRuntime"]
+            self.assertTrue(tracked[0]["runtimeAssembled"])
+
     def test_distinguishes_naming_mapping_and_knowledge_content_gaps(self):
         incomplete_tree = """
         - 📁 01-业务路线/

@@ -57,6 +57,19 @@ LEGACY_BUSINESS_PREFIX = "crwu-audit-business-"
 # base ships it, the business skill must download and reference it for every subroute.
 BUSINESS_COMMON_REVIEW_DOC = "共同审核点"
 
+# Knowledge-base modules whose current content is a design/prototype contract rather than
+# executable audit rules. They stay visible in every inventory run but must not enter runtime
+# assembly until a maintainer explicitly verifies the enablement conditions and changes this
+# policy. Directory-only inspection cannot infer that a document's body has matured.
+NON_RUNTIME_KB_MODULES = (
+    {
+        "prefix": "06-规则库/M-收益法/",
+        "classification": "prototype/non-runtime",
+        "reason": "模块规程仍为原型，规则依据含待编占位，不能作为正式审核依据",
+        "enableWhen": "知识库状态改为正式、规则编号补齐且维护人明确后，经人工复核启用",
+    },
+)
+
 # ---- 路由层（router ↔ 目录 ↔ 注册表 ↔ 真实 Skill）----
 ROUTER_SKILL = "crwu-audit"
 ROUTER_REFERENCES = (
@@ -793,6 +806,7 @@ def inspect_method_layer_assembly(
 
     covered: list[dict[str, object]] = []
     gaps: list[dict[str, object]] = []
+    non_runtime: list[dict[str, object]] = []
     watched = 0
     for prefix in watched_prefixes:
         if not any(path == prefix or path.startswith(prefix) for path in paths):
@@ -814,6 +828,33 @@ def inspect_method_layer_assembly(
                 path=prefix,
             )
 
+    for module in NON_RUNTIME_KB_MODULES:
+        prefix = str(module["prefix"])
+        if not any(path == prefix or path.startswith(prefix) for path in paths):
+            continue
+        holders = sorted(
+            {
+                source
+                for key, source in assembly_keys.items()
+                if key == prefix or key.startswith(prefix)
+            }
+        )
+        tracked = dict(module)
+        tracked["runtimeAssembled"] = bool(holders)
+        tracked["holders"] = holders
+        non_runtime.append(tracked)
+        if holders:
+            add_finding(
+                "NON_RUNTIME_MODULE_ASSEMBLED",
+                "error",
+                (
+                    "prototype/non-runtime knowledge module is present in runtime assembly; "
+                    "remove the assembly path until its enablement conditions are verified"
+                ),
+                path=prefix,
+                source=", ".join(holders),
+            )
+
     channel_declared = False
     dws_root = skills_root / "crwu-dws"
     if dws_root.is_dir():
@@ -829,8 +870,13 @@ def inspect_method_layer_assembly(
             "native (non-adoc) nodes need an explicit download channel; the downloading spec declares none",
             path="skills/crwu-dws",
         )
-    return {"watched": watched, "covered": len(covered), "gaps": gaps,
-            "channelDeclared": channel_declared}
+    return {
+        "watched": watched,
+        "covered": len(covered),
+        "gaps": gaps,
+        "nonRuntime": non_runtime,
+        "channelDeclared": channel_declared,
+    }
 
 
 def _catalog_age_hours(catalog: "Catalog") -> float | None:
@@ -1521,6 +1567,7 @@ def inspect_repository(
         "errors": sum(item["severity"] == "error" for item in findings),
         "warnings": sum(item["severity"] == "warning" for item in findings),
         "proposals": len(proposals),
+        "non_runtime_modules": len(method_layer.get("nonRuntime", [])),
         "first_level_assets": len(first_level["asset"]),
         "first_level_businesses": len(first_level["business"]),
     }
@@ -1774,6 +1821,28 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
             "",
         ]
 
+    method_layer = calibration.get("method_layer_assembly") or {}
+    assert isinstance(method_layer, dict)
+    non_runtime = method_layer.get("nonRuntime") or []
+    assert isinstance(non_runtime, list)
+    lines += ["## 原型 / 非运行时模块", ""]
+    if non_runtime:
+        lines += [
+            "> 下列路径已被维护器显式追踪，但不是运行时装配键；满足启用条件并经人工复核前不得参与审核。",
+            "",
+            "| 库内路径 | 分类 | 隔离原因 | 运行时装配 | 启用条件 |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for item in non_runtime:
+            assert isinstance(item, dict)
+            assembled = "**错误：已装配**" if item.get("runtimeAssembled") else "否（隔离）"
+            lines.append(
+                f"| {item['prefix']} | {item['classification']} | {item['reason']} | {assembled} | {item['enableWhen']} |"
+            )
+    else:
+        lines.append("（无）")
+    lines.append("")
+
     unregistered = calibration["unregistered_skills"]
     assert isinstance(unregistered, list)
     lines += ["## 未登记 / 待处理 Skill", ""]
@@ -1837,6 +1906,7 @@ def render_text(report: dict[str, object]) -> str:
             f"{summary['first_level_businesses']} / 错误 {summary['errors']} / "
             f"警告 {summary['warnings']} / 建议 {summary['proposals']}"
         ),
+        f"原型/非运行时模块：{summary['non_runtime_modules']}",
         "",
         "发现：",
     ]
@@ -1848,6 +1918,21 @@ def render_text(report: dict[str, object]) -> str:
         assert isinstance(item, dict)
         target = item.get("label") or item.get("skill") or item.get("path") or "全局"
         lines.append(f"- [{item['severity']}] {item['code']} · {target}：{item['message']}")
+    calibration = report["calibration"]
+    assert isinstance(calibration, dict)
+    method_layer = calibration.get("method_layer_assembly") or {}
+    assert isinstance(method_layer, dict)
+    non_runtime = method_layer.get("nonRuntime") or []
+    assert isinstance(non_runtime, list)
+    lines.extend(["", "原型/非运行时模块："])
+    if not non_runtime:
+        lines.append("- 无")
+    for item in non_runtime:
+        assert isinstance(item, dict)
+        state = "错误：已进入运行时" if item.get("runtimeAssembled") else "已隔离"
+        lines.append(
+            f"- {item['classification']} · {item['prefix']} · {state}；原因：{item['reason']}；启用条件：{item['enableWhen']}"
+        )
     lines.extend(["", "建议："])
     proposals = report["proposals"]
     assert isinstance(proposals, list)
