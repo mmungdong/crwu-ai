@@ -286,7 +286,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "分发规则必须明确跨轴专项清单不会替代成本法共性准则",
         )
 
-    def test_asset_based_method_inherits_cost_principles_without_cost_checklist(self):
+    def test_asset_based_method_inherits_cost_principles_and_realestate_adds_checklist(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         classification_path = AUDIT_SKILL_ROOT / "references/05-method-classification.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
@@ -318,10 +318,10 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             asset_based_row,
             "资产基础法必须继续装配自身方法说明",
         )
-        self.assertIn(
+        self.assertNotIn(
             "06-规则库/清单-M-资产基础法/",
             asset_based_row,
-            "资产基础法必须继续装配自身专项清单",
+            "通用资产基础法映射不得无条件装配房地产专项清单",
         )
         self.assertNotIn(
             "06-规则库/清单-M-成本法/",
@@ -329,11 +329,31 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "继承成本法共性准则不等于装配直接成本法专项清单",
         )
 
+        realestate_asset_based_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(
+                r"\|\s*method\+asset\s*\|\s*`资产基础法`\s*∧\s*`房地产`\s*\|",
+                line,
+            )
+        ]
+        self.assertEqual(
+            1,
+            len(realestate_asset_based_rows),
+            "房地产资产基础法专项清单必须有独立的 method+asset 条件映射",
+        )
+        self.assertIn(
+            "06-规则库/清单-M-资产基础法/",
+            realestate_asset_based_rows[0],
+            "资产基础法且资产类型为房地产时必须追加不动产专项清单",
+        )
+
         required_classification_terms = (
             "资产基础法即成本法项下的成本加和法",
             "保留独立 canonical 标签",
             "不得据此新增一个 `成本法` 标签",
             "不得装配 `06-规则库/清单-M-成本法/`",
+            "仅在 `asset_types[]` 同时命中 `房地产` 时追加资产基础法不动产专项清单",
         )
         missing = [
             term for term in required_classification_terms if term not in classification_text
