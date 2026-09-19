@@ -262,6 +262,64 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "成本法不得误装资产基础法专项清单",
         )
 
+    def test_asset_based_method_inherits_cost_principles_without_cost_checklist(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        classification_path = AUDIT_SKILL_ROOT / "references/05-method-classification.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        self.assertTrue(
+            classification_path.is_file(),
+            f"missing method classification rules: {classification_path}",
+        )
+        rules_text = rules_path.read_text(encoding="utf-8")
+        classification_text = classification_path.read_text(encoding="utf-8")
+        asset_based_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(r"\|\s*method\s*\|\s*`资产基础法`\s*\|", line)
+        ]
+
+        self.assertEqual(
+            1,
+            len(asset_based_rows),
+            "资产基础法必须有且只有一条独立装配映射",
+        )
+        asset_based_row = asset_based_rows[0]
+        self.assertIn(
+            "03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/04-成本法",
+            asset_based_row,
+            "资产基础法属于成本法项下的成本加和法，必须继承成本法共性准则",
+        )
+        self.assertIn(
+            "03-评估方法/03-资产基础法/",
+            asset_based_row,
+            "资产基础法必须继续装配自身方法说明",
+        )
+        self.assertIn(
+            "06-规则库/清单-M-资产基础法/",
+            asset_based_row,
+            "资产基础法必须继续装配自身专项清单",
+        )
+        self.assertNotIn(
+            "06-规则库/清单-M-成本法/",
+            asset_based_row,
+            "继承成本法共性准则不等于装配直接成本法专项清单",
+        )
+
+        required_classification_terms = (
+            "资产基础法即成本法项下的成本加和法",
+            "保留独立 canonical 标签",
+            "不得据此新增一个 `成本法` 标签",
+            "不得装配 `06-规则库/清单-M-成本法/`",
+        )
+        missing = [
+            term for term in required_classification_terms if term not in classification_text
+        ]
+        self.assertEqual(
+            [],
+            missing,
+            f"方法分类缺少资产基础法与成本法的继承/隔离规则: {missing}",
+        )
+
     def test_financial_reporting_coverage_uses_business_trigger(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
