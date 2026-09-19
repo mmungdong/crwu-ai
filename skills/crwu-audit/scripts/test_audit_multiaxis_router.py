@@ -311,6 +311,50 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             "财务报告业务审核关注点必须声明覆盖层规则的实际库内来源",
         )
 
+    def test_income_checklist_requires_enterprise_value_asset(self):
+        rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
+        self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
+        rules_text = rules_path.read_text(encoding="utf-8")
+        income_method_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(r"\|\s*method\s*\|\s*`收益法`\s*\|", line)
+        ]
+        enterprise_income_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(
+                r"\|\s*method\+asset\s*\|\s*`收益法`\s*∧\s*`企业价值`\s*\|",
+                line,
+            )
+        ]
+
+        self.assertEqual(
+            1,
+            len(income_method_rows),
+            "收益法必须有且只有一条不区分资产类型的通用方法映射",
+        )
+        self.assertIn(
+            "03-评估方法/02-收益法/",
+            income_method_rows[0],
+            "所有收益法项目都必须装配通用收益法目录",
+        )
+        self.assertNotIn(
+            "06-规则库/清单-M-收益法/",
+            income_method_rows[0],
+            "通用收益法映射不得无条件装配企业价值专项清单",
+        )
+        self.assertEqual(
+            1,
+            len(enterprise_income_rows),
+            "企业价值收益法专项清单必须有独立的 method+asset 条件映射",
+        )
+        self.assertIn(
+            "06-规则库/清单-M-收益法/",
+            enterprise_income_rows[0],
+            "收益法且资产类型为企业价值时必须装配企业价值收益法专项清单",
+        )
+
     def test_union_dispatch_rules_load_four_skills_for_realestate_liquidation_auction(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
