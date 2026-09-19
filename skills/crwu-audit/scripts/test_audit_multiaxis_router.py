@@ -230,7 +230,7 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
 
         self.assertEqual([], missing, f"stable union algorithm is missing inputs: {missing}")
 
-    def test_cost_method_uses_its_own_rule_and_checklist(self):
+    def test_cost_method_uses_generic_rule_and_realestate_adds_specialized_checklist(self):
         rules_path = AUDIT_SKILL_ROOT / "references/08-union-dispatch-rules.md"
         self.assertTrue(rules_path.is_file(), f"missing union dispatch rules: {rules_path}")
         rules_text = rules_path.read_text(encoding="utf-8")
@@ -251,15 +251,39 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
             cost_row,
             "成本法映射必须装配成本法准则条目",
         )
-        self.assertIn(
+        self.assertNotIn(
             "06-规则库/清单-M-成本法/",
             cost_row,
-            "成本法映射必须装配成本法专项清单",
+            "通用成本法映射不得无条件装配房地产专项清单",
         )
         self.assertNotIn(
             "06-规则库/清单-M-资产基础法/",
             cost_row,
             "成本法不得误装资产基础法专项清单",
+        )
+
+        realestate_cost_rows = [
+            line
+            for line in rules_text.splitlines()
+            if re.search(
+                r"\|\s*method\+asset\s*\|\s*`成本法`\s*∧\s*`房地产`\s*\|",
+                line,
+            )
+        ]
+        self.assertEqual(
+            1,
+            len(realestate_cost_rows),
+            "房地产成本法专项清单必须有独立的 method+asset 条件映射",
+        )
+        self.assertIn(
+            "06-规则库/清单-M-成本法/",
+            realestate_cost_rows[0],
+            "成本法且资产类型为房地产时必须追加不动产成本法专项清单",
+        )
+        self.assertIn(
+            "跨轴专项映射是在单轴共性映射基础上追加，不替代单轴共性资料",
+            rules_text,
+            "分发规则必须明确跨轴专项清单不会替代成本法共性准则",
         )
 
     def test_asset_based_method_inherits_cost_principles_without_cost_checklist(self):
