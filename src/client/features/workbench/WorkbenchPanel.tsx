@@ -14,7 +14,7 @@ import { createEnvStatusStore, useEnvStatus, type EnvStatusStore } from '../envi
 import { WORKBENCH_PROTOCOL } from '../../../shared/consts.ts'
 import { AuditInfoDrawer } from '../report-audit/AuditInfoDrawer.tsx'
 import { ReportPane } from '../report-audit/ReportPane.tsx'
-import { openSessionTarget } from '../report-audit/row.ts'
+import { openReportNotice, openSessionTarget } from '../report-audit/row.ts'
 
 /**
  * 工作台外壳。
@@ -384,7 +384,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
           }}
           onOpenCloud={(key) => {
             void workbenchApi.ossLink({ key })
-              .then((result) => { if (!result.ok) setNotice(result.error) })
+              // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
+              // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
+              .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
               .catch((cause: unknown) => { setNotice(describe(cause)) })
           }}
           onOpenLocalHtml={(key) => {

@@ -26,6 +26,7 @@ const {
   buildRows,
   filterModeText,
   pageCount,
+  openReportNotice,
 } = await import(new URL('src/client/features/report-audit/row.ts', ROOT).href)
 
 const GATING = { canDispatch: true, canStart: true }
@@ -284,4 +285,23 @@ test('riskBadge surfaces the raw level and only uses tone for severity', () => {
   assert.deepEqual(riskBadge('   '), { text: '—', tone: 'low' })
   // 原始值一律不改写。
   assert.equal(riskBadge('D').text, 'D')
+})
+
+// ── 「查看报告」的结果怎么说话（用户报过「查看报告打不开」且界面毫无反应）──────
+
+test('openReportNotice names both failure kinds and stays quiet on success', () => {
+  // `ok` 只代表签名成功；打开浏览器是另一步。早先客户端只判 `ok`，于是
+  // `opened:false` 时什么都不说 —— 用户看到的就是「点了没反应」。
+  assert.equal(openReportNotice({ ok: true, opened: true }), '', '真的打开了就不要打扰用户')
+  assert.equal(openReportNotice({ ok: true, opened: true, openError: '噪声' }), '', '成功时忽略残留的 openError')
+
+  const notOpened = openReportNotice({ ok: true, opened: false, openError: '沙箱拒绝了 open 命令' })
+  assert.match(notOpened, /没能打开浏览器/)
+  assert.match(notOpened, /沙箱拒绝了 open 命令/, '真实原因必须带出来，否则还是无从下手')
+
+  assert.match(openReportNotice({ ok: true, opened: false }), /没能打开浏览器/, '没有原因也要说「没打开」')
+
+  // 签名/前缀这类的硬失败走 error。
+  assert.equal(openReportNotice({ ok: false, error: '对象不在配置的 OSS 前缀内' }), '对象不在配置的 OSS 前缀内')
+  assert.equal(openReportNotice({ ok: false, error: '' }), '打开报告失败', '空原因也要给一句能看的话')
 })

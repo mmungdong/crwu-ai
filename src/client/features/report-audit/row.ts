@@ -78,6 +78,26 @@ export function childIsLive(audit: AuditView): boolean {
   return audit.childAlive === true || audit.status === 'running'
 }
 
+/**
+ * 「查看报告」的结果 → 要不要给用户一句话。
+ *
+ * `ok` 只代表**签名成功**；「用系统默认程序打开」是另一个动作，结果在 `opened`/`openError` 里。
+ * 早先客户端只判 `ok`（`if (!result.ok) setNotice(...)`），于是 `opened:false` 时界面**什么都
+ * 不说** —— 点下去没反应，用户只能报「查看报告打不开」（实测踩到）。这里把两种情况都说清楚。
+ */
+export function openReportNotice(result: {
+  ok: boolean
+  error?: string
+  opened?: boolean
+  openError?: string
+}): string {
+  if (result.ok !== true) return text(result.error) || '打开报告失败'
+  if (result.opened === false) {
+    return `签名成功，但没能打开浏览器：${text(result.openError) || '打开命令未成功'}`
+  }
+  return ''
+}
+
 /** 发起审核按钮的文案：云端已有意见时是「重新审核」，否则「AI 审核」。 */
 export function startLabel(cloud: CloudItem | null | undefined): string {
   return hasCloudResult(cloud) ? '重新审核' : 'AI 审核'

@@ -24,6 +24,7 @@ const { WORKBENCH_CLASSES, WORKBENCH_STYLE_ID, WORKBENCH_STYLE_TEXT } = await im
 )
 const { zhCN } = await import(new URL('src/client/locales/zh-CN.ts', ROOT).href)
 const { installWorkbenchStyles } = await import(new URL('src/client/features/workbench/styles.ts', ROOT).href)
+const { WORKBENCH_PROTOCOL } = await import(new URL('src/shared/consts.ts', ROOT).href)
 
 const React = fakeReact
 
@@ -617,6 +618,59 @@ test('a stale host build is called out and blocks starting audits', async () => 
     const start = findButtonLike(tree, 'AI 审核')
     assert.ok(start, '按钮还在（只是禁用）')
     assert.equal(start.props.disabled, true, '旧宿主下不许发起审核')
+  } finally {
+    globalThis.setInterval = noTimer.setInterval
+    globalThis.clearInterval = noTimer.clearInterval
+  }
+})
+
+test('点「查看报告」送的是交付件的 htmlKey，而且「没打开」必须说出来', async () => {
+  // 这条链上有两个真实故障（用户报的「oss 查看报告打不开」）：
+  // 1. 行里的按钮原来送的是**行 key（流水号）**，而 `oss-link` 按清单的 OSS 前缀做隔离检查，
+  //    会把裸流水号拒掉（实测 `ok:false`「对象不在配置的 OSS 前缀内」）；
+  // 2. `ok:true` 但 `opened:false`（签名成功、打开浏览器失败）时界面**什么都不说** ——
+  //    点下去毫无反应。两半都要闭住。
+  let sentKey = ''
+  stubOps({
+    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, parentSessionId: '' } },
+    env: { body: okEnvBody() },
+    pending: { body: { ok: true, error: '', rows: [PENDING_TASK], formName: '报告审核', page: 1, size: 20, total: 1, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
+    'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { key: '', childId: '', since: 0 } } },
+    'oss-index': { body: { ok: true, error: '', bucket: 'b', prefix: 'crwu/audit', count: 1, items: { [PENDING_TASK.seqNo]: PENDING_CLOUD }, truncated: false } },
+    'oss-link': (payload) => {
+      sentKey = String(payload.args?.key ?? '')
+      return {
+        body: {
+          ok: true, error: '', url: 'https://example.invalid/report', mode: 'signed', ttl: 60,
+          opened: false, openError: '沙箱拒绝了 open 命令',
+        },
+      }
+    },
+  })
+  const services = fakeServices()
+  const noTimer = { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval }
+  globalThis.setInterval = () => 0
+  globalThis.clearInterval = () => {}
+  try {
+    const rendered = render(WorkbenchPanel, { services })
+    await flushEffects(rendered.instance)
+    rerender(WorkbenchPanel, { services })
+    await flushEffects(rendered.instance)
+    rerender(WorkbenchPanel, { services })
+    await flushEffects(rendered.instance)
+    let tree = rerender(WorkbenchPanel, { services })
+
+    const button = findButtonLike(tree, zhCN.openReport)
+    assert.ok(button, '云端有交付件时，行里要有「查看报告」')
+    button.props.onClick()
+    await settle()
+    await settle()
+    tree = rerender(WorkbenchPanel, { services })
+
+    assert.equal(sentKey, PENDING_CLOUD.htmlKey, '送的必须是交付件的完整对象 key，不是流水号')
+    const text = textOf(tree)
+    assert.equal(text.includes('没能打开浏览器'), true, '打开失败也要出声，否则就是「点了没反应」')
+    assert.equal(text.includes('沙箱拒绝了 open 命令'), true, '要把真实原因带出来')
   } finally {
     globalThis.setInterval = noTimer.setInterval
     globalThis.clearInterval = noTimer.clearInterval

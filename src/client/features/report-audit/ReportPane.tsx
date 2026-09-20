@@ -171,7 +171,14 @@ function PendingTable(props: ReportPaneProps & { rows: RowView[] }): React.React
               onStart={(retry) => props.onStart(task, retry)}
               onStop={() => props.onStop('')}
               onRetryUpload={() => props.onRetryUpload(view.key)}
-              onOpenCloud={() => props.onOpenCloud(view.key)}
+              onOpenCloud={() => {
+                // **行 key 是流水号，不是 OSS 对象 key**：`oss-link` 会按清单里配置的 prefix
+                // 做隔离检查，把裸流水号拒掉（实测 `ok:false`「对象不在配置的 OSS 前缀内」，
+                // 界面只弹一句提示 —— 就是「查看报告打不开」）。这一行要打开的是它云端交付件
+                // 里的 HTML，所以取 `state.ossIndex[view.key].htmlKey`。
+                const cloud = state.ossIndex[view.key]
+                props.onOpenCloud(cloud?.htmlKey ?? '')
+              }}
               onOpenAuditInfo={() => {
                 const cloud = state.ossIndex[view.key]
                 if (cloud !== undefined) props.onOpenAuditInfo(view.key, cloud)
