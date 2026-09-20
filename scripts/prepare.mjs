@@ -27,8 +27,12 @@ export function missingSources() {
 }
 
 export function build() {
-  console.log('[build] tsdown 构建 lib/ …')
-  const result = spawnSync('tsdown', { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' })
+  // 进度日志一律走 **stderr**：stdout 留给机器可读输出。npm 10（Node 22 自带）在
+  // `npm pack --dry-run --json --ignore-scripts` 下仍然会执行 prepare，这些日志一旦混进
+  // stdout，消费 `--json` 的脚本 `JSON.parse` 就炸了（CI 的 ubuntu/no​de22 就是这么红的）。
+  console.error('[build] tsdown 构建 lib/ …')
+  // 子进程的 stdout 也转去 stderr（'inherit' 会让 tsdown 的 ℹ 行落进我们的 stdout）。
+  const result = spawnSync('tsdown', { cwd: ROOT, stdio: ['inherit', 2, 'inherit'], shell: process.platform === 'win32' })
   if (result.error) {
     console.error(`[build] 构建失败：${result.error.message}`)
     return 1
@@ -44,7 +48,7 @@ export function run({ force }) {
       console.error(`[build] 缺少构建所需文件：${missing.join(', ')}`)
       return 1
     }
-    console.log(`[build] 跳过构建：这是已发布的预构建产物（缺 ${missing.join(', ')}），lib/ 已随包提供。`)
+    console.error(`[build] 跳过构建：这是已发布的预构建产物（缺 ${missing.join(', ')}），lib/ 已随包提供。`)
     return 0
   }
   return build()

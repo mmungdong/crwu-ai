@@ -12,8 +12,36 @@ import { promisify } from 'node:util'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { npmInvocation } from './exec.mjs'
+
 const run = promisify(execFile)
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+
+/**
+ * 从 `npm pack --json` 的 stdout 里取出那个 JSON 数组。
+ *
+ * 为什么不能直接 `JSON.parse(stdout)`：**npm 10（Node 22 自带）在 `--ignore-scripts` 下仍会
+ * 执行 `prepare`**（npm 11 不会），构建日志因此混进 stdout —— 实测首行是
+ * `[build] tsdown 构建 lib/ …`，直接 parse 必炸。CI 的 ubuntu/node22 就是这么红的。
+ * `prepare.mjs` 的日志现在也走 stderr 了，但这里再兜一层：npm 的数组是 stdout 里最后一个
+ * 顶格 `[` 起的整段，从那里截一份再试。
+ */
+function parsePackReport(stdout) {
+  const candidates = []
+  const at = stdout.lastIndexOf('\n[')
+  if (at >= 0) candidates.push(stdout.slice(at + 1))
+  candidates.push(stdout)
+  for (const text of candidates) {
+    try {
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      if (parsed !== null && typeof parsed === 'object') return [parsed]
+    } catch (error) {
+      void error
+    }
+  }
+  throw new Error(`npm pack --json 的输出里找不到 JSON 数组，前 200 字符：${stdout.slice(0, 200)}`)
+}
 
 /** 装包的人必须有这些，否则插件根本装不上或不该用。 */
 const REQUIRED = [
@@ -39,6 +67,8 @@ const FORBIDDEN = [
   'install/',
   'scripts/sync-version.mjs',
   'scripts/assert-pack.mjs',
+  // 同上：只有 prepare.mjs 随包发布，其它 scripts 一律不进包。
+  'scripts/exec.mjs',
   'node_modules/',
   '.github/',
   'tsconfig.json',
@@ -47,11 +77,12 @@ const FORBIDDEN = [
 
 // `--ignore-scripts` 很重要：`prepare`/`prepack` 会把构建日志写进 stdout，把 --json 打坏。
 // 调用方负责先构建（prepublishOnly 里 pack:assert 在前、check 里的 build 在后）。
-const { stdout } = await run('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+const npm = npmInvocation()
+const { stdout } = await run(npm.command, [...npm.args, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
   cwd: ROOT,
   maxBuffer: 16 * 1024 * 1024,
 })
-const [report] = JSON.parse(stdout)
+const [report] = parsePackReport(stdout)
 const files = (report.files || []).map((entry) => entry.path)
 const total = files.length
 const bytes = report.unpackedSize ?? report.size ?? 0

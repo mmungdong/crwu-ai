@@ -510,6 +510,10 @@ test('an installed tarball can actually be installed and imported', async () => 
   // 接收方的 `npm install` 直接失败，而本地门禁看不出来。这里真跑一遍 npm pack + npm install。
   const { execFile } = await import('node:child_process')
   const { promisify } = await import('node:util')
+  // Windows 上 `execFile('npm', …)` 起不来（npm 是 .cmd；Node ≥ 20.12 还直接拒绝 spawn .cmd），
+  // 所以统一走 scripts/exec.mjs 的跨平台启动器。
+  const { npmInvocation } = await import(new URL('scripts/exec.mjs', ROOT).href)
+  const npm = npmInvocation()
   const { mkdtemp, rm, stat } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -522,7 +526,7 @@ test('an installed tarball can actually be installed and imported', async () => 
     // 之下，这条测试里的 `npm pack` 会跟着变成 dry-run、不产出 tarball，于是门禁因为一个
     // 与被测行为无关的原因变红。这里显式关掉它，让测试只看「打包能不能装」这件事本身。
     const env = { ...process.env, npm_config_dry_run: 'false' }
-    await run('npm', ['pack', '--pack-destination', workdir], { cwd: fileURLToPath(ROOT), maxBuffer: 16 * 1024 * 1024, env })
+    await run(npm.command, [...npm.args, 'pack', '--pack-destination', workdir], { cwd: fileURLToPath(ROOT), maxBuffer: 16 * 1024 * 1024, env })
     const tarball = (await (await import('node:fs/promises')).readdir(workdir)).find((name) => name.endsWith('.tgz'))
     assert.ok(tarball, 'npm pack 没有产出 tarball')
 
@@ -531,7 +535,7 @@ test('an installed tarball can actually be installed and imported', async () => 
     await run('tar', ['-xzf', join(workdir, tarball), '-C', packageDir, '--strip-components=1'])
 
     // 解包目录里没有 src/，所以 prepare 必须走「跳过」而不是失败。
-    await run('npm', ['install', '--no-audit', '--no-fund'], { cwd: packageDir, maxBuffer: 32 * 1024 * 1024, env })
+    await run(npm.command, [...npm.args, 'install', '--no-audit', '--no-fund'], { cwd: packageDir, maxBuffer: 32 * 1024 * 1024, env })
     await stat(join(packageDir, 'lib', 'index.js'))
     await stat(join(packageDir, 'lib', 'client.js'))
 
