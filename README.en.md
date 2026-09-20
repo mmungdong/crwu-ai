@@ -1,0 +1,119 @@
+# dsh-crwu-workbench
+
+[![ci](https://github.com/mmungdong/dsh-crwu-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/mmungdong/dsh-crwu-workbench/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-internal-lightgrey.svg)](LICENSE)
+
+English | [中文](README.md)
+
+The **audit workbench** for DeepSeek Harness (DSH): self-check the environment → pull pending
+"报告审核" tasks from H3Yun → dispatch exactly one AI audit subagent → watch it, stop it, restart it →
+auto-upload deliverables to Aliyun OSS → open the cloud-hosted audit opinion.
+
+The audit process itself is **not** in this repository; the `crwu-audit` skill family runs it.
+This repository only *dispatches, watches, and ships back*.
+
+One form only: `src/` is the single source, bundled by tsdown into `lib/index.js` (Host) and
+`lib/client.js` (Client), distributed as a DSH **package** plugin (npm / tarball / git).
+Migration history: [`PORTING.md`](PORTING.md).
+
+> A dynamic Cordis form (evaluated in a sandbox from two self-contained source strings) used to live in
+> `legacy/` and was **removed** in the 2026-09-20 cutover. The built `lib/` artifacts cannot replace it:
+> they are an ESM module and a `window.__ModuleLoader__` factory, not sandbox function bodies, and the
+> two forms differ in RPC registration, client transport and React provisioning. That trade-off is
+> deliberate — one form, not two.
+
+Conventions: [`AGENTS.md`](AGENTS.md). Security model: [`SECURITY.md`](SECURITY.md).
+Licensed for internal use only: [`LICENSE`](LICENSE) — do not redistribute.
+
+## Install
+
+```bash
+# recipients — prebuilt, no build authorization needed
+dsh plugin --profile web add dsh-crwu-workbench
+
+# or from a tarball / from git (these fetch sources and build via prepare; pnpm >= 10 needs allowBuilds)
+dsh plugin --profile web add ./dsh-crwu-workbench-<version>.tgz
+dsh plugin --profile web add github:<owner>/<repo>
+
+# local development
+npm ci && dsh plugin --profile web add .
+```
+
+**Restart that profile afterwards** — plugins load with the profile. Then:
+
+1. Open **中瑞世联工作台** in the sidebar.
+2. If the page only shows the self-check tab, get the environment in place first: use "copy prompt" to
+   hand the install manifest to the agent, then install `crwu` / `dws` / `ossutil`, the iFinD key, and
+   the H3Yun + DingTalk logins.
+3. To dispatch an audit, register the parent from a **top-level** session header first. Audits may only
+   be parented by a top-level session; nesting them is what used to make status tracking lose track of
+   a running child.
+
+> **Sandbox mode**: if the restricted mode has no usable backend on this host (on macOS, `sandbox-exec`
+> cannot nest), DSH refuses every shell call the plugin makes. Follow DSH's own hint and switch the mode
+> to `danger-full-access` (`DSH_PERMISSION_MODE=danger-full-access`, or the profile's
+> `dsh-sandbox-policy` `mode`). The plugin never escalates on its own — that decision belongs to the user.
+
+### Updating and removing
+
+```bash
+dsh plugin --profile web add dsh-crwu-workbench@<version>   # then restart the profile
+dsh plugin --profile web remove dsh-crwu-workbench
+```
+
+## Releasing
+
+Never run `npm publish` by hand. The release path is tag-driven and gated:
+
+```bash
+npm run version:set 0.1.3          # package.json + VERSION + lockfile root
+# add a `## package · 0.1.3 · <date>` section to CHANGELOG.md
+npm run check && npm run pack:assert
+git commit -am "release: 0.1.3" && git push
+git tag v0.1.3 && git push origin v0.1.3
+```
+
+The `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which asserts the
+tag matches `package.json` / `VERSION`, runs the full gate and the packed-artifact check, then publishes
+with `--provenance` (needs an `NPM_TOKEN` repository secret). `workflow_dispatch` runs the same pipeline
+as a dry run. `prepublishOnly` re-runs the artifact check and the gate, so a manual publish cannot skip them.
+
+### One trap worth knowing: npm runs `prepare` on install too
+
+Installing the **published tarball** also runs `prepare`, but the tarball only contains `lib/`, the patch and
+the docs — no `src/`, `tsconfig.json`, or `tsdown.config.ts`. So `prepare` cannot be `tsdown`, and it cannot
+point at a script that is not shipped. The build entry is `scripts/prepare.mjs`, which **is** in `files`:
+it builds when the sources are present and skips with an explanation when they are not. The release path is
+`prepack` → `build:lib --force`, which fails rather than shipping a package without `lib/`.
+
+`tests/unit/host-package.test.mjs` pins this with a real `npm pack` + `npm install` + import regression —
+both failure modes were invisible to local gates and only surfaced for the person installing the package.
+
+`peerDependencies` currently pin the `@deepseek-ai/dsh-*@0.1.5-rc.2` line, matching the installed DSH.
+The DSH plugin API is a developer preview: when you upgrade DSH, re-check those peers, re-run the gate, and
+record the supported DSH version in `CHANGELOG.md`.
+
+## Development
+
+| Command | Purpose |
+|---|---|
+| `npm test` | All tests under `tests/unit/`: config, routing, operation table, package manifest, and both Host and **Client** halves |
+| `npm run typecheck` | `tsc --noEmit` over `src/` |
+| `npm run build` | tsdown dual build → `lib/index.js` + `lib/client.js` (`prepare` runs this too) |
+| `npm run smoke:built` | Loads the **real** `lib/index.js` through its same-origin route and the real `lib/client.js` through `__ModuleLoader__` |
+| `npm run check` | `version:check` → `typecheck` → `test` → `build` → `smoke:built` — run this before delivering or opening a PR |
+| `npm run version:set 0.1.3` | Bump the version in `package.json` + `VERSION` + the lockfile root |
+| `npm run version:check` | Verify `package.json` / `VERSION` / `CHANGELOG.md` agree |
+| `npm run pack:assert` | Verify what `npm pack` actually ships (required before publishing) |
+| `npm run build:lib` | Build `lib/` for release (`prepack` uses it; fails if sources are missing) |
+
+CI runs the same gates on Ubuntu + Windows across Node 22 and 24, so a skipped gate cannot slip through.
+
+The package's **Client half is tested directly** in `tests/unit/client-package.test.mjs`.
+`tests/helpers/tsx-loader.mjs` registers an in-process Node loader that strips types and transforms JSX
+(via the already-present `typescript` devDependency), and a small React stand-in resolves the element tree.
+That keeps the test run to `node --test` with no vitest, jsdom, or react-dom — while still asserting what the
+panel renders in its loading / loaded / failed / unmounted states, what `apply` registers into which slot
+inside which lifecycle effect, and that the stylesheet uses DSH theme tokens instead of hard-coded colors.
+The panel's *visual* behaviour (does it render, does switching tabs re-list OSS) is checked in a
+real browser by `install/browser-check.mjs` — see the verification checklist in the Chinese README.

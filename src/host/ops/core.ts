@@ -1,9 +1,26 @@
 import { homedir } from 'node:os'
+import { HOST_BUILD_STAMP } from '../build-info.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { workspaceView } from '../state/store.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { finiteNumber, text } from '../../shared/utils/value.ts'
+import { auditRelease, auditStart, auditStatus, auditStop } from '../audit/ops.ts'
+import { DEFAULT_MANIFEST } from '../environment/manifest-default.ts'
+import { DEFAULT_INSTALL_DOC, buildInstallPromptText } from '../environment/install-prompt.ts'
+import { WORKBENCH_PROTOCOL } from '../../shared/consts.ts'
+import { ensureRegistry } from '../state/registry.ts'
+import { adoptWorkspace, autoWorkspace, pickWorkspace } from '../workspace/ops.ts'
+import { sessionWorkspaceInfo } from '../workspace/resolve.ts'
+import { auditRootView } from '../audit/root.ts'
+import { maybeAutoUpload } from '../oss/auto.ts'
+import { ossCredSave, ossIndex, ossLink, ossResult, ossUpload, type OssDeps } from '../oss/ops.ts'
+import { createUploadWatch } from '../oss/watch.ts'
+import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
+import { runCrwu } from '../crwu/run.ts'
+import { loadEnvironment } from '../environment/ops.ts'
+import { loadPending } from '../h3yun/pending.ts'
+import type { WorldFacts } from '../platform/world.ts'
 import type { OperationMap } from './types.ts'
 
 interface DelegationView {
@@ -34,53 +51,82 @@ function sessionDelegation(ctx: Context, id: string): DelegationView {
   return result
 }
 
-function notPorted(operation: string, legacyLine: number): never {
-  throw new Error(
-    `工作台 op "${operation}" 在包形态里尚未移植（动态形态见 legacy/host.js:${legacyLine}，`
-      + '逐项清单见 PORTING.md）。这不是失败，是骨架阶段的预期状态。',
-  )
-}
-
 /** 创建包形态当前已经支持的操作表。 */
-export function createCoreOperations(ctx: Context, config: WorkbenchConfig, state: WorkbenchState): OperationMap {
+export function createCoreOperations(
+  ctx: Context,
+  config: WorkbenchConfig,
+  state: WorkbenchState,
+  world: WorldFacts,
+): OperationMap {
+  /**
+   * OSS 操作的依赖。
+   *
+   * 必须每次调用时重新构造：清单是环境自检拉来的，平台是探测出来的，
+   * 都可能在这之后才就绪。构造时抓一次快照会让第一次调用永远拿到内置默认清单。
+   */
+  const ossDeps = async (): Promise<OssDeps> => ({
+    ctx,
+    manifest: state.manifest ?? DEFAULT_MANIFEST,
+    platform: await world.platform(),
+    home: await world.home(),
+    workdir: () => world.workdir(),
+  })
+  // 上传看门狗：审核跑完不会回调，只能轮询「有结果就传」。句柄挂在插件实例上。
+  const watch = createUploadWatch(ctx, state, ossDeps)
+  // 定时器必须随插件生命周期释放；这里只登记释放动作，启动由 audit-start 触发。
+  ctx.effect(() => watch.stop, 'crwu-workbench: upload watch')
   return {
-    ping: () => ({ ok: true, rev: 'pkg-0.1.1', at: new Date().toISOString() }),
-    boot: () => ({
+    // `rev` 只反映包版本，同一轮开发里两次 build 完全相同；`builtAt` 是这份产物的写入时间，
+    // 用来回答「重启之后生效的是不是我刚 build 的那份」（见 AGENTS.md §7 的本地开发循环）。
+    ping: () => ({
+      ok: true, rev: 'pkg-0.1.2', at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
+      // 客户端拿它判断「跑着的宿主是不是同一代」——见 shared/consts.ts 的 WORKBENCH_PROTOCOL。
+      protocol: WORKBENCH_PROTOCOL,
+    }),
+    boot: async () => {
+      // legacy 的 boot 是面板挂载后第一个被调用的操作，它顺手恢复了注册表并采用工作空间；
+      // 不补这一步，第一次响应里的 workspace 永远是「未选定」，界面会先闪一下空状态。
+      await ensureRegistry(ctx, await world.home(), state)
+      await adoptWorkspace({ ctx, config, state, world })
+      return {
       ok: true,
+      protocol: WORKBENCH_PROTOCOL,
       caseRoot: state.caseRoot,
       home: homedir(),
       formName: config.formName,
       parentSessionId: state.parentSessionId,
       workspace: workspaceView(state),
+      auditRoot: auditRootView(ctx, state),
       active: { key: state.activeKey, childId: state.activeChildId, since: state.activeSince },
       ported: {
-        done: ['boot', 'workspace', 'workspace-auto', 'bind-session', 'trust', 'clipboard', 'install-prompt', 'ping'],
-        todo: ['env', 'pending', 'audit-start', 'audit-stop', 'audit-status', 'audit-release',
-          'oss-index', 'oss-result', 'oss-link', 'oss-upload', 'open-path', 'relogin', 'dws-login', 'oss-cred-save'],
+        // 只列包形态真的实现了的操作。曾经把 clipboard 列进 done，但操作表里没有它，
+        // 于是客户端点「复制提示词」时拿到 404 —— 声明必须跟着实现走。
+        done: ['ping', 'boot', 'workspace', 'workspace-auto', 'bind-session', 'trust',
+          'install-prompt',
+          // 第 2 层：氚云表单定位 + 待审核列表 + 受白名单约束的 crwu 直通。
+          'pending', 'crwu',
+          // 第 1 层收尾：环境自检聚合（清单 / 二进制 / 氚云 / 钉钉 / OSS / iFinD / 工作空间）。
+          'env',
+          // 第 3 层：审核生命周期（顶层会话门禁 / 单条并发 / 带时间戳重启 / 状态跟不丢）。
+          'audit-start', 'audit-stop', 'audit-status', 'audit-release',
+          // 第 4 层：OSS 交付件（列举 / 按精确 key 读摘要 / 签名链接 / 重传 / 凭据保存）。
+          'oss-index', 'oss-result', 'oss-link', 'oss-upload', 'oss-cred-save',
+          // 第 5 层：零碎但用户每天会点的那些。
+          'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred'],
+        // 24 个 legacy RPC 已全部搬完；这里保留空数组，是为了让「声明跟着实现走」的测试继续成立。
+        todo: [],
       },
-    }),
-    workspace: (args) => {
-      const path = text(args.path).replace(/\/+$/, '')
-      if (path !== '') {
-        state.workspacePath = path
-        state.workspaceTitle = text(args.title) || path
-        state.workspaceSource = 'manual'
-        state.workspaceChosen = true
       }
-      return { ok: true, workspace: workspaceView(state) }
     },
-    'workspace-auto': () => {
-      state.workspaceChosen = false
-      state.workspacePath = ''
-      state.workspaceTitle = ''
-      state.workspaceSource = ''
-      return { ok: true, workspace: workspaceView(state) }
-    },
+    workspace: async (args) => await pickWorkspace({ ctx, config, state, world }, args),
+
+    'workspace-auto': async () => await autoWorkspace({ ctx, config, state, world }),
+
     trust: (args) => {
       state.trustH3yun = args.h3yun === true
       return { ok: true, trust: { h3yun: state.trustH3yun } }
     },
-    'bind-session': (args) => {
+    'bind-session': async (args) => {
       const id = text(args.sessionId)
       if (id === '') return { ok: false, error: '缺少 sessionId' }
       const info = sessionDelegation(ctx, id)
@@ -96,52 +142,104 @@ export function createCoreOperations(ctx: Context, config: WorkbenchConfig, stat
         }
       }
       state.parentSessionId = id
-      return { ok: true, parentSessionId: id, subagent: false, depth: 0, workspace: workspaceView(state) }
+      // 登记是用户按引导做的第一步；顺带把工作空间采用了，别让他再额外点一次自检。
+      await adoptWorkspace({ ctx, config, state, world })
+      return {
+        ok: true,
+        parentSessionId: id,
+        subagent: false,
+        depth: 0,
+        workspace: workspaceView(state),
+        sessionWorkspace: sessionWorkspaceInfo(ctx, state),
+      }
     },
     'install-prompt': (args) => {
-      const url = config.installDocUrl
+      // 清单优先：它是从组织自己的 OSS 现拉的，比部署配置更新；Config 是兜底覆盖。
+      // 与 `env` 返回 installDocUrl 的口径保持一致（同一个值有两个来源时不能各写一套）。
+      const url = (state.manifest?.installDocUrl ?? '') || config.installDocUrl || DEFAULT_INSTALL_DOC
       const workspace = text(args.workspace) || state.workspacePath || state.caseRoot
-      const lines = [
-        '请完成本机 crwu 审核环境的安装。',
-        '',
-        `**第一步：先完整阅读这份安装清单 —— ${url}**`,
-        '',
-        '然后**严格按它的步骤逐条执行**。不要凭经验跳步，不要自己发明安装方式。',
-        '',
-        '几条必须遵守的：',
-        '1. **先检查、只装缺的**：已经装好且可用的项直接跳过，不要重装。',
-        '2. **GitHub 一律按不可达处理**：需要的东西只能从 GitHub 获得时停下来问我。',
-        '3. **密钥、令牌一律不要回显**到对话或日志里。',
-        '4. **每一项都要实际验证**（跑版本命令、看真实输出），不要凭推理判断成功。',
-      ]
-      if (workspace !== '') lines.push(`5. 需要临时文件时放在当前工作空间 \`${workspace}\` 下，不要写系统目录。`)
-      lines.push('', '完成后**逐项回报**：每项的实际状态、绝对路径、验证命令的真实输出，以及跳过或失败的原因。')
-      return { ok: true, url, prompt: lines.join('\n') }
+      return { ok: true, url, prompt: buildInstallPromptText(url, workspace) }
     },
-    env: () => notPorted('env', 2241),
-    pending: () => notPorted('pending', 2378),
-    'audit-start': () => notPorted('audit-start', 1722),
-    'audit-stop': () => notPorted('audit-stop', 1891),
-    'audit-status': () => ({
-      ok: true,
-      audits: [],
-      parentSessionId: state.parentSessionId,
-      active: { key: state.activeKey, childId: state.activeChildId, since: state.activeSince },
-    }),
-    'audit-release': () => {
-      const released = state.activeKey || state.activeChildId
-      state.activeKey = ''
-      state.activeChildId = ''
-      state.activeSince = 0
-      return { ok: true, released }
+
+    env: async (args) => {
+      // 自检要探测平台、主目录、工作空间；三者都按实例缓存，避免每次刷新都跑一串子进程。
+      const [platform, home] = [await world.platform(), await world.home()]
+      return await loadEnvironment(
+        { ctx, config, state, home, platform, sessionRoot: () => world.workdir() },
+        args,
+      )
     },
-    'oss-index': () => notPorted('oss-index', 2110),
-    'oss-result': () => notPorted('oss-result', 2142),
-    'oss-link': () => notPorted('oss-link', 2169),
-    'oss-upload': () => notPorted('oss-upload', 2345),
-    'oss-cred-save': () => notPorted('oss-cred-save', 1696),
-    'open-path': () => notPorted('open-path', 2211),
-    relogin: () => notPorted('relogin', 2334),
-    'dws-login': () => notPorted('dws-login', 2321),
+
+    pending: async (args) => {
+      // 平台探测要跑子进程，所以按实例缓存一次；提权执行必须带工作区，由 loadPending 统一解析。
+      const platform = await world.platform()
+      return await loadPending(
+        { ctx, config, state, trusted: state.trustH3yun, platform, sessionRoot: () => world.workdir() },
+        args,
+      )
+    },
+
+    crwu: async (args) => {
+      // 直通入口，但白名单与提权规则与其它操作完全一致：argv[0] 必须是 crwu。
+      const argv = Array.isArray(args.argv) ? args.argv.map((item) => text(item)) : []
+      const platform = await world.platform()
+      const workdir = text(args.workdir) || await world.workdir()
+      return await runCrwu(ctx, argv, {
+        ...(workdir === '' ? {} : { workdir }),
+        timeoutMs: finiteNumber(args.timeoutMs) > 0 ? finiteNumber(args.timeoutMs) : 60_000,
+        escalate: args.escalate === true,
+        trusted: state.trustH3yun,
+        platform,
+      })
+    },
+    'audit-start': async (args) => {
+      const result = await auditStart({ ctx, config, state, world }, args)
+      // 起了审核就开始盯交付件：子会话跑完不会回调，只能轮询。
+      if (result.ok) watch.start()
+      return result
+    },
+    'audit-stop': async (args) => {
+      const result = await auditStop({ ctx, config, state, world }, args)
+      // 手动停止后把看门狗也停掉（legacy 行为）：这条审核已经不活动了，
+      // 定时器留着只是空转。真正已产出的交付件仍会被 audit-status 的每轮触发上传。
+      if (result.ok) watch.stop()
+      return result
+    },
+    'audit-status': async (args) => {
+      const result = await auditStatus({
+        ctx,
+        config,
+        state,
+        world,
+        autoUpload: async (record) => await maybeAutoUpload(await ossDeps(), record),
+      }, args)
+      // 状态轮询本来就每 10 秒一次，顺手踢一脚看门狗，不必再等满 30 秒。
+      await watch.kick()
+      return result
+    },
+    'audit-release': async () => await auditRelease({ ctx, config, state, world }),
+    'oss-index': async () => await ossIndex(await ossDeps()),
+    'oss-result': async (args) => await ossResult(await ossDeps(), args),
+    'oss-link': async (args) => await ossLink(await ossDeps(), args),
+    'oss-upload': async (args) => await ossUpload(await ossDeps(), args, state),
+    'oss-cred-save': async (args) => await ossCredSave(await ossDeps(), args),
+    'open-path': async (args) => await openPath(
+      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      args,
+    ),
+    clipboard: async (args) => await clipboard(
+      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      args,
+    ),
+    relogin: async () => await relogin({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() }),
+    'dws-login': async (args) => await dwsLogin(
+      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      args,
+    ),
+    session: async () => await sessionStatus({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() }),
+    'oss-cred': async () => await ossCred(
+      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      await world.home(),
+    ),
   }
 }

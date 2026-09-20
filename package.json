@@ -1,10 +1,25 @@
 {
   "name": "dsh-crwu-workbench",
-  "version": "0.1.1",
-  "private": true,
-  "description": "中瑞世联工作台 / CRWU audit workbench for DeepSeek Harness: pick a pending audit report, dispatch one AI audit subagent, watch and stop/restart it, auto-upload deliverables to Aliyun OSS.",
-  "keywords": ["deepseek-harness", "dsh-plugin", "audit", "workbench", "crwu"],
+  "version": "0.1.2",
+  "description": "\u4e2d\u745e\u4e16\u8054\u5de5\u4f5c\u53f0 / CRWU audit workbench for DeepSeek Harness: pick a pending audit report, dispatch one AI audit subagent, watch and stop/restart it, auto-upload deliverables to Aliyun OSS.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh",
+    "cordis",
+    "plugin",
+    "audit",
+    "workbench",
+    "crwu"
+  ],
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mmungdong/dsh-crwu-workbench.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mmungdong/dsh-crwu-workbench/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -15,14 +30,35 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "scripts/prepare.mjs",
     "cordis.patch.yml",
     "README.md",
-    "CHANGELOG.md"
+    "README.en.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE"
   ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "build": "tsdown",
-    "test": "node --test",
-    "typecheck": "tsc --noEmit"
+    "build:lib": "node scripts/prepare.mjs --force",
+    "prepare": "node scripts/prepare.mjs",
+    "prepack": "npm run build:lib",
+    "test": "node --test \"tests/*.test.mjs\" \"tests/**/*.test.mjs\"",
+    "typecheck": "tsc --noEmit",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "version:set": "node scripts/sync-version.mjs",
+    "check": "npm run version:check && npm run typecheck && npm test && npm run build && npm run smoke:built",
+    "pack:assert": "node scripts/assert-pack.mjs",
+    "prepublishOnly": "npm run pack:assert && npm run check",
+    "smoke:built": "node scripts/smoke-built.mjs"
   },
   "dsh": {
     "bundle": {
@@ -49,10 +85,15 @@
     "@deepseek-ai/schemastery": "^3.18.2"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-agent": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-shell": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-subagent": "^0.1.5-rc.2",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.2",
+    "react": "^18.3.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3"
   }

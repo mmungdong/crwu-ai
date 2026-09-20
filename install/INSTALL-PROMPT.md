@@ -1,54 +1,40 @@
 # 安装提示词（粘到收件人的 DSH 对话里）
 
 > 用法：把下面代码块里的全部内容复制，粘贴到**收件人自己**的 DSH 会话里发给 agent。
-> 先把仓库拉到本地（或让 agent 自己拉），再把 `<REPO>` 换成真实路径。
+> 这是「装插件」的提示词；装完插件后，面板会用另一份提示词引导装**运行环境**
+> （`crwu` / `dws` / `ossutil` / iFinD 密钥）。
 
 ```text
-请在这个 DSH 里安装「中瑞世联工作台」插件（动态 Cordis 插件，不是 npm 包）。
+请在这台机器的 DSH 里安装「中瑞世联工作台」插件（DSH 包插件，按 npm 分发）。
 
-仓库在 <REPO>（本机绝对路径；若是 URL 请先 clone 到本地并把路径替换进来）。
+先确认 dsh CLI 可用，然后装进要用的 profile（下面以 web 为例；装了插件的 profile 必须重启）：
 
-严格按以下步骤执行，不要跳步、不要凭经验改写代码：
+  dsh --version
+  dsh plugin --profile web add dsh-crwu-workbench
 
-1. 先完整读这两份源码（它们是逐字源码，含中文与全角符号，不要重新排版）：
-   - <REPO>/legacy/host.js
-   - <REPO>/legacy/client.js
-   读之前先跑 <REPO>/install/verify.sh，确认两份文件的 sha256 与 legacy/REV 记录一致、且
-   node --check 通过。不一致就停下来告诉我，不要自己修。
+如果这台机器连不上公共 npm，改用下面任一条（这两条会拉源码、走 prepare 构建，
+pnpm ≥ 10 需要 allowBuilds 授权，请如实报告授权情况，不要绕过）：
 
-2. 用一次 cordis_define 把**两半一起**定义：
-   - code.host   = legacy/host.js 的完整内容
-   - code.client = legacy/client.js 的完整内容
-   - 若是首次安装：plugin.kind = "new"，idPrefix 用 "crwu"
-   - 若已存在 crwu-1：plugin.kind = "existing"，pluginId = "crwu-1"
-   两半必须同时发。只发 host 半会让浏览器端停留在旧 run 上，之后每次 host.call 都会返回
-   stale-run 并被面板静默吞掉（表现为「面板什么都不显示」）。
+  dsh plugin --profile web add <本仓 tarball 路径>
+  dsh plugin --profile web add github:<owner>/<repo>
 
-3. 用 cordis_run 激活：
-   - 首次：mode = "run"
-   - 已有 currentPackageId：mode = "update"
-   需要授权时等我确认。
+装完必须重启该 profile，插件才会加载。重启后：
 
-4. 激活完成后告诉我 pluginId / packageId / pluginRunId。然后：
-   - 在**顶层会话**里打开一次工作台运行卡片（或点会话头的「登记为子会话父级」）完成审核父级登记。
-     注意：审核只允许挂在顶层会话下；在子代理会话里登记会被拒绝，这是设计如此。
-   - 打开面板：先看「环境自检」。未就绪就点「复制提示词」，把安装清单交给 agent 装完
-     crwu / dws / ossutil / iFinD 密钥 / 氚云 + 钉钉登录，再点「重新自检」。
+1. 打开侧栏的「中瑞世联工作台」。
+2. 如果页面只有「环境自检」一个标签，说明运行环境还没装齐：点那一页的「复制提示词」，
+   按它的安装清单装 crwu / dws / ossutil / iFinD 密钥 / 氚云 + 钉钉登录。
+3. 要发起审核，先在**顶层会话**的会话头点「登记为子会话父级」——审核只允许挂在顶层会话下。
 
-5. 回报：env 页里每一项的真实状态（通过/未通过 + 实际版本）、工作空间选到了哪个目录、
-   审核父级会话 id 是什么。任何一项没通过都如实说明，不要跳过或假装成功。
+几条必须遵守的：
 
-注意：
-- 不要把这个插件写成 npm 包或文件式插件，DSH 的动态插件只能在会话里定义并激活。
-- 不要新建第二个 plugin：同一个工作台重复安装会得到两个面板。
-- 不要在源码里加版本头/注释头，保持与 legacy/REV 记录逐字一致。
+1. **不要凭经验发明安装方式**：装法就是上面的 `dsh plugin --profile <p> add`。
+2. **不要试探连通性**：连不上 npm 就直接停下来告诉我，不要反复重试或换源。
+3. **密钥、令牌一律不要回显**到对话或日志里。
+4. **不要手工 npm publish**：本仓发布走 tag，见 README 第五节。
+5. 若这台机器的受限沙箱模式没有可用后端（macOS 上 `sandbox-exec` 无法套娃），
+   插件发出的 shell 调用会被 DSH 按契约拒绝（报 sandbox mode ... no sandbox backend is usable）。
+   这时按 DSH 的提示把模式切到 danger-full-access（DSH_PERMISSION_MODE=danger-full-access，
+   或改 profile 里 dsh-sandbox-policy 的 mode），并告诉我你改了什么。
+6. 每一项都要实际验证：dsh plugin 装完能列出该依赖、重启后侧栏真的出现工作台入口。
+   请把「实际执行的命令 + 真实输出」逐项回报；跳过或失败的项也要说明原因。
 ```
-
-## 更新到新版本
-
-把 `legacy/` 换成新版本后，重复上面第 1、2（`kind: "existing"`，`pluginId: "crwu-1"`）、3（`mode: "update"`）步。
-Package 是不可变的：新版本是一个新 Package，旧版本仍可回滚（`mode: "run"` 切回旧 packageId）。
-
-## 卸载
-
-让 agent 调 `cordis_undefine` 并传 `pluginId: "crwu-1"`。DSH 进程重启本身也会让它消失。

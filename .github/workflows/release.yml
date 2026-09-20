@@ -1,0 +1,69 @@
+name: release
+
+# 包形态按 npm 分发，所以发布必须由 tag 驱动、由门禁把门：
+#   1. 打 tag（v0.1.2）→ 本工作流
+#   2. 校验 tag 与 package.json / VERSION / CHANGELOG 一致
+#   3. 跑完整门禁（npm run check）+ 产物自检（pack:assert）
+#   4. npm publish --provenance（走 NPM_TOKEN，附构建来源证明）
+#
+# 为什么发布前还要再跑一次门禁：CI 跑在 push 上，tag 可能指向一个没经过 CI 的提交。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: '只打包与校验，不真正发布'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - name: tag must match the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          file="$(tr -d '[:space:]' < VERSION)"
+          echo "tag=$tag package.json=$pkg VERSION=$file"
+          test "$tag" = "$pkg"
+          test "$tag" = "$file"
+
+      - name: full gate
+        run: npm run check
+
+      - name: packed artifact self-check
+        run: npm run pack:assert
+
+      - name: publish
+        if: ${{ github.event_name == 'push' || inputs.dry-run == false }}
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: dry run summary
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run != false }}
+        run: echo "dry-run：门禁与产物自检通过，未发布。"

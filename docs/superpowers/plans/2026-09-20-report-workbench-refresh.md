@@ -1,5 +1,9 @@
 # Report workbench refresh implementation plan
 
+> **历史文档（2026-09-20）**：本计划写作时本仓还并存一条动态 Cordis 形态（`legacy/host.js` +
+> `legacy/client.js`），下文关于「两个自包含交付文件」「动态形态」的说法**已过时** ——
+> 该形态已随 `0.1.2` 的收尾删除，`src/` 现在是唯一源码（见 `README.md` 与 `PORTING.md`）。
+
 ## Goal
 
 Update the currently usable legacy workbench so the report page performs one
