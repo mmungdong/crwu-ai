@@ -60,9 +60,26 @@ jobs:
 
       - name: publish
         if: ${{ github.event_name == 'push' || inputs.dry-run == false }}
-        run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # 先把「没配 secret」这种最常见的原因**明确点出来**：否则 npm 只会回一句
+          # ENEEDAUTH，而 job log 的 REST 接口要仓库 admin 权限才读得到（普通 token 403），
+          # 排查的人只能猜。失败原因同时写成 ::error:: 注解（check-run 注解是公开可读的）。
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::仓库没有配置 NPM_TOKEN secret（Settings → Secrets and variables → Actions → New repository secret）"
+            exit 1
+          fi
+          if ! npm publish --provenance 2>&1 | tee "$RUNNER_TEMP/publish.log"; then
+            node -e "
+              const fs = require('fs')
+              const lines = String(fs.readFileSync(process.env.RUNNER_TEMP + '/publish.log', 'utf8')).split(/\r?\n/)
+              const hits = lines.filter((line) => /(npm error|npm ERR|error code|ENEEDAUTH|EOTP|E403|401|403)/.test(line)).slice(0, 12)
+              const body = [...hits, '———— 尾部 ————', ...lines.slice(-12)].join('%0A')
+              console.log('::error::' + body.slice(0, 4000))
+            "
+            exit 1
+          fi
 
       - name: dry run summary
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run != false }}
