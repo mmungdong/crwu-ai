@@ -532,7 +532,10 @@ test('an installed tarball can actually be installed and imported', async () => 
 
     const packageDir = join(workdir, 'pkg')
     await (await import('node:fs/promises')).mkdir(packageDir, { recursive: true })
-    await run('tar', ['-xzf', join(workdir, tarball), '-C', packageDir, '--strip-components=1'])
+    // 解包一律用**相对路径**：Windows 上 PATH 里的 `tar` 是 GNU tar，它把 `C:\Users\…`
+    // 当成 `host:path` 去解析，于是报 `tar (child): Cannot connect to C: resolve failed`
+    // （CI 的 windows 两个 Node 版本都挂在这里）。相对路径既避开这个解析，bsdtar 也照样吃。
+    await run('tar', ['-xzf', tarball, '-C', 'pkg', '--strip-components=1'], { cwd: workdir })
 
     // 解包目录里没有 src/，所以 prepare 必须走「跳过」而不是失败。
     await run(npm.command, [...npm.args, 'install', '--no-audit', '--no-fund'], { cwd: packageDir, maxBuffer: 32 * 1024 * 1024, env })

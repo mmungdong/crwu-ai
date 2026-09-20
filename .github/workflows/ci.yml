@@ -53,10 +53,19 @@ jobs:
 
       - name: annotate test failures
         if: steps.tests.outcome == 'failure'
+        env:
+          LOG: ${{ runner.temp }}/test-output.log
         run: |
-          log="$RUNNER_TEMP/test-output.log"
-          grep -E '^✖ ' "$log" | head -4 | while IFS= read -r line; do echo "::error::${line}"; done
-          tail -n 6 "$log" | while IFS= read -r line; do echo "::error::${line}"; done
+          # 一条注解装下「失败用例名 + 日志尾部」：GitHub 每个 step 只留有限条注解，
+          # 换行用 %0A 编码，这样失败原因（含 AssertionError / 子进程 stderr）不会被我
+          # 自己的截断吃掉 —— 这正是排查 windows 那次踩的坑。
+          node -e "
+            const fs = require('fs')
+            const lines = String(fs.readFileSync(process.env.LOG, 'utf8')).split(/\r?\n/)
+            const fails = lines.filter((line) => /^✖ /.test(line)).slice(0, 6)
+            const body = [...fails, '———— 日志尾部 ————', ...lines.slice(-45)].join('%0A')
+            console.log('::error::' + body.slice(0, 6000))
+          "
           exit 1
 
       - name: build
