@@ -15,6 +15,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 import ts from 'typescript'
 
@@ -117,10 +118,13 @@ export function registerTsxLoader() {
       if (url.startsWith('crwu-test:react/')) {
         return { format: 'module', shortCircuit: true, source: FAKE_JSX_RUNTIME }
       }
-      if (!url.startsWith('file:') || !REWRITE.test(new URL(url).pathname)) {
-        return nextLoad(url, context)
-      }
-      const filename = new URL(url).pathname
+      if (!url.startsWith('file:')) return nextLoad(url, context)
+      // **必须用 `fileURLToPath`，不能用 `new URL(url).pathname`**：Windows 上 `file:` URL 的
+      // pathname 是 `/C:/Users/…`（带前导斜杠、正斜杠），拿它去 `readFileSync` 直接 ENOENT ——
+      // CI 的 windows 上整个 `client-package.test.mjs` 加载失败（411−340 = 71 条一条没跑）
+      // 就是这个原因，而 macOS / Linux 上永远看不到。
+      const filename = fileURLToPath(url)
+      if (!REWRITE.test(filename)) return nextLoad(url, context)
       const source = readFileSync(filename, 'utf8')
       const transpiled = ts.transpileModule(source, {
         fileName: filename.endsWith('.tsx') ? 'module.tsx' : 'module.ts',
