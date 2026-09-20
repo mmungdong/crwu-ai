@@ -43,8 +43,21 @@ jobs:
       - name: typecheck
         run: npm run typecheck
 
+      # `continue-on-error` + 下一步的注解：失败详情必须**能被机器读到**。
+      # job log 的 REST 接口要仓库 admin 权限（普通 token 403），而 check-run 注解是公开可读的
+      # —— 「windows 上到底哪条测试红了」之前只能靠人翻网页（本轮就吃过这个亏）。
       - name: tests
-        run: npm test
+        id: tests
+        continue-on-error: true
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test-output.log"
+
+      - name: annotate test failures
+        if: steps.tests.outcome == 'failure'
+        run: |
+          log="$RUNNER_TEMP/test-output.log"
+          grep -E '^✖ ' "$log" | head -4 | while IFS= read -r line; do echo "::error::${line}"; done
+          tail -n 6 "$log" | while IFS= read -r line; do echo "::error::${line}"; done
+          exit 1
 
       - name: build
         run: npm run build
