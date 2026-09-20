@@ -18,6 +18,7 @@ export const WORKBENCH_CLASSES = {
   root: 'crwu-audit-root',
   header: 'crwu-audit-header',
   title: 'crwu-audit-title',
+  version: 'crwu-audit-version',
   description: 'crwu-audit-description',
   error: 'crwu-audit-error',
   result: 'crwu-audit-result',
@@ -189,6 +190,13 @@ export const WORKBENCH_STYLE_TEXT = `
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 .crwu-audit-title { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+/* 标题旁的版本徽章：小而安静，但要能一眼读出来（等宽，选中方便复制去报问题）。 */
+.crwu-audit-version {
+  padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-caption);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  white-space: nowrap; user-select: all; cursor: default;
+}
 .crwu-audit-description { margin-top: 4px; color: var(--dsw-alias-label-secondary); }
 .crwu-audit-error { margin-top: 8px; color: var(--dsw-alias-state-error-primary); }
 .crwu-audit-result {

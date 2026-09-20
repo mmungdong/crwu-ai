@@ -2,6 +2,8 @@
 export const zhCN = {
   sidebarLabel: '中瑞世联工作台',
   title: '中瑞世联工作台',
+  versionHint: '当前运行的宿主插件版本',
+  versionUnknown: '版本未知',
   loadingHost: '正在读取 Host…',
   hostStaleTitle: '宿主插件是旧构建，请重启 web profile',
   hostStaleHint: '客户端产物刷新页面就会换新，宿主产物只有重启 profile 才会换。现在跑着的宿主代码比你看到的界面旧，'

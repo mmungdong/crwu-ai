@@ -63,6 +63,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    * 否则界面是新的、逻辑是旧的，会按旧规则把审核挂到「当前会话」下（实测踩过）。
    */
   const [hostProtocol, setHostProtocol] = React.useState<number | null>(null)
+  // 宿主版本指纹：显示在标题旁，用户一眼看到「现在跑的是哪一版」，报问题时直接对上号。
+  const [hostRev, setHostRev] = React.useState('')
+  const [hostBuiltAt, setHostBuiltAt] = React.useState('')
   const [boundParentId, setBoundParentId] = React.useState('')
   const [copied, setCopied] = React.useState(false)
   const [pending, setPending] = React.useState<PendingResult | null>(null)
@@ -180,6 +183,8 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
         if (!alive) return
         if (!result.ok) setBootError('Host 未就绪')
         setHostProtocol(result.protocol ?? null)
+        setHostRev(typeof result.rev === 'string' ? result.rev : '')
+        setHostBuiltAt(typeof result.builtAt === 'string' ? result.builtAt : '')
         setBoundParentId(result.parentSessionId ?? '')
       })
       .catch((cause: unknown) => { if (alive) setBootError(describe(cause)) })
@@ -313,6 +318,12 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   return <div className={C.root}>
     <div className={C.header}>
       <span className={C.title}>{zhCN.title}</span>
+      {/* 当前运行的宿主版本：客户端刷新就换新、宿主只有重启才换，所以这个号是
+          「我到底在跑哪一版」的唯一凭据（悬停看构建时间）。 */}
+      <span
+        className={C.version}
+        title={hostBuiltAt === '' ? zhCN.versionHint : `${zhCN.versionHint}：${hostBuiltAt}`}
+      >{hostRev === '' ? zhCN.versionUnknown : hostRev}</span>
       <span className={C.grow} />
       {/* 面板自己的右上角指示灯：兼作「回到环境自检」的入口（与环境页的门禁是同一份结论）。 */}
       <EnvironmentStatusIcon

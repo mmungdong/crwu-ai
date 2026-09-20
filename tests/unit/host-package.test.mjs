@@ -202,6 +202,12 @@ test('ping and boot answer with the state the panel needs to render', async () =
     pong.builtAt === '' || !Number.isNaN(Date.parse(String(pong.builtAt))),
     `builtAt 必须是有值的 ISO 时间或空串，实际是 ${String(pong.builtAt)}`,
   )
+  // 面板标题旁显示的版本号来自 boot（客户端只调 boot，不调 ping），两处必须是同一个值。
+  const bootAnswer = await operations.boot()
+  assert.equal(bootAnswer.rev, pong.rev, 'boot 也要回版本号，否则标题旁只能显示「版本未知」')
+  assert.equal(bootAnswer.builtAt, pong.builtAt, '构建时间同样要给，悬停时要看得到')
+  assert.equal(bootAnswer.rev, `pkg-${pkg.version}`, 'boot.rev 与 package.json 版本必须一致')
+
   // 它必须是**模块加载时算好的常量**，不是每次请求现读文件：现读的话
   // 「重新 build 但没重启」会报出新文件的时间，让人误以为新 build 已生效（第 33 轮实测过）。
   const buildInfo = await import(new URL('src/host/build-info.ts', ROOT).href)

@@ -44,6 +44,30 @@
 - **文档**：`AGENTS.md` 补 §4.4.1 样式规范（CSS）与 §7.10~§7.13（审核根会话、工作空间三条硬规则、
   协议号、「查看会话」三条硬规则）；`PORTING.md` 记录 25 个操作的验证账。
 
+发布前补进来的（2026-09-20 深夜那几轮，都在同一天）：
+
+- **修「查看报告」打不开**：待审核报告那一行把**流水号**当成 OSS 对象 key 交给 `oss-link`
+  （被前缀隔离拒掉，`对象不在配置的 OSS 前缀内`）；改成取交付件的 `htmlKey`。另外 `ok:true`
+  只代表签名成功，打开浏览器失败（`opened:false`）原来被静默吞掉 —— 新增
+  `openReportNotice()` 把两种情况都说清楚。
+- **审核指令补上钉钉两件回传**：`auditPrompt` 原来只有「案例目录 / 重审禁读旧产物 / OSS 上传」
+  三段，从没提技能步骤 15（钉钉结果回传），子会话做完 OSS 那步就收尾了。现在显式写出
+  ① 团队空间归档（技能脚本**绝对路径**、**只回传结果 JSON**、按 `auditTask.auditTime` 的
+  年/月分开、时间戳必须带时区）与 ② 把 HTML 发到自己的单聊并**把那条消息转成 DING**
+  （`ding message send-by-message --type app`，判据是真实 `openDingId`，一个案例只发一次）。
+  这一层原来一条测试都没有，新增 `tests/unit/host-audit-prompt.test.mjs` 逐条钉住。
+- **面板标题旁显示当前运行的宿主版本**（`pkg-0.0.1`，悬停看构建时间）：`boot` 现在带
+  `rev`/`builtAt`，`WORKBENCH_PROTOCOL` 2 → 3。宿主与客户端分开加载，用户报问题时先看这个号
+  就能分清「界面新、宿主旧」。
+- **CI 修到四个 job 全绿**（原来只有 ubuntu/Node 24 绿）：① ubuntu/Node 22 上 npm 10 在
+  `npm pack --json --ignore-scripts` 下仍会跑 `prepare`，构建日志混进 stdout 让 `JSON.parse`
+  崩掉 → `prepare.mjs` 日志改走 stderr + `assert-pack.mjs` 定位 JSON；② Windows 上
+  `execFile('npm')` 起不来（npm 是 `.cmd`）→ 新增 `scripts/exec.mjs` 用当前 node 跑 npm 的
+  JS 入口；③ Windows 的 `tar` 是 GNU tar，把 `C:\…` 当 `host:path` 解析
+  （`Cannot connect to C: resolve failed`）→ 解包改用相对路径；④ TSX 加载器用
+  `new URL(url).pathname` 当路径，Windows 上是 `/C:/…` → 改用 `fileURLToPath`。
+  测试失败现在会写成 check-run 注解（job log 的 REST 接口要仓库 admin 权限，读不到）。
+
 ## package · 0.1.2 · 2026-09-20（未发布）
 
 **收尾完成：`legacy/` 已删除，`src/` 成为唯一源码**（第 32 轮，用户明确要求后执行）：

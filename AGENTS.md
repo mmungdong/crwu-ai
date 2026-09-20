@@ -333,6 +333,10 @@ curl -s -X POST "http://127.0.0.1:3080/api/crwu-workbench?token=$TOKEN" \
 # {"ok":true,"rev":"pkg-0.0.1","at":"…","builtAt":"2026-09-20T11:30:44.653Z"}
 ```
 
+**面板标题旁就显示这个号**（`crwu-audit-version` 徽章，鼠标悬停看 `builtAt`）：宿主与客户端
+分开加载，用户报问题时先说「看见的版本号是多少」，就能立刻分清是「界面是新的、宿主是旧的」
+还是两边都新 —— 这个徽章的可见性由 `install/browser-check.mjs` 盯着。
+
 拿 `builtAt` 与 `lib/index.js` 的 mtime 比：
 
 - **相同** → 跑的就是当前产物，可以开始测；

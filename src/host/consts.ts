@@ -18,3 +18,13 @@ export const PLUGIN_NAME = 'crwu-workbench'
  * 判据是「缺了它这个插件还该不该起来」：该起来 + 报错 = 可选；起不来 = 硬依赖。
  */
 export const PLUGIN_INJECT = ['webServer', 'shell']
+
+/**
+ * `ping` / `boot` 应答里的版本指纹，形如 `pkg-0.0.1`。
+ *
+ * 为什么是常量而不是现读 `package.json`：它是「我装到的是哪一版」的唯一口头依据，
+ * 必须在**模块加载时**就定下来（现读文件会让「重新 build 但没重启」看起来已生效，
+ * 见 AGENTS.md §7.2）。改版本号时 `version:set` 不会碰这里 ——
+ * `tests/unit/host-package.test.mjs` 有一条断言盯着它必须等于 `pkg-<package.json 版本>`。
+ */
+export const PLUGIN_REV = 'pkg-0.0.1'

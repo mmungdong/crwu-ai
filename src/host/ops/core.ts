@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { HOST_BUILD_STAMP } from '../build-info.ts'
+import { PLUGIN_REV } from '../consts.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { workspaceView } from '../state/store.ts'
@@ -79,7 +80,7 @@ export function createCoreOperations(
     // `rev` 只反映包版本，同一轮开发里两次 build 完全相同；`builtAt` 是这份产物的写入时间，
     // 用来回答「重启之后生效的是不是我刚 build 的那份」（见 AGENTS.md §7 的本地开发循环）。
     ping: () => ({
-      ok: true, rev: 'pkg-0.0.1', at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
+      ok: true, rev: PLUGIN_REV, at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
       // 客户端拿它判断「跑着的宿主是不是同一代」——见 shared/consts.ts 的 WORKBENCH_PROTOCOL。
       protocol: WORKBENCH_PROTOCOL,
     }),
@@ -91,6 +92,10 @@ export function createCoreOperations(
       return {
       ok: true,
       protocol: WORKBENCH_PROTOCOL,
+      // 面板标题旁要显示「现在跑的是哪一版」：客户端刷一下就换新，宿主只有重启才换，
+      // 把 rev 与构建时间一起给它，用户报问题时能直接对上号（见 AGENTS.md §7.2）。
+      rev: PLUGIN_REV,
+      builtAt: HOST_BUILD_STAMP,
       caseRoot: state.caseRoot,
       home: homedir(),
       formName: config.formName,

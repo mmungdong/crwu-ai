@@ -148,6 +148,16 @@ async function main() {
           await page.screenshot({ path: join(out, 'lamp.png') })
         })
 
+        // ── 标题旁的版本号：用户靠它定位「现在跑的是哪一版」 ──────────────────
+        await phase('标题旁的版本号', async () => {
+          const chip = page.locator('.crwu-audit-version').first()
+          checks.that('面板标题旁有版本徽章', await chip.count() > 0)
+          const text = (await chip.innerText().catch(() => '')).trim()
+          checks.that('版本徽章显示宿主的 pkg- 版本号', /^pkg-\d+\.\d+\.\d+/.test(text), text)
+          const title = String(await chip.getAttribute('title') ?? '')
+          checks.that('悬停能看到构建时间', /当前运行的宿主插件版本/.test(title), title)
+        })
+
         // ── 门禁：通过就直接进报告审核；不通过必须停在环境自检页 ────────────
         await phase('自检门禁', async () => {
           const text = await body()

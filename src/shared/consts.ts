@@ -12,4 +12,4 @@ export const WORKBENCH_ROUTE = '/api/crwu-workbench'
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 2
+export const WORKBENCH_PROTOCOL = 3

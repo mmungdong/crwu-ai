@@ -1447,6 +1447,28 @@ test('a passing self-check goes straight into the report page', async () => {
   assert.equal(text.includes(zhCN.enterReport), false, '已经进来了就不该还停在环境自检页')
 })
 
+test('标题旁显示当前运行的宿主版本（悬停看构建时间）', async () => {
+  // 用户要求：面板标题旁要有「现在跑的是哪一版」，报问题时先看这个号。
+  // 客户端刷新就换新、宿主只有重启才换，所以这个号是判断「我到底在跑哪一版」的唯一凭据。
+  stubOps({
+    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, rev: 'pkg-9.9.9', builtAt: '2026-09-20T10:00:00.000Z' } },
+    env: { body: okEnvBody() },
+  })
+  const { tree } = await mountChecked()
+  const chip = find(tree, (node) => node.props?.className === WORKBENCH_CLASSES.version)
+  assert.ok(chip, '标题旁要有版本徽章')
+  assert.equal(textOf(chip), 'pkg-9.9.9', '要显示宿主给的 rev 原文')
+  assert.match(String(chip.props.title), /2026-09-20T10:00:00\.000Z/, '悬停要看得到构建时间（同版本两次 build 只能靠它区分）')
+})
+
+test('旧宿主不报版本时显示「版本未知」，而不是留空', async () => {
+  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  const { tree } = await mountChecked()
+  const chip = find(tree, (node) => node.props?.className === WORKBENCH_CLASSES.version)
+  assert.ok(chip, '旧宿主也要有徽章（否则用户以为界面坏了）')
+  assert.equal(textOf(chip), zhCN.versionUnknown)
+})
+
 test('a failing self-check blocks the report page behind a loading state', async () => {
   stubOps({ boot: { body: { ok: true } }, env: { body: blockedEnvBody() } })
   const services = fakeServices()

@@ -29,6 +29,12 @@ export interface BootResult {
    * 缺这个字段 = 旧构建（字段是后加的）。
    */
   protocol?: number
+  /**
+   * 宿主产物的版本指纹（`pkg-0.0.1`）与它的写入时间；缺这两个字段 = 旧宿主。
+   * 面板标题旁就显示它 —— 用户报问题时先看这个号。
+   */
+  rev?: string
+  builtAt?: string
   caseRoot: string
   home: string
   formName: string
