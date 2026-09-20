@@ -5,7 +5,7 @@
  * 发布前对不上就会出现「装到的包和记录的版本不是一个东西」。
  * `CHANGELOG.md` 里的标题由人写，脚本只校验它至少存在对应版本的小节。
  *
- *   node scripts/sync-version.mjs 0.1.3     # 改 package.json + VERSION（并同步 lockfile 根版本）
+ *   node scripts/sync-version.mjs 0.0.2     # 改 package.json + VERSION（并同步 lockfile 根版本）
  *   node scripts/sync-version.mjs --check   # 只校验（CI / prepublishOnly 用）
  */
 import { readFile, writeFile } from 'node:fs/promises'

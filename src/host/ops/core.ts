@@ -79,7 +79,7 @@ export function createCoreOperations(
     // `rev` 只反映包版本，同一轮开发里两次 build 完全相同；`builtAt` 是这份产物的写入时间，
     // 用来回答「重启之后生效的是不是我刚 build 的那份」（见 AGENTS.md §7 的本地开发循环）。
     ping: () => ({
-      ok: true, rev: 'pkg-0.1.2', at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
+      ok: true, rev: 'pkg-0.0.1', at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
       // 客户端拿它判断「跑着的宿主是不是同一代」——见 shared/consts.ts 的 WORKBENCH_PROTOCOL。
       protocol: WORKBENCH_PROTOCOL,
     }),

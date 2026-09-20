@@ -320,7 +320,7 @@ cp ~/.dsh/crwu-workbench.json /tmp/crwu-state-backup.json
 
 ### 7.2 重启后先确认「新 build 真的生效」
 
-`ping` 的 `rev` 是跟着包版本走的常量（`pkg-0.1.2`），**同一轮开发里两次 build 完全一样**，
+`ping` 的 `rev` 是跟着包版本走的常量（`pkg-0.0.1`），**同一轮开发里两次 build 完全一样**，
 光看它分不清新旧。所以 `ping` 另外回一个 `builtAt` = **这份正在运行的代码被加载那一刻**产物的写入时间。
 
 ```bash
@@ -330,7 +330,7 @@ TOKEN=$(grep -o 'token=[A-Za-z0-9_-]*' ~/.dsh/logs/dsh-web-3080.log | tail -1 | 
 
 curl -s -X POST "http://127.0.0.1:3080/api/crwu-workbench?token=$TOKEN" \
      -H 'Content-Type: application/json' -d '{"op":"ping","args":{}}'
-# {"ok":true,"rev":"pkg-0.1.2","at":"…","builtAt":"2026-09-20T11:30:44.653Z"}
+# {"ok":true,"rev":"pkg-0.0.1","at":"…","builtAt":"2026-09-20T11:30:44.653Z"}
 ```
 
 拿 `builtAt` 与 `lib/index.js` 的 mtime 比：
@@ -535,8 +535,8 @@ dsh plugin --profile <临时 profile> add ./dsh-crwu-workbench-<ver>.tgz
 ### 8.1 版本号与 CHANGELOG
 
 ```bash
-npm run version:set 0.1.3     # 改 package.json + VERSION，并同步 package-lock.json 的根版本
-# 手动在 CHANGELOG.md 加一节：## package · 0.1.3 · <日期>
+npm run version:set 0.0.2     # 改 package.json + VERSION，并同步 package-lock.json 的根版本
+# 手动在 CHANGELOG.md 加一节：## package · 0.0.2 · <日期>
 npm run version:check         # 校验 package.json / VERSION / CHANGELOG 三处一致
 ```
 
@@ -556,9 +556,9 @@ npm publish --dry-run
 ### 8.3 走 tag 发布，不要手工 publish
 
 ```bash
-git commit -am "release(dsh-crwu-workbench): 0.1.3"
+git commit -am "release(dsh-crwu-workbench): 0.0.2"
 git push
-git tag v0.1.3 && git push origin v0.1.3
+git tag v0.0.2 && git push origin v0.0.2
 ```
 
 `v*` tag → `.github/workflows/release.yml`：

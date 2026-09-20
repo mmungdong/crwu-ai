@@ -1,7 +1,7 @@
 name: release
 
 # 包形态按 npm 分发，所以发布必须由 tag 驱动、由门禁把门：
-#   1. 打 tag（v0.1.2）→ 本工作流
+#   1. 打 tag（v0.0.1）→ 本工作流
 #   2. 校验 tag 与 package.json / VERSION / CHANGELOG 一致
 #   3. 跑完整门禁（npm run check）+ 产物自检（pack:assert）
 #   4. npm publish --provenance（走 NPM_TOKEN，附构建来源证明）

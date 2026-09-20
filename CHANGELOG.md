@@ -4,8 +4,45 @@
 版本号用 semver（`package.json` / `VERSION` / `CHANGELOG.md` 三处一致）。
 
 2026-09-20 收尾前本仓并存过一条**动态 Cordis 形态**（`legacy/`，在 DSH 会话里由
-`cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已随 `0.1.2` 的收尾删除，
-下面 `legacy · pkg-43` 及更早的记录是它的历史。
+`cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
+（见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
+
+## package · 0.0.1 · 2026-09-20（首个 npm 发布）
+
+**版本号定为 `0.0.1`**：此前 `0.1.1` / `0.1.2` 两个编号**从未发布过**，首个 npm 发布用最小
+版本号；下面那两节保留为同一批工作的过程记录（不表示存在过 0.1.x 的发布）。
+`ping.rev` 跟着变成 `pkg-0.0.1`。
+
+首个发布里有什么：
+
+- **包形态**：`src/` 是唯一源码，tsdown 分构建 `lib/index.js`（ESM，导出 `name` / `inject` /
+  `apply` / `Config`）与 `lib/client.js`（`__ModuleLoader__.load({ id })`，只 require `react` 与
+  `react/jsx-runtime`）；`lib/` 不入库，由 `prepare.mjs` / `prepack` 产出。
+- **25 条同源操作**（冻结清单）：`ping` / `boot` / `workspace` / `workspace-auto` / `trust` /
+  `bind-session` / `install-prompt` / `env` / `pending` / `crwu` / `audit-start` / `audit-stop` /
+  `audit-status` / `audit-release` / `oss-index` / `oss-result` / `oss-link` / `oss-upload` /
+  `oss-cred-save` / `open-path` / `clipboard` / `relogin` / `dws-login` / `session` / `oss-cred`。
+- **审核子代理一律挂在审核根会话下**：`host/audit/root.ts` 在 ① 选定的工作空间里建一个顶层会话
+  `审核子代理根节点 · MM-DD HH:mm`（`meta.cwd` = 工作空间、**不带** `parentAgent`、
+  `workspace.attachSession`），建完跑一次 hello 预检，不通过就不落钩子、不起审核；根可用就一直
+  复用，不可用才新建（旧树保留）。
+- **`WORKBENCH_PROTOCOL`**：宿主产物只有重启 profile 才换、客户端刷新页面就换；协议号对不上时
+  界面明确说「宿主插件是旧构建，请重启 web profile」并拦住派发。
+- **① 案例根目录三条硬规则**：整份持久化（path / title / id / source）、选过的目录不在了**报错
+  而不静默回落**清单偏好、绝不采用父会话 cwd；配置读失败时放弃本次写入。
+- **界面**：右上角环境指示灯（绿=就绪 / 红=未通过 + 悬停文案）、自检通过直接进报告审核、
+  不通过用 loading 拦住；报告表固定列宽 + 风险等级列 + 窄列不换行；「审核信息」右侧抽屉；
+  翻页与重新自检的加载态。
+- **「查看会话」的两个根因**：可选客户端服务改为现读（不再在 `apply()` 里快照）、目标改为
+  「被点那一行」的 key；另加 `uiWorkspace.openSession` 兜底路径，两条都缺才说「服务不可用」。
+- **删掉「只释放占用（不停子会话）」按钮**（用户要求）：它会解开占用锁而子会话继续跑，正是
+  「两条子会话往同一个案例目录对写」那条闸门要拦的状态；宿主侧 `audit-release` 保留为 host-only。
+- **交付与门禁**：`install/browser-check.mjs`（47 条真实浏览器断言，且全程不点「AI 审核」）、
+  `scripts/`（prepare / assert-pack / smoke-built / sync-version）、CI（Ubuntu + Windows ×
+  Node 22/24）、`v*` tag → npm 发布工作流（`--provenance`）、LICENSE / SECURITY.md /
+  README.en.md / `package-lock.json`。
+- **文档**：`AGENTS.md` 补 §4.4.1 样式规范（CSS）与 §7.10~§7.13（审核根会话、工作空间三条硬规则、
+  协议号、「查看会话」三条硬规则）；`PORTING.md` 记录 25 个操作的验证账。
 
 ## package · 0.1.2 · 2026-09-20（未发布）
 

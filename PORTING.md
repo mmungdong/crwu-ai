@@ -133,7 +133,7 @@
 
 | 验到了什么 | 证据 |
 |---|---|
-| `apply()` 在真实 DSH 里跑完并注册同源路由 | `ping` → `{"ok":true,"rev":"pkg-0.1.2"}` |
+| `apply()` 在真实 DSH 里跑完并注册同源路由 | `ping` → `{"ok":true,"rev":"pkg-0.0.1"}` |
 | 真实平台 / fs / 清单解析 | `boot` → `platform=darwin-arm64`、`caseRoot=/Users/mungdong/中瑞世联工作空间`、`source=manifest-workspace` |
 | 真实 shell + 真实 CLI | `env` → `allOk:true`；`crwu`/`dws`/`python3`/`ossutil` 均定位到真实路径 |
 | 真实氚云 / 钉钉 / OSS | `env` → 氚云 `正常`（真实 userId + 到期）、钉钉 `已登录`、OSS `AK 正常`（真实 bucket 可列） |

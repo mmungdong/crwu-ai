@@ -189,6 +189,13 @@ test('ping and boot answer with the state the panel needs to render', async () =
   const pong = operations.ping()
   assert.equal(pong.ok, true)
   assert.match(String(pong.rev), /^pkg-\d/)
+  // `rev` 必须**等于 package.json 的版本**：它是「我装到的是哪一版」的唯一口头依据，而
+  // `version:set` 只改 package.json / VERSION / lockfile —— 漏改这里会静默地报出上一版的号。
+  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
+  assert.equal(
+    String(pong.rev), `pkg-${pkg.version}`,
+    `包版本是 ${pkg.version}，rev 必须跟着改（src/host/ops/core.ts）`,
+  )
   // 构建指纹：要么是空串（这种形态下读不到自己的 mtime），要么是能解析的 ISO 时间。
   // 它的用途是「重启后确认生效的是刚 build 的那份」—— rev 做不到这件事（同一轮开发里是常量）。
   assert.ok(

@@ -75,7 +75,7 @@ node <仓库>/install/browser-check.mjs \
 
 | 操作 | 观察到的结果 |
 |---|---|
-| `ping` | `{"ok":true,"rev":"pkg-0.1.2"}` —— 说明 `apply()` 在真实 DSH 里跑完并注册了同源路由 |
+| `ping` | `{"ok":true,"rev":"pkg-0.0.1"}` —— 说明 `apply()` 在真实 DSH 里跑完并注册了同源路由 |
 | `boot` | `platform=darwin-arm64`、`caseRoot=/Users/mungdong/中瑞世联工作空间`、`source=manifest-workspace` —— 真实 fs 与清单解析 |
 | `env` | `allOk: true`：`crwu` / `dws` / `python3` / `ossutil` 都定位到真实路径；氚云 `正常`（真实 userId 与到期时间）；钉钉 `已登录`；OSS `AK 正常`（真实 bucket 可列） |
 | `pending` | `total: 8608`，返回真实氚云待办（项目名、复核级次、当前节点） |
@@ -240,7 +240,7 @@ dsh plugin --profile web remove dsh-crwu-workbench
 | `npm run build` | tsdown 双端打包出 `lib/index.js` + `lib/client.js`（`prepare` 也走它） |
 | `npm run smoke:built` | 用**真的** `lib/index.js` 走一遍同源路由、用真的 `lib/client.js` 过一遍 `__ModuleLoader__` |
 | `npm run check` | 上面几条按顺序跑一遍（`version:check` → `typecheck` → `test` → `build` → `smoke:built`）—— **交付/提 PR 前跑这个** |
-| `npm run version:set 0.1.3` | 改版本号（`package.json` + `VERSION` + lockfile 根版本） |
+| `npm run version:set 0.0.2` | 改版本号（`package.json` + `VERSION` + lockfile 根版本） |
 | `npm run version:check` | 校验 `package.json` / `VERSION` / `CHANGELOG.md` 版本一致 |
 | `npm run pack:assert` | 核对 `npm pack` 真正打进去的文件清单 + 三条加载契约（发布前必跑；CI 也跑这条） |
 
@@ -278,12 +278,12 @@ CI（`.github/workflows/ci.yml`）在 Ubuntu + Windows × Node 22/24 上跑同�
 包形态是长期维护的那一半，按 npm 包分发。仓库已配好发布链路，**不要手工 `npm publish`**：
 
 ```bash
-npm run version:set 0.1.3     # 改 package.json + VERSION（并同步 lockfile 根版本）
-# 在 CHANGELOG.md 加一节 `## package · 0.1.3 · <日期>`
+npm run version:set 0.0.2     # 改 package.json + VERSION（并同步 lockfile 根版本）
+# 在 CHANGELOG.md 加一节 `## package · 0.0.2 · <日期>`
 npm run check                 # 本地门禁：version:check + typecheck + test + build + smoke:built
 npm run pack:assert           # 核对真正打进 tarball 的文件清单
-git commit -am "release(dsh-crwu-workbench): 0.1.3" && git push
-git tag v0.1.3 && git push origin v0.1.3
+git commit -am "release(dsh-crwu-workbench): 0.0.2" && git push
+git tag v0.0.2 && git push origin v0.0.2
 ```
 
 `v*` tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：先断言
@@ -311,13 +311,13 @@ npm publish --dry-run    # 期望看到：Publishing to https://registry.npmjs.o
 
 ```bash
 npm pack
-dsh plugin --profile tgz add ./dsh-crwu-workbench-0.1.2.tgz   # 真实接收方路径：装的是 tarball，不是 link:
+dsh plugin --profile tgz add ./dsh-crwu-workbench-0.0.1.tgz   # 真实接收方路径：装的是 tarball，不是 link:
 DSH_PERMISSION_MODE=danger-full-access dsh --profile tgz --port 3098 --no-open
 ```
 
 实测结果：profile 的 `node_modules/dsh-crwu-workbench` 是一份**拷贝**（不是符号链接），
 `lib/index.js` / `lib/client.js` 与仓库构建产物**逐字一致**，包里**没有 `src/`**；
-`ping` → `pkg-0.1.2`、`env` → `allOk:true`、`oss-result` 读真实对象成功；
+`ping` → `pkg-0.0.1`、`env` → `allOk:true`、`oss-result` 读真实对象成功；
 客户端产物被登记进该 profile 的 web 启动清单（`{"id":"dsh-crwu-workbench","url":"/plugins/??…"}`）
 并且服务出来的字节与 `lib/client.js` 一致；随包发布的 `scripts/prepare.mjs` 在无 `src/` 时
 按设计跳过构建并退出 0。
