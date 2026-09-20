@@ -591,6 +591,69 @@ return {
       try { return JSON.parse(value) } catch (error) { return null }
     }
 
+    // 审核结果 JSON 可能包含完整问题清单和证据，不应整包传到浏览器。
+    // 工作台只返回列表抽屉需要的摘要；完整报告仍通过原 HTML 查看。
+    function auditInfoFromResult(doc) {
+      const root = doc && typeof doc === 'object' ? doc : {}
+      const task = root.auditTask && typeof root.auditTask === 'object' ? root.auditTask : {}
+      const profile = task.profile && typeof task.profile === 'object' ? task.profile : {}
+      const summary = root.summary && typeof root.summary === 'object' ? root.summary : {}
+      const counts = summary.counts && typeof summary.counts === 'object' ? summary.counts : {}
+      const review = root.reviewComparison && typeof root.reviewComparison === 'object' ? root.reviewComparison : {}
+      const metrics = review.metrics && typeof review.metrics === 'object' ? review.metrics : {}
+      const bands = review.bands && typeof review.bands === 'object' ? review.bands : {}
+      const trace = root.fileTrace && typeof root.fileTrace === 'object' ? root.fileTrace : {}
+      const numberOrText = function (value) {
+        if (typeof value === 'number' && isFinite(value)) return value
+        return text(value)
+      }
+      const selectedCounts = {}
+      ;['issuesTotal', 'fail', 'high', 'medium', 'low', 'pendingConfirmation', 'notChecked'].forEach(function (key) {
+        if (counts[key] !== undefined && counts[key] !== null) selectedCounts[key] = numberOrText(counts[key])
+      })
+      const selectedMetrics = {}
+      ;['total', 'evaluable', 'resolved', 'uncheckable', 'exactHits', 'partialHits', 'misses', 'hitRate',
+        'coverageRate', 'strictHitRate', 'aiHitRate', 'aiHitRateExclResolved'].forEach(function (key) {
+        if (metrics[key] !== undefined && metrics[key] !== null) selectedMetrics[key] = numberOrText(metrics[key])
+      })
+      const selectedBands = {}
+      ;['overlap', 'aiOnly', 'reviewerOnly', 'divergent'].forEach(function (key) {
+        if (bands[key] !== undefined && bands[key] !== null) selectedBands[key] = numberOrText(bands[key])
+      })
+      return {
+        schemaVersion: text(root.schemaVersion),
+        projectId: text(task.projectId),
+        auditTime: text(task.auditTime),
+        engineVersion: text(task.engineVersion),
+        reportVersion: text(task.reportVersion).slice(0, 500),
+        stage: text(profile.stage),
+        summary: {
+          decision: text(summary.overallDecision),
+          counts: selectedCounts,
+          narrative: text(summary.narrative).slice(0, 4000),
+        },
+        reviewComparison: {
+          status: text(review.status),
+          metrics: selectedMetrics,
+          bands: selectedBands,
+          reviewFiles: arr(review.reviewFiles).slice(0, 20).map(function (file) {
+            const f = file && typeof file === 'object' ? file : {}
+            return {
+              level: text(f.level),
+              displayName: text(f.displayName).slice(0, 300),
+              version: text(f.version).slice(0, 300),
+              occurredAt: text(f.occurredAt),
+            }
+          }),
+        },
+        fileTrace: {
+          generatedAt: text(trace.generatedAt),
+          rendererVersion: text(trace.rendererVersion),
+          sourceDigest: text(trace.sourceDigest),
+        },
+      }
+    }
+
     function normalizeOss(doc) {
       const base = doc && typeof doc === 'object' ? doc : {}
       const lm = text(base.linkMode)
@@ -842,6 +905,9 @@ return {
         project: text(pick(r, ['F0000049'])),
         business: text(pick(r, ['F0000056'])),
         risk: text(pick(r, ['F0000020'])),
+        reviewLevel: labelOf(pick(r, ['F0000158'])),
+        reviewState: labelOf(pick(r, ['F0000178'])),
+        currentNode: labelOf(pick(r, ['F0000184'])),
         seqNo: text(pick(r, ['SeqNo', 'seqNo'])),
         status: r.Status === undefined || r.Status === null ? '' : String(r.Status),
         statusName: text(pick(r, ['Status_Name', 'statusName'])),
@@ -2067,10 +2133,37 @@ return {
         if (!items[seq]) items[seq] = { seqNo: seq, files: [], htmlKey: '', jsonKey: '' }
         const name = fileNameOf(key)
         items[seq].files.push({ key: key, name: name })
-        if (/\.html?$/i.test(name)) items[seq].htmlKey = key
-        else if (/\.json$/i.test(name)) items[seq].jsonKey = key
+        if (name === '审核意见.' + seq + '.html') items[seq].htmlKey = key
+        else if (name === '审核结果.' + seq + '.json') items[seq].jsonKey = key
       }
       return { ok: true, bucket: oss.bucket, prefix: oss.prefix, count: keys.length, items: items, truncated: run.truncated === true }
+    })
+
+    harness.handle('workbench:oss-result', async (args) => {
+      const a = args && typeof args === 'object' ? args : {}
+      const key = text(a.key)
+      if (!key) return { ok: false, error: '缺少审核结果对象 key' }
+      const platform = await detectPlatform()
+      const manifest = state.manifest || normalizeManifest(BUILTIN_MANIFEST)
+      const oss = normalizeOss(manifest.oss)
+      if (!oss.enabled) return { ok: false, error: '清单里 oss.enabled 不是 true' }
+      if (!oss.bucket) return { ok: false, error: '清单缺 oss.bucket' }
+      const relative = stripPrefix(key, oss.prefix)
+      if (!relative) return { ok: false, error: '审核结果对象不在配置的 OSS 前缀内' }
+      if (!/\.json$/i.test(key)) return { ok: false, error: '审核信息只允许读取 JSON 对象' }
+      const ossutilPath = await resolveOssutil(oss, platform)
+      if (!ossutilPath) return { ok: false, error: '未找到 ossutil，请先安装' }
+      const argv = [ossutilPath, 'cat', 'oss://' + oss.bucket + '/' + key]
+      if (oss.endpoint) argv.push('--endpoint', oss.endpoint)
+      const run = await runShell(argv.map(quoteArg).join(' '), undefined, 60000, false, 8 * 1024 * 1024)
+      if (!run.ok) {
+        const raw = (text(run.stderr) || text(run.error) || '读取审核结果失败').trim()
+        return { ok: false, error: raw.slice(0, 400) }
+      }
+      if (run.truncated) return { ok: false, error: '审核结果 JSON 超过 8MB，已停止读取' }
+      const doc = parseJsonLoose(run.stdout)
+      if (!doc || typeof doc !== 'object') return { ok: false, error: '审核结果不是合法 JSON' }
+      return { ok: true, key: key, info: auditInfoFromResult(doc) }
     })
 
     harness.handle('workbench:oss-link', async (args) => {
@@ -2081,6 +2174,7 @@ return {
       const manifest = state.manifest || normalizeManifest(BUILTIN_MANIFEST)
       const oss = normalizeOss(manifest.oss)
       if (!oss.bucket) return { ok: false, error: '清单缺 oss.bucket' }
+      if (!stripPrefix(key, oss.prefix)) return { ok: false, error: '对象不在配置的 OSS 前缀内' }
       const cloud = 'oss://' + oss.bucket + '/' + key
       let url = ''
       if (oss.linkMode === 'public') {
@@ -2322,7 +2416,7 @@ return {
     })
 
     console.log('中瑞世联工作台 Host 半已装配 ' + JSON.stringify({
-      rev: 'pkg-42',
+      rev: 'pkg-43',
       ws: typeof resolveAuditWorkspace === 'function' && typeof ensureWorkspace === 'function' && typeof sessionWorkspaceInfo === 'function',
       wsView: typeof workspaceView === 'function',
       promptRoot: typeof auditPrompt === 'function' && auditPrompt.toString().indexOf('本案例的唯一根目录是') > 0,

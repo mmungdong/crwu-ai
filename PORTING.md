@@ -62,11 +62,11 @@
 | `auditLabel` / `seqNoFromLabel` | ~1450 / ~1456 | label = `审核 <流水号> · HH:MM:SS`，流水号始终是第一个 token |
 | `describEndReason` | ~1030 | `SubagentStopReason` 四值：completed/aborted/error/max-tokens |
 | `auditPrompt` | 875 | 审核指令全文（含 `--case` 绝对路径、重审段、OSS 上传段）——**整段照抄，不要改写措辞** |
-| `stopChild` | 1764 | abort → 再 dispose；无句柄时 `agents.get(id).cancel({ kind:'parent' })` |
-| `sessionDelegation` | 1427 | 已移植（顶层会话门禁） |
-| **`audit-start`** | **1656** | 父级必须是顶层会话；同报告已有子会话则**停掉旧的 + 带时间戳重启 + 走重审提示词** |
-| **`audit-stop`** | **1817** | 标记 stopped/ended + 释放占用 |
-| **`audit-status`** | **1839** | 存活 = `agents.get(childId).status === 'running'`（**与父会话无关**，这是修「状态跟丢」的关键）；按每条记录自己的 `parentSessionId` 聚合查询；占用锁自愈 |
+| `stopChild` | 1838 | abort → 再 dispose；无句柄时 `agents.get(id).cancel({ kind:'parent' })` |
+| `sessionDelegation` | 1493 | 已移植（顶层会话门禁） |
+| **`audit-start`** | **1722** | 父级必须是顶层会话；同报告已有子会话则**停掉旧的 + 带时间戳重启 + 走重审提示词** |
+| **`audit-stop`** | **1891** | 标记 stopped/ended + 释放占用 |
+| **`audit-status`** | **1913** | 存活 = `agents.get(childId).status === 'running'`（**与父会话无关**，这是修「状态跟丢」的关键）；按每条记录自己的 `parentSessionId` 聚合查询；占用锁自愈 |
 | 事件订阅 | ~1000 | `ctx.on('agent/status')` / `ctx.on('subagent/end')` —— 包形态直接可用 |
 
 ### 第 5 层：交付件上云
@@ -77,18 +77,26 @@
 | `uploadArtifacts` | 1076 | `ossutil cp -f` → key = `<prefix>/<流水号>/<文件名>`（**不带年/月**） |
 | `maybeAutoUpload` + 上传看门狗 | 1044 / ~1005 | `ctx.timer.interval` 轮询，出结果就传 |
 | `joinUrl` / `parseSignUrl` / `parseLsObjects` | ~1030 / ~700 / ~680 | 签名 URL、列举解析 |
-| **`oss-index`** | **2036** | `ossutil ls`（**没有 `-r`**，默认即递归；`-d` 才是只列一层） |
-| **`oss-link`** | **2068** | 默认签名 URL 1 小时；`http://` 升级 `https://`；然后调系统 `open` |
-| **`oss-upload`** | **2243** | 手动重传 |
-| `oss-cred-save` | 1630 | 写 `~/.ossutilconfig`（600），密钥不回显 |
-| `open-path` | 2109 | 系统默认程序打开案例内文件（`fs.contains` 做根目录包含检查） |
-| `relogin` / `dws-login` | 2232 / 2219 | 氚云扫码 / 钉钉登录 |
+| **`oss-index`** | **2110** | 报告页首次进入或显式刷新时只执行一次 `ossutil ls`；检索、翻页、标签切换不得重复列举 |
+| **`oss-result`** | **2142** | 用户点击“审核信息”后才按精确 Key `ossutil cat` 一个 JSON；先校验 Bucket 前缀与 `.json` 后缀，再输出精简摘要，不把完整证据链塞进列表接口 |
+| **`oss-link`** | **2169** | 先校验对象属于配置前缀；默认签名 URL 1 小时；`http://` 升级 `https://`；然后调系统 `open` |
+| **`oss-upload`** | **2345** | 手动重传 |
+| `oss-cred-save` | 1696 | 写 `~/.ossutilconfig`（600），密钥不回显 |
+| `open-path` | 2211 | 系统默认程序打开案例内文件（`fs.contains` 做根目录包含检查） |
+| `relogin` / `dws-login` | 2334 / 2321 | 氚云扫码 / 钉钉登录 |
 
 ### 第 6 层：客户端半（**基本重写**）
 
 `legacy/client.js` 是「函数体 + 注入 React/host/styles/slots」，包形态是 tsdown 打出的浏览器模块。
 可以照搬的：面板结构、表格/徽章/提示条的 JSX、主题 token、`slots.inject` 的槽位名。
-必须重写的：打包方式、`host.call` → `rpc`、`styles.insert` → CSS module、`ctx.interval` → 客户端定时器。
+必须重写的：打包方式、`host.call` → `rpc`、`styles.insert` → 包内样式模块、`ctx.interval` → 客户端定时器。
+
+当前 `src/` 已完成入口、Host 路由、状态与 Client 骨架的目录拆分，证明 DSH 并不要求 TypeScript
+单文件。正式页面尚未从 `legacy/client.js` 搬完；在接入 DSH 官方 CSS Module 构建预设前，骨架样式
+以 `features/workbench/consts.ts` 中的自包含样式文本随 `lib/client.js` 交付，避免生成未发布的独立 CSS。
+
+报告页的目标交互已经在 legacy 落地：待审核报告与 AI 审核结果使用页内标签；氚云每页记录与一次
+OSS 对象清单在内存合并；只有点击某条“审核信息”时才读取该条 JSON。不要恢复每分钟 OSS 轮询。
 
 槽位归属（已实测确认，写进 `package.json` 的 `dsh.client.inject`）：
 

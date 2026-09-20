@@ -7,18 +7,18 @@
 # 一律写在本文件和 CHANGELOG.md。
 
 pluginId  = crwu-1
-rev       = pkg-42
+rev       = pkg-43
 runId     = pending-install
-capturedAt= 2026-09-20T11:28+08:00
+capturedAt= 2026-09-20T16:22+08:00
 form      = dynamic cordis package source (pending DSH install)
 
-sha256    legacy/host.js    a17fd591907e5de36330370ba576f9ad4fee87c4b386b94c7593e14252ac3a58
-sha256    legacy/client.js  ae77d1a8c95928bfa0adaf0c3175e5c736f22f39bde6b95a0317bdd4c2bf1004
-bytes     legacy/host.js    117914
-bytes     legacy/client.js  87043
+sha256    legacy/host.js    68d667b718fcf92a51ddf674a1634544f380a3556723f099eacb8e18a9f716b9
+sha256    legacy/client.js  abc9879c5a4c42cdf904e4712c669190e7dada59e4f44a374107eecc3949bc15
+bytes     legacy/host.js    123229
+bytes     legacy/client.js  101831
 
 # 形态说明（与 src/ 里的包形态互不影响）
 # host.js   是 `return { apply(ctx) { ... } }`：沙箱里求值的函数体，
-#           用注入的 harness.handle('workbench:*') 注册 23 个 RPC 处理器。
+#           用注入的 harness.handle('workbench:*') 注册 24 个 RPC 处理器。
 # client.js 是 `return { inject:['timer'], apply(ctx) {...} }`：同样是函数体，
 #           用注入的 React / host / styles / slots 渲染面板，用 host.call 走 RPC。

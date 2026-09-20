@@ -104,15 +104,22 @@ AI 审核子会话 → 盯住它的运行状态、可随时停止/重启 → 交
 ## 六、目录
 
 ```
-legacy/host.js     Host 半（沙箱函数体）：23 个 workbench:* RPC 处理器
+AGENTS.md          DSH 插件架构、目录、代码风格与测试规范
+legacy/host.js     Host 半（沙箱函数体）：24 个 workbench:* RPC 处理器
 legacy/client.js   Client 半：面板 UI + slots 注册
 legacy/REV         rev / runId / sha256 / 捕获时间
 install/           收件人安装提示词与校验脚本
-src/index.ts       包形态 Host 半（骨架）
-src/client/        包形态 Client 半（骨架）
+src/index.ts       包形态 Host 轻入口（骨架）
+src/host/          包形态 Host 配置、路由、操作与状态模块
+src/client/        包形态 Client 装配、API、组件与 feature 模块
+src/shared/        Host / Client 共享的协议常量与纯工具
 cordis.patch.yml   包形态的装配补丁
 PORTING.md         legacy → 包 的逐项移植清单
 ```
+
+DSH 不要求 TypeScript 源码集中在单个文件。`src/` 应按领域拆分，构建后仍只暴露
+`lib/index.js` 与 `lib/client.js` 两个入口；只有动态交付的 `legacy/host.js`、
+`legacy/client.js` 需要保持自包含。
 
 ## 许可
 

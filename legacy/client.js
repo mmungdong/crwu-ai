@@ -3,7 +3,10 @@ return {
   apply(ctx) {
     const slots = ctx.get('slots')
     const layout = ctx.get('layout')
-    const wbCache = { boot: null, env: null, envAt: 0, installPrompt: null, parentSessionId: '', parentIssue: '' }
+    const wbCache = {
+      boot: null, env: null, envAt: 0, installPrompt: null, parentSessionId: '', parentIssue: '',
+      ossLoaded: false, ossIndex: {}, auditInfo: {}, auditInfoRequest: 0,
+    }
     // 案例根目录与「当前会话属于哪个工作空间」由 Host 解析（只有 Host 能读
     // workspaceRegistry / sessions）。绑定父会话的组件拿到结果后广播，
     // 工作台不必为了这几个字段再自检一次。
@@ -25,7 +28,7 @@ return {
     }
 
     styles.insert([
-      '.wb-root{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px}',
+      '.wb-root{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px}',
       '.wb-head{padding:14px 18px 10px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
       '.wb-title{font-size:16px;font-weight:600;letter-spacing:.3px}',
       '.wb-sub{margin-top:3px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
@@ -89,6 +92,19 @@ return {
       '.wb-form{display:grid;grid-template-columns:110px 1fr;gap:8px 10px;align-items:center;margin-top:4px}',
       '.wb-form-l{font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.wb-form input{width:100%}',
+      '.wb-page-tabs{display:flex;gap:20px;border-bottom:1px solid var(--dsw-alias-border-l1);margin-bottom:12px}',
+      '.wb-page-tab{border:0;background:transparent;color:var(--dsw-alias-label-secondary);padding:4px 1px 10px;cursor:pointer;font:inherit;font-weight:600;border-bottom:2px solid transparent}',
+      '.wb-page-tab-on{color:var(--dsw-alias-brand-primary);border-bottom-color:var(--dsw-alias-brand-primary)}',
+      '.wb-page-count{display:inline-block;min-width:18px;padding:1px 6px;margin-left:5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);font-size:10px;text-align:center}',
+      '.wb-review-main{font-weight:600}',
+      '.wb-drawer-shade{position:absolute;inset:0;background:rgba(0,0,0,.22);z-index:20}',
+      '.wb-drawer{position:absolute;z-index:21;top:0;right:0;width:min(430px,100%);height:100%;overflow:auto;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.12);padding:18px}',
+      '.wb-drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.wb-drawer-title{font-size:16px;font-weight:700}',
+      '.wb-drawer-section{padding:13px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.wb-drawer-section:last-child{border-bottom:0}',
+      '.wb-kv{display:grid;grid-template-columns:105px 1fr;gap:7px 10px;line-height:1.55}',
+      '.wb-kv-k{color:var(--dsw-alias-label-secondary)}',
     ].join('\n'))
 
     function call(method, args) { return host.call(method, args === undefined ? null : args) }
@@ -481,8 +497,7 @@ return {
       )
     }
 
-    // 云端只暴露审核意见 HTML 一个入口。结果 JSON 照样上传（它是交付件），
-    // 但不在按钮区开第二个口子 —— 员工要看的是审核意见本身，不是为了看 JSON。
+    // HTML 仍沿用现有 OSS 位置。列表阶段只持有 Key，用户点击后才签名打开。
     function CloudButtons(props) {
       const cloud = props.cloud
       if (!cloud || !cloud.htmlKey) return null
@@ -490,7 +505,90 @@ return {
         React.createElement('button', {
           className: 'wb-btn wb-btn-p wb-btn-s', type: 'button', disabled: props.busy,
           onClick: function () { props.openCloud(cloud.htmlKey) },
-        }, props.busy ? '打开中…' : '云端审核意见'),
+        }, props.busy ? '打开中…' : '查看报告'),
+      )
+    }
+
+    function AuditInfoButton(props) {
+      const cloud = props.cloud
+      if (!cloud || !cloud.htmlKey || !cloud.jsonKey) return null
+      return React.createElement('button', {
+        className: 'wb-btn wb-btn-s', type: 'button',
+        onClick: function () { props.openAuditInfo(props.task || null, cloud) },
+      }, '审核信息')
+    }
+
+    function AuditInfoDrawer(props) {
+      const state = props.state
+      if (!state) return null
+      const info = state.info
+      const task = state.task || {}
+      const summary = info && info.summary ? info.summary : {}
+      const counts = summary.counts || {}
+      const comparison = info && info.reviewComparison ? info.reviewComparison : {}
+      const metrics = comparison.metrics || {}
+      const files = comparison.reviewFiles || []
+      const auditAt = info ? Date.parse(String(info.auditTime || '')) : NaN
+      const modifiedAt = Date.parse(String(task.modifiedAt || ''))
+      // ModifiedTime 只能说明氚云记录后来更新过，不能据此声称报告材料发生变化。
+      const changedAfterAudit = isFinite(auditAt) && isFinite(modifiedAt) && modifiedAt > auditAt
+      const decision = summary.decision === 'pass' ? '通过'
+        : (summary.decision === 'fail' ? '需修改' : (summary.decision || '未给出'))
+      return React.createElement(React.Fragment || 'div', null,
+        React.createElement('div', { className: 'wb-drawer-shade', onClick: props.close }),
+        React.createElement('aside', { className: 'wb-drawer' },
+          React.createElement('div', { className: 'wb-drawer-head' },
+            React.createElement('div', null,
+              React.createElement('div', { className: 'wb-drawer-title' }, 'AI 审核信息'),
+              React.createElement('div', { className: 'wb-muted wb-mono', style: { marginTop: '4px' } },
+                (info && info.projectId) || task.seqNo || state.seqNo || '—'),
+            ),
+            React.createElement('button', { className: 'wb-btn wb-btn-s', type: 'button', onClick: props.close }, '关闭'),
+          ),
+          state.loading ? React.createElement('div', { className: 'wb-empty' }, '正在读取该项目的审核结果 JSON…') : null,
+          state.error ? React.createElement('div', { className: 'wb-notice wb-notice-e', style: { marginTop: '12px' } }, state.error) : null,
+          info ? React.createElement('div', null,
+            React.createElement('div', { className: 'wb-drawer-section' },
+              React.createElement('div', { className: 'wb-kv' },
+                React.createElement('div', { className: 'wb-kv-k' }, '审核结论'), React.createElement('div', null, decision),
+                React.createElement('div', { className: 'wb-kv-k' }, '审核时间'), React.createElement('div', { className: 'wb-mono' }, info.auditTime || '—'),
+                React.createElement('div', { className: 'wb-kv-k' }, 'AI 审核阶段'), React.createElement('div', null, info.stage || '—'),
+                React.createElement('div', { className: 'wb-kv-k' }, '当前人工复核'), React.createElement('div', null,
+                  [task.reviewLevel, task.reviewState].filter(Boolean).join(' · ') || '当前页未取得'),
+                React.createElement('div', { className: 'wb-kv-k' }, '当前节点'), React.createElement('div', null, task.currentNode || '—'),
+              ),
+              changedAfterAudit ? React.createElement('div', { className: 'wb-notice wb-notice-w', style: { marginTop: '11px', marginBottom: 0 } },
+                '氚云记录在本次 AI 审核后更新过。这里只提示记录时间变化，不能据此判断报告材料已经变化。') : null,
+            ),
+            React.createElement('div', { className: 'wb-drawer-section' },
+              React.createElement('div', { className: 'wb-card-t' }, '问题摘要'),
+              React.createElement('div', { className: 'wb-row' },
+                React.createElement(Chip, { text: '高风险 ' + String(counts.high === undefined ? 0 : counts.high) }),
+                React.createElement(Chip, { text: '中风险 ' + String(counts.medium === undefined ? 0 : counts.medium) }),
+                React.createElement(Chip, { text: '低风险 ' + String(counts.low === undefined ? 0 : counts.low) }),
+                React.createElement(Chip, { text: '待确认 ' + String(counts.pendingConfirmation === undefined ? 0 : counts.pendingConfirmation) }),
+              ),
+              summary.narrative ? React.createElement('div', { className: 'wb-quote' }, summary.narrative) : null,
+            ),
+            React.createElement('div', { className: 'wb-drawer-section' },
+              React.createElement('div', { className: 'wb-card-t' }, '人工复核对照'),
+              React.createElement('div', { className: 'wb-kv' },
+                React.createElement('div', { className: 'wb-kv-k' }, '对照状态'), React.createElement('div', null, comparison.status || '未执行'),
+                React.createElement('div', { className: 'wb-kv-k' }, '命中率'), React.createElement('div', null,
+                  metrics.hitRate !== undefined ? String(metrics.hitRate) + (typeof metrics.hitRate === 'number' ? '%' : '') : '—'),
+                React.createElement('div', { className: 'wb-kv-k' }, '精确 / 部分 / 未命中'), React.createElement('div', null,
+                  [metrics.exactHits, metrics.partialHits, metrics.misses].map(function (v) { return v === undefined ? '—' : String(v) }).join(' / ')),
+              ),
+              files.length > 0 ? React.createElement('div', { style: { marginTop: '10px' } }, files.map(function (file, index) {
+                return React.createElement('div', { className: 'wb-ev', key: index },
+                  React.createElement('div', { className: 'wb-ev-t' }, file.level || '复核文件'),
+                  React.createElement('div', { className: 'wb-muted' }, file.displayName || '—'),
+                  file.version ? React.createElement('div', { className: 'wb-muted' }, file.version) : null,
+                )
+              })) : null,
+            ),
+          ) : null,
+        ),
       )
     }
 
@@ -539,6 +637,7 @@ return {
             state: state, key: key, taskKey: key, task: task, start: props.startAudit,
             label: hasCloud ? '重新审核' : 'AI 审核', confirm: hasCloud,
           }),
+          React.createElement(AuditInfoButton, { task: task, cloud: cloud, openAuditInfo: props.openAuditInfo }),
           React.createElement(CloudButtons, { cloud: cloud, busy: state.cloudBusy, openCloud: props.openCloud }),
           !state.canDispatch
             ? React.createElement('div', { className: 'wb-muted', style: { marginTop: '4px' } }, '需先通过钉钉认证')
@@ -580,6 +679,7 @@ return {
             disabled: !!state.stopBusy,
             onClick: function () { props.stopAudit(audit.childId) },
           }, state.stopBusy ? '停止中…' : '停止') : null,
+          React.createElement(AuditInfoButton, { task: task, cloud: cloud, openAuditInfo: props.openAuditInfo }),
           React.createElement(CloudButtons, { cloud: cloud, busy: state.cloudBusy, openCloud: props.openCloud }),
           audit.htmlFile ? React.createElement('button', {
             className: 'wb-btn wb-btn-s', type: 'button',
@@ -601,12 +701,18 @@ return {
 
     function ReportPane(props) {
       const state = props.state
+      const [view, setView] = React.useState('pending')
       const total = state.total || 0
       const size = state.pageSize || 20
       const pages = total > 0 ? Math.max(1, Math.ceil(total / size)) : 1
       const modeText = state.filterMode === 'equal' ? ' · 精确匹配'
         : (state.filterMode === 'contains' ? ' · 模糊匹配' : '')
       const cloudCount = state.ossIndex ? Object.keys(state.ossIndex).length : 0
+      const taskBySeq = {}
+      ;(state.tasks || []).forEach(function (task) { taskBySeq[task.seqNo || task.name] = task })
+      const resultItems = Object.keys(state.ossIndex || {}).map(function (key) { return state.ossIndex[key] })
+        .filter(function (item) { return !!(item && (item.htmlKey || item.jsonKey)) })
+        .sort(function (a, b) { return String(b.seqNo || '').localeCompare(String(a.seqNo || '')) })
       return React.createElement('div', null,
         props.noticeNode,
         state.parentIssue
@@ -639,13 +745,25 @@ return {
           ? React.createElement('div', { className: 'wb-notice wb-notice-w' },
               '云端审核结果清单没拉到（不影响氚云列表）：' + state.ossIndexError)
           : null,
+        React.createElement('div', { className: 'wb-page-tabs' },
+          React.createElement('button', {
+            className: 'wb-page-tab' + (view === 'pending' ? ' wb-page-tab-on' : ''), type: 'button',
+            onClick: function () { setView('pending') },
+          }, '待审核报告', React.createElement('span', { className: 'wb-page-count' }, String(total))),
+          React.createElement('button', {
+            className: 'wb-page-tab' + (view === 'results' ? ' wb-page-tab-on' : ''), type: 'button',
+            onClick: function () { setView('results') },
+          }, 'AI审核结果', React.createElement('span', { className: 'wb-page-count' }, String(cloudCount))),
+        ),
         React.createElement(Card, {
-          title: '氚云 · 报告审核',
+          title: view === 'pending' ? '氚云 · 报告审核' : 'OSS · 最新 AI 审核报告',
           extra: React.createElement('span', { className: 'wb-muted' },
-            (state.tasks === null ? '未拉取' : ('共 ' + total + ' 条')) +
-            (state.ossLoading ? ' · 云端清单拉取中…' : (' · 云端命中 ' + cloudCount + ' 个'))),
+            view === 'pending'
+              ? ((state.tasks === null ? '未拉取' : ('共 ' + total + ' 条')) +
+                (state.ossLoading ? ' · 云端清单拉取中…' : (' · 已审核 ' + cloudCount + ' 个')))
+              : (state.ossLoading ? '云端清单拉取中…' : ('共 ' + resultItems.length + ' 个'))),
         },
-          React.createElement('div', { className: 'wb-row' },
+          view === 'pending' ? React.createElement('div', { className: 'wb-row' },
             React.createElement('input', {
               className: 'wb-input wb-mono', style: { width: '270px' },
               placeholder: '按报告流水号检索，如 2026-302584-LX10102-BG8734',
@@ -655,22 +773,27 @@ return {
             }),
             React.createElement('button', { className: 'wb-btn wb-btn-p', type: 'button', disabled: state.busy === 'pending', onClick: function () { props.search() } }, '检索'),
             React.createElement('button', { className: 'wb-btn', type: 'button', disabled: state.busy === 'pending', onClick: function () { props.clearSearch() } }, '清除'),
-            React.createElement('button', { className: 'wb-btn', type: 'button', disabled: state.busy === 'pending', onClick: function () { props.load(false) } }, state.busy === 'pending' ? '拉取中…' : '刷新（同时拉云端）'),
+            React.createElement('button', { className: 'wb-btn', type: 'button', disabled: state.busy === 'pending', onClick: function () { props.load(true) } }, state.busy === 'pending' ? '拉取中…' : '刷新数据'),
+          ) : React.createElement('div', { className: 'wb-row' },
+            React.createElement('button', { className: 'wb-btn', type: 'button', disabled: state.ossLoading, onClick: function () { props.refreshCloud() } },
+              state.ossLoading ? '刷新中…' : '刷新审核报告清单'),
+            React.createElement('span', { className: 'wb-muted' }, '这里只列举对象名称；点击“审核信息”后才读取对应 JSON。'),
           ),
-          React.createElement('div', { className: 'wb-muted', style: { marginTop: '6px' } },
+          view === 'pending' ? React.createElement('div', { className: 'wb-muted', style: { marginTop: '6px' } },
             state.formName ? ('已定位表单 · ' + state.formName) : '首次拉取会先从氚云自动定位「报告审核」表单'
-          ),
-          state.workspacePath
+          ) : null,
+          view === 'pending' && state.workspacePath
             ? React.createElement('div', { className: 'wb-muted wb-mono', style: { marginTop: '4px', wordBreak: 'break-all' } },
                 '案例根目录 · ' + state.workspacePath + (state.workspaceSource ? '（' + (state.workspaceSource === 'saved' ? '上次选择' : (state.workspaceSource === 'manifest-workspace' ? '清单指定' : '手动选择')) + '）' : '')
               )
             : null,
-          state.boundParent
+          view === 'pending' && state.boundParent
             ? React.createElement('div', { className: 'wb-muted wb-mono', style: { marginTop: '4px', wordBreak: 'break-all' } },
                 '审核挂靠的顶层会话 · ' + String(state.boundParent).slice(0, 8) + '…（审核只挂一层子代理，深度 1）')
-            : React.createElement('div', { className: 'wb-muted', style: { marginTop: '4px' } },
-                '尚未登记审核父级：请在一个顶层会话里打开一次工作台运行卡片。'),
-          React.createElement('div', { className: 'wb-row', style: { marginTop: '10px' } },
+            : (view === 'pending' ? React.createElement('div', { className: 'wb-muted', style: { marginTop: '4px' } },
+                '尚未登记审核父级：请在一个顶层会话里打开一次工作台运行卡片。')
+              : null),
+          view === 'pending' ? React.createElement('div', { className: 'wb-row', style: { marginTop: '10px' } },
             React.createElement('button', { className: 'wb-btn wb-btn-s', type: 'button', disabled: state.busy === 'pending' || state.page <= 1, onClick: function () { props.goPage(state.page - 1) } }, '上一页'),
             React.createElement('span', { className: 'wb-muted' }, '第 ' + state.page + ' / ' + pages + ' 页 · 共 ' + total + ' 条' + modeText),
             React.createElement('button', { className: 'wb-btn wb-btn-s', type: 'button', disabled: state.busy === 'pending' || state.page >= pages, onClick: function () { props.goPage(state.page + 1) } }, '下一页'),
@@ -681,34 +804,61 @@ return {
             }, [10, 20, 50, 100].map(function (n) {
               return React.createElement('option', { key: n, value: String(n) }, String(n) + ' 条')
             })),
-          ),
-          props.escalateNode,
-          state.tasks === null
-            ? React.createElement('div', { className: 'wb-empty' }, '正在从氚云取回报告审核记录（同时拉取 OSS 上已有的审核结果）…')
-            : state.tasks.length === 0
+          ) : null,
+          view === 'pending' ? props.escalateNode : null,
+          view === 'pending' && state.tasks === null
+            ? React.createElement('div', { className: 'wb-empty' }, '正在从氚云取回报告审核记录…')
+            : view === 'pending' && state.tasks.length === 0
               ? React.createElement('div', { className: 'wb-empty' }, '没有匹配的报告审核记录。')
-              : React.createElement('table', { className: 'wb-tb' },
+              : view === 'pending' ? React.createElement('table', { className: 'wb-tb' },
                 React.createElement('thead', null, React.createElement('tr', null,
-                  React.createElement('th', null, '报告流水号'),
-                  React.createElement('th', null, '项目名称'),
-                  React.createElement('th', null, '业务'),
-                  React.createElement('th', null, '风险'),
-                  React.createElement('th', null, '状态'),
-                  React.createElement('th', null, '更新时间'),
-                  React.createElement('th', null, '操作'),
+                  React.createElement('th', null, '项目'),
+                  React.createElement('th', null, '业务 / 风险'),
+                  React.createElement('th', null, '人工复核进度'),
+                  React.createElement('th', null, 'AI 审核与操作'),
                 )),
                 React.createElement('tbody', null, state.tasks.map((task, i) => React.createElement('tr', { key: i },
-                  React.createElement('td', { className: 'wb-mono' }, task.seqNo || task.name),
-                  React.createElement('td', null, task.project || task.name || '—'),
-                  React.createElement('td', null, task.business || '—'),
-                  React.createElement('td', null, task.risk ? React.createElement('span', { className: 'wb-badge wb-low' }, task.risk) : '—'),
-                  React.createElement('td', null, task.statusName || task.status || '—'),
-                  React.createElement('td', { className: 'wb-mono' }, task.modifiedAt || '—'),
+                  React.createElement('td', null,
+                    React.createElement('div', { className: 'wb-review-main' }, task.project || task.name || '—'),
+                    React.createElement('div', { className: 'wb-muted wb-mono' }, task.seqNo || task.name)),
+                  React.createElement('td', null, task.business || '—',
+                    task.risk ? React.createElement('div', { style: { marginTop: '4px' } }, React.createElement('span', { className: 'wb-badge wb-low' }, task.risk)) : null),
+                  React.createElement('td', null,
+                    React.createElement('div', { className: 'wb-review-main' }, [task.reviewLevel, task.reviewState].filter(Boolean).join(' · ') || '—'),
+                    React.createElement('div', { className: 'wb-muted' }, task.currentNode || '—')),
                   React.createElement('td', null, rowAction(task, state, props)),
                 ))),
-              ),
+              ) : resultItems.length === 0
+                ? React.createElement('div', { className: 'wb-empty' }, 'OSS 中还没有 AI 审核报告。')
+                : React.createElement('table', { className: 'wb-tb' },
+                  React.createElement('thead', null, React.createElement('tr', null,
+                    React.createElement('th', null, '报告流水号'),
+                    React.createElement('th', null, '人工复核进度'),
+                    React.createElement('th', null, '文件状态'),
+                    React.createElement('th', null, '操作'),
+                  )),
+                  React.createElement('tbody', null, resultItems.map(function (cloud) {
+                    const task = taskBySeq[cloud.seqNo] || null
+                    const complete = !!(cloud.htmlKey && cloud.jsonKey)
+                    return React.createElement('tr', { key: cloud.seqNo },
+                      React.createElement('td', { className: 'wb-mono' }, cloud.seqNo || '—'),
+                      React.createElement('td', null, task
+                        ? React.createElement('div', null,
+                            React.createElement('div', { className: 'wb-review-main' }, [task.reviewLevel, task.reviewState].filter(Boolean).join(' · ') || '—'),
+                            React.createElement('div', { className: 'wb-muted' }, task.currentNode || '—'))
+                        : React.createElement('span', { className: 'wb-muted' }, '当前氚云页未载入')),
+                      React.createElement('td', null, React.createElement('span', {
+                        className: 'wb-badge ' + (complete ? 'wb-ok' : 'wb-medium'),
+                      }, complete ? '报告完整' : '结果不完整')),
+                      React.createElement('td', null, React.createElement('div', { className: 'wb-row' },
+                        React.createElement(AuditInfoButton, { task: task, cloud: cloud, openAuditInfo: props.openAuditInfo }),
+                        React.createElement(CloudButtons, { cloud: cloud, busy: state.cloudBusy, openCloud: props.openCloud }))),
+                    )
+                  })),
+                ),
         ),
         state.handoff ? React.createElement(Handoff, { prompt: state.handoff.prompt }) : null,
+        React.createElement(AuditInfoDrawer, { state: props.auditInfo, close: props.closeAuditInfo }),
       )
     }
 
@@ -764,7 +914,7 @@ return {
       const [escalate, setEscalate] = React.useState(null)
       const [handoff, setHandoff] = React.useState(null)
       const [cloudBusy, setCloudBusy] = React.useState(false)
-      const [ossIndex, setOssIndex] = React.useState({})
+      const [ossIndex, setOssIndex] = React.useState(wbCache.ossIndex || {})
       const [ossIndexError, setOssIndexError] = React.useState('')
       const [ossLoading, setOssLoading] = React.useState(false)
       const [linkMode, setLinkMode] = React.useState('')
@@ -791,6 +941,8 @@ return {
       const [wsBusy, setWsBusy] = React.useState(false)
       const [boundParent, setBoundParent] = React.useState(wbCache.parentSessionId || (wbCache.boot && wbCache.boot.parentSessionId) || '')
       const [parentIssue, setParentIssue] = React.useState(wbCache.parentIssue || '')
+      const [ossLoaded, setOssLoaded] = React.useState(wbCache.ossLoaded === true)
+      const [auditInfo, setAuditInfo] = React.useState(null)
 
       function storeEnv(r) {
         if (!r) return
@@ -820,17 +972,56 @@ return {
 
       function applyCloud(r) {
         setOssLoading(false)
+        wbCache.ossLoaded = true
+        setOssLoaded(true)
         if (!r) { setOssIndexError('无返回'); return }
-        if (!r.ok) { setOssIndex({}); setOssIndexError(String(r.error || '未知原因')); return }
-        setOssIndex(r.items || {})
+        if (!r.ok) { setOssIndexError(String(r.error || '未知原因')); return }
+        const next = r.items || {}
+        wbCache.ossIndex = next
+        setOssIndex(next)
         setOssIndexError('')
       }
 
-      function loadCloud() {
+      function loadCloud(clearDetails) {
+        wbCache.ossLoaded = true
+        setOssLoaded(true)
+        if (clearDetails === true) {
+          wbCache.auditInfo = {}
+          wbCache.auditInfoRequest += 1
+          setAuditInfo(null)
+        }
         setOssLoading(true)
-        return call('workbench:oss-index', {}).then(applyCloud).catch(function (e) {
+        return call('workbench:oss-index', {}).then(function (r) { applyCloud(r) }).catch(function (e) {
           setOssLoading(false)
           setOssIndexError(errText(e))
+        })
+      }
+
+      function openAuditInfo(task, cloud) {
+        const key = String((cloud && cloud.jsonKey) || '')
+        const requestId = wbCache.auditInfoRequest + 1
+        wbCache.auditInfoRequest = requestId
+        if (!key) {
+          setAuditInfo({ seqNo: task && task.seqNo, task: task || null, info: null, loading: false, error: '该项目没有审核结果 JSON。' })
+          return
+        }
+        const cached = wbCache.auditInfo[key]
+        if (cached) {
+          setAuditInfo({ seqNo: (cloud && cloud.seqNo) || '', task: task || null, info: cached, loading: false, error: '' })
+          return
+        }
+        setAuditInfo({ seqNo: (cloud && cloud.seqNo) || '', task: task || null, info: null, loading: true, error: '' })
+        call('workbench:oss-result', { key: key }).then(function (r) {
+          if (wbCache.auditInfoRequest !== requestId) return
+          if (!r || !r.ok) {
+            setAuditInfo({ seqNo: (cloud && cloud.seqNo) || '', task: task || null, info: null, loading: false, error: String((r && r.error) || '读取审核信息失败') })
+            return
+          }
+          wbCache.auditInfo[key] = r.info
+          setAuditInfo({ seqNo: (cloud && cloud.seqNo) || '', task: task || null, info: r.info, loading: false, error: '' })
+        }).catch(function (error) {
+          if (wbCache.auditInfoRequest !== requestId) return
+          setAuditInfo({ seqNo: (cloud && cloud.seqNo) || '', task: task || null, info: null, loading: false, error: errText(error) })
         })
       }
 
@@ -899,7 +1090,6 @@ return {
           if (!alive) return
           applyAudits(r)
         }).catch(function () {})
-        loadCloud()
         return function () { alive = false }
       }, [])
 
@@ -939,13 +1129,6 @@ return {
         return function () { dispose() }
       }, [anyAuditRunning])
 
-      React.useEffect(function () {
-        if (!anyAuditRunning) return undefined
-        const dispose = ctx.interval(function () { loadCloud() }, 60000)
-        return function () { dispose() }
-      }, [anyAuditRunning])
-
-
       function adoptWorkspace(r, fallbackPath) {
         // Host 是唯一权威：它把选择持久化到 ~/.dsh/crwu-workbench.json，
         // 并回传 workspace / sessionWorkspace 的官方视图。
@@ -978,7 +1161,7 @@ return {
               adoptWorkspace(r, view.path)
               setWsBusy(false)
               setWsMsg('案例根目录已选定：' + view.path + '（已记住，下次不用再选）')
-              return uiWorkspace.openWorkspace(view.workspaceId).catch(function () {}).then(function () { loadEnv(); refreshPrompt(); loadCloud() })
+              return uiWorkspace.openWorkspace(view.workspaceId).catch(function () {}).then(function () { loadEnv(); refreshPrompt() })
             })
           })
         }).catch(function (e) { setWsBusy(false); setWsMsg('选定失败：' + errText(e)) })
@@ -1011,7 +1194,7 @@ return {
                 adoptWorkspace(r, view.path)
                 setWsBusy(false)
                 setWsMsg('已新建并选定：' + view.path)
-                return uiWorkspace.openWorkspace(view.workspaceId).catch(function () {}).then(function () { loadEnv(); refreshPrompt(); loadCloud() })
+                return uiWorkspace.openWorkspace(view.workspaceId).catch(function () {}).then(function () { loadEnv(); refreshPrompt() })
               })
             })
           })
@@ -1137,7 +1320,7 @@ return {
             return
           }
           setNotice({ kind: 'i', text: '已重传到 ' + (r.prefix || '') + '/：' + (r.results || []).map(function (x) { return x.name }).join('、') })
-          loadCloud()
+          loadCloud(true)
           call('workbench:audit-status', {}).then(applyAudits).catch(function () {})
         }).catch(function (e) { setRetryBusy(''); setNotice({ kind: 'e', text: '重传失败：' + errText(e) }) })
       }
@@ -1150,13 +1333,24 @@ return {
         setBusy('pending')
         setNotice(null)
         setEscalate(null)
-        setOssLoading(true)
-        Promise.all([
-          call('workbench:pending', { escalate: escalated === true, page: p, size: s, query: q }),
-          call('workbench:oss-index', {}),
-        ]).then(function (rs) {
-          const r = rs[0]
-          applyCloud(rs[1])
+        const shouldLoadCloud = o.refreshCloud === true || (!ossLoaded && wbCache.ossLoaded !== true)
+        if (shouldLoadCloud) {
+          wbCache.ossLoaded = true
+          setOssLoaded(true)
+          if (o.refreshCloud === true) {
+            wbCache.auditInfo = {}
+            wbCache.auditInfoRequest += 1
+            setAuditInfo(null)
+          }
+          setOssLoading(true)
+          call('workbench:oss-index', {}).then(function (result) {
+            applyCloud(result)
+          }).catch(function (error) {
+            setOssLoading(false)
+            setOssIndexError(errText(error))
+          })
+        }
+        call('workbench:pending', { escalate: escalated === true, page: p, size: s, query: q }).then(function (r) {
           setBusy('')
           if (r && r.formName) setFormName(r.formName)
           if (!r || !r.ok) {
@@ -1176,7 +1370,6 @@ return {
           if (r.escalated) loadEnv()
         }).catch(function (e) {
           setBusy('')
-          setOssLoading(false)
           setNotice({ kind: 'e', text: errText(e) })
         })
       }
@@ -1368,7 +1561,8 @@ return {
                   clearSearch: function () { setQuery(''); loadReport(false, { query: '', page: 1 }) },
                   goPage: function (next) { loadReport(false, { page: next }) },
                   setPageSize: function (n) { setPageSizeState(n); loadReport(false, { size: n, page: 1 }) },
-                  load: loadReport,
+                  load: function (refreshCloud) { loadReport(false, { refreshCloud: refreshCloud === true }) },
+                  refreshCloud: function () { loadCloud(true) },
                   startAudit: startAudit,
                   releaseActive: releaseActive,
                   stopAudit: stopAudit,
@@ -1376,6 +1570,9 @@ return {
                   openSession: openSession,
                   openHtml: function (audit) { openHtmlFile(audit.htmlFile, audit.casePath) },
                   openCloud: openCloud,
+                  openAuditInfo: openAuditInfo,
+                  auditInfo: auditInfo,
+                  closeAuditInfo: function () { wbCache.auditInfoRequest += 1; setAuditInfo(null) },
                   noticeNode: noticeNode,
                   escalateNode: escalateNode,
                 }),
@@ -1443,7 +1640,7 @@ return {
     }
 
     console.log('中瑞世联工作台 Client 半已装配 ' + JSON.stringify({
-      rev: 'pkg-42',
+      rev: 'pkg-43',
       views: typeof Workbench === 'function' && typeof WorkspaceCard === 'function' && typeof ReportPane === 'function',
       adopt: typeof wbAdopt === 'function' && typeof wbNotify === 'function',
     }))
