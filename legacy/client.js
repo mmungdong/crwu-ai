@@ -497,9 +497,9 @@ return {
     // 「重新审核」会把同一条报告已有的审核结果作废重跑，所以它要二次确认；
     // 首次「AI 审核」直接开始。确认态就地展开成「确认重新审核 / 取消」两个按钮，
     // 不弹窗 —— 这一行本身就是上下文。
-    function startButton(props) {
-      const busy = props.state.busy === props.key
-      const blocked = !props.state.canDispatch || !!props.state.busy || !props.state.canStart
+    function StartButton(props) {
+      const busy = props.state.auditBusy === props.taskKey
+      const blocked = !props.state.canDispatch || !!props.state.busy || !!props.state.auditBusy || !props.state.canStart
       const [confirming, setConfirming] = React.useState(false)
       const needsConfirm = props.confirm === true
 
@@ -535,8 +535,8 @@ return {
         // （要二次确认），而不是「AI 审核」—— 否则会让人以为从来没审过。
         const hasCloud = !!(cloud && cloud.htmlKey)
         return React.createElement('div', null,
-          React.createElement(startButton, {
-            state: state, key: key, task: task, start: props.startAudit,
+          React.createElement(StartButton, {
+            state: state, key: key, taskKey: key, task: task, start: props.startAudit,
             label: hasCloud ? '重新审核' : 'AI 审核', confirm: hasCloud,
           }),
           React.createElement(CloudButtons, { cloud: cloud, busy: state.cloudBusy, openCloud: props.openCloud }),
@@ -591,8 +591,8 @@ return {
             onClick: function () { props.retryUpload(audit) },
           }, state.retryBusy ? '重传中…' : '重传 OSS') : null,
           // 运行中不给「另起一条」：要先停止，再重新审核。
-          childLive ? null : React.createElement(startButton, {
-            state: state, key: key, task: task, start: props.startAudit,
+          childLive ? null : React.createElement(StartButton, {
+            state: state, key: key, taskKey: key, task: task, start: props.startAudit,
             label: '重新审核', confirm: true,
           }),
         ),
@@ -1354,7 +1354,7 @@ return {
                     tasks: tasks, busy: busy, formName: formName,
                     canDispatch: h3Ready && dtReady,
                     canStart: !activeKey,
-                    activeKey: activeKey, releaseBusy: releaseBusy, stopBusy: stopBusy,
+                    activeKey: activeKey, auditBusy: auditBusy, releaseBusy: releaseBusy, stopBusy: stopBusy,
                     query: query, page: page, pageSize: pageSize, total: total, filterMode: filterMode,
                     audits: audits, handoff: handoff,
                     ossIndex: ossIndex, ossIndexError: ossIndexError, ossLoading: ossLoading,
@@ -1443,7 +1443,7 @@ return {
     }
 
     console.log('中瑞世联工作台 Client 半已装配 ' + JSON.stringify({
-      rev: 'pkg-41',
+      rev: 'pkg-42',
       views: typeof Workbench === 'function' && typeof WorkspaceCard === 'function' && typeof ReportPane === 'function',
       adopt: typeof wbAdopt === 'function' && typeof wbNotify === 'function',
     }))

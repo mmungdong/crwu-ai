@@ -15,7 +15,7 @@ return {
       parentSessionId: '', audits: {},
       workspacePath: '', workspaceChosen: false, platform: '',
       workspaceSource: '', workspaceTitle: '', workspaceId: '',
-      activeKey: '', activeChildId: '', activeSince: 0,
+      activeKey: '', activeChildId: '', activeSince: 0, startingKey: '',
       uploadTimer: null,
       // childId → { run, abort }。这是活的进程内句柄，绝不能进任何 JSON 返回值：
       // audit-status 会用 Object.assign 复制审计记录，所以单独放一张表。
@@ -1658,87 +1658,95 @@ return {
       await ensureRegistry()
       const key = text(a.key) || text(a.seqNo)
       if (!key) return { ok: false, error: '缺少任务标识' }
-      const seqNo = text(a.seqNo)
-      // 硬门禁：父级必须是顶层会话。登记时已经拦过一次，这里再拦一次是因为
-      // state.parentSessionId 可能是**旧版本插件**落下来的子代理 id，或者绑定之后
-      // 那个会话被降级成了子代理。嵌套审核必须彻底挡在门外。
-      const parentInfo = sessionDelegation(state.parentSessionId)
-      if (parentInfo.found && parentInfo.subagent) {
-        return {
-          ok: false,
-          error: '当前登记的审核父级 ' + text(state.parentSessionId).slice(0, 8) + '… 本身是子代理（delegationDepth ' + (parentInfo.depth || 1) + '）。审核只允许挂在顶层会话下（只挂一层，方便盯状态）。请在顶层会话里打开工作台完成登记，再发起审核。',
-        }
+      if (state.startingKey) {
+        return { ok: false, error: '正在创建审核子会话（' + state.startingKey + '），请勿重复提交。' }
       }
-      const subagents = ctx.get('subagents')
-      const prev = state.audits[key]
-      // 单条并发门禁：**别的**报告正在跑时拒绝；同一条报告则是"重启"（下面处理），
-      // 否则「重启」这条路会被自己的锁挡死。
-      if (state.activeChildId && state.activeKey !== key) {
-        return { ok: false, error: '已有审核在进行中（' + (state.activeKey || state.activeChildId) + '）。同一时间只允许一条，等它结束或先点「停止」。' }
-      }
-      // 「这条任务已经有了」的处理：不另起一条，也不无视它 —— 把已经存在的子会话
-      // 停掉，再用**重新审核**的提示词重启一个，并给新会话盖上启动时间戳。
-      // 存在的子会话不能只查 state.audits：插件重装后记录可能已经没了，而清单里
-      // 那个子会话还在跑（label 里带流水号），漏掉它就会让两条子会话交叉写同一个
-      // 案例目录。所以两边都算。
-      const stale = []
-      if (prev && prev.childId && prev.ended !== true && prev.stopped !== true) stale.push(prev.childId)
-      if (subagents !== undefined && state.parentSessionId) {
-        try {
-          const children = await subagents.listChildren(state.parentSessionId)
-          for (let i = 0; i < children.length; i += 1) {
-            const c = children[i]
-            if (!c || c.kind !== 'child') continue
-            const cid = text(c.id)
-            if (!cid || stale.indexOf(cid) >= 0) continue
-            if (seqNoFromLabel(c.label) !== seqNo) continue
-            if (text(c.activity) !== 'running') continue
-            stale.push(cid)
+      state.startingKey = key
+      try {
+        const seqNo = text(a.seqNo)
+        // 硬门禁：父级必须是顶层会话。登记时已经拦过一次，这里再拦一次是因为
+        // state.parentSessionId 可能是**旧版本插件**落下来的子代理 id，或者绑定之后
+        // 那个会话被降级成了子代理。嵌套审核必须彻底挡在门外。
+        const parentInfo = sessionDelegation(state.parentSessionId)
+        if (parentInfo.found && parentInfo.subagent) {
+          return {
+            ok: false,
+            error: '当前登记的审核父级 ' + text(state.parentSessionId).slice(0, 8) + '… 本身是子代理（delegationDepth ' + (parentInfo.depth || 1) + '）。审核只允许挂在顶层会话下（只挂一层，方便盯状态）。请在顶层会话里打开工作台完成登记，再发起审核。',
           }
-        } catch (error) { /* 清单查不到就只按记录走 */ }
-      }
-      // 有前一轮（记录里的或清单里的）→ 走重审提示词：从零重跑、不读旧产物。
-      // 界面知道「云端已有审核意见」而 Host 不知道，所以它也会显式传 retry:true。
-      const isRetry = stale.length > 0 || !!prev || a.retry === true
-      let replaced = ''
-      for (let i = 0; i < stale.length; i += 1) {
-        const stopped = await stopChild(stale[i], '这条报告已有审核子会话，先停掉它再重启一条')
-        if (!stopped.aborted && stopped.errors.length > 0) {
-          return { ok: false, error: '已有的审核子会话（' + stale[i].slice(0, 8) + '）停不掉，为避免两条子会话交叉写同一个案例目录，已中止本次重启：' + stopped.errors.join('；') }
         }
-        if (i === 0) replaced = stale[i]
-      }
-      const stamp = new Date()
-      const started = await startChild(auditLabel(seqNo, stamp), auditPrompt({
-        objectId: text(a.objectId), seqNo: seqNo, project: text(a.project),
-        workspace: state.workspacePath || state.root,
-        oss: normalizeOss((state.manifest || normalizeManifest(BUILTIN_MANIFEST)).oss),
-        isRetry: isRetry,
-      }))
-      if (!started.ok) return { ok: false, error: started.error }
-      // 留住「可中止的信号 + run 句柄」：一次性运行没有别的停止入口
-      // （subagents.interrupt 对 one-shot 是记录在案的 no-op）。
-      // 停止时必须先 abort 再 dispose，见 workbench:audit-stop。
-      if (started.run || started.abort) {
-        state.runs[started.childId] = { run: started.run, abort: started.abort }
-      }
-      state.audits[key] = {
-        key: key, childId: started.childId, status: 'running', ended: false, stopReason: '',
-        parentSessionId: state.parentSessionId, mode: 'one-shot',
-        seqNo: seqNo, project: text(a.project), objectId: text(a.objectId),
-        startedAt: stamp.toISOString(), casePath: '', resultFile: '', htmlFile: '', caseName: '',
-        uploading: false, uploadedAt: '', uploadError: '', ossPrefix: '',
-        attempt: (prev && prev.attempt ? prev.attempt : 0) + 1, replacedChildId: replaced,
-      }
-      state.activeKey = key
-      state.activeChildId = started.childId
-      state.activeSince = stamp.getTime()
-      startUploadWatch()
-      await persistAudits()
-      return {
-        ok: true, childId: started.childId, provider: started.provider, parentSessionId: state.parentSessionId,
-        mode: 'one-shot', isRetry: isRetry, replaced: replaced, replacedCount: stale.length,
-        startedAt: stamp.toISOString(), attempt: state.audits[key].attempt,
+        const subagents = ctx.get('subagents')
+        const prev = state.audits[key]
+        // 单条并发门禁：**别的**报告正在跑时拒绝；同一条报告则是"重启"（下面处理），
+        // 否则「重启」这条路会被自己的锁挡死。
+        if (state.activeChildId && state.activeKey !== key) {
+          return { ok: false, error: '已有审核在进行中（' + (state.activeKey || state.activeChildId) + '）。同一时间只允许一条，等它结束或先点「停止」。' }
+        }
+        // 「这条任务已经有了」的处理：不另起一条，也不无视它 —— 把已经存在的子会话
+        // 停掉，再用**重新审核**的提示词重启一个，并给新会话盖上启动时间戳。
+        // 存在的子会话不能只查 state.audits：插件重装后记录可能已经没了，而清单里
+        // 那个子会话还在跑（label 里带流水号），漏掉它就会让两条子会话交叉写同一个
+        // 案例目录。所以两边都算。
+        const stale = []
+        if (prev && prev.childId && prev.ended !== true && prev.stopped !== true) stale.push(prev.childId)
+        if (subagents !== undefined && state.parentSessionId) {
+          try {
+            const children = await subagents.listChildren(state.parentSessionId)
+            for (let i = 0; i < children.length; i += 1) {
+              const c = children[i]
+              if (!c || c.kind !== 'child') continue
+              const cid = text(c.id)
+              if (!cid || stale.indexOf(cid) >= 0) continue
+              if (seqNoFromLabel(c.label) !== seqNo) continue
+              if (text(c.activity) !== 'running') continue
+              stale.push(cid)
+            }
+          } catch (error) { /* 清单查不到就只按记录走 */ }
+        }
+        // 有前一轮（记录里的或清单里的）→ 走重审提示词：从零重跑、不读旧产物。
+        // 界面知道「云端已有审核意见」而 Host 不知道，所以它也会显式传 retry:true。
+        const isRetry = stale.length > 0 || !!prev || a.retry === true
+        let replaced = ''
+        for (let i = 0; i < stale.length; i += 1) {
+          const stopped = await stopChild(stale[i], '这条报告已有审核子会话，先停掉它再重启一条')
+          if (!stopped.aborted && stopped.errors.length > 0) {
+            return { ok: false, error: '已有的审核子会话（' + stale[i].slice(0, 8) + '）停不掉，为避免两条子会话交叉写同一个案例目录，已中止本次重启：' + stopped.errors.join('；') }
+          }
+          if (i === 0) replaced = stale[i]
+        }
+        const stamp = new Date()
+        const started = await startChild(auditLabel(seqNo, stamp), auditPrompt({
+          objectId: text(a.objectId), seqNo: seqNo, project: text(a.project),
+          workspace: state.workspacePath || state.root,
+          oss: normalizeOss((state.manifest || normalizeManifest(BUILTIN_MANIFEST)).oss),
+          isRetry: isRetry,
+        }))
+        if (!started.ok) return { ok: false, error: started.error }
+        // 留住「可中止的信号 + run 句柄」：一次性运行没有别的停止入口
+        // （subagents.interrupt 对 one-shot 是记录在案的 no-op）。
+        // 停止时必须先 abort 再 dispose，见 workbench:audit-stop。
+        if (started.run || started.abort) {
+          state.runs[started.childId] = { run: started.run, abort: started.abort }
+        }
+        state.audits[key] = {
+          key: key, childId: started.childId, status: 'running', ended: false, stopReason: '',
+          parentSessionId: state.parentSessionId, mode: 'one-shot',
+          seqNo: seqNo, project: text(a.project), objectId: text(a.objectId),
+          startedAt: stamp.toISOString(), casePath: '', resultFile: '', htmlFile: '', caseName: '',
+          uploading: false, uploadedAt: '', uploadError: '', ossPrefix: '',
+          attempt: (prev && prev.attempt ? prev.attempt : 0) + 1, replacedChildId: replaced,
+        }
+        state.activeKey = key
+        state.activeChildId = started.childId
+        state.activeSince = stamp.getTime()
+        startUploadWatch()
+        await persistAudits()
+        return {
+          ok: true, childId: started.childId, provider: started.provider, parentSessionId: state.parentSessionId,
+          mode: 'one-shot', isRetry: isRetry, replaced: replaced, replacedCount: stale.length,
+          startedAt: stamp.toISOString(), attempt: state.audits[key].attempt,
+        }
+      } finally {
+        if (state.startingKey === key) state.startingKey = ''
       }
     })
 
@@ -2314,7 +2322,7 @@ return {
     })
 
     console.log('中瑞世联工作台 Host 半已装配 ' + JSON.stringify({
-      rev: 'pkg-41',
+      rev: 'pkg-42',
       ws: typeof resolveAuditWorkspace === 'function' && typeof ensureWorkspace === 'function' && typeof sessionWorkspaceInfo === 'function',
       wsView: typeof workspaceView === 'function',
       promptRoot: typeof auditPrompt === 'function' && auditPrompt.toString().indexOf('本案例的唯一根目录是') > 0,

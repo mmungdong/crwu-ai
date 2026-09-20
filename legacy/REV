@@ -1,20 +1,21 @@
 # 动态插件形态快照（legacy）
 #
-# 这两份文件是 DeepSeek Harness 里 crwu-1 插件对应版本的逐字源码。
-# 保持与「正在运行的那个 Package」逐字一致，是为了能用
-# cordis_inspect_self('crwu-1','<rev>') 导出运行版直接 diff —— 所以
-# 不要在这两个文件里加注释头/版本头，版本信息一律写在本文件和 CHANGELOG.md。
+# 这两份文件是 crwu-1 动态插件对应版本的逐字源码。runId 为真实 run-N 时，
+# 必须与 DeepSeek Harness 里正在运行的 Package 逐字一致，才能用
+# cordis_inspect_self('crwu-1','<rev>') 导出运行版直接 diff；pending-install
+# 表示源码已冻结、尚待装入 DSH。不要在源码里加注释头/版本头，版本信息
+# 一律写在本文件和 CHANGELOG.md。
 
 pluginId  = crwu-1
-rev       = pkg-41
-runId     = run-38
-capturedAt= 2026-09-20T10:31+08:00
-form      = dynamic cordis package (host half + client half)
+rev       = pkg-42
+runId     = pending-install
+capturedAt= 2026-09-20T11:28+08:00
+form      = dynamic cordis package source (pending DSH install)
 
-sha256    legacy/host.js    5c93d8891609fc5ca1d30b27c463ed2dc335a08bad88bed2565a455d6170ce31
-sha256    legacy/client.js  7d1277615be26003720fa9c4f9a836ab30365cd9f7aa9a4fd3a90d8195ea27e5
-bytes     legacy/host.js    117442
-bytes     legacy/client.js  86957
+sha256    legacy/host.js    a17fd591907e5de36330370ba576f9ad4fee87c4b386b94c7593e14252ac3a58
+sha256    legacy/client.js  ae77d1a8c95928bfa0adaf0c3175e5c736f22f39bde6b95a0317bdd4c2bf1004
+bytes     legacy/host.js    117914
+bytes     legacy/client.js  87043
 
 # 形态说明（与 src/ 里的包形态互不影响）
 # host.js   是 `return { apply(ctx) { ... } }`：沙箱里求值的函数体，
