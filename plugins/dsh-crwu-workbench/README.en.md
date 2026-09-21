@@ -75,6 +75,19 @@ dsh plugin --profile web remove dsh-crwu-workbench
 > same version when its content differs, so any change means bumping the version first — otherwise
 > employees who installed early and those who reinstall end up on different code under one version.
 
+## One YAML configuration
+
+[`config/crwu-workbench.yml`](config/crwu-workbench.yml) is the single configuration source for source
+development, packaging, and the installed employee tarball. `oss.readonly` names the anonymously readable
+bucket that carries the environment manifest, install instructions, and plugin tarballs. `oss.protected`
+names the private audit-deliverable bucket; credentials stay on the employee machine and object links use
+signed URLs by default.
+
+The Host reads this YAML directly in source development. Set `CRWU_CONFIG_FILE=/absolute/path/config.yml`
+before starting the DSH profile to test another file. `npm pack` validates and embeds the package-local YAML,
+and the installed Host automatically reads that packaged copy. `make plugin-dist` derives both its OSS write
+target and the employee HTTPS install URL from the same `oss.readonly` section.
+
 ## Releasing
 
 Never run `npm publish` by hand. The release path is tag-driven and gated:
@@ -95,8 +108,8 @@ as a dry run. `prepublishOnly` re-runs the artifact check and the gate, so a man
 
 ### One trap worth knowing: npm runs `prepare` on install too
 
-Installing the **published tarball** also runs `prepare`, but the tarball only contains `lib/`, the patch and
-the docs — no `src/`, `tsconfig.json`, or `tsdown.config.ts`. So `prepare` cannot be `tsdown`, and it cannot
+Installing the **published tarball** also runs `prepare`, but the tarball only contains `lib/`, the package
+configuration, the patch, Skills and docs — no `src/`, `tsconfig.json`, or `tsdown.config.ts`. So `prepare` cannot be `tsdown`, and it cannot
 point at a script that is not shipped. The build entry is `scripts/prepare.mjs`, which **is** in `files`:
 it builds when the sources are present and skips with an explanation when they are not. The release path is
 `prepack` → `build:lib --force`, which fails rather than shipping a package without `lib/`.
@@ -113,6 +126,7 @@ record the supported DSH version in `CHANGELOG.md`.
 | Command | Purpose |
 |---|---|
 | `npm test` | All tests under `tests/unit/`: config, routing, operation table, package manifest, and both Host and **Client** halves |
+| `npm run config:check` | Validate the single YAML configuration and its public/private OSS boundary |
 | `npm run typecheck` | `tsc --noEmit` over `src/` |
 | `npm run build` | tsdown dual build → `lib/index.js` + `lib/client.js` (`prepare` runs this too) |
 | `npm run smoke:built` | Loads the **real** `lib/index.js` through its same-origin route and the real `lib/client.js` through `__ModuleLoader__` |

@@ -23,7 +23,7 @@ const { assessAudit } = await import(new URL('src/host/audit/state.ts', ROOT).hr
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
-  autoUpload: true, singleAuditOnly: true, requireTopLevelParent: true,
+  autoUpload: true, requireTopLevelParent: true,
 }
 const SEQ = '2026-301705-LX10170'
 

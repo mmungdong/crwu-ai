@@ -15,8 +15,8 @@ const { createWorkbenchState } = await import(new URL('src/host/state/store.ts',
 
 const CONFIG = {
   caseRoot: '', formName: '报告审核', installDocUrl: 'https://doc.invalid/install.md', manifestUrl: 'https://x.invalid/m.json',
-  preferWorkspaceTitle: '中瑞世联工作空间', ossBucket: '', ossPrefix: '', ossEndpoint: '',
-  ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, singleAuditOnly: true, requireTopLevelParent: true,
+  preferWorkspaceTitle: '中瑞世联工作空间', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossBaseUrl: '',
+  ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true,
 }
 
 /** 沙箱后端不可用时 DSH 抛出的那条原文（真实环境逐字抄回，不是编的）。 */
@@ -299,11 +299,25 @@ test('a failed manifest fetch is surfaced with its reason while the page still r
   assert.ok(result.blocked.includes('dws'))
 })
 
-test('an explicit source argument overrides the configured manifest url', async () => {
+test('request arguments cannot replace the configured manifest and protected OSS config wins', async () => {
   const ctx = healthyContext()
-  const { deps } = depsOf(ctx)
+  const { deps, state } = depsOf(ctx, { config: {
+    ossBucket: 'private-bucket',
+    ossPrefix: 'private/audit',
+    ossEndpoint: 'oss-cn-test.aliyuncs.com',
+    ossBaseUrl: 'https://private-bucket.oss-cn-test.aliyuncs.com',
+    ossLinkTtlSeconds: 7200,
+    autoUpload: false,
+  } })
   const result = await loadEnvironment(deps, { source: 'https://other.invalid/m.json' })
-  assert.equal(result.manifestSource, 'https://other.invalid/m.json')
+  assert.equal(result.manifestSource, 'https://x.invalid/m.json')
+  assert.equal(state.manifest.oss.bucket, 'private-bucket')
+  assert.equal(state.manifest.oss.prefix, 'private/audit')
+  assert.equal(state.manifest.oss.endpoint, 'oss-cn-test.aliyuncs.com')
+  assert.equal(state.manifest.oss.publicBaseUrl, 'https://private-bucket.oss-cn-test.aliyuncs.com')
+  assert.equal(state.manifest.oss.linkTtl, 7200)
+  assert.equal(state.manifest.oss.autoUpload, false)
+  assert.equal(state.manifest.oss.probeCommand, '', '远程清单不能向宿主注入探测命令')
 })
 
 test('the trust flag is echoed so the panel can render the switch state', async () => {

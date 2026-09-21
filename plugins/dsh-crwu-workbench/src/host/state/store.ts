@@ -1,4 +1,6 @@
 import type { WorkbenchConfig } from '../config/config.ts'
+import { applyDeploymentConfig } from '../config/deployment.ts'
+import { DEFAULT_MANIFEST } from '../environment/manifest-default.ts'
 import type { WorkspaceView } from '../../shared/types.ts'
 import type { WorkbenchState } from './types.ts'
 
@@ -6,7 +8,8 @@ import type { WorkbenchState } from './types.ts'
 export function createWorkbenchState(config: WorkbenchConfig): WorkbenchState {
   return {
     caseRoot: config.caseRoot,
-    manifest: null,
+    // 启动时就让 TGZ 内 YAML 生效；远程清单稍后由 env 自检补充并覆盖非部署字段。
+    manifest: applyDeploymentConfig(DEFAULT_MANIFEST, config),
     workspacePath: '',
     workspaceTitle: '',
     workspaceSource: '',

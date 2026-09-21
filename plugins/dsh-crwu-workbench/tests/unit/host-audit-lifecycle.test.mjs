@@ -22,7 +22,7 @@ const { normalizeAudit } = await import(new URL('src/host/state/registry.ts', RO
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
-  autoUpload: true, singleAuditOnly: true, requireTopLevelParent: true,
+  autoUpload: true, requireTopLevelParent: true,
 }
 
 function fakeWorld(patch = {}) {

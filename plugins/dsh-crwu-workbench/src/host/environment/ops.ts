@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
+import { applyDeploymentConfig } from '../config/deployment.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { loadManifest } from '../environment/manifest.ts'
 import type { EnvManifest } from '../environment/manifest-default.ts'
@@ -66,21 +67,21 @@ export interface EnvDeps {
   sessionRoot: () => Promise<string>
 }
 
-export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknown>): Promise<EnvResult> {
+export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unknown>): Promise<EnvResult> {
   const { ctx, config, state, home, platform } = deps
 
-  const source = text(args.source) || config.manifestUrl
-  const loaded = await loadManifest(ctx, source, { workdir: await deps.sessionRoot() })
-  state.manifest = loaded.manifest
+  const loaded = await loadManifest(ctx, config.manifestUrl, { workdir: await deps.sessionRoot() })
+  const manifest = applyDeploymentConfig(loaded.manifest, config)
+  state.manifest = manifest
 
   await ensureRegistry(ctx, home, state)
   await ensureWorkspace(ctx, home, state, {
     preferTitle: config.preferWorkspaceTitle,
-    preferPath: loaded.manifest.workspace.preferPath,
+    preferPath: manifest.workspace.preferPath,
   })
 
-  const checks = await probeEnv(ctx, loaded.manifest, platform, { home })
-  const ifindKey = await probeIfindKey(ctx, loaded.manifest, { home, platform })
+  const checks = await probeEnv(ctx, manifest, platform, { home })
+  const ifindKey = await probeIfindKey(ctx, manifest, { home, platform })
   const services: ServiceCheck[] = []
 
   // 氚云会话：只有 crwu 能回答，所以直接问它。
@@ -107,7 +108,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   services.push({
     id: 'h3yun',
     label: '氚云（H3Yun）员工会话',
-    required: serviceRequired(loaded.manifest, 'h3yun', true),
+    required: serviceRequired(manifest, 'h3yun', true),
     ok: sessionData !== null && !expired,
     // 命令没跑起来时，`stdout` 为空是「探测失败」，不是「未绑定」—— 两者的处置完全不同。
     state: shellUnavailable(sessionRun) ? '探测失败' : (sessionData === null ? '未绑定' : (expired ? '已过期' : '正常')),
@@ -133,17 +134,17 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   services.push({
     id: 'dingtalk',
     label: '钉钉认证',
-    required: serviceRequired(loaded.manifest, 'dingtalk', true),
+    required: serviceRequired(manifest, 'dingtalk', true),
     ok: dwsDoc?.authenticated === true,
     state: shellUnavailable(dwsRun) ? '探测失败' : (dwsDoc === null ? '未知' : (dwsDoc.authenticated === true ? '已登录' : '未登录')),
     detail: dwsDoc?.message === undefined ? (text(dwsRun.stderr) || dwsRun.error) : text(dwsDoc.message),
   })
 
-  const oss = loaded.manifest.oss
-  const ossProbe = await probeOss(ctx, oss, platform, { manifest: loaded.manifest, home })
-  services.push({ ...ossProbe, required: serviceRequired(loaded.manifest, 'oss', true) })
+  const oss = manifest.oss
+  const ossProbe = await probeOss(ctx, oss, platform, { manifest, home })
+  services.push({ ...ossProbe, required: serviceRequired(manifest, 'oss', true) })
 
-  const declaredIds = loaded.manifest.services.map((service) => text(service.id))
+  const declaredIds = manifest.services.map((service) => text(service.id))
   const filtered = declaredIds.length > 0 ? services.filter((service) => declaredIds.includes(service.id)) : services
 
   const blocked: string[] = []
@@ -151,7 +152,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     // 用户选过的那个目录没了：必须说清是哪一个，并且**不许**悄悄换成清单偏好里的另一个。
     blocked.push(`已选定的工作空间不存在：${state.workspacePath}，请重新选择（插件不会自动换到别的工作空间）`)
   } else if (!state.workspaceChosen) {
-    const prefer = loaded.manifest.workspace
+    const prefer = manifest.workspace
     blocked.push(`未找到工作空间「${text(prefer.preferTitle)}」，请手动选择`)
   }
   if (platform === '') blocked.push('运行平台未识别')
@@ -171,8 +172,8 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     manifestKind: loaded.kind,
     manifestLoaded: loaded.loaded,
     manifestError: loaded.error,
-    manifestUpdatedAt: text(loaded.manifest.updatedAt),
-    installDocUrl: text(loaded.manifest.installDocUrl) || config.installDocUrl,
+    manifestUpdatedAt: text(manifest.updatedAt),
+    installDocUrl: text(manifest.installDocUrl),
     checks,
     ifindKey,
     services: filtered,

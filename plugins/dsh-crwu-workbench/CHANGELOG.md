@@ -7,6 +7,23 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.2 · 2026-09-21
+
+- **一份 YAML 覆盖开发、打包与员工运行**：新增 `config/crwu-workbench.yml`，明确区分匿名只读的
+  `crwu-only-workspace`（环境清单、安装说明、插件 TGZ）与私有的 `crwu-workspace`（审核产物）。
+  源码开发直接读取 YAML；TGZ 原样携带同一文件，安装后 Host 自动读取包内副本。
+- **分发也只认这份 YAML**：`make plugin-dist` 不再从 Makefile 的 `OSS_BUCKET` / `OSS_PREFIX`
+  拼地址，而是从 `oss.readonly` 计算 `oss://` 上传目标与员工 HTTPS 安装地址。
+- **部署配置真正生效**：私有 OSS 的 bucket、endpoint、prefix、签名模式、TTL 与自动上传策略覆盖
+  远程环境清单；插件激活时立即用 YAML 初始化运行清单，不再依赖页面先调用 `env`；RPC 不再允许
+  临时替换清单地址，远程清单的 `probeCommand` 也不会进入宿主 Shell。
+- **收紧手工重传边界**：`oss-upload` 只接受 Host 审核注册表里的 key，不再接受调用方传入任意
+  `casePath` / `projectId`；检索后的翻页与刷新会保留当前查询条件。
+- **并发配置去伪存真**：页面与 Host 继续强制同一时间只运行一条审核，删除没有任何运行时作用的
+  `audit.singleAuditOnly` YAML 字段，避免部署者误以为它可以关闭门禁。
+- **发布门禁**：新增 YAML Schema/地址边界测试、`config:check`、TGZ 必含配置断言，以及真实
+  `npm pack` → `npm install` → 从包内 YAML 激活 Host 的回归测试。
+
 ## package · 0.0.1 · 2026-09-20（首个 npm 发布）
 
 **版本号定为 `0.0.1`**：此前 `0.1.1` / `0.1.2` 两个编号**从未发布过**，首个 npm 发布用最小

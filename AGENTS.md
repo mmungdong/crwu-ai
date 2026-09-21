@@ -50,11 +50,11 @@ Two exceptions, and only these two:
 - **External tools** that genuinely ship outside this repository (for example a deployment-side script): the Skill must state that this repository does not provide them and that they do not install with the Skill.
 - **Source-repository contract tests / maintenance tools**: `.py` files that only run while maintaining this repository, that the runtime never needs and that `SKILL.md` never references as a runtime step, may locate the repository after declaring `源仓契约测试` or `源仓维护工具` within their first 30 lines. Any assertion about repository documents must skip explicitly when they are absent, so that an installed copy skips instead of failing.
 
-Machine gate: `python3 <skills root>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <skills root>` must report `error=0`; its self-containment lint enforces the list above over Skill content and Skill-owned scripts (`skills/AGENTS.md` and `skills/README.md` are repository documents, not Skills). The full checklist, the "what to write instead" table and the migration steps are in [`skills/AGENTS.md`](skills/AGENTS.md) §「技能自洽性」.
+Machine gate: `python3 <skills root>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <skills root>` must report `error=0`; its self-containment lint enforces the list above over Skill content and Skill-owned scripts (`plugins/AGENTS.md` and `docs/skills.md` are repository documents, not Skills). The full checklist, the "what to write instead" table and the migration steps are in [`plugins/AGENTS.md`](plugins/AGENTS.md) §「技能自洽性」.
 
 ## CLI Command Contract
 
-- Follow `docs/cli-command-contract.md` for every new or changed `crwu` command.
+- Follow `docs/v0.0.1/cli-command-contract.md` for every new or changed `crwu` command.
 - Register every invokable subcommand in the canonical CLI command catalog.
 - Give every subcommand a specific English description, exact usage, and at least one accurate example with an English description.
 - Keep `crwu scheme` as stable JSON intended for AI command discovery; write no human-oriented logs to its standard output.
@@ -64,11 +64,11 @@ Machine gate: `python3 <skills root>/crwu-dev-audit-skill-maintainer/scripts/kb_
 
 ## CLI Manual & Changelog
 
-- `docs/cli-manual.md` is the single source of truth for *using* the CLI, so an
+- `docs/v0.0.1/cli-manual.md` is the single source of truth for *using* the CLI, so an
   agent can operate `crwu` without reading the whole repository. Update it
   whenever commands, flags, environment variables, output contracts, channel
   behavior, or workflows change.
-- Append an entry to `docs/CHANGELOG.md` for every functional CLI change
+- Append an entry to `docs/v0.0.1/CHANGELOG.md` for every functional CLI change
   (feat / fix / refactor / docs), following that file's format.
 - Keep the README command tables in sync with the actual command catalog
   (`crwu scheme`).

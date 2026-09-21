@@ -16,14 +16,16 @@
  *      `ossutil stat` 读不出来（网络/权限/输出变了）也按第 3 种处理 —— 安全默认，
  *      不确定的时候宁可不动远端。
  *
- * 用法：node scripts/dist-plugin.mjs --tgz <文件> --oss-url oss://<bucket>/<key> \
- *                                    [--install-url https://…] [--dry-run] [--self-test]
+ * 用法：node scripts/dist-plugin.mjs --tgz <文件> --config <crwu-workbench.yml> \
+ *                                    [--dry-run] [--self-test]
  *
  * `--self-test` 只跑判定逻辑（不起进程、不联网），`make plugin-check` 与 CI 都会跑它。
  */
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { basename } from 'node:path'
+import { distributionTargetsFromFile } from './plugin-distribution-config.mjs'
 
 function parseArgs(argv) {
   const args = {}
@@ -78,14 +80,13 @@ if (args.selfTest === true) {
   selfTest()
   process.exit(0)
 }
-if (!args.tgz || !args['oss-url']) {
-  console.error('用法：node scripts/dist-plugin.mjs --tgz <文件> --oss-url oss://<bucket>/<key> [--install-url <https URL>] [--dry-run]')
+if (!args.tgz || !args.config) {
+  console.error('用法：node scripts/dist-plugin.mjs --tgz <文件> --config <crwu-workbench.yml> [--dry-run]')
   process.exit(2)
 }
 
 const tgz = args.tgz
-const ossUrl = args['oss-url']
-const installUrl = args['install-url'] ?? ''
+const { ossUrl, installUrl } = distributionTargetsFromFile(args.config, basename(tgz))
 const dryRun = args.dryRun === true
 
 /** 本机 tarball 的 MD5（base64，与 OSS `Content-Md5` 同格式）与字节数。 */

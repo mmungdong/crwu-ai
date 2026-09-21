@@ -20,7 +20,7 @@ const { createWorkbenchState } = await import(new URL('src/host/state/store.ts',
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
-  autoUpload: true, singleAuditOnly: true, requireTopLevelParent: true,
+  autoUpload: true, requireTopLevelParent: true,
 }
 
 /** ctx：shell 记录命令与 spec，fs 提供 stat/contains/readText。 */

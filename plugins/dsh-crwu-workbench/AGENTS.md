@@ -21,8 +21,9 @@ src/
 ├── host/
 │   ├── apply.ts                     # Host 功能总装配
 │   ├── config/
-│   │   ├── config.ts                # Config 类型与 Schema
-│   │   └── consts.ts                # 配置默认值与固定协议常量
+│   │   ├── config.ts                # Cordis 选择入口与运行时配置类型
+│   │   ├── deployment.ts            # YAML 部署值合并到运行清单
+│   │   └── yaml.ts                  # YAML Schema 解析与分发地址推导
 │   ├── http/
 │   │   ├── route.ts                 # 同源 HTTP 路由
 │   │   ├── json.ts                  # 请求与响应处理
@@ -95,7 +96,8 @@ tests/
 - 不建立无边界的全局 `utils.ts`。工具函数按用途放入具名文件，例如 `date.ts`、`json.ts`、`fingerprint.ts`。
 - 仓库级工具脚本放 `scripts/`（如 `sync-version.mjs`、`assert-pack.mjs`）；`install/` 只放交付相关的校验与安装件。
 - 类型放在领域自己的 `types.ts`；跨 Host/Client 传输的类型放在 `src/shared/types.ts`。
-- 部署可变的值必须进入 `Config` 和 `cordis.patch.yml`，不能伪装成 `DEFAULT_*` 常量写死在功能代码中。
+- 部署可变的值必须进入 `config/crwu-workbench.yml`；开发与 TGZ 运行共用这一份配置，不能再写进
+  `cordis.patch.yml` 或伪装成 `DEFAULT_*` 常量。
 - 固定路由、字段代码、协议版本、状态枚举等不可配置的协议值可以进入 `consts.ts`。
 
 ## 4. DSH 插件规范
@@ -279,7 +281,7 @@ tests/unit/                         # 配置 / 路由 / 操作表 / 包清单 + 
 | 状态持久化（`host/state/`） | 单元测试（读-改-写、跨重启恢复、占用锁自愈） | 没人拦；真机前**先备份** `~/.dsh/crwu-workbench.json` |
 | **构建 / 交付配置**（tsdown、`package.json` 的 `exports`/`files`/`dsh.client`、`prepare.mjs`、新依赖） | `npm run build` + `smoke:built` + `pack:assert` | `pack:assert`（缺入口 / `require` 只允许 react 与 react/jsx-runtime / ModuleLoader id 必须等于包名）；`host-package.test.mjs`（peer、`dsh.client.inject`、真跑 `npm pack` + `npm install` 的回归） |
 | 用户可见文案（UI 中文 / 安装提示词） | **逐条**断言的测试，模板见 `host-install-prompt.test.mjs` | 没人拦 —— 但「意思差不多地改写」真的丢过安全指令 |
-| 新增部署可变的值 | 默认值与边界的单元测试，并写进 `Config` / `cordis.patch.yml` | `host-package.test.mjs` 的 config schema 测试 |
+| 新增部署可变的值 | YAML Schema 边界测试，并写进 `config/crwu-workbench.yml` | `host-yaml-config.test.mjs` + `host-package.test.mjs` 的真实 pack/install/激活测试 |
 
 **新增一个 Host 操作的最小改动清单**（最容易漏的是 2~4）：
 
@@ -586,7 +588,7 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 `dsh plugin add` 甚至未必真的替换（pnpm 见 spec 未变就跳过 —— 实测过）。用户 2026-09-21 明确要求
 守住这条。
 
-- 改了任何东西（代码 / 技能 / 文档 / `cordis.patch.yml`）→ **升版本号**：`npm run version:set x.y.z`
+- 改了任何东西（代码 / 技能 / 文档 / `cordis.patch.yml` / `config/crwu-workbench.yml`）→ **升版本号**：`npm run version:set x.y.z`
   + 手写 CHANGELOG 一节，然后 `make plugin-dist`。
 - 机器判据在 `scripts/dist-plugin.mjs`（`make plugin-dist` 先跑完整门禁再接它）：远端没有该对象 →
   上传；已有且内容一致 → 跳过（幂等重跑无害）；已有但内容不同 → **拒绝上传**并提示升版本号；

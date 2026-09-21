@@ -274,3 +274,8 @@ export function pageCount(total: number, pageSize: number): number {
   if (total <= 0 || pageSize <= 0) return 1
   return Math.max(1, Math.ceil(total / pageSize))
 }
+
+/** 待审核列表的检索上下文：翻页和刷新都必须保留当前查询条件。 */
+export function pendingArgs(query: string, page: number): { query: string; page: number } {
+  return { query, page }
+}

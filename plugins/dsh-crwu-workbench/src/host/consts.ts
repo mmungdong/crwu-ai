@@ -27,4 +27,4 @@ export const PLUGIN_INJECT = ['webServer', 'shell']
  * 见 AGENTS.md §7.2）。改版本号时 `version:set` 不会碰这里 ——
  * `tests/unit/host-package.test.mjs` 有一条断言盯着它必须等于 `pkg-<package.json 版本>`。
  */
-export const PLUGIN_REV = 'pkg-0.0.1'
+export const PLUGIN_REV = 'pkg-0.0.2'

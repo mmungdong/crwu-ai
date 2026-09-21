@@ -51,6 +51,7 @@ const REQUIRED = [
   // npm 安装 tarball 时也会跑 prepare；这个入口不在包里，装包的人就会看到
   // `npm error command sh -c node scripts/prepare.mjs`。它必须随包发布。
   'scripts/prepare.mjs',
+  'config/crwu-workbench.yml',
   'cordis.patch.yml',
   'README.md',
   'CHANGELOG.md',

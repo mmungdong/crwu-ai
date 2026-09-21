@@ -7,7 +7,6 @@ import { workspaceView } from '../state/store.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { finiteNumber, text } from '../../shared/utils/value.ts'
 import { auditRelease, auditStart, auditStatus, auditStop } from '../audit/ops.ts'
-import { DEFAULT_MANIFEST } from '../environment/manifest-default.ts'
 import { DEFAULT_INSTALL_DOC, buildInstallPromptText } from '../environment/install-prompt.ts'
 import { WORKBENCH_PROTOCOL } from '../../shared/consts.ts'
 import { ensureRegistry } from '../state/registry.ts'
@@ -67,7 +66,7 @@ export function createCoreOperations(
    */
   const ossDeps = async (): Promise<OssDeps> => ({
     ctx,
-    manifest: state.manifest ?? DEFAULT_MANIFEST,
+    manifest: state.manifest,
     platform: await world.platform(),
     home: await world.home(),
     workdir: () => world.workdir(),
@@ -161,7 +160,7 @@ export function createCoreOperations(
     'install-prompt': (args) => {
       // 清单优先：它是从组织自己的 OSS 现拉的，比部署配置更新；Config 是兜底覆盖。
       // 与 `env` 返回 installDocUrl 的口径保持一致（同一个值有两个来源时不能各写一套）。
-      const url = (state.manifest?.installDocUrl ?? '') || config.installDocUrl || DEFAULT_INSTALL_DOC
+      const url = state.manifest.installDocUrl || config.installDocUrl || DEFAULT_INSTALL_DOC
       const workspace = text(args.workspace) || state.workspacePath || state.caseRoot
       return { ok: true, url, prompt: buildInstallPromptText(url, workspace) }
     },

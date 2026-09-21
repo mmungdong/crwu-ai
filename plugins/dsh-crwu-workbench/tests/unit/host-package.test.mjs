@@ -14,8 +14,7 @@ import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
 
-const { CONFIG_DEFAULTS } = await import(new URL('src/host/config/consts.ts', ROOT).href)
-const { Config } = await import(new URL('src/host/config/config.ts', ROOT).href)
+const { Config, resolveWorkbenchConfig } = await import(new URL('src/host/config/config.ts', ROOT).href)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
 const { PLUGIN_INJECT, PLUGIN_NAME } = await import(new URL('src/host/consts.ts', ROOT).href)
 const { RPC_BODY_MAX_BYTES } = await import(new URL('src/host/http/consts.ts', ROOT).href)
@@ -24,9 +23,12 @@ const { createCoreOperations } = await import(new URL('src/host/ops/core.ts', RO
 const { WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { readJsonBody, writeJson } = await import(new URL('src/host/http/json.ts', ROOT).href)
 
-/** 用真实 schema 补默认值，等同于 Cordis 装载时的行为。 */
+const YAML_CONFIG = new URL('config/crwu-workbench.yml', ROOT)
+const YAML_RUNTIME = resolveWorkbenchConfig({ configFile: YAML_CONFIG.pathname })
+
+/** 操作单测从真实 YAML 起步，只覆盖该用例关心的字段。 */
 function resolveConfig(patch = {}) {
-  return Config({ ...patch })
+  return { ...YAML_RUNTIME, ...patch }
 }
 
 /** 最小的 webServer 替身：只保留 register 并把 handler 交出来。 */
@@ -90,28 +92,18 @@ async function invoke(handler, options) {
 
 // ── 配置 Schema ─────────────────────────────────────────────────────────────
 
-test('config schema fills every deployment value from the documented defaults', () => {
+test('Cordis config only selects an optional development YAML', () => {
+  assert.deepEqual(Config({}), { configFile: '' })
+  assert.deepEqual(Config({ configFile: '/tmp/dev.yml' }), { configFile: '/tmp/dev.yml' })
+})
+
+test('the package YAML is the runtime source of deployment values', () => {
   const config = resolveConfig()
-  for (const [key, value] of Object.entries(CONFIG_DEFAULTS)) {
-    assert.deepEqual(config[key], value, `default mismatch for ${key}`)
-  }
-  // 案例根目录默认必须是空的：留空 = 不自动采用，必须在面板里显式选工作空间。
+  assert.equal(config.configSource, YAML_CONFIG.pathname)
   assert.equal(config.caseRoot, '')
+  assert.equal(config.manifestUrl, 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-env-manifest.json')
+  assert.equal(config.ossBucket, 'crwu-workspace')
   assert.equal(config.ossLinkMode, 'signed')
-  assert.equal(config.singleAuditOnly, true)
-  assert.equal(config.requireTopLevelParent, true)
-})
-
-test('config schema accepts an explicit deployment value', () => {
-  const config = resolveConfig({ caseRoot: '/tmp/crwu-cases', ossLinkMode: 'public', ossLinkTtlSeconds: 600 })
-  assert.equal(config.caseRoot, '/tmp/crwu-cases')
-  assert.equal(config.ossLinkMode, 'public')
-  assert.equal(config.ossLinkTtlSeconds, 600)
-})
-
-test('config schema rejects an unknown link mode and a shorter-than-60s TTL', () => {
-  assert.throws(() => resolveConfig({ ossLinkMode: 'signed-url' }))
-  assert.throws(() => resolveConfig({ ossLinkTtlSeconds: 30 }))
 })
 
 test('host declares exactly the services it reads', () => {
@@ -128,6 +120,9 @@ test('each plugin instance gets isolated state seeded from its own config', () =
   const second = createWorkbenchState(resolveConfig({ caseRoot: '/cases/b' }))
   assert.equal(first.caseRoot, '/cases/a')
   assert.equal(second.caseRoot, '/cases/b')
+  assert.equal(first.manifest?.oss.bucket, 'crwu-workspace', '插件激活后、env RPC 之前就要使用 YAML 的私有 OSS')
+  assert.equal(first.manifest?.oss.prefix, 'crwu/audit')
+  assert.equal(first.manifest?.oss.linkMode, 'signed')
   assert.notEqual(first.audits, second.audits)
   first.audits.k = 'x'
   assert.deepEqual(second.audits, {})
@@ -474,7 +469,7 @@ test('package.json entry points, files and exports stay consistent', async () =>
     './package.json': './package.json',
   })
   // 装包的人必须拿到入口、补丁、许可与说明；仓库内部件（tests/legacy/install/scripts）不进包。
-  for (const entry of ['lib/index.js', 'lib/client.js', 'cordis.patch.yml', 'LICENSE', 'SECURITY.md', 'CHANGELOG.md']) {
+  for (const entry of ['lib/index.js', 'lib/client.js', 'config/crwu-workbench.yml', 'cordis.patch.yml', 'LICENSE', 'SECURITY.md', 'CHANGELOG.md']) {
     assert.ok(pkg.files.includes(entry), `${entry} 不在 files 里，分发会缺件`)
   }
   // 技能随包发布：`skills/` 是插件专属技能，`common/skills/` 是打包前从 `plugins/common/skills/`
@@ -490,6 +485,7 @@ test('package.json entry points, files and exports stay consistent', async () =>
   assert.equal(pkg.scripts.prepare, 'node scripts/prepare.mjs')
   // 打包前先同步公共技能：少了这一步，tarball 里只有插件专属技能。
   assert.match(pkg.scripts.prepack, /skills:sync/)
+  assert.match(pkg.scripts.prepack, /config:check/)
   assert.match(pkg.scripts.prepack, /build:lib/)
   assert.match(pkg.scripts.build, /skills:sync/)
   assert.match(pkg.scripts.check, /skills:check/)
@@ -560,12 +556,22 @@ test('an installed tarball can actually be installed and imported', async () => 
     await run(npm.command, [...npm.args, 'install', '--no-audit', '--no-fund'], { cwd: packageDir, maxBuffer: 32 * 1024 * 1024, env })
     await stat(join(packageDir, 'lib', 'index.js'))
     await stat(join(packageDir, 'lib', 'client.js'))
+    await stat(join(packageDir, 'config', 'crwu-workbench.yml'))
     // 技能是员工侧的唯一来源：专属技能与同步进来的公共技能都必须真的在包里。
     await stat(join(packageDir, 'skills', 'crwu-audit', 'SKILL.md'))
     await stat(join(packageDir, 'common', 'skills', 'crwu-dws', 'SKILL.md'))
 
-    const { stdout } = await run('node', ['-e', 'import("dsh-crwu-workbench").then(m => console.log(Object.keys(m).sort().join(",")))'], { cwd: packageDir })
-    assert.equal(stdout.trim(), 'Config,ROUTE,apply,inject,name', '装出来的包必须导出 DSH 插件协议成员')
+    const activate = [
+      'import("dsh-crwu-workbench").then(m => {',
+      'const routes = [];',
+      'const ctx = { webServer: { register: () => { routes.push(1); return () => {} } },',
+      'get: () => undefined, on: () => () => {}, effect: (fn) => fn() };',
+      'm.apply(ctx, m.Config({}));',
+      'console.log(`${Object.keys(m).sort().join(",")}:${routes.length}`);',
+      '})',
+    ].join('')
+    const { stdout } = await run('node', ['-e', activate], { cwd: packageDir })
+    assert.equal(stdout.trim(), 'Config,ROUTE,apply,inject,name:1', '装出来的包必须从包内 YAML 激活并注册路由')
   } finally {
     await rm(workdir, { recursive: true, force: true })
   }

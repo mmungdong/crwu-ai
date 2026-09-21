@@ -2,7 +2,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { normalizeOss } from '../environment/manifest.ts'
-import { DEFAULT_MANIFEST } from '../environment/manifest-default.ts'
 import { persistAudits, ensureRegistry } from '../state/registry.ts'
 import type { AuditRecord, WorkbenchState } from '../state/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
@@ -175,7 +174,7 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     }
 
     const stamp = new Date()
-    const manifest = state.manifest ?? DEFAULT_MANIFEST
+    const manifest = state.manifest
     const started = await startChild(ctx, {
       label: auditLabel(seqNo, stamp),
       prompt: auditPrompt({

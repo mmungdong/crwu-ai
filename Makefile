@@ -35,12 +35,8 @@ PLUGIN_VERSION ?= $(shell node -p "require('$(PLUGIN_DIR)/package.json').version
 DIST_DIR      := $(CURDIR)/dist
 PLUGIN_TGZ    := $(DIST_DIR)/$(PLUGIN_PKG_NAME)-$(PLUGIN_VERSION).tgz
 
-# 员工侧的安装源（OSS 静态站点）。换组织/桶只改这三个变量。
-OSS_BUCKET    ?= crwu-only-workspace
-OSS_PREFIX    ?= crwu-dsh-plugins
-OSS_ENDPOINT_HOST ?= $(OSS_BUCKET).oss-cn-beijing.aliyuncs.com
-PLUGIN_OSS_URL := oss://$(OSS_BUCKET)/$(OSS_PREFIX)/$(notdir $(PLUGIN_TGZ))
-PLUGIN_URL    := https://$(OSS_ENDPOINT_HOST)/$(OSS_PREFIX)/$(notdir $(PLUGIN_TGZ))
+# 开发运行、TGZ 内配置与分发地址共用这一份 YAML。
+PLUGIN_CONFIG ?= $(PLUGIN_DIR)/config/crwu-workbench.yml
 
 # 技能装到非 DSH 宿主时用：`make skills-install AGENT_DIR=~/.agents/skills`。
 # 收哪些技能只由目录布局决定 —— `plugins/*/skills/*` 同时覆盖插件专属技能与
@@ -113,8 +109,7 @@ plugin-dist: plugin-check
 	@$(MAKE) --no-print-directory plugin-pack
 	node scripts/dist-plugin.mjs \
 		--tgz "$(PLUGIN_TGZ)" \
-		--oss-url "$(PLUGIN_OSS_URL)" \
-		--install-url "$(PLUGIN_URL)" \
+		--config "$(PLUGIN_CONFIG)" \
 		$(if $(PLUGIN_DIST_DRY_RUN),--dry-run)
 
 plugin-clean:

@@ -17,7 +17,7 @@
 （各宿主目录见 [`agent-skill-dirs.md`](agent-skill-dirs.md)）。
 
 规则：Skill 依赖不进入根 Go 构建，不得成为 `crwu` 二进制的运行时依赖；
-变更功能后按 `AGENTS.md` 在 `docs/CHANGELOG.md` 记纪要，并同步相关手册。
+变更功能后按 `AGENTS.md` 在 `docs/v0.0.1/CHANGELOG.md` 记纪要，并同步相关手册。
 
 | Skill | 类型 | 作用 |
 | --- | --- | --- |
@@ -64,8 +64,8 @@
 - 一级根按 `request_kind=directory`、`recursive=true` 递归下载根内全部支持正文；**细分对象与子业务不各建 Skill**，由父 Skill 在已下载目录包内二次选用。
 - **方法轴与覆盖层技能为 `pending` 期间，其知识库内容仍必须被装配**：下载清单 = 命中叶子装配表 ＋ 公共执行契约 ＋ **router 按本次 `methods[]`/`overlays[]` 命中项追加的方法层与覆盖层目录**（映射唯一事实源：`crwu-audit/references/08-union-dispatch-rules.md`）。`pending` 表示能力未落地，不表示内容可以不装。
 
-设计、能力树与路由表见 [`docs/design-crwu-audit-skills.md`](design-crwu-audit-skills.md)。
-总路由 `crwu-audit` 入口与知识库仓库解耦（不预读知识库入口文档/路径）；**叶子技能执行期按 RULE/CHK 编号 + 库内层级路径寻址，经 crwu-dws 按本次清单实时下载规则正文后引用（文件零缓存；不复制正文——实时引用协议 R1–R5 见 docs/design-audit-live-kb-protocol.md）**。
+设计、能力树与路由表见 [`docs/v0.0.1/design-crwu-audit-skills.md`](v0.0.1/design-crwu-audit-skills.md)。
+总路由 `crwu-audit` 入口与知识库仓库解耦（不预读知识库入口文档/路径）；**叶子技能执行期按 RULE/CHK 编号 + 库内层级路径寻址，经 crwu-dws 按本次清单实时下载规则正文后引用（文件零缓存；不复制正文——实时引用协议 R1–R5 见 docs/v0.0.1/design-audit-live-kb-protocol.md）**。
 叶子技能只读引用、不复制规则正文。新增能力需在 crwu-audit 路由注册表 + 设计文档 + 本表三处登记。
 **族维护分工**：`crwu-dev-audit-optimize` 负责从漏检、误检和复核反馈诊断“需要改什么”，并交付可视化差距报告；知识库修复单只供用户手工执行，Skill 修改须逐项确认。`crwu-dev-audit-skill-maintainer` 负责盘点目录树以及创建、修复、重映射资产/业务 Skill。两者都不经 crwu-audit 路由、不产审核判断。
 
@@ -75,8 +75,8 @@
 - 缓存语义（用户口径）：**目录可缓存、正文不缓存**——目录缓存只存结构与 nodeId/全路径索引，正文每次实时从钉钉取回（本次下载物只属本次审核），保证"员工钉钉更新 → AI 取到的正文永远最新"。
 - 取数通道（v0.6）：知识库文档的 `nodeType` 恒为 `file`，**格式只在 `extension` 里**；`doc +export` 仅支持 `adoc`。故 M2/M3 一律按 `extension` 分流——`adoc`→`doc +export`；`md`/`txt`→`drive +download`（原件即正文）；其余→`skipped`（**不是 failure**）。禁止"先 export 试一次失败再换通道"。节点 `extension`/`contentType` 由 M1 遍历写入快照与 node-index；旧缓存缺该字段时逐节点补查 `wiki +node-get`，不按名称后缀猜。
 - 缓存名一致性（v0.3.1/D12）：缓存目录身份 = `.cache-meta.space`（name+workspaceId）；缓存库名与目标不一致（改名/换库/历史残留）→ **先清理缓存目录、再在线重下目标库目录结构**（防跨库误命中；见 SKILL.md §5.0 与 design §10）。
-- 口径：钉钉知识库是知识正文唯一来源；案例 `knowledge/` 是本次审核工作集，跨审核必须重新下载；目录缓存只用于查找加速且无正文。audit 族实时引用协议见 [`docs/design-audit-live-kb-protocol.md`](design-audit-live-kb-protocol.md)（R1–R5）。
-- 设计/决策点与改动纪律见 [`docs/design-crwu-dws.md`](design-crwu-dws.md)；改动只落源仓，运行时部署由插件包（DSH）或 `make skills-install`（其它宿主）负责（不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）。
+- 口径：钉钉知识库是知识正文唯一来源；案例 `knowledge/` 是本次审核工作集，跨审核必须重新下载；目录缓存只用于查找加速且无正文。audit 族实时引用协议见 [`docs/v0.0.1/design-audit-live-kb-protocol.md`](v0.0.1/design-audit-live-kb-protocol.md)（R1–R5）。
+- 设计/决策点与改动纪律见 [`docs/v0.0.1/design-crwu-dws.md`](v0.0.1/design-crwu-dws.md)；改动只落源仓，运行时部署由插件包（DSH）或 `make skills-install`（其它宿主）负责（不直接写/ln/cp/rm `~/.skills-manager`、`~/.dsh`、`~/.workbuddy` 等运行时目录）。
 
 ## V2.1 增补（2026-09-07）
 - `crwu-audit` 目录 = 精简入口 `SKILL.md`（≤300 行）+ `references/` 四件运行材料
@@ -85,6 +85,6 @@
   债权-金融不良 → P2；复核报告 → 待定；mining → P2。
 - 数据基线：氚云「报告审核」8,486 条（2026-09-07 快照），词表体量列与覆盖层判定即源于此；
   复跑脚本 `pull_全量画像.py`（基线/统计由部署方维护，技能不持有）。
-- **知识库推理引用协议（实时版，2026-09-08）**：crwu-audit 族技能引用知识库只写 RULE/CHK 编号 + **库内层级路径**（如 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核`），不写知识库名称、本地根路径或节点 nodeId。**单文件寻址键不带 `.md`**（`.md` 只是导出到本地时的文件名；带后缀会与 `by_path` 键不匹配而在 M2 记 failure），目录项以 `/` 结尾。nodeId 每次由 crwu-dws 目录树动态解析，正文按**本次审核清单**从钉钉实时下载；清单支持单文件与目录路径，文件零缓存、跨审核重下。设计/决策见 [`docs/design-audit-live-kb-protocol.md`](design-audit-live-kb-protocol.md)（R1–R5）与 `docs/design-crwu-dws.md`。机器校验：`plugins/dsh-crwu-workbench/skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <repo>/plugins/dsh-crwu-workbench/skills`；对单个 audit 根加 `--forbid-literal <库名>` 禁知识库名字面。**本文件是源仓维护者视角，不随技能安装到 agent。**
+- **知识库推理引用协议（实时版，2026-09-08）**：crwu-audit 族技能引用知识库只写 RULE/CHK 编号 + **库内层级路径**（如 `06-规则库/清单-M-市场法/不动产-房产-市场法租金比较-报告审核`），不写知识库名称、本地根路径或节点 nodeId。**单文件寻址键不带 `.md`**（`.md` 只是导出到本地时的文件名；带后缀会与 `by_path` 键不匹配而在 M2 记 failure），目录项以 `/` 结尾。nodeId 每次由 crwu-dws 目录树动态解析，正文按**本次审核清单**从钉钉实时下载；清单支持单文件与目录路径，文件零缓存、跨审核重下。设计/决策见 [`docs/v0.0.1/design-audit-live-kb-protocol.md`](v0.0.1/design-audit-live-kb-protocol.md)（R1–R5）与 `docs/v0.0.1/design-crwu-dws.md`。机器校验：`plugins/dsh-crwu-workbench/skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <repo>/plugins/dsh-crwu-workbench/skills`；对单个 audit 根加 `--forbid-literal <库名>` 禁知识库名字面。**本文件是源仓维护者视角，不随技能安装到 agent。**
 - 2026-09-07：`references/03-业务风险分类判定.md` —— 机构 A/B/C 业务分类作为**路由首判**（严谨度参考、首页标注；
   agent 一律全面审核、不裁剪检查点，最终通过由人工复核；与氚云风险等级字段对照校验）。

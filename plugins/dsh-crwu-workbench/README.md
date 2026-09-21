@@ -201,15 +201,25 @@ dsh plugin --profile web remove dsh-crwu-workbench
 
 （旧动态形态的卸载方式 `cordis_undefine` 已随该形态退休；它本来就活不过一次 DSH 重启。）
 
-## 三、分发前必须改的环境相关项
+## 三、统一 YAML 配置
 
-现在的默认值是给作者这套环境配的，别人直接装会指向作者的 OSS。分发前按需在
-`cordis.patch.yml` 的 `config` 里覆盖（字段定义见 `src/host/config/config.ts`，默认值见
-`src/host/consts.ts`）：
+[`config/crwu-workbench.yml`](config/crwu-workbench.yml) 是开发、打包与员工 TGZ 运行时的唯一配置源：
 
-| 配置项 | 默认值 | 说明 |
-|---|---|---|
-| `caseRoot` | 空串（**有意**） | 旧的兜底值是作者本机绝对路径，分发出去会把别人的产物写到不存在的目录；空串时由「选定的工作空间」决定，而「必须先选工作空间」是硬门禁 |
+- `oss.readonly` 是匿名只读 Bucket，保存环境清单、安装说明和员工下载的插件 TGZ；
+- `oss.protected` 是审核产物的私有 Bucket，匿名访问应返回 403，上传继续使用员工机器上的 OSS
+  凭据，查看链接默认由 `ossutil` 生成签名 URL；
+- YAML 只保存地址和行为参数，不保存 AK、SK 或 STS Token。
+
+源码开发时 Host 直接读取这份 YAML。要临时验证另一份配置，可在启动 DSH profile 前设置
+`CRWU_CONFIG_FILE=/绝对路径/crwu-workbench.yml`，也可以只在开发用的 Cordis 配置里设置
+`configFile`。不指定时自动寻找插件目录里的 `config/crwu-workbench.yml`。
+
+`make plugin-pack` / `npm pack` 会先运行 `npm run config:check`，然后把同一份 YAML 原样放进 TGZ；
+员工安装后 Host 自动读取包内配置。`make plugin-dist` 也从 `oss.readonly` 推导 `oss://` 上传目标和
+员工侧 HTTPS 安装地址，Makefile 不再维护另一套 Bucket 常量。
+
+`workspace.caseRoot` 默认留空是有意的：由面板中选定的工作空间决定，而“必须先选工作空间”仍是
+审核硬门禁。
 
 ### 审核子代理挂在哪（审核根会话）
 
@@ -232,11 +242,6 @@ dsh plugin --profile web remove dsh-crwu-workbench
    会话事实（会话 cwd / 会话所属工作空间）在 ⑧ 运行环境信息里展示。
 4. 写盘是读-改-写，而**读失败时一律不写**：否则一次 transient 的 stat 失败就会用只有本次补丁的
    对象覆盖别人的字段（实测把 `workspacePath` 抹掉过）。
-| `manifestUrl` | 作者环境的清单地址 | 环境清单地址；每个组织应指向自己的 OSS |
-| `installDocUrl` | 同上 | 安装清单文档地址（「复制提示词」里那份） |
-| `formName` | `报告审核` | 氚云表单名 |
-| `ossBucket` / `ossPrefix` / `ossEndpoint` | 空 / 空 / 空 | 交付件上传目标；也可以只写在远程清单里 |
-| `ossLinkMode` / `ossLinkTtlSeconds` | `signed` / `3600` | 云端链接是签名还是公有读 |
 
 ## 四、开发工作流
 
@@ -248,6 +253,7 @@ dsh plugin --profile web remove dsh-crwu-workbench
 | 命令 | 作用 |
 |---|---|
 | `npm test` | 全部测试：`tests/unit/`（配置、路由、操作表、包清单、Host 与 **Client 半**含 `.tsx`） |
+| `npm run config:check` | 校验唯一 YAML 配置及两个 OSS 边界 |
 | `npm run typecheck` | `tsc --noEmit`（仅 `src/`） |
 | `npm run build` | tsdown 双端打包出 `lib/index.js` + `lib/client.js`（`prepare` 也走它） |
 | `npm run smoke:built` | 用**真的** `lib/index.js` 走一遍同源路由、用真的 `lib/client.js` 过一遍 `__ModuleLoader__` |

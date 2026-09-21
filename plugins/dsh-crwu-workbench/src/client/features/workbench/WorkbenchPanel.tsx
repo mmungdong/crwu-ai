@@ -14,7 +14,7 @@ import { createEnvStatusStore, useEnvStatus, type EnvStatusStore } from '../envi
 import { WORKBENCH_PROTOCOL } from '../../../shared/consts.ts'
 import { AuditInfoDrawer } from '../report-audit/AuditInfoDrawer.tsx'
 import { ReportPane } from '../report-audit/ReportPane.tsx'
-import { openReportNotice, openSessionTarget } from '../report-audit/row.ts'
+import { openReportNotice, openSessionTarget, pendingArgs } from '../report-audit/row.ts'
 
 /**
  * 工作台外壳。
@@ -347,9 +347,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       : <ReportPane
           state={reportState}
           gating={gating}
-          onSearch={(next) => { setQuery(next); setPage(1); void loadReport({ query: next, page: 1 }) }}
-          onGoPage={(next) => { setPage(next); void loadReport({ page: next }) }}
-          onRefreshPending={() => { void loadReport() }}
+          onSearch={(next) => { setQuery(next); setPage(1); void loadReport(pendingArgs(next, 1)) }}
+          onGoPage={(next) => { setPage(next); void loadReport(pendingArgs(query, next)) }}
+          onRefreshPending={() => { void loadReport(pendingArgs(query, page)) }}
           onRefreshCloud={() => { void loadCloud(true) }}
           onStart={(task, retry) => {
             const key = task.seqNo !== '' ? task.seqNo : task.name

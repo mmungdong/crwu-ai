@@ -284,7 +284,7 @@ export async function uploadArtifacts(
   }
 }
 
-/** 队列外的手动重传：按 key 找到记录，或直接用调用方给的 casePath。 */
+/** 队列外的手动重传：只能按 key 使用 Host 已登记的案例目录。 */
 export async function ossUpload(
   deps: OssDeps,
   args: Record<string, unknown>,
@@ -292,7 +292,10 @@ export async function ossUpload(
 ): Promise<UploadResult> {
   const key = text(args.key)
   const record = key === '' ? undefined : state.audits[key]
-  const casePath = text(args.casePath) || record?.casePath || ''
+  if (record === undefined) {
+    return { ok: false, error: '找不到已登记的审核记录，无法重传。', bucket: '', prefix: '', results: [] }
+  }
+  const casePath = record.casePath
   if (casePath === '') {
     return { ok: false, error: '这条审核还没定位到案例目录，无法重传。', bucket: '', prefix: '', results: [] }
   }
@@ -318,16 +321,13 @@ export async function ossUpload(
   }
   if (item === null) return { ok: false, error: `案例目录不可读或不是案例：${casePath}`, bucket: '', prefix: '', results: [] }
 
-  const projectId = key !== '' ? key : (text(args.projectId) || item.name)
-  const out = await uploadArtifacts(deps, item, projectId, ossutil, oss)
-  if (record !== undefined) {
-    if (out.ok) {
-      record.uploadedAt = new Date().toISOString()
-      record.uploadError = ''
-      record.ossPrefix = out.prefix
-    } else {
-      record.uploadError = out.error.slice(0, 300) || '上传失败'
-    }
+  const out = await uploadArtifacts(deps, item, key, ossutil, oss)
+  if (out.ok) {
+    record.uploadedAt = new Date().toISOString()
+    record.uploadError = ''
+    record.ossPrefix = out.prefix
+  } else {
+    record.uploadError = out.error.slice(0, 300) || '上传失败'
   }
   return out
 }

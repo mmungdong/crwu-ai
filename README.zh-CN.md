@@ -6,7 +6,7 @@
 
 把评估材料、企业知识和业务记录转化为有证据支撑的 AI 工作流，同时确保 AI 的权限不会超过正在使用它的员工。
 
-[English](README.md) · [浏览 Skills](skills/README.md) · [CLI 手册](docs/cli-manual.md) · [变更记录](docs/CHANGELOG.md)
+[English](README.md) · [浏览 Skills](docs/skills.md) · [CLI 手册](docs/v0.0.1/cli-manual.md) · [变更记录](docs/v0.0.1/CHANGELOG.md)
 
 <br>
 
@@ -51,11 +51,11 @@ CRWU 最初是用于安全访问氚云的稳定命令入口，现在已经发展
 
 | 我想要…… | 从这里开始 |
 | --- | --- |
-| 审核一个资产评估项目 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [审核设计](docs/design-crwu-audit-skills.md) |
+| 审核一个资产评估项目 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [审核设计](docs/v0.0.1/design-crwu-audit-skills.md) |
 | 查看全部 AI Skills | [Skills 目录](docs/skills.md) |
-| 以员工身份登录氚云 | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/cli-manual.md) |
+| 以员工身份登录氚云 | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/v0.0.1/cli-manual.md) |
 | 查询表单、记录和附件 | [`crwu-h3yun-query`](plugins/common/skills/crwu-h3yun-query/SKILL.md) |
-| 使用钉钉知识库作为审核依据 | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [实时知识协议](docs/design-audit-live-kb-protocol.md) |
+| 使用钉钉知识库作为审核依据 | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [实时知识协议](docs/v0.0.1/design-audit-live-kb-protocol.md) |
 | 为 AI 宿主安装或更新 Skills | `make skills-install AGENT_DIR=…` → [各宿主目录](docs/agent-skill-dirs.md) |
 | 给员工安装 DSH 插件 | `make plugin-dist` → [插件 README](plugins/dsh-crwu-workbench/README.md) |
 | 维护或扩展审核体系 | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
@@ -162,7 +162,7 @@ flowchart LR
 | 企业数据与知识访问 | 3 | 氚云登录、氚云查询及钉钉 DWS 知识访问。 |
 | 准则、分发与维护 | 4 | 公共准则、环境初始化、审核优化及 Skill 维护。 |
 
-Skills 必须满足自洽契约：安装后的 Skill 不能依赖自身目录之外的仓库相对路径。完整触发条件、职责和依赖边界请查看 [Skills 目录](skills/README.md)。
+Skills 必须满足自洽契约：安装后的 Skill 不能依赖自身目录之外的仓库相对路径。完整触发条件、职责和依赖边界请查看 [Skills 目录](docs/skills.md)。
 
 ## CLI 与氚云访问
 
@@ -230,7 +230,7 @@ crwu h3yun file download --schema <schemaCode> --id <recordId> --out ./files
 
 </details>
 
-完整参数、输出契约、筛选条件和示例请查看 [CLI 手册](docs/cli-manual.md)。修改命令时必须遵循 [CLI 命令契约](docs/cli-command-contract.md)，并以 `crwu scheme` 为权威目录。
+完整参数、输出契约、筛选条件和示例请查看 [CLI 手册](docs/v0.0.1/cli-manual.md)。修改命令时必须遵循 [CLI 命令契约](docs/v0.0.1/cli-command-contract.md)，并以 `crwu scheme` 为权威目录。
 
 ## 架构
 
@@ -314,7 +314,7 @@ python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py \
 1. CLI 核心行为与 AI 宿主适配层保持分离；
 2. 每个可执行命令都必须登记到 `crwu scheme`；
 3. 每个 Skill 都必须能够独立安装；
-4. CLI 功能变更需要同步更新 `docs/cli-manual.md` 和 `docs/CHANGELOG.md`；
+4. CLI 功能变更需要同步更新 `docs/v0.0.1/cli-manual.md` 和 `docs/v0.0.1/CHANGELOG.md`；
 5. 本文档必须与 [`README.md`](README.md) 保持同步。
 
 CLI 默认版本必须在 `internal/buildinfo` 与根目录 `Makefile` 中保持一致。
@@ -323,13 +323,13 @@ CLI 默认版本必须在 `internal/buildinfo` 与根目录 `Makefile` 中保持
 
 | 文档 | 适合查看什么 |
 | --- | --- |
-| [CLI 手册](docs/cli-manual.md) | 命令、参数、环境变量、筛选条件和操作流程。 |
-| [Skills 目录](skills/README.md) | 完整 Skill 清单、审核轴、触发条件与职责。 |
-| [审核 Skills 设计](docs/design-crwu-audit-skills.md) | 领域模型、能力树与路由架构。 |
-| [实时知识协议](docs/design-audit-live-kb-protocol.md) | 审核如何解析并获取当前知识，同时避免复制规则正文。 |
-| [DWS 设计](docs/design-crwu-dws.md) | 钉钉目录缓存与正文实时获取模型。 |
-| [CLI 命令契约](docs/cli-command-contract.md) | 命令描述、用法、示例和机器发现要求。 |
-| [变更记录](docs/CHANGELOG.md) | 最近的功能、审核系统与交付模板变更。 |
+| [CLI 手册](docs/v0.0.1/cli-manual.md) | 命令、参数、环境变量、筛选条件和操作流程。 |
+| [Skills 目录](docs/skills.md) | 完整 Skill 清单、审核轴、触发条件与职责。 |
+| [审核 Skills 设计](docs/v0.0.1/design-crwu-audit-skills.md) | 领域模型、能力树与路由架构。 |
+| [实时知识协议](docs/v0.0.1/design-audit-live-kb-protocol.md) | 审核如何解析并获取当前知识，同时避免复制规则正文。 |
+| [DWS 设计](docs/v0.0.1/design-crwu-dws.md) | 钉钉目录缓存与正文实时获取模型。 |
+| [CLI 命令契约](docs/v0.0.1/cli-command-contract.md) | 命令描述、用法、示例和机器发现要求。 |
+| [变更记录](docs/v0.0.1/CHANGELOG.md) | 最近的功能、审核系统与交付模板变更。 |
 | [智能体开发指南](AGENTS.md) | 仓库级开发约束与安全规则。 |
 | [领域上下文](CONTEXT.md) | 共享术语与系统边界。 |
 
@@ -339,6 +339,6 @@ CLI 默认版本必须在 `internal/buildinfo` 与根目录 `Makefile` 中保持
 
 **即使证据不完整，也让 AI 工作流保持可信——因为它会准确说明自己检查了什么。**
 
-[English](README.md) · [Skills](skills/README.md) · [CLI 手册](docs/cli-manual.md)
+[English](README.md) · [Skills](docs/skills.md) · [CLI 手册](docs/v0.0.1/cli-manual.md)
 
 </div>

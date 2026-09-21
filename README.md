@@ -6,7 +6,7 @@
 
 Turn appraisal materials, enterprise knowledge, and business records into evidence-backed AI workflows without giving an agent more authority than the employee using it.
 
-[简体中文](README.zh-CN.md) · [Explore Skills](skills/README.md) · [CLI Manual](docs/cli-manual.md) · [Change Log](docs/CHANGELOG.md)
+[简体中文](README.zh-CN.md) · [Explore Skills](docs/skills.md) · [CLI Manual](docs/v0.0.1/cli-manual.md) · [Change Log](docs/v0.0.1/CHANGELOG.md)
 
 <br>
 
@@ -51,11 +51,11 @@ The project is designed around a simple rule: **an AI conclusion must not exceed
 
 | I want to… | Start here |
 | --- | --- |
-| Audit an appraisal project | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [audit design](docs/design-crwu-audit-skills.md) |
+| Audit an appraisal project | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [audit design](docs/v0.0.1/design-crwu-audit-skills.md) |
 | Review all available AI Skills | [Skills catalog](docs/skills.md) |
-| Sign in to H3Yun as an employee | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/cli-manual.md) |
+| Sign in to H3Yun as an employee | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/v0.0.1/cli-manual.md) |
 | Query forms, records, and attachments | [`crwu-h3yun-query`](plugins/common/skills/crwu-h3yun-query/SKILL.md) |
-| Ground an audit in DingTalk knowledge | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [live-knowledge protocol](docs/design-audit-live-kb-protocol.md) |
+| Ground an audit in DingTalk knowledge | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [live-knowledge protocol](docs/v0.0.1/design-audit-live-kb-protocol.md) |
 | Install or update Skills for an AI host | `make skills-install AGENT_DIR=…` → [per-host directories](docs/agent-skill-dirs.md) |
 | Install the DSH plugin for employees | `make plugin-dist` → [plugin README](plugins/dsh-crwu-workbench/README.md) |
 | Maintain or extend the audit system | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
@@ -162,7 +162,7 @@ The repository currently contains **30 independently installable Skills**.
 | Enterprise access and knowledge | 3 | H3Yun login, H3Yun query, and DingTalk DWS knowledge access. |
 | Standards, distribution, and maintenance | 4 | Public standards, initialization, audit optimization, and Skill maintenance. |
 
-Skills are self-contained by contract: an installed Skill must not rely on repository-relative files outside its own directory. See the [complete Skills catalog](skills/README.md) for triggers, responsibilities, and dependency boundaries.
+Skills are self-contained by contract: an installed Skill must not rely on repository-relative files outside its own directory. See the [complete Skills catalog](docs/skills.md) for triggers, responsibilities, and dependency boundaries.
 
 ## CLI and H3Yun access
 
@@ -230,7 +230,7 @@ crwu h3yun file download --schema <schemaCode> --id <recordId> --out ./files
 
 </details>
 
-For flags, output contracts, filters, and examples, use the [CLI manual](docs/cli-manual.md). When changing a command, follow the [CLI command contract](docs/cli-command-contract.md) and keep `crwu scheme` authoritative.
+For flags, output contracts, filters, and examples, use the [CLI manual](docs/v0.0.1/cli-manual.md). When changing a command, follow the [CLI command contract](docs/v0.0.1/cli-command-contract.md) and keep `crwu scheme` authoritative.
 
 ## Architecture
 
@@ -314,7 +314,7 @@ When contributing:
 1. keep CLI behavior and AI-host adapters separated;
 2. register every invokable command in `crwu scheme`;
 3. keep each Skill independently installable;
-4. update `docs/cli-manual.md` and `docs/CHANGELOG.md` for functional CLI changes;
+4. update `docs/v0.0.1/cli-manual.md` and `docs/v0.0.1/CHANGELOG.md` for functional CLI changes;
 5. synchronize this README with [`README.zh-CN.md`](README.zh-CN.md).
 
 The default CLI version must remain synchronized between `internal/buildinfo` and the root `Makefile`.
@@ -323,13 +323,13 @@ The default CLI version must remain synchronized between `internal/buildinfo` an
 
 | Document | Use it for |
 | --- | --- |
-| [CLI manual](docs/cli-manual.md) | Commands, flags, environment variables, filters, and operator workflows. |
-| [Skills catalog](skills/README.md) | Complete Skill inventory, audit axes, triggers, and responsibilities. |
-| [Audit Skills design](docs/design-crwu-audit-skills.md) | Domain model, capability tree, and routing architecture. |
-| [Live-knowledge protocol](docs/design-audit-live-kb-protocol.md) | How audits resolve and retrieve current knowledge without copying rule bodies. |
-| [DWS design](docs/design-crwu-dws.md) | DingTalk directory cache and live-content retrieval model. |
-| [CLI command contract](docs/cli-command-contract.md) | Requirements for descriptions, usage, examples, and machine-readable discovery. |
-| [Change log](docs/CHANGELOG.md) | Recent behavior, audit-system, and delivery-template changes. |
+| [CLI manual](docs/v0.0.1/cli-manual.md) | Commands, flags, environment variables, filters, and operator workflows. |
+| [Skills catalog](docs/skills.md) | Complete Skill inventory, audit axes, triggers, and responsibilities. |
+| [Audit Skills design](docs/v0.0.1/design-crwu-audit-skills.md) | Domain model, capability tree, and routing architecture. |
+| [Live-knowledge protocol](docs/v0.0.1/design-audit-live-kb-protocol.md) | How audits resolve and retrieve current knowledge without copying rule bodies. |
+| [DWS design](docs/v0.0.1/design-crwu-dws.md) | DingTalk directory cache and live-content retrieval model. |
+| [CLI command contract](docs/v0.0.1/cli-command-contract.md) | Requirements for descriptions, usage, examples, and machine-readable discovery. |
+| [Change log](docs/v0.0.1/CHANGELOG.md) | Recent behavior, audit-system, and delivery-template changes. |
 | [Agent guidelines](AGENTS.md) | Repository-wide development and security constraints. |
 | [Domain context](CONTEXT.md) | Shared terminology and system boundaries. |
 
@@ -339,6 +339,6 @@ The default CLI version must remain synchronized between `internal/buildinfo` an
 
 **Build AI workflows that remain useful when the evidence is incomplete — because they say exactly what was checked.**
 
-[简体中文](README.zh-CN.md) · [Skills](skills/README.md) · [CLI Manual](docs/cli-manual.md)
+[简体中文](README.zh-CN.md) · [Skills](docs/skills.md) · [CLI Manual](docs/v0.0.1/cli-manual.md)
 
 </div>

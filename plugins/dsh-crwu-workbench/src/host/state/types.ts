@@ -35,8 +35,8 @@ export interface AuditRecord {
 
 /** Host 插件实例的进程内状态。 */
 export interface WorkbenchState {
-  /** 最近一次加载的环境清单（远程失败时为内置默认）；供 ossutil 解析等处复用。 */
-  manifest: EnvManifest | null
+  /** 当前有效清单：激活时由内置清单叠加 YAML，env 自检后再补入远程环境信息。 */
+  manifest: EnvManifest
   caseRoot: string
   workspacePath: string
   workspaceTitle: string

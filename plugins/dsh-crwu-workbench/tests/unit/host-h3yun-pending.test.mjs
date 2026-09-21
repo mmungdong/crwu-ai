@@ -13,7 +13,7 @@ const { loadPending } = await import(new URL('src/host/h3yun/pending.ts', ROOT).
 const { discoverForm } = await import(new URL('src/host/h3yun/discover.ts', ROOT).href)
 const { RECORDS_STDOUT_MAX } = await import(new URL('src/host/h3yun/consts.ts', ROOT).href)
 
-const CONFIG = { caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, singleAuditOnly: true, requireTopLevelParent: true }
+const CONFIG = { caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true }
 
 function stateOf(patch = {}) {
   return {

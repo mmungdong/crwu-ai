@@ -150,7 +150,7 @@ export interface SimpleResult {
 /** 带类型的调用集合。每个方法对应 Host 的一个 `workbench:*` handler。 */
 export interface WorkbenchApi {
   boot: () => Promise<BootResult>
-  env: (args?: { source?: string }) => Promise<EnvResult>
+  env: () => Promise<EnvResult>
   pending: (args: { query?: string; page?: number; size?: number; escalate?: boolean }) => Promise<PendingResult>
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
@@ -158,7 +158,7 @@ export interface WorkbenchApi {
   ossIndex: () => Promise<OssIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
   ossLink: (args: { key: string }) => Promise<OssLinkResult>
-  ossUpload: (args: { key?: string; casePath?: string; projectId?: string }) => Promise<{ ok: boolean; error: string }>
+  ossUpload: (args: { key: string }) => Promise<{ ok: boolean; error: string }>
   ossCred: () => Promise<{ ok: boolean; cred: EnvResult['ossCred'] }>
   ossCredSave: (args: { accessKeyId: string; accessKeySecret: string; stsToken?: string; endpoint?: string }) => Promise<Record<string, unknown>>
   workspace: (args: { path: string; title?: string; id?: string }) => Promise<Record<string, unknown>>
@@ -181,7 +181,7 @@ async function call<T>(operation: string, args?: unknown): Promise<T> {
 
 export const workbenchApi: WorkbenchApi = {
   boot: () => call('boot'),
-  env: (args) => call('env', args),
+  env: () => call('env'),
   pending: (args) => call('pending', args),
   auditStatus: (args) => call('audit-status', args),
   auditStart: (args) => call('audit-start', args),

@@ -1,8 +1,8 @@
-# 插件内技能维护规范
+# 插件与插件内技能维护规范
 
 ## 适用范围与规则优先级
 
-- 本文件适用于 `plugins/*/skills/`（插件专属技能）与 `plugins/common/skills/`（公共技能）下所有 Skill、reference、配套文档与测试的维护，重点约束 `crwu-audit-asset-*` 和 `crwu-audit-biz-*` 两类审核 Skill。`crwu-audit-business-*` 仅视为待迁移的遗留前缀。
+- 本文件适用于 `plugins/` 下的插件配置、打包与分发，以及 `plugins/*/skills/`（插件专属技能）与 `plugins/common/skills/`（公共技能）下所有 Skill、reference、配套文档与测试的维护。技能部分重点约束 `crwu-audit-asset-*` 和 `crwu-audit-biz-*` 两类审核 Skill；`crwu-audit-business-*` 仅视为待迁移的遗留前缀。
 - 仓库根目录 `AGENTS.md` 的要求继续适用。本文件是 `plugins/` 范围内技能维护的补充规则；若将来某个更深子目录存在更具体的 `AGENTS.md`，以更深层规则为准。
 - 只修改并提交 source repo 中获授权的文件。不得直接写入、复制、链接或删除任何运行时 Skill 目录。
 
@@ -16,6 +16,46 @@
   `PLUGIN_PKG_NAME` 从 `package.json` 读 —— tarball 名跟着包名走，不要手写其中一个去代替另一个。
 - 改这个名要同批动：目录、`package.json.name`、patch 行 `name:`、CI 的 `working-directory` /
   `cache-dependency-path`、接收方测试，以及每台员工机器上已登记的 bundle 名（否则升级时留下两个包）。
+
+## 工作台统一 YAML 配置
+
+`plugins/dsh-crwu-workbench/config/crwu-workbench.yml` 是工作台**唯一部署配置源**。开发运行、TGZ
+打包、员工安装后的运行时和 OSS 分发都必须从这一份 YAML 解析；不得在 `Makefile`、
+`cordis.patch.yml`、TypeScript 默认常量或发布脚本里再维护一套相同地址或行为参数。
+
+### 两个 OSS 的边界
+
+- `oss.readonly`：匿名只读 Bucket，保存环境清单、安装说明和员工下载的插件 TGZ；
+  `manifestKey`、`installDocKey`、`pluginPrefix` 都相对它的 `baseUrl`/`bucket` 解析。
+- `oss.protected`：审核交付件私有 Bucket，匿名访问应返回 403；保存 `auditPrefix`、签名模式与
+  TTL。插件使用员工机器上的 OSS 凭据上传，并默认生成签名 URL。
+- YAML 与 TGZ **不得包含 AK、SK、STS Token、签名 URL 或其他临时凭据**。这些只能保存在员工
+  机器的凭据存储中；配置只保存 Bucket、Endpoint、Base URL、对象前缀和行为参数。
+- `publicBaseUrl` 这个旧名字不得用于描述私有 Bucket；新增字段使用 `baseUrl`/`objectBaseUrl`，
+  是否公开由 Bucket 权限与 `linkMode` 决定。
+
+### 开发与 TGZ 加载契约
+
+- 源码开发默认直接读取上述 YAML；临时验证另一份配置时，只能通过
+  `CRWU_CONFIG_FILE=/绝对路径/config.yml` 或开发 Cordis 配置的 `configFile` 显式选择。
+- `configFile` 留空时，源码形态寻找插件根的 `config/crwu-workbench.yml`；安装形态寻找 TGZ 内
+  同一路径。找不到、YAML 无法解析或 Schema 不合法时必须拒绝激活，不得静默使用作者地址。
+- `npm pack` / `make plugin-pack` 前必须运行 `npm run config:check`；`package.json.files` 与
+  `scripts/assert-pack.mjs` 必须共同保证 YAML 真正进入 TGZ。
+- 真实打包回归必须覆盖 `npm pack → npm install → apply()`，证明安装后的 Host 是从包内 YAML
+  激活，而不只是 tarball 文件列表里“看起来存在”。
+
+### 运行与分发解释权
+
+- 远程环境清单只提供二进制与服务目录；私有 OSS 的 bucket、endpoint、prefix、链接模式、TTL
+  与自动上传策略以 YAML 为最终解释权。
+- `env` RPC 不得接受请求级 `source` 来替换 YAML 确定的清单地址；远程清单不得向宿主注入
+  `probeCommand` 或其他自由格式 Shell。
+- `make plugin-dist` / `scripts/dist-plugin.mjs` 必须从 `oss.readonly` 计算 `oss://` 上传目标与员工
+  HTTPS 安装地址，继续遵守“同版本对象不可覆盖”的发布纪律。
+- 修改 YAML 结构或字段时，必须同批更新解析类型、Schema 校验、`config:check`、Host 映射、分发
+  推导、TGZ 断言、README、CHANGELOG 和版本号；最低测试为 `host-yaml-config.test.mjs`、
+  `dist-config.test.mjs` 与 `host-package.test.mjs`。
 
 ## 资产轴与业务轴边界
 

@@ -26,6 +26,7 @@ const {
   buildRows,
   filterModeText,
   pageCount,
+  pendingArgs,
   openReportNotice,
 } = await import(new URL('src/client/features/report-audit/row.ts', ROOT).href)
 
@@ -90,6 +91,11 @@ test('filterModeText and pageCount are the display-only helpers', () => {
   assert.equal(pageCount(0, 20), 1)
   assert.equal(pageCount(37, 20), 2)
   assert.equal(pageCount(37, 0), 1, '页大小非法时不能除零')
+})
+
+test('pendingArgs keeps the active query while paging or refreshing', () => {
+  assert.deepEqual(pendingArgs('2026-301705', 3), { query: '2026-301705', page: 3 })
+  assert.deepEqual(pendingArgs('', 1), { query: '', page: 1 })
 })
 
 // ── 未发起过：主按钮与确认 ──────────────────────────────────────────────────

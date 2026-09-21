@@ -278,12 +278,24 @@ test('oss-upload writes the outcome back onto the record it was given', async ()
   assert.equal(record.ossPrefix, `crwu/audit/${SEQ}`)
 })
 
-test('oss-upload explains a missing case path and a disabled OSS', async () => {
+test('oss-upload refuses a caller-supplied case path that is not in the audit registry', async () => {
+  const { deps, commands } = uploadDeps()
+  const out = await ossUpload(deps, { casePath: `/cases/${SEQ}`, projectId: 'forged-project' }, { audits: {} })
+  assert.equal(out.ok, false)
+  assert.match(out.error, /审核记录/)
+  assert.equal(commands.some((command) => command.includes(' cp ')), false, '未登记的路径不得触发上传')
+})
+
+test('oss-upload explains a missing record path and a disabled OSS', async () => {
   const { deps } = uploadDeps()
-  assert.match((await ossUpload(deps, { key: 'missing' }, { audits: {} })).error, /还没定位到案例目录/)
+  assert.match((await ossUpload(deps, { key: 'missing' }, { audits: {} })).error, /审核记录/)
+  assert.match(
+    (await ossUpload(deps, { key: SEQ }, { audits: { [SEQ]: { casePath: '', uploadedAt: '', uploadError: '', ossPrefix: '' } } })).error,
+    /还没定位到案例目录/,
+  )
   const disabled = ossDeps({ manifest: manifestWith({ enabled: false }) })
   assert.match(
-    (await ossUpload(disabled.deps, { key: SEQ, casePath: '/cases/x' }, { audits: {} })).error,
+    (await ossUpload(disabled.deps, { key: SEQ }, { audits: { [SEQ]: { casePath: '/cases/x', uploadedAt: '', uploadError: '', ossPrefix: '' } } })).error,
     /未启用/,
   )
 })

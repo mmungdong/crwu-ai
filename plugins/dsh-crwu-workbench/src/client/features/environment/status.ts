@@ -33,7 +33,7 @@ export interface EnvStatusStore {
   /** 订阅变化；返回解除订阅的函数（组件卸载时必须调用）。 */
   subscribe(listener: () => void): () => void
   /** 跑一次自检。并发的调用共享同一次请求，不会把 shell 探测打两遍。 */
-  refresh(source?: string): Promise<EnvResult | null>
+  refresh(): Promise<EnvResult | null>
 }
 
 function describe(cause: unknown): string {
@@ -61,11 +61,11 @@ export function createEnvStatusStore(): EnvStatusStore {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh(source) {
+    refresh() {
       // 并发去重：会话头的灯与面板几乎同时挂载时，只应该有一次真实自检。
       if (inflight !== null) return inflight
       patch({ busy: true, error: '' })
-      inflight = workbenchApi.env(source === undefined ? {} : { source })
+      inflight = workbenchApi.env()
         .then((env) => {
           patch({ env, busy: false, error: '', checkedAt: new Date().toISOString() })
           return env

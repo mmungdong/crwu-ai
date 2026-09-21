@@ -22,7 +22,7 @@ const { createWorkbenchState } = await import(new URL('src/host/state/store.ts',
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true,
-  singleAuditOnly: true, requireTopLevelParent: true,
+  requireTopLevelParent: true,
 }
 
 function fakeWorld() {
