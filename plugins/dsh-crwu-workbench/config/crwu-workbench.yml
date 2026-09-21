@@ -1,0 +1,31 @@
+schemaVersion: 1
+
+workspace:
+  caseRoot: ''
+  preferTitle: 中瑞世联工作空间
+  requireTopLevelParent: true
+
+report:
+  formName: 报告审核
+
+audit:
+  autoUpload: true
+
+oss:
+  # 对员工匿名只读：环境清单、安装说明和插件 TGZ 都从这里分发。
+  readonly:
+    bucket: crwu-only-workspace
+    endpoint: oss-cn-beijing.aliyuncs.com
+    baseUrl: https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com
+    manifestKey: crwu-env-manifest.json
+    installDocKey: crwu-env-install.md
+    pluginPrefix: crwu-dsh-plugins
+
+  # 审核产物私有存储：匿名访问应返回 403，上传依赖员工机器上的 OSS 凭据。
+  protected:
+    bucket: crwu-workspace
+    endpoint: oss-cn-beijing.aliyuncs.com
+    baseUrl: https://crwu-workspace.oss-cn-beijing.aliyuncs.com
+    auditPrefix: crwu/audit
+    linkMode: signed
+    linkTtlSeconds: 3600

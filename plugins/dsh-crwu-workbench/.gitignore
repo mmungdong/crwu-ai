@@ -1,0 +1,10 @@
+node_modules/
+dist/
+lib/
+*.tsbuildinfo
+.DS_Store
+.venv/
+.superpowers/
+*.tgz
+# 打包前由 scripts/sync-common-skills.mjs 从 ../../common/skills 生成
+common/skills/
