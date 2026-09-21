@@ -104,6 +104,9 @@ dsh plugin --profile web add ./dist/dsh-crwu-workbench-<版本>.tgz
 make skills-install AGENT_DIR=~/.codex/skills
 ```
 
+`make plugin-dist` 守着**同一个版本号只发一次**：远端已有同版本 tarball 而内容不同时它会拒绝上传，
+所以改了内容要先升版本号。
+
 各宿主的 skills 目录见 [`docs/agent-skill-dirs.md`](docs/agent-skill-dirs.md)。同名技能会被覆盖，所以重跑这条命令就是更新方式。
 
 ## AI 资产评估审核

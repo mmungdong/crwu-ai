@@ -104,6 +104,9 @@ dsh plugin --profile web add ./dist/dsh-crwu-workbench-<version>.tgz
 make skills-install AGENT_DIR=~/.codex/skills
 ```
 
+`make plugin-dist` enforces **one publish per version**: it refuses to overwrite an existing tarball of
+the same version whose content differs, so any change means bumping the version first.
+
 Per-host Skills directories are listed in [`docs/agent-skill-dirs.md`](docs/agent-skill-dirs.md). A Skill of the same name is replaced, so re-running the command is also the update path.
 
 ## AI appraisal audit

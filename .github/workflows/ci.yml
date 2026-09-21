@@ -72,6 +72,11 @@ jobs:
           python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
           python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 
+      # 分发守卫（同版本只发一次）：判定表自检，不起进程、不联网。
+      - name: plugin dist guard self-test
+        if: runner.os == 'Linux'
+        run: node ../../scripts/dist-plugin.mjs --self-test
+
       # 版本三处一致（package.json / VERSION / CHANGELOG）。本地 `check` 里有这一步，
       # CI 之前漏了 —— 于是「本地漏跑会被 CI 挡住」这句话对这条并不成立。
       - name: version consistency

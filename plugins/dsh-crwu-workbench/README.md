@@ -190,6 +190,9 @@ dsh plugin --profile web add dsh-crwu-workbench@<version>
 
 再重启该 profile。安装目录里是预构建产物，更新就是换一份 `lib/` 与 `skills/`。
 
+> **版本号只发一次**：同一个版本的 tarball 不会被覆盖（`make plugin-dist` 会拒绝内容不同的同版本
+> 重发），所以改了内容要**升版本号**再发 —— 否则早装和重装的员工会拿到「同一个版本、两份内容」。
+
 ### 卸载
 
 ```bash

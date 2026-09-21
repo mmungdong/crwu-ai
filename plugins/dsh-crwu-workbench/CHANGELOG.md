@@ -70,6 +70,12 @@
 
 同一个 0.0.1 版本内继续合并仓库（2026-09-21，源仓并入 `crwu-ai/plugins/dsh-crwu-workbench/`）：
 
+- **分发纪律：同一个版本号只发一次**（用户 2026-09-21 要求）。新增 `scripts/dist-plugin.mjs` 作为
+  `make plugin-dist` 的上传守卫：远端没有该对象 → 上传；已有且 MD5 一致 → 跳过（幂等）；已有但内容
+  不同 → **拒绝上传**并提示升版本号；`ossutil stat` 读不出来 → 同样不动远端。判定表自检
+  （`--self-test`）已接入 `make plugin-check` 与 CI。理由：URL 就是 `<包名>-<版本>.tgz`，同版本重发
+  会让早装与重装的员工拿到同一版本号下的两份内容（且 `dsh plugin add` 未必真替换 —— pnpm 见 spec
+  未变会跳过，实测过）。
 - **名字统一成一个 `dsh-crwu-workbench`**：目录名、npm 包名、`cordis.patch.yml` 的行 `name:`、
   tarball 文件名、员工侧 `dsh.profile.bundles` 条目全部同名（此前目录叫 `dsh-crwu-audit-workbench`，
   「目录一个名、安装另一个名」的写法已废弃）。员工侧安装命令与 OSS 上的路径**不变**。

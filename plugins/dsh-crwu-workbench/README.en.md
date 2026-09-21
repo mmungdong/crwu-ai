@@ -71,6 +71,10 @@ dsh plugin --profile web add dsh-crwu-workbench@<version>   # then restart the p
 dsh plugin --profile web remove dsh-crwu-workbench
 ```
 
+> **A version is published once.** `make plugin-dist` refuses to overwrite an existing tarball of the
+> same version when its content differs, so any change means bumping the version first — otherwise
+> employees who installed early and those who reinstall end up on different code under one version.
+
 ## Releasing
 
 Never run `npm publish` by hand. The release path is tag-driven and gated:

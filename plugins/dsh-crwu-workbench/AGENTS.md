@@ -579,6 +579,20 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 和 CI 的构建来源，而且本机 registry 未必是官方源（见下）。
 **`git push` 与发版都要等用户明确说**（§7.4）。
 
+### 8.3.1 同一个版本号只发一次（分发包不可变）
+
+分发包 URL 就是 `<包名>-<版本>.tgz`（员工侧 `dsh plugin add <URL>` 认的就是它），所以**同版本重发
+= 覆盖远端对象**：同一版本号出现两份内容，早装与重装的员工跑的不是同一份，版本号也不再能定位问题；
+`dsh plugin add` 甚至未必真的替换（pnpm 见 spec 未变就跳过 —— 实测过）。用户 2026-09-21 明确要求
+守住这条。
+
+- 改了任何东西（代码 / 技能 / 文档 / `cordis.patch.yml`）→ **升版本号**：`npm run version:set x.y.z`
+  + 手写 CHANGELOG 一节，然后 `make plugin-dist`。
+- 机器判据在 `scripts/dist-plugin.mjs`（`make plugin-dist` 先跑完整门禁再接它）：远端没有该对象 →
+  上传；已有且内容一致 → 跳过（幂等重跑无害）；已有但内容不同 → **拒绝上传**并提示升版本号；
+  `ossutil stat` 读不出来（网络/权限/输出变了）→ 同样不动远端。空跑：`PLUGIN_DIST_DRY_RUN=1 make plugin-dist`。
+- 员工侧升级 = 用**新** URL 再 `add` 一次（旧版本的 URL 一直有效、内容不变），然后重启 profile。
+
 ### 8.4 发布目标固定为官方 registry
 
 `publishConfig.registry = https://registry.npmjs.org`，**必须与 release workflow 的 `registry-url` 相同**

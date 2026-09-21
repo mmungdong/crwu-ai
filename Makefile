@@ -22,6 +22,11 @@ WINDOWS_ARCH ?= amd64
 # ── DSH 插件：plugins/dsh-crwu-workbench ──────────────────────────────
 # 插件以 tarball 分发给员工，所以「打包 + 上传 OSS + 打印安装命令」都在这里，
 # 让 Go CLI 与插件两种形态共用一条出口：`make plugin-dist`。
+#
+# **发布纪律：同一个版本号只发一次**（用户 2026-09-21 定的）。分发包 URL 就是
+# `<包名>-<版本>.tgz`，覆盖同版本对象会让「同一版本号、两份内容」—— 员工之间装的不是同一份，
+# 版本号也不再能用来定位问题。所以 `plugin-dist` 上传前会先只读查远端：内容一致就跳过（幂等）、
+# 不一致就拒绝并让你升版本号，判断逻辑在 scripts/dist-plugin.mjs（可 `PLUGIN_DIST_DRY_RUN=1` 空跑）。
 PLUGIN        ?= dsh-crwu-workbench
 PLUGIN_DIR    := $(CURDIR)/plugins/$(PLUGIN)
 # npm 包的 tarball 名跟着 `package.json` 的 name 走（不一定等于插件目录名），所以从包里取。
@@ -34,6 +39,7 @@ PLUGIN_TGZ    := $(DIST_DIR)/$(PLUGIN_PKG_NAME)-$(PLUGIN_VERSION).tgz
 OSS_BUCKET    ?= crwu-only-workspace
 OSS_PREFIX    ?= crwu-dsh-plugins
 OSS_ENDPOINT_HOST ?= $(OSS_BUCKET).oss-cn-beijing.aliyuncs.com
+PLUGIN_OSS_URL := oss://$(OSS_BUCKET)/$(OSS_PREFIX)/$(notdir $(PLUGIN_TGZ))
 PLUGIN_URL    := https://$(OSS_ENDPOINT_HOST)/$(OSS_PREFIX)/$(notdir $(PLUGIN_TGZ))
 
 # 技能装到非 DSH 宿主时用：`make skills-install AGENT_DIR=~/.agents/skills`。
@@ -81,7 +87,7 @@ plugin-skills: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run skills:sync
 
 # 完整门禁 = 版本一致 + 公共技能同步 + 类型 + 测试 + 构建 + 产物冒烟 + tarball 自检
-#            + 技能自洽性 lint + 三个源仓契约测试（与 CI 的 skill gates 同一条命令集）。
+#            + 技能自洽性 lint + 三个源仓契约测试 + 分发守卫判定自检（与 CI 同一条命令集）。
 plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run check
 	cd "$(PLUGIN_DIR)" && npm run pack:assert
@@ -90,6 +96,7 @@ plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
 	cd "$(PLUGIN_DIR)" && python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
+	node "$(CURDIR)/scripts/dist-plugin.mjs" --self-test
 
 # 打成可直接分发的 tgz。包内已含 skills/ 与 common/skills/，员工装完即得全部技能。
 plugin-pack: plugin-deps
@@ -97,12 +104,18 @@ plugin-pack: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm pack --pack-destination "$(DIST_DIR)"
 	@echo "==> $(PLUGIN_TGZ)"
 
-# 上传到 OSS 静态站点并打印员工侧安装命令（升级 = 用新 URL 再 add 一次）。
-plugin-dist: plugin-pack
-	ossutil cp -f "$(PLUGIN_TGZ)" "oss://$(OSS_BUCKET)/$(OSS_PREFIX)/$(notdir $(PLUGIN_TGZ))"
-	@echo ""
-	@echo "员工安装 / 升级（在员工机器的 DSH 上执行，然后重启 profile）："
-	@echo "  dsh plugin --profile web add $(PLUGIN_URL)"
+# 上传到 OSS 静态站点并打印员工侧安装命令。
+#
+# 依赖 `plugin-check`：发出去的东西不能是红的。上传本身由 scripts/dist-plugin.mjs 做，
+# 它守着「同版本只发一次」——远端已有同版本且内容一致 → 跳过；内容不一致 → **拒绝上传**
+# 并提示升版本号（详见该脚本头部）。空跑：`PLUGIN_DIST_DRY_RUN=1 make plugin-dist`。
+plugin-dist: plugin-check
+	@$(MAKE) --no-print-directory plugin-pack
+	node scripts/dist-plugin.mjs \
+		--tgz "$(PLUGIN_TGZ)" \
+		--oss-url "$(PLUGIN_OSS_URL)" \
+		--install-url "$(PLUGIN_URL)" \
+		$(if $(PLUGIN_DIST_DRY_RUN),--dry-run)
 
 plugin-clean:
 	rm -rf -- "$(DIST_DIR)"
