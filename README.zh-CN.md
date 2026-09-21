@@ -51,13 +51,14 @@ CRWU 最初是用于安全访问氚云的稳定命令入口，现在已经发展
 
 | 我想要…… | 从这里开始 |
 | --- | --- |
-| 审核一个资产评估项目 | [`crwu-audit`](skills/crwu-audit/SKILL.md) → [审核设计](docs/design-crwu-audit-skills.md) |
-| 查看全部 AI Skills | [Skills 目录](skills/README.md) |
-| 以员工身份登录氚云 | [`crwu-h3yun-login`](skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/cli-manual.md) |
-| 查询表单、记录和附件 | [`crwu-h3yun-query`](skills/crwu-h3yun-query/SKILL.md) |
-| 使用钉钉知识库作为审核依据 | [`crwu-dws`](skills/crwu-dws/SKILL.md) → [实时知识协议](docs/design-audit-live-kb-protocol.md) |
-| 为 AI 宿主安装或更新 Skills | [`crwu-init`](skills/crwu-init/SKILL.md) |
-| 维护或扩展审核体系 | [`AGENTS.md`](AGENTS.md) → [`skills/AGENTS.md`](skills/AGENTS.md) |
+| 审核一个资产评估项目 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [审核设计](docs/design-crwu-audit-skills.md) |
+| 查看全部 AI Skills | [Skills 目录](docs/skills.md) |
+| 以员工身份登录氚云 | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/cli-manual.md) |
+| 查询表单、记录和附件 | [`crwu-h3yun-query`](plugins/common/skills/crwu-h3yun-query/SKILL.md) |
+| 使用钉钉知识库作为审核依据 | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [实时知识协议](docs/design-audit-live-kb-protocol.md) |
+| 为 AI 宿主安装或更新 Skills | `make skills-install AGENT_DIR=…` → [各宿主目录](docs/agent-skill-dirs.md) |
+| 给员工安装 DSH 插件 | `make plugin-dist` → [插件 README](plugins/dsh-crwu-workbench/README.md) |
+| 维护或扩展审核体系 | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
 
 ## 快速开始
 
@@ -88,20 +89,22 @@ make test
 
 ### 3. 安装需要的 Skills
 
-`skills/` 下每个包含 `SKILL.md` 的目录都可以独立安装。推荐从 [`crwu-init`](skills/crwu-init/SKILL.md) 开始，它可以为指定智能体宿主安装全部 Skills、安装指定 Skills，或更新已经安装的 Skills。
+这里**没有名单文件**：目录布局本身就是名单。`plugins/common/skills/` 是公共 Skills（钉钉知识库、氚云登录与查询）；每个插件自己的 `plugins/<名字>/skills/` 放随该插件发布的 Skills。
 
-从本地仓库为 Codex 引导安装：
+**DeepSeek Harness** —— 装插件包即可，技能随包一起进去（插件把两个技能目录都注册成技能根）：
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R skills/crwu-init ~/.codex/skills/crwu-init
+make plugin-pack        # → dist/dsh-crwu-workbench-<版本>.tgz
+dsh plugin --profile web add ./dist/dsh-crwu-workbench-<版本>.tgz
 ```
 
-随后对智能体说：
+**其它 AI 宿主**（Codex、WorkBuddy、OpenCode 等）—— 把全部技能拷进该宿主的 skills 根：
 
-> 为 Codex 初始化全部 CRWU Skills。
+```bash
+make skills-install AGENT_DIR=~/.codex/skills
+```
 
-如果使用 WorkBuddy、OpenCode、DeepSeek Harness 或自研宿主，请让 `crwu-init` 在写入前解析并确认目标 Skills 目录。
+各宿主的 skills 目录见 [`docs/agent-skill-dirs.md`](docs/agent-skill-dirs.md)。同名技能会被覆盖，所以重跑这条命令就是更新方式。
 
 ## AI 资产评估审核
 

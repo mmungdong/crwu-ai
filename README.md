@@ -51,13 +51,14 @@ The project is designed around a simple rule: **an AI conclusion must not exceed
 
 | I want to… | Start here |
 | --- | --- |
-| Audit an appraisal project | [`crwu-audit`](skills/crwu-audit/SKILL.md) → [audit design](docs/design-crwu-audit-skills.md) |
-| Review all available AI Skills | [Skills catalog](skills/README.md) |
-| Sign in to H3Yun as an employee | [`crwu-h3yun-login`](skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/cli-manual.md) |
-| Query forms, records, and attachments | [`crwu-h3yun-query`](skills/crwu-h3yun-query/SKILL.md) |
-| Ground an audit in DingTalk knowledge | [`crwu-dws`](skills/crwu-dws/SKILL.md) → [live-knowledge protocol](docs/design-audit-live-kb-protocol.md) |
-| Install or update Skills for an AI host | [`crwu-init`](skills/crwu-init/SKILL.md) |
-| Maintain or extend the audit system | [`AGENTS.md`](AGENTS.md) → [`skills/AGENTS.md`](skills/AGENTS.md) |
+| Audit an appraisal project | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [audit design](docs/design-crwu-audit-skills.md) |
+| Review all available AI Skills | [Skills catalog](docs/skills.md) |
+| Sign in to H3Yun as an employee | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/cli-manual.md) |
+| Query forms, records, and attachments | [`crwu-h3yun-query`](plugins/common/skills/crwu-h3yun-query/SKILL.md) |
+| Ground an audit in DingTalk knowledge | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [live-knowledge protocol](docs/design-audit-live-kb-protocol.md) |
+| Install or update Skills for an AI host | `make skills-install AGENT_DIR=…` → [per-host directories](docs/agent-skill-dirs.md) |
+| Install the DSH plugin for employees | `make plugin-dist` → [plugin README](plugins/dsh-crwu-workbench/README.md) |
+| Maintain or extend the audit system | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
 
 ## Quick start
 
@@ -88,20 +89,22 @@ The login command opens the browser for a DingTalk QR scan. The resulting sessio
 
 ### 3. Install the Skills you need
 
-Every directory under `skills/` that contains a `SKILL.md` is independently installable. The recommended entry point is [`crwu-init`](skills/crwu-init/SKILL.md), which can install all Skills, selected Skills, or update already-installed Skills for the chosen agent host.
+There is no manifest file: the directory layout **is** the manifest. `plugins/common/skills/` holds the shared Skills (DingTalk knowledge access, H3Yun login and query); each plugin under `plugins/<name>/skills/` holds the Skills that ship with it.
 
-To bootstrap it for Codex from a local clone:
+**DeepSeek Harness** — install the plugin bundle; its Skills come with it (the bundle registers both Skills directories as skill roots):
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R skills/crwu-init ~/.codex/skills/crwu-init
+make plugin-pack        # → dist/dsh-crwu-workbench-<version>.tgz
+dsh plugin --profile web add ./dist/dsh-crwu-workbench-<version>.tgz
 ```
 
-Then ask the agent:
+**Any other AI host** (Codex, WorkBuddy, OpenCode, …) — copy every Skill into that host's Skills root:
 
-> Initialize all CRWU Skills for Codex.
+```bash
+make skills-install AGENT_DIR=~/.codex/skills
+```
 
-For WorkBuddy, OpenCode, DeepSeek Harness, or a custom host, let `crwu-init` resolve and confirm the target Skills directory before it writes anything.
+Per-host Skills directories are listed in [`docs/agent-skill-dirs.md`](docs/agent-skill-dirs.md). A Skill of the same name is replaced, so re-running the command is also the update path.
 
 ## AI appraisal audit
 

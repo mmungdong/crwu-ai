@@ -1,4 +1,8 @@
 /bin/
+# 插件打包产物（make plugin-pack / plugin-dist）
+/dist/
+# macOS Finder 元数据
+.DS_Store
 /.worktrees/
 /.superpowers/
 

@@ -1,0 +1,125 @@
+name: ci
+
+# 本仓两种形态，各自一个 job，互不依赖：
+#   1. Go：`cmd/ internal/ tests/` → `crwu` 二进制（根 Makefile）；
+#   2. DSH 插件：`plugins/dsh-crwu-workbench/`（TypeScript 源码 → tsdown 双端产物
+#      lib/index.js + lib/client.js，并以 tarball / npm 分发给员工）。
+# 插件的门禁覆盖：版本一致 → 技能自洽性 → 类型 → 单元/集成测试 → 构建 → tarball 清单 → 产物冒烟。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本从 go.mod 读，避免 workflow 里再写一份。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test ./...
+
+  plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # 插件在本仓是子目录，所有 npm 命令都在它下面跑。
+        working-directory: plugins/dsh-crwu-workbench
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          # 锁文件不在仓根，必须显式指路，否则 setup-node 找不到缓存键。
+          cache-dependency-path: plugins/dsh-crwu-workbench/package-lock.json
+
+      # npm ci 会执行 prepare（tsdown），所以这一步同时验证「依赖可复现」与「产物可构建」。
+      - run: npm ci
+
+      # 技能门禁（技能自洽性 lint + 三个源仓契约测试）。技能必须以副本独立安装后可用，
+      # 不得引用仓内目录；契约测试覆盖路由/装配/路径键与 crwu-dws 取数契约。
+      # 只跑一遍：纯内容与 Python 检查，与 OS / Node 版本无关，而 windows runner 上
+      # `python3` 不保证在 PATH。
+      - name: skill gates
+        if: runner.os == 'Linux'
+        run: |
+          python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
+          python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
+          python3 skills/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
+          python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
+          python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
+
+      # 版本三处一致（package.json / VERSION / CHANGELOG）。本地 `check` 里有这一步，
+      # CI 之前漏了 —— 于是「本地漏跑会被 CI 挡住」这句话对这条并不成立。
+      - name: version consistency
+        run: npm run version:check
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # `continue-on-error` + 下一步的注解：失败详情必须**能被机器读到**。
+      # job log 的 REST 接口要仓库 admin 权限（普通 token 403），而 check-run 注解是公开可读的
+      # —— 「windows 上到底哪条测试红了」之前只能靠人翻网页（本轮就吃过这个亏）。
+      - name: tests
+        id: tests
+        continue-on-error: true
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test-output.log"
+
+      - name: annotate test failures
+        if: steps.tests.outcome == 'failure'
+        env:
+          LOG: ${{ runner.temp }}/test-output.log
+        run: |
+          # 一条注解装下「失败用例名 + 日志尾部」：GitHub 每个 step 只留有限条注解，
+          # 换行用 %0A 编码，这样失败原因（含 AssertionError / 子进程 stderr）不会被我
+          # 自己的截断吃掉 —— 这正是排查 windows 那次踩的坑。
+          node -e "
+            const fs = require('fs')
+            const lines = String(fs.readFileSync(process.env.LOG, 'utf8')).split(/\r?\n/)
+            const fails = lines.filter((line) => /^✖ /.test(line)).slice(0, 6)
+            const body = [...fails, '———— 日志尾部 ————', ...lines.slice(-45)].join('%0A')
+            console.log('::error::' + body.slice(0, 6000))
+          "
+          exit 1
+
+      - name: build
+        run: npm run build
+
+      # 真实 tarball 的文件清单 + 加载契约。改 files / exports / publishConfig 时这是唯一的护栏，
+      # 之前只靠发布前的 prepublishOnly，PR 阶段挡不住。
+      - name: assert packed tarball
+        run: npm run pack:assert
+
+      # 构建产物冒烟：真跑 lib/index.js 的同源路由与 lib/client.js 的 ModuleLoader 加载。
+      # tests/ 里的测试全部 import src 源码，证明不了打出来的东西能被 DSH 加载。
+      - name: built-artifact smoke
+        run: npm run smoke:built
+
+      - name: assert build artifacts
+        run: |
+          test -f lib/index.js
+          test -f lib/client.js
+          node -e "const fs=require('fs');const c=fs.readFileSync('lib/client.js','utf8');if(!c.includes('__ModuleLoader__'))throw new Error('lib/client.js 缺少 DSH ModuleLoader 包装')"
