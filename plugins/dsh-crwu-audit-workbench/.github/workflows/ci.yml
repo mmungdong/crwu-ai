@@ -1,0 +1,88 @@
+name: ci
+
+# 本仓只有一条形态：`src/`（TypeScript 源码 → tsdown 双端构建产物 lib/index.js + lib/client.js）。
+# 门禁覆盖：版本一致 → 类型 → 单元/集成测试 → 构建 → tarball 清单 → 构建产物冒烟。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # npm ci 会执行 prepare（tsdown），所以这一步同时验证「依赖可复现」与「产物可构建」。
+      - run: npm ci
+
+      # 版本三处一致（package.json / VERSION / CHANGELOG）。本地 `check` 里有这一步，
+      # CI 之前漏了 —— 于是「本地漏跑会被 CI 挡住」这句话对这条并不成立。
+      - name: version consistency
+        run: npm run version:check
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # `continue-on-error` + 下一步的注解：失败详情必须**能被机器读到**。
+      # job log 的 REST 接口要仓库 admin 权限（普通 token 403），而 check-run 注解是公开可读的
+      # —— 「windows 上到底哪条测试红了」之前只能靠人翻网页（本轮就吃过这个亏）。
+      - name: tests
+        id: tests
+        continue-on-error: true
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test-output.log"
+
+      - name: annotate test failures
+        if: steps.tests.outcome == 'failure'
+        env:
+          LOG: ${{ runner.temp }}/test-output.log
+        run: |
+          # 一条注解装下「失败用例名 + 日志尾部」：GitHub 每个 step 只留有限条注解，
+          # 换行用 %0A 编码，这样失败原因（含 AssertionError / 子进程 stderr）不会被我
+          # 自己的截断吃掉 —— 这正是排查 windows 那次踩的坑。
+          node -e "
+            const fs = require('fs')
+            const lines = String(fs.readFileSync(process.env.LOG, 'utf8')).split(/\r?\n/)
+            const fails = lines.filter((line) => /^✖ /.test(line)).slice(0, 6)
+            const body = [...fails, '———— 日志尾部 ————', ...lines.slice(-45)].join('%0A')
+            console.log('::error::' + body.slice(0, 6000))
+          "
+          exit 1
+
+      - name: build
+        run: npm run build
+
+      # 真实 tarball 的文件清单 + 加载契约。改 files / exports / publishConfig 时这是唯一的护栏，
+      # 之前只靠发布前的 prepublishOnly，PR 阶段挡不住。
+      - name: assert packed tarball
+        run: npm run pack:assert
+
+      # 构建产物冒烟：真跑 lib/index.js 的同源路由与 lib/client.js 的 ModuleLoader 加载。
+      # tests/ 里的测试全部 import src 源码，证明不了打出来的东西能被 DSH 加载。
+      - name: built-artifact smoke
+        run: npm run smoke:built
+
+      - name: assert build artifacts
+        run: |
+          test -f lib/index.js
+          test -f lib/client.js
+          node -e "const fs=require('fs');const c=fs.readFileSync('lib/client.js','utf8');if(!c.includes('__ModuleLoader__'))throw new Error('lib/client.js 缺少 DSH ModuleLoader 包装')"
