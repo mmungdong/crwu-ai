@@ -142,6 +142,23 @@ tests/
 `resolveSlotLabel(options.label) ?? options.id`，而 `resolveSlotLabel` 对字符串**原样返回**
 （对函数则调用）。所以 `label` 直接给中文字符串是正确的，不需要 locale 键。
 
+### 4.1.3 bundle patch 里的 `baseUrl` 是 **profile 目录**（2026-09-22 踩过）
+
+profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以 `cordis.patch.yml` 里 `!!js` 表达式拿到
+的 `baseUrl` 锚在 **profile 目录**，**不是本包目录**（DSH 源码注释：根配置文件存在只是因为 Loader
+需要一个真实的 include root 来锚定 `baseUrl`）。`agent.cordis.yml`（agent preset）里同样写法是好的，
+因为 preset 按文件加载、`baseUrl` 才是 preset 目录 —— 两处语义不同，别互相套用。
+
+后果很隐蔽：`new URL('skills/', baseUrl)` 指向 `<profile>/skills/`（不存在），skill provider 照样
+"装配成功"，只是**静默贡献 0 个技能**（症状：技能表里 crwu-* 一个都没有，而启动日志干干净净）。
+
+- 本包内的路径一律**按包名解析**：
+  `createRequire(baseUrl + 'package.json').resolve('dsh-crwu-workbench/package.json')` → 包目录 →
+  再拼 `skills/` / `common/skills/`。link 开发、员工 tarball、装到别的布局都对。
+- `>-` 折叠标量会把换行**折成空格**：多语句必须写分号，漏了就是求值期的 `SyntaxError`。
+- 回归测试 `tests/unit/host-skills-patch.test.mjs` 会造一个 profile 形态的临时目录、把补丁里的表达式
+  **真的求值一次**并断言两个技能根存在；改回 `new URL('skills/', baseUrl)` 立刻变红。
+
 ### 4.2 Cordis 生命周期
 
 - 所有注册、监听器、定时器和资源必须由 `ctx.effect()`、`ctx.on()` 或 DSH 提供的可释放生命周期 API 管理。

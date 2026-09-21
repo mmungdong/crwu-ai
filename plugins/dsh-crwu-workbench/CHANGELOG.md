@@ -9,6 +9,15 @@
 
 ## package · 0.0.2 · 2026-09-21
 
+- **修「随包技能一个都没加载」**（2026-09-22 实测）：`cordis.patch.yml` 的技能根原来写成
+  `new URL('skills/', baseUrl)`，但 bundle patch 里的 `baseUrl` 锚的是 **profile 目录**（profile 整棵树
+  是「补丁层挂在 profile 空根配置上」），于是指向了不存在的 `<profile>/skills/` —— provider 装配成功
+  却静默贡献 0 个技能（启动日志无任何报错）。改为按包名解析
+  （`createRequire(baseUrl + 'package.json').resolve('dsh-crwu-workbench/package.json')`），并把
+  `providerName` 统一为 `crwu-workbench`；新增 `tests/unit/host-skills-patch.test.mjs`（造 profile 形态
+  的临时目录**真的求值一次**补丁里的表达式，改回旧写法立刻变红）。顺带修掉折叠标量漏分号的
+  `SyntaxError` 隐患。
+
 - **一份 YAML 覆盖开发、打包与员工运行**：新增 `config/crwu-workbench.yml`，明确区分匿名只读的
   `crwu-only-workspace`（环境清单、安装说明、插件 TGZ）与私有的 `crwu-workspace`（审核产物）。
   源码开发直接读取 YAML；TGZ 原样携带同一文件，安装后 Host 自动读取包内副本。
