@@ -7,6 +7,7 @@ import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { runShell } from '../shell/run.ts'
 import { readOssCred, type OssCredView } from './cred.ts'
 import { groupObjects, isResultJson, joinUrl, parseLsObjects, parseSignUrl, stripPrefix } from './parse.ts'
+import { isSafeSeqNo } from '../../shared/consts.ts'
 import { inspectCase } from '../audit/case.ts'
 import { auditInfoFromResult } from '../audit/summary.ts'
 
@@ -70,13 +71,30 @@ export interface OssIndexResult {
  * `ls` 默认递归列举该前缀下全部对象；它**没有** `-r`（`-d/--directory` 才是「只列一层」），
  * 传 `-r` 会被 ossutil 直接拒绝。stdout 预算放宽到 4MB，否则对象多时会被截断成半个清单。
  */
-export async function ossIndex(deps: OssDeps): Promise<OssIndexResult> {
+export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}): Promise<OssIndexResult> {
   const empty = { bucket: '', prefix: '', count: 0, items: {}, truncated: false }
+  // 传了流水号 = 「按流水号找交付件」：它会被拼进 OSS 路径，所以**先过形状校验**（共享判据）。
+  // 不合形状直接拒绝、**一条命令都不发** —— 这是安全边界，不是体验优化。
+  const seqNo = text(args.seqNo).trim()
+  if (seqNo !== '' && !isSafeSeqNo(seqNo)) {
+    return {
+      ok: false,
+      error: `流水号形状不对：${seqNo}（示例 2026-301705-LX10170-BG8746；只允许字母数字与 - _ .，不能含 /）`,
+      ...empty,
+    }
+  }
+
   const ready = await requireOss(deps)
   if (!ready.ok) return { ok: false, error: ready.error, ...empty }
   const { oss, ossutil } = ready
 
-  const argv = [ossutil, 'ls', `oss://${oss.bucket}/${oss.prefix}/`, '--short-format']
+  // 前缀隔离：只在配置前缀内再下一层；上面已保证这一段不含 `/`，这里再用既有 stripPrefix 兜一道。
+  const listedPrefix = seqNo === '' ? oss.prefix : `${oss.prefix}/${seqNo}`
+  if (seqNo !== '' && stripPrefix(`${listedPrefix}/`, oss.prefix) === '') {
+    return { ok: false, error: '流水号越出配置的 OSS 前缀', ...empty }
+  }
+
+  const argv = [ossutil, 'ls', `oss://${oss.bucket}/${listedPrefix}/`, '--short-format']
   if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
   const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
     workdir: await shellWorkdir(deps),

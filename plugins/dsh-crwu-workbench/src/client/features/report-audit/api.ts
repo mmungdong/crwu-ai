@@ -155,7 +155,7 @@ export interface WorkbenchApi {
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
   auditStop: (args?: { childId?: string }) => Promise<StopResult>
-  ossIndex: () => Promise<OssIndexResult>
+  ossIndex: (args?: { seqNo?: string }) => Promise<OssIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
   ossLink: (args: { key: string }) => Promise<OssLinkResult>
   ossUpload: (args: { key: string }) => Promise<{ ok: boolean; error: string }>
@@ -186,7 +186,7 @@ export const workbenchApi: WorkbenchApi = {
   auditStatus: (args) => call('audit-status', args),
   auditStart: (args) => call('audit-start', args),
   auditStop: (args) => call('audit-stop', args),
-  ossIndex: () => call('oss-index'),
+  ossIndex: (args) => call('oss-index', args ?? {}),
   ossResult: (args) => call('oss-result', args),
   ossLink: (args) => call('oss-link', args),
   ossUpload: (args) => call('oss-upload', args),

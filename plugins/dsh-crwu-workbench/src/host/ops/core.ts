@@ -231,7 +231,7 @@ export function createCoreOperations(
       return result
     },
     'audit-release': async () => await auditRelease({ ctx, config, state, world }),
-    'oss-index': async () => await ossIndex(await ossDeps()),
+    'oss-index': async (args) => await ossIndex(await ossDeps(), args),
     'oss-result': async (args) => await ossResult(await ossDeps(), args),
     'oss-link': async (args) => await ossLink(await ossDeps(), args),
     'oss-upload': async (args) => await ossUpload(await ossDeps(), args, state),

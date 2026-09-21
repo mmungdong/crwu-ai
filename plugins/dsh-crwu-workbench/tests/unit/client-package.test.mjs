@@ -1124,7 +1124,7 @@ test('the report page offers a sandbox-free retry when the keychain blocked the 
     gating: { canDispatch: true, canStart: true },
     onSearch: () => {}, onGoPage: () => {}, onRefreshPending: () => {}, onRefreshCloud: () => {},
     onStart: () => {}, onStop: () => {}, onRetryUpload: () => {},
-    onOpenCloud: () => {}, onOpenLocalHtml: () => {}, onOpenSession: () => {},
+    onOpenLocalHtml: () => {}, onOpenSession: () => {},
     onOpenAuditInfo: () => {}, onOpenPath: () => {}, onEscalateRetry: () => { retried += 1 },
     handoffCopied: false, onHandoffCopied: () => {},
   }
@@ -1825,6 +1825,7 @@ function reportPaneProps(patch = {}) {
     tasks: [], audits: {}, ossIndex: {}, ossIndexError: '', ossLoading: false, formName: '',
     query: '', page: 1, pageSize: 20, total: 0, filterMode: '', activeKey: '',
     escalateAvailable: false, handoff: null, notice: '', childAliveHint: '',
+    cloudSearchSeqNo: '', cloudSearchItems: [], cloudSearchError: '', cloudSearchBusy: false, cloudSearchDone: false,
     ...(patch.state ?? {}),
   }
   return {
@@ -1834,6 +1835,9 @@ function reportPaneProps(patch = {}) {
     onStart: () => {}, onStop: () => {}, onRetryUpload: () => {},
     onOpenCloud: () => {}, onOpenLocalHtml: () => {}, onOpenSession: () => {},
     onOpenAuditInfo: () => {}, onOpenPath: () => {}, onEscalateRetry: () => {},
+    onOpenCloud: (key) => { patch.onOpenCloud?.(key) },
+    onSearchCloud: (seqNo) => { patch.onSearchCloud?.(seqNo) },
+    onClearCloudSearch: () => { patch.onClearCloudSearch?.() },
     handoffCopied: false, onHandoffCopied: () => {},
   }
 }
@@ -2003,4 +2007,156 @@ test('the audit info opens in a right-side drawer, loads, and closes back to the
     globalThis.setInterval = realSetInterval
     globalThis.clearInterval = realClearInterval
   }
+})
+
+// ── 按流水号查云端交付件（AI 审核页的搜索框）─────────────────────────────────
+
+const CLOUD_SEQ = '2026-301705-LX10170-BG8746'
+
+/**
+ * 切到「AI审核结果」标签：`view` 是组件本地状态（hook #1）。
+ * 注意 `rerender` 返回的就是树本身（不是 `{ tree }`）—— 这里踩过一次。
+ */
+function openResults(Component, props, instance) {
+  instance.state[1] = 'results'
+  instance.cursor = 0
+  return rerender(Component, props)
+}
+
+/** 找「按流水号查找」的输入框（按 placeholder 认，别用文本包含）。 */
+function findCloudSearchInput(tree) {
+  return find(tree, (node) => node.type === 'input' && node.props?.placeholder === zhCN.cloudSearchPlaceholder)
+}
+
+test('按流水号查找：搜索框只在「AI审核结果」页里，待审核报告页没有', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const props = reportPaneProps({})
+  const { tree, instance } = render(ReportPane, props)
+  assert.equal(findCloudSearchInput(tree), null, '「待审核报告」页里不该有流水号查找框')
+  const results = openResults(ReportPane, props, instance)
+  assert.ok(findCloudSearchInput(results), '「AI审核结果」页里要有流水号查找框')
+  assert.equal(textOf(results).includes(zhCN.cloudSearchAll), true, '默认要看得出"正在看全量"')
+})
+
+test('按流水号查找：输入过程不发请求，点「查找」才把流水号交给 Host', async () => {
+  const posts = []
+  globalThis.fetch = async (url, init) => {
+    posts.push(JSON.parse(init.body))
+    return { ok: true, status: 200, async json() { return { ok: true, error: '', bucket: 'b', prefix: '', count: 0, items: {}, truncated: false } } }
+  }
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const searched = []
+  const props = reportPaneProps({ onSearchCloud: (seqNo) => { searched.push(seqNo) } })
+  const { instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  // 切标签本身不得列举 OSS（页面第一条约束）。
+  assert.deepEqual(posts, [], '切到结果页不发请求')
+  assert.deepEqual(searched, [], '切到结果页不触发查找')
+
+  // 打字（改组件本地 state）不得发请求 —— 防抖自动查会变成反复扫 OSS。
+  instance.state[2] = CLOUD_SEQ
+  instance.cursor = 0
+  const typed = rerender(ReportPane, props)
+  assert.deepEqual(posts, [], '输入过程不发请求')
+  assert.deepEqual(searched, [], '输入过程不触发查找')
+
+  findButtonLike(typed, zhCN.cloudSearchButton).props.onClick()
+  assert.deepEqual(searched, [CLOUD_SEQ], '点「查找」才把流水号交给 Host')
+})
+
+test('按流水号查找：命中就只列该流水号的交付件与「查看报告」，并写清正在看哪个流水号', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const item = {
+    seqNo: CLOUD_SEQ,
+    files: [{ key: `crwu/audit/${CLOUD_SEQ}/审核意见.${CLOUD_SEQ}.html`, name: `审核意见.${CLOUD_SEQ}.html` }],
+    htmlKey: `crwu/audit/${CLOUD_SEQ}/审核意见.${CLOUD_SEQ}.html`,
+    jsonKey: '',
+  }
+  let opened = ''
+  const props = reportPaneProps({
+    state: { cloudSearchSeqNo: CLOUD_SEQ, cloudSearchItems: [item], cloudSearchDone: true },
+    onOpenCloud: (key) => { opened = key },
+  })
+  const { instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  const text = textOf(results)
+  assert.equal(text.includes(item.htmlKey), true, '要把命中的对象 key 列出来')
+  assert.equal(text.includes(zhCN.cloudSearchAll), false, '命中时不该还说"正在看全量"')
+  assert.equal(text.includes(CLOUD_SEQ), true, '要写清正在看哪个流水号')
+  const open = findButtonLike(results, zhCN.openReport)
+  assert.ok(open, '命中时要有「查看报告」')
+  open.props.onClick()
+  assert.equal(opened, item.htmlKey, '打开的是命中那条的 htmlKey，不是流水号')
+  assert.equal(text.includes(zhCN.cloudSearchEmpty), false, '命中时不该说"没有"')
+})
+
+test('按流水号查找：没命中就说「OSS 上没有这个流水号的交付件」', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const props = reportPaneProps({ state: { cloudSearchSeqNo: CLOUD_SEQ, cloudSearchDone: true } })
+  const { instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  assert.equal(textOf(results).includes(zhCN.cloudSearchEmpty), true)
+  // 没查过（done=false）时说"没有"是错的。
+  const before = render(ReportPane, reportPaneProps({}))
+  assert.equal(textOf(openResults(ReportPane, reportPaneProps({}), before.instance)).includes(zhCN.cloudSearchEmpty), false, '还没查过不能说"没有"')
+})
+
+test('按流水号查找：卡片右上角的计数跟着**正在显示的那一份**走', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const other = {
+    seqNo: '2026-301705-LX10170-BG8000',
+    files: [],
+    htmlKey: 'crwu/audit/2026-301705-LX10170-BG8000/审核意见.html',
+    jsonKey: '',
+  }
+  const hit = {
+    seqNo: CLOUD_SEQ,
+    files: [],
+    htmlKey: `crwu/audit/${CLOUD_SEQ}/审核意见.html`,
+    jsonKey: '',
+  }
+  const full = { [other.seqNo]: other, [hit.seqNo]: hit }
+  // 全量清单 2 条、搜索命中 1 条：计数显示 2 就是"空列表 + 5 项"那类自相矛盾的读数。
+  const watched = reportPaneProps({
+    state: { ossIndex: full, cloudSearchSeqNo: CLOUD_SEQ, cloudSearchItems: [hit], cloudSearchDone: true },
+  })
+  const watchedRender = render(ReportPane, watched)
+  const watchedTree = openResults(ReportPane, watched, watchedRender.instance)
+  assert.equal(textOf(watchedTree).includes(`1 ${zhCN.items}`), true, '搜索命中时计数要按搜索结果算')
+  assert.equal(textOf(watchedTree).includes(`2 ${zhCN.items}`), false, '搜索命中时不该报全量条数')
+  // 清空（done=false）回到全量：计数跟着回到 2。
+  const cleared = reportPaneProps({ state: { ossIndex: full } })
+  const clearedRender = render(ReportPane, cleared)
+  const clearedTree = openResults(ReportPane, cleared, clearedRender.instance)
+  assert.equal(textOf(clearedTree).includes(`2 ${zhCN.items}`), true)
+})
+
+test('按流水号查找：形状不对就地拦下，不发请求也不去找别的流水号', async () => {
+  const searched = []
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const props = reportPaneProps({ onSearchCloud: (seqNo) => { searched.push(seqNo) } })
+  const { instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  instance.state[2] = '../../other-prefix'
+  instance.cursor = 0
+  const typed = rerender(ReportPane, props)
+  findButtonLike(typed, zhCN.cloudSearchButton).props.onClick()
+  const after = rerender(ReportPane, props)
+  assert.deepEqual(searched, [], '非法流水号不得发请求')
+  assert.equal(textOf(after).includes(zhCN.cloudSearchInvalid), true, '要给人话提示')
+})
+
+test('按流水号查找：真发出去的请求是 oss-index + seqNo（不是文本包含式假通过）', async () => {
+  const calls = stubFetch([{ status: 200, body: { ok: true, error: '', bucket: 'b', prefix: '', count: 0, items: {}, truncated: false } }])
+  const { workbenchApi } = await import(new URL('src/client/features/report-audit/api.ts', ROOT).href)
+  await workbenchApi.ossIndex({ seqNo: CLOUD_SEQ })
+  assert.equal(calls.length, 1)
+  const body = JSON.parse(calls[0].init.body)
+  assert.equal(body.op, 'oss-index', '操作名必须是 oss-index')
+  assert.deepEqual(body.args, { seqNo: CLOUD_SEQ }, '流水号必须原样发给 Host（Host 侧再校验一次是安全边界）')
 })

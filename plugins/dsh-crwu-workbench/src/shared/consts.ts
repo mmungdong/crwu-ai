@@ -12,4 +12,22 @@ export const WORKBENCH_ROUTE = '/api/crwu-workbench'
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 4
+export const WORKBENCH_PROTOCOL = 5
+
+/**
+ * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。
+ *
+ * 为什么放共享常量：Host 拿它当**安全边界**（流水号会被拼进 OSS 路径，不校验的话 `../` 能越出
+ * 配置前缀），Client 拿它做即时校验（不合形状就不发请求、直接给人话提示）。两边各写一份正则
+ * 必然漂移，所以只此一份。
+ *
+ * 规则：`<4 位年>-<数字>-<字母数字与 ._- >`；**不含 `/`**、**不含 `..`**、长度 ≤ 128。
+ */
+export const SEQ_NO_PATTERN = /^\d{4}-\d+-[0-9A-Za-z][0-9A-Za-z._-]*$/
+export const SEQ_NO_MAX_LENGTH = 128
+
+/** 这个流水号能不能安全地当作 OSS 路径的一段（Host 与 Client 同一个判据）。 */
+export function isSafeSeqNo(value: string): boolean {
+  const raw = value.trim()
+  return raw !== '' && raw.length <= SEQ_NO_MAX_LENGTH && SEQ_NO_PATTERN.test(raw) && !raw.includes('..')
+}

@@ -3,6 +3,7 @@ import { Badge, Button, Card, Empty, Loading, LoadingBar, Notice, Spinner } from
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import type { CloudItem } from '../../../shared/types.ts'
+import { isSafeSeqNo } from '../../../shared/consts.ts'
 import { Handoff } from '../workbench/Handoff.tsx'
 import { buildRows, filterModeText, pageCount, resultItems, riskBadge } from './row.ts'
 import type { AuditView, RowView, TaskRow } from './types.ts'
@@ -30,6 +31,14 @@ export interface ReportPaneState {
   total: number
   filterMode: string
   activeKey: string
+  /** 按流水号查云端交付件：查的是哪个流水号（回填输入框）。 */
+  cloudSearchSeqNo: string
+  /** 命中的交付件（0 条 = OSS 上没有这个流水号）。 */
+  cloudSearchItems: CloudItem[]
+  cloudSearchError: string
+  cloudSearchBusy: boolean
+  /** 是否已经查过一次（决定要不要显示"没有"——没查过时显示"没有"是错的）。 */
+  cloudSearchDone: boolean
   /** Host 说「这次氚云读取被钥匙串拦住了，可以申请免沙箱重试」。 */
   escalateAvailable: boolean
   /** 发起审核失败时留下的手工兜底任务；非空即显示可复制的提示词。 */
@@ -53,6 +62,9 @@ export interface ReportPaneProps {
   onOpenSession: (key: string) => void
   onOpenAuditInfo: (key: string, cloud: CloudItem) => void
   onOpenPath: (path: string) => void
+  /** 按流水号查云端交付件（用户点「查找」才发，输入过程不发请求）。 */
+  onSearchCloud: (seqNo: string) => void
+  onClearCloudSearch: () => void
   onEscalateRetry: () => void
   onHandoffCopied: (copied: boolean) => void
   handoffCopied: boolean
@@ -233,8 +245,19 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
   const [query, setQuery] = React.useState(state.query)
   // 页内标签只是本地视图状态：它**不触发任何 Host 调用**。
   const [view, setView] = React.useState<'pending' | 'results'>('pending')
+  // 云端搜索框的输入与校验提示都是**本地**状态：输入过程不碰 Host。
+  // （hook 顺序：0=query、1=view、2=cloudSeq、3=cloudHint —— 测试按这个顺序改 state。）
+  const [cloudSeq, setCloudSeq] = React.useState(state.cloudSearchSeqNo)
+  const [cloudHint, setCloudHint] = React.useState('')
   const rows = buildRows(state.tasks, state.audits, state.ossIndex, props.gating)
+  // 逐字段兜底：这几个字段是后加的，父组件/旧 bundle 没给时不能把 undefined 渲染成文案。
+  const cloudItems = state.cloudSearchItems ?? []
+  const cloudError = state.cloudSearchError ?? ''
   const items = resultItems(state.ossIndex)
+  // 正在按流水号看结果时，这一页显示的是**搜索结果**而不是全量云端清单。计数与表格必须同源：
+  // 否则会出现「空列表 + 5 项」这种自相矛盾的读数（员工会以为列表坏了）。
+  const cloudWatching = state.cloudSearchDone === true && cloudError === ''
+  const shownItems = cloudWatching ? cloudItems : items
   const pages = pageCount(state.total, state.pageSize)
 
   return <div>
@@ -321,15 +344,44 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         </Card>
       : <Card
           title={zhCN.tabResults}
-          extra={<span className={C.muted}>{`${items.length} ${zhCN.items}`}</span>}
+          extra={<span className={C.muted}>{`${shownItems.length} ${zhCN.items}`}</span>}
         >
           <LoadingBar active={state.ossLoading} />
+          {/* 按流水号查交付件是**这一页**的工具条（这一页本来就是云端交付件列表）。
+              **只在点「查找」时发一次列举**；输入过程不发请求 —— 防抖自动查会变成反复扫 OSS。 */}
           <div className={C.row}>
+            <input
+              className={C.input}
+              value={cloudSeq}
+              placeholder={zhCN.cloudSearchPlaceholder}
+              onChange={(event) => setCloudSeq(String((event.target as { value?: unknown }).value ?? ''))}
+            />
+            <Button label={zhCN.cloudSearchButton} small onClick={() => {
+              // 形状不对就地拦下、**不发请求**；Host 侧还会再校验一次（那是安全边界）。
+              if (!isSafeSeqNo(cloudSeq)) { setCloudHint(zhCN.cloudSearchInvalid); return }
+              setCloudHint('')
+              props.onSearchCloud(cloudSeq.trim())
+            }} />
+            <Button label={zhCN.clear} small onClick={() => { setCloudSeq(''); setCloudHint(''); props.onClearCloudSearch() }} />
+            <span className={C.grow} />
             <Button label={zhCN.refreshCloud} small disabled={state.ossLoading} onClick={props.onRefreshCloud} />
-            {state.ossLoading ? <><Spinner /><span className={C.muted}>{zhCN.loadingCloud}</span></> : null}
+            {state.cloudSearchBusy === true || state.ossLoading ? <><Spinner /><span className={C.muted}>{zhCN.loadingCloud}</span></> : null}
           </div>
+          {/* 说清"现在看的是哪一份"：只显示该流水号的结果 vs 全量列表 —— 否则员工会以为列表坏了。 */}
+          <div className={C.muted}>
+            {cloudWatching
+              ? `${zhCN.cloudSearchWatchingPrefix} ${state.cloudSearchSeqNo} ${zhCN.cloudSearchWatchingSuffix}`
+              : zhCN.cloudSearchAll}
+          </div>
+          {cloudHint === '' ? null : <Notice tone="warn">{cloudHint}</Notice>}
+          {cloudError === '' ? null : <Notice tone="warn">{zhCN.cloudFailed + cloudError}</Notice>}
           <div className={state.ossLoading ? C.dim : ''}>
-            <ResultsTable {...props} items={items} />
+            {cloudWatching
+              ? (cloudItems.length === 0
+                  // 「没找到」是明确结论，不是错误、也不回退去猜别的流水号。
+                  ? <Empty text={zhCN.cloudSearchEmpty} />
+                  : <ResultsTable {...props} items={cloudItems} />)
+              : <ResultsTable {...props} items={items} />}
           </div>
         </Card>}
   </div>

@@ -208,11 +208,19 @@ async function main() {
           const detailsHead = page.locator('.crwu-audit-details-head').first()
           checks.that('页脚有「排查详情」入口', await detailsHead.count() > 0)
           checks.that('排查详情默认不展开', !envText.includes('运行环境信息'), envText.slice(0, 120).replace(/\s+/g, ' '))
-          // 授权开关是「员工必须点一次」的东西：常驻在 ③ 登录认证 层，默认就在视野里。
-          checks.that('授权开关默认可见（③ 登录认证 层）', envText.includes('信任本插件读取本机凭据'), envText.slice(0, 160).replace(/\s+/g, ' '))
-          // 没授权时插件不可用：面板要说「需要授权」，而不是谎报「未登录」。
-          if (envText.includes('需要授权')) {
-            checks.that('未授权时状态词是「需要授权」，不谎报未登录', !envText.includes('钉钉认证｜未登录'))
+          // 授权是**插件级门槛**：没有授权，氚云待办取不到、钉钉也回传不了，所以它用一个弹框
+          // 把整页挡住（「同意并继续」/「拒绝」→ 拒绝屏 + 「再次授权」），不再是 ③ 里一个可以
+          // 悄悄忽略掉的勾选框（用户 2026-09-22 明确要这种形式）。
+          if (envText.includes('需要一项授权')) {
+            // 未授权：弹框必须挡住整页（报告页的入口一个都不许露出来），并给出两个明确动作。
+            checks.that('未授权时弹框挡住整页（报告页不出现）', !envText.includes('待审核报告'))
+            checks.that('未授权弹框给出「同意并继续」', envText.includes('同意并继续'))
+            checks.that('未授权弹框给出「拒绝」', envText.includes('拒绝'))
+            // 没授权时插件不可用：要说「需要授权」，而不是谎报「未登录」。
+            checks.that('未授权时状态词不说「未登录」', !envText.includes('钉钉认证｜未登录'))
+          } else {
+            // 已授权：③ 层头常驻这一行（文案由 client-package.test.mjs 逐字盯着）。
+            checks.that('已授权后 ③ 层头常驻「已授权读取本机凭据」', envText.includes('已授权读取本机凭据'))
           }
 
           // 就绪的层收成一行：层里的路径要点开才出现。逐层点开，核对真实探测值。
@@ -227,7 +235,17 @@ async function main() {
           const expandedText = await body()
           checks.that('展开后能看到真实二进制路径', expandedText.includes('/Users/') || expandedText.includes('/usr/'))
           checks.that('展开后能看到工具版本', /\d+\.\d+/.test(expandedText))
-          checks.that('④ 的 AK 表单就在这一层里', expandedText.includes('AccessKey') && expandedText.includes('endpoint'))
+          // ④ 层里的 AK 表单：员工要填的只有 ID 与 Secret —— STS Token 与 endpoint 由插件
+          // 自己处理（用户 2026-09-22 反馈「这两个不需要配置」）。断言按**这一层里的输入框**
+          // 数量来，避免被页面上别处的同名字样满足（文本包含式断言踩过）。
+          const akCard = page.locator('.crwu-audit-card').filter({ hasText: '填 AccessKey' }).first()
+          checks.that('④ 的 AK 表单就在这一层里', await akCard.count() > 0)
+          const akInputs = await akCard.locator('input').count()
+          checks.that('AK 表单只有 ID 与 Secret 两个输入框', akInputs === 2, `实际 ${String(akInputs)} 个`)
+          checks.that(
+            'AK 表单不再要 STS Token / endpoint',
+            await akCard.getByText(/STS|endpoint/i).count() === 0,
+          )
           await page.screenshot({ path: join(out, 'env-layers.png') })
 
           // 排查详情：点开后才是维护者信息（清单来源、运行环境信息、审核根会话）。
@@ -303,6 +321,11 @@ async function main() {
           ).catch(() => undefined)
           const pendingText = await body()
           checks.that('待审核报告画出真实流水号行', SEQ.test(pendingText))
+          // 按流水号查交付件的工具条属于「AI审核结果」页，不该出现在待审核报告页。
+          checks.that(
+            '待审核报告页里没有流水号查找框',
+            await page.getByPlaceholder(/输入报告流水号/).count() === 0,
+          )
           checks.that('待审核报告显示复核级次', pendingText.includes('初审'))
           // 风险等级要透出来：这一列是用户要求加的（真实取值 A/B/C）。
           checks.that('待审核报告有「风险等级」列', pendingText.includes('风险等级'))
@@ -454,6 +477,85 @@ async function main() {
           ).catch(() => undefined)
           checks.that('AI审核结果画出真实云端案例', SEQ.test(await body()))
           await page.screenshot({ path: join(out, 'results.png') })
+        })
+
+        // ── 按流水号查云端交付件（**「AI审核结果」页自己的工具条**）─────────────
+        // 用户要求：输入报告流水号 → 点查找 → 拼该流水号去 OSS 找交付件。这里盯五条：
+        // 工具条在、输入过程不列举 OSS（只在点「查找」时发一次）、不存在的流水号明确说「没有」、
+        // 命中的流水号真的列出交付件、点「清空」回到全量且不重新列举。
+        await phase('按流水号查找', async () => {
+          const search = page.getByPlaceholder(/输入报告流水号/).first()
+          checks.that('「AI审核结果」页里有「按流水号」查找框', await search.count() === 1)
+          // 位置也是需求的一部分（用户 2026-09-22 纠正过）：它是**这一页自己的工具条**，
+          // 必须长在「AI审核结果」那张卡片里，而不是浮在两个标签之上。
+          const resultCard = page.locator('.crwu-audit-card').filter({ hasText: 'AI审核结果' }).first()
+          checks.that(
+            '查找框在「AI审核结果」卡片里面',
+            await resultCard.locator('input').count() === 1,
+            `卡片内输入框 ${await resultCard.locator('input').count()} 个`,
+          )
+
+          // 真流水号只能从**搜索前**的页面文本里取：搜索之后页面上有「正在看：流水号 … 的交付件」
+          // 这一行，里面装的正是刚输入的那个假流水号，正则会把它当成"真"的（踩过 —— 命中用例
+          // 因此一直在查一个不存在的号，看起来像功能坏了）。
+          const listingText = await body()
+          const fake = '2099-999999-ZZZZZZ-ZZZZZZ'
+          const realSeq = [...new Set(listingText.match(/\b\d{4}-\d{5,7}-[A-Z0-9]{3,}-[A-Z0-9]{3,}\b/g) ?? [])]
+            .find((seqNo) => seqNo !== fake) ?? ''
+
+          const before = ossListings()
+          await search.fill(fake)
+          await page.waitForTimeout(800)
+          checks.that(
+            '输入流水号的过程不列举 OSS',
+            ossListings() === before,
+            `输入前 ${before} 次、输入后 ${ossListings()} 次`,
+          )
+
+          // 条件等待**这一次**应答落地（状态行换成这个流水号），不要抢在应答之前断言：
+          // 请求在飞的时候页面还画着全量清单，那时断言命中等于是断言旧的列表。
+          const watching = (seqNo) => `正在看：流水号 ${seqNo} 的交付件`
+          await page.getByRole('button', { name: '查找' }).first().click()
+          await page.waitForFunction(
+            (text) => document.body.innerText.includes(text),
+            watching(fake),
+            { timeout: 60_000 },
+          ).catch(() => undefined)
+          const afterMissing = await body()
+          checks.that('不存在的流水号明确说「OSS 上没有这个流水号的交付件」', afterMissing.includes('OSS 上没有这个流水号的交付件'))
+          checks.that('查找不存在的流水号只发一次列举', ossListings() === before + 1, `现在 ${ossListings()} 次`)
+          await page.screenshot({ path: join(out, 'cloud-search-missing.png') })
+
+          // 已存在的流水号：拿真实的那一条（拿不到就如实跳过，不编造）。
+          if (realSeq === '') {
+            checks.passed.push('云端清单里暂无可验证的流水号（跳过命中用例）')
+          } else {
+            await search.fill(realSeq)
+            await page.getByRole('button', { name: '查找' }).first().click()
+            await page.waitForFunction(
+              (text) => document.body.innerText.includes(text) && document.body.innerText.includes('查看报告'),
+              watching(realSeq),
+              { timeout: 60_000 },
+            ).catch(() => undefined)
+            const hit = await body()
+            checks.that('存在的流水号能列出交付件与「查看报告」', hit.includes(realSeq) && hit.includes('查看报告'))
+            checks.that('查找命中也只发一次列举', ossListings() === before + 2, `现在 ${ossListings()} 次`)
+            await page.screenshot({ path: join(out, 'cloud-search-hit.png') })
+
+            // 「清空」只是一个视图切回全量：不许把已经取到的云端清单丢掉，也不许重新列举 OSS。
+            await page.getByRole('button', { name: '清空' }).first().click()
+            await page.waitForFunction(
+              () => document.body.innerText.includes('正在看：全部云端交付件'),
+              undefined,
+              { timeout: 30_000 },
+            ).catch(() => undefined)
+            const cleared = await body()
+            checks.that(
+              '点「清空」回到全量云端清单',
+              cleared.includes('正在看：全部云端交付件') && cleared.includes('查看报告'),
+            )
+            checks.that('清空不重新列举 OSS', ossListings() === before + 2, `现在 ${ossListings()} 次`)
+          }
         })
 
         // ── 「查看会话」：客户端服务晚注册时不许报「服务不可用」 ─────────────

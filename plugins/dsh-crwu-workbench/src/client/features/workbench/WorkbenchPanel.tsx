@@ -79,6 +79,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [activeKey, setActiveKey] = React.useState('')
   const [activeChildId, setActiveChildId] = React.useState('')
   const [ossIndex, setOssIndex] = React.useState<Record<string, CloudItem>>({})
+  // 按流水号查云端交付件：查的是哪个流水号、命中什么、是否已经查过。
+  const [cloudSearch, setCloudSearch] = React.useState({
+    seqNo: '', items: [] as CloudItem[], error: '', busy: false, done: false,
+  })
   const [ossError, setOssError] = React.useState('')
   const [ossLoading, setOssLoading] = React.useState(false)
   const [ossLoaded, setOssLoaded] = React.useState(false)
@@ -145,6 +149,25 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       if (mounted.current) setOssLoading(false)
     }
   }, [ossLoaded])
+
+  const searchCloud = React.useCallback(async (raw: string) => {
+    const seqNo = raw.trim()
+    // 用户操作触发 → 允许**一次**列举，且只列这一个流水号那一层。
+    setCloudSearch({ seqNo, items: [], error: '', busy: true, done: false })
+    try {
+      const result = await workbenchApi.ossIndex({ seqNo })
+      if (!mounted.current) return
+      setCloudSearch({
+        seqNo,
+        items: result.ok ? Object.values(result.items) : [],
+        error: result.ok ? '' : result.error,
+        busy: false,
+        done: true,
+      })
+    } catch (cause) {
+      if (mounted.current) setCloudSearch({ seqNo, items: [], error: describe(cause), busy: false, done: true })
+    }
+  }, [])
 
   const loadReport = React.useCallback(async (options: { query?: string; page?: number } = {}) => {
     setBusy(true)
@@ -298,6 +321,11 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     ossIndex,
     ossIndexError: ossError,
     ossLoading,
+    cloudSearchSeqNo: cloudSearch.seqNo,
+    cloudSearchItems: cloudSearch.items,
+    cloudSearchError: cloudSearch.error,
+    cloudSearchBusy: cloudSearch.busy,
+    cloudSearchDone: cloudSearch.done,
     formName: pending?.formName ?? '',
     query,
     page: pending?.page ?? page,
@@ -384,6 +412,8 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
           onGoPage={(next) => { setPage(next); void loadReport(pendingArgs(query, next)) }}
           onRefreshPending={() => { void loadReport(pendingArgs(query, page)) }}
           onRefreshCloud={() => { void loadCloud(true) }}
+          onSearchCloud={(seqNo) => { void searchCloud(seqNo) }}
+          onClearCloudSearch={() => { setCloudSearch({ seqNo: '', items: [], error: '', busy: false, done: false }) }}
           onStart={(task, retry) => {
             const key = task.seqNo !== '' ? task.seqNo : task.name
             setAuditBusy(key)

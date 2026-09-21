@@ -107,6 +107,48 @@ test('oss-index refuses when OSS is disabled, has no bucket, or has no ossutil',
   assert.match((await ossIndex(noOssutil.deps)).error, /ossutil/)
 })
 
+test('oss-index 按流水号查：只列该流水号那一层，命中它自己的交付件', async () => {
+  const listing = [
+    `oss://bkt/crwu/audit/${SEQ}/审核意见.${SEQ}.html`,
+    `oss://bkt/crwu/audit/${SEQ}/审核结果.${SEQ}.json`,
+  ].join('\n')
+  const { deps, commands } = ossDeps({
+    shell: (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: listing }),
+  })
+  const result = await ossIndex(deps, { seqNo: SEQ })
+  assert.equal(result.ok, true)
+  assert.deepEqual(Object.keys(result.items), [SEQ])
+  assert.equal(result.items[SEQ].htmlKey, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
+  const ls = commands.find((command) => command.includes(' ls ')) ?? ''
+  assert.ok(ls.includes(`oss://bkt/crwu/audit/${SEQ}/`), `只该列这个流水号那一层，实际：${ls}`)
+})
+
+test('oss-index 按流水号查：不合形状 / 试图越界一律拒绝，且一条命令都不发', async () => {
+  // 安全边界：流水号会被拼进 OSS 路径，不校验的话 `../` 能越出配置前缀。
+  for (const bad of ['not-a-seq', '2026-301705-../other', '2026-301705-..', '2026-301705-a/b', '2026-301705-a b', 'x'.repeat(200)]) {
+    const { deps, commands } = ossDeps({ shell: ossutilOnPath })
+    const result = await ossIndex(deps, { seqNo: bad })
+    assert.equal(result.ok, false, `应当拒绝：${JSON.stringify(bad)}`)
+    assert.match(result.error, /流水号/, `错误要说清是流水号的问题：${result.error}`)
+    assert.equal(commands.length, 0, `非法输入不得发出任何命令（${JSON.stringify(bad)}）`)
+  }
+})
+
+test('oss-index 不传流水号 = 照旧列举整段前缀（既有行为不能被破坏）', async () => {
+  const { deps, commands } = ossDeps({ shell: ossutilOnPath })
+  await ossIndex(deps, { seqNo: '   ' })
+  const ls = commands.find((command) => command.includes(' ls ')) ?? ''
+  assert.ok(ls.endsWith('oss://bkt/crwu/audit/ --short-format') || ls.includes('oss://bkt/crwu/audit/ '), `空流水号应是整段列举：${ls}`)
+})
+
+test('oss-index 按流水号查：没找到是 ok:true / 0 条（不是命令失败）', async () => {
+  const { deps } = ossDeps({ shell: (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: '' }) })
+  const result = await ossIndex(deps, { seqNo: SEQ })
+  assert.equal(result.ok, true)
+  assert.equal(result.count, 0)
+  assert.deepEqual(result.items, {})
+})
+
 // ── oss-result ──────────────────────────────────────────────────────────────
 
 test('oss-result rejects a key outside the configured prefix', async () => {
