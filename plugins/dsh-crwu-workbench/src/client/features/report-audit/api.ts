@@ -65,7 +65,7 @@ export interface EnvResult {
   allOk: boolean
   home: string
   platform: string
-  trust: { h3yun: boolean }
+  trust: { credentials: boolean }
   workspace: BootResult['workspace']
   /** 审核子代理的挂载点；老版本 Host 不带这个字段（见 BootResult.auditRoot）。 */
   auditRoot?: AuditRootView
@@ -164,7 +164,7 @@ export interface WorkbenchApi {
   workspace: (args: { path: string; title?: string; id?: string }) => Promise<Record<string, unknown>>
   workspaceAuto: () => Promise<Record<string, unknown>>
   bindSession: (args: { sessionId: string }) => Promise<Record<string, unknown>>
-  trust: (args: { h3yun: boolean }) => Promise<Record<string, unknown>>
+  trust: (args: { credentials: boolean }) => Promise<Record<string, unknown>>
   installPrompt: (args: { workspace?: string }) => Promise<{ ok: boolean; url: string; prompt: string }>
   session: () => Promise<{ ok: boolean; error: string; session: { userId: string; expiresAt: string; expiresIn: string } | null }>
   relogin: () => Promise<SimpleResult & { stdoutTail?: string; stderrTail?: string }>

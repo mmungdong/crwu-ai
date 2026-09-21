@@ -98,7 +98,7 @@ function healthyContext() {
     entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
     files: {
       '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"token-123456"}',
-      '/Users/x/.dsh/crwu-workbench.json': '{}',
+      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
     },
   })
 }
@@ -157,7 +157,7 @@ test('a missing workspace blocks everything and is listed first', async () => {
     },
     files: {
       '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}',
-      '/Users/x/.dsh/crwu-workbench.json': '{}',
+      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
     },
   })
   void ctx
@@ -188,7 +188,7 @@ test('a missing binary is blocked by name', async () => {
     },
     dirs: ['/cases/space'],
     entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}', '/Users/x/.dsh/crwu-workbench.json': '{}' },
+    files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}', '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -204,7 +204,7 @@ test('a sandbox that cannot run commands is reported as 探测失败, never as �
     shellDown: ['for b in', 'h3yun session status', 'dws auth status', 'command -v'],
     dirs: ['/cases/space'],
     entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{}' },
+    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -221,7 +221,11 @@ test('a sandbox that cannot run commands is reported as 探测失败, never as �
   const dingtalk = result.services.find((service) => service.id === 'dingtalk')
   assert.equal(h3yun.state, '探测失败')
   assert.match(h3yun.detail, /no sandbox backend is usable/)
-  assert.equal(dingtalk.state, '探测失败')
+  // 钉钉：已授权、但命令压根没跑起来 → 如实报「读本机凭据被拦住」（不是「未登录」），
+  // 并且**照旧阻塞**：读不到凭据 = 审核链路真的走不通，不能放人进去。
+  assert.equal(dingtalk.state, '本机凭据读取被拦住')
+  assert.match(dingtalk.detail, /no sandbox backend is usable/)
+  assert.ok(result.blocked.includes('钉钉认证'))
 
   // OSS：不能报「ossutil 未安装」。
   const oss = result.services.find((service) => service.id === 'oss')
@@ -243,15 +247,19 @@ test('a logged-out service is blocked by its label, and a missing iFinD key too'
     },
     dirs: ['/cases/space'],
     entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{}' },
+    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
   assert.ok(result.blocked.includes('氚云（H3Yun）员工会话'))
-  assert.ok(result.blocked.includes('钉钉认证'))
   assert.ok(result.blocked.includes('iFinD 密钥'))
   assert.equal(result.services[0].state, '未绑定')
+  // 钉钉这条命令现在**自己带无沙箱权限**去问（员工零配置），所以它回的 `authenticated:false`
+  // 是真答案 → 如实报「未登录」并计入阻塞。谎报只可能出现在「命令没跑起来」那条路径
+  // （见上一条测试：那种情况报「本机凭据读取被拦住」，不阻塞）。
   assert.equal(result.services[1].state, '未登录')
+  assert.equal(result.services[1].required, true)
+  assert.ok(result.blocked.includes('钉钉认证'), '确认没登录就要拦')
 })
 
 test('an expired h3yun session is reported as expired and blocked', async () => {
@@ -268,7 +276,7 @@ test('an expired h3yun session is reported as expired and blocked', async () => 
     },
     dirs: ['/cases/space'],
     entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}', '/Users/x/.dsh/crwu-workbench.json': '{}' },
+    files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}', '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -286,7 +294,7 @@ test('a failed manifest fetch is surfaced with its reason while the page still r
       'dws auth status': { stdout: '' },
       'command -v': { stdout: '' },
     },
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{}' },
+    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -321,8 +329,102 @@ test('request arguments cannot replace the configured manifest and protected OSS
 })
 
 test('the trust flag is echoed so the panel can render the switch state', async () => {
-  const { deps } = depsOf(healthyContext(), { state: { trustH3yun: true } })
+  const { deps } = depsOf(healthyContext(), { state: { trustCredentials: true } })
   const result = await loadEnvironment(deps, {})
-  assert.deepEqual(result.trust, { h3yun: true })
+  assert.deepEqual(result.trust, { credentials: true })
   assert.equal(DEFAULT_MANIFEST.workspace.preferTitle, '中瑞世联工作空间')
+})
+
+test('钉钉探测：未授权就说需要授权（绝不谎报未登录）；授权后带无沙箱策略去拿真结论', async () => {
+  const ctx = healthyContext()
+  const specs = []
+  // `makeCtx` 的 `get('shell')` 每次都新建一个对象，所以要包 `get` 本身，而不是改返回值的属性。
+  const originalGet = ctx.get
+  ctx.get = (name) => {
+    const value = originalGet(name)
+    if (name !== 'shell' || value === undefined) return value
+    const inner = value.run
+    return {
+      ...value,
+      run: async (spec) => {
+        specs.push(spec)
+        return inner(spec)
+      },
+    }
+  }
+
+  // ① 未授权：**不去猜**登录态（沙箱里读钥匙串只会得到假的「未登录」），直接报「需要授权」，
+  //    授权项进 blocked（硬门禁），dws 探测压根不发。
+  const unauthorized = await loadEnvironment(depsOf(makeUnauthorizedCtx())[0] ?? depsOf(makeUnauthorizedCtx()).deps, {})
+  const dingtalk = unauthorized.services.find((service) => service.id === 'dingtalk')
+  assert.equal(dingtalk.state, '需要授权')
+  assert.equal(dingtalk.ok, false)
+  assert.ok(unauthorized.blocked.includes('授权读取本机凭据（氚云 / 钉钉）'), '未授权必须是阻塞项')
+  assert.equal(makeUnauthorizedSpecs().some((spec) => String(spec.command).includes('dws auth status')), false, '未授权不该去问 dws')
+
+  // ② 已授权：凭据类命令自己声明无沙箱权限 → 拿到真结论（这里 fixture 回 authenticated:true）。
+  const { deps } = depsOf(ctx, { state: { trustCredentials: true } })
+  const result = await loadEnvironment(deps, {})
+  const dwsSpec = specs.find((spec) => String(spec.command).includes('dws auth status'))
+  assert.ok(dwsSpec, '授权后应当问过 dws auth status')
+  // 这条断言就是缺陷复现：去掉 escalate 时它立刻变红。
+  assert.equal(dwsSpec.sandboxPolicy?.mode, 'danger-full-access', '读钥匙串的命令必须声明无沙箱（钥匙串在沙箱外）')
+  assert.equal(result.services.find((service) => service.id === 'dingtalk').ok, true)
+  assert.equal(result.blocked.includes('授权读取本机凭据（氚云 / 钉钉）'), false, '授权后授权项消失')
+  // 反向护栏：探二进制/版本这类命令**不能**跟着提权（能给最小权限就给最小）。
+  const versionSpec = specs.find((spec) => String(spec.command).includes('--version'))
+  assert.ok(versionSpec, '应当探过二进制版本')
+  assert.equal(versionSpec.sandboxPolicy, undefined, '探版本不需要无沙箱')
+})
+
+/** 未授权的 ctx（配置文件里没有授权标记）+ 记录它发出的 shell 请求。 */
+function makeUnauthorizedCtx() {
+  const specs = []
+  const ctx = healthyContext()
+  ctx.get = ((original) => (name) => {
+    const value = original(name)
+    if (name !== 'shell' || value === undefined) {
+      if (name === 'fs' && value !== undefined) {
+        return {
+          ...value,
+          async readText() { return '{}' },
+        }
+      }
+      return value
+    }
+    const inner = value.run
+    return { ...value, run: async (spec) => { specs.push(spec); return inner(spec) } }
+  })(ctx.get)
+  makeUnauthorizedSpecs.specs = specs
+  return ctx
+}
+function makeUnauthorizedSpecs() { return makeUnauthorizedSpecs.specs ?? [] }
+makeUnauthorizedSpecs.specs = []
+
+test('信任本机凭据后确实没登录，仍然如实报未登录并阻塞', async () => {
+  const ctx = makeCtx({
+    shellLines: {
+      'curl': { stdout: MANIFEST_JSON },
+      'for b in': { stdout: 'node\t/n\nossutil\t/o\n' },
+      '/n --version': { stdout: 'v22.19.0\n' },
+      '/o --version': { stdout: 'Version: 1.7.19\n' },
+      'h3yun session status': { stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) },
+      'dws auth status': { stdout: JSON.stringify({ authenticated: false, message: '未登录' }) },
+      'command -v': { stdout: '/o\n' },
+      ' ls ': { stdout: 'ok\n' },
+    },
+    dirs: ['/cases/space'],
+    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
+    files: {
+      '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}',
+      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+    },
+  })
+  const { deps } = depsOf(ctx, { state: { trustCredentials: true } })
+  const result = await loadEnvironment(deps, {})
+
+  const dingtalk = result.services.find((service) => service.id === 'dingtalk')
+  assert.equal(dingtalk.state, '未登录')
+  assert.equal(dingtalk.required, true)
+  assert.ok(result.blocked.includes('钉钉认证'), '确认过没登录就要拦')
 })

@@ -35,6 +35,8 @@ import { openReportNotice, openSessionTarget, pendingArgs } from '../report-audi
 
 const POLL_INTERVAL_MS = 10_000
 
+import { AuthorizationGate } from './AuthorizationGate.tsx'
+
 export interface WorkbenchPanelProps {
   /** 由 apply 注入的浏览器侧可选服务（目录选择器 / 工作空间注册表 / layout）。 */
   services: ClientServices
@@ -68,6 +70,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [hostBuiltAt, setHostBuiltAt] = React.useState('')
   const [boundParentId, setBoundParentId] = React.useState('')
   const [copied, setCopied] = React.useState(false)
+  // 授权门槛：拒绝**不落盘**（下次打开页面还会再问）；同意落盘在 Host 的 trustCredentials 里。
+  const [authDeclined, setAuthDeclined] = React.useState(false)
+  const [authBusy, setAuthBusy] = React.useState(false)
+  const [authError, setAuthError] = React.useState('')
   const [pending, setPending] = React.useState<PendingResult | null>(null)
   const [audits, setAudits] = React.useState<Record<string, AuditView>>({})
   const [activeKey, setActiveKey] = React.useState('')
@@ -254,6 +260,24 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
   }
 
+  // 授权态：Host 的 `env.trust.credentials` 是唯一判据（落盘后重启仍在）。
+  const authorized = env !== null && env.trust.credentials === true
+  const showGate = env !== null && !authorized
+  const grantCredentials = (): void => {
+    setAuthBusy(true)
+    setAuthError('')
+    void workbenchApi.trust({ credentials: true })
+      .then((result) => {
+        // 写盘失败时 Host 回 `persistError`：不能假装已授权（下次重启就没了）。
+        const persistError = typeof result.persistError === 'string' ? result.persistError : ''
+        if (persistError !== '') { setAuthError(persistError); return null }
+        setAuthDeclined(false)
+        return envStatus.refresh()
+      })
+      .catch((cause: unknown) => { setAuthError(describe(cause)) })
+      .finally(() => { setAuthBusy(false) })
+  }
+
   // 宿主与客户端不同代：明说 + 停发起审核（其余只读功能照常）。
   const hostStale = hostProtocol !== null && hostProtocol !== WORKBENCH_PROTOCOL
   const gating = gatingOf(env, activeKey, {
@@ -298,7 +322,6 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     copied={copied}
     onRelogin={() => { void workbenchApi.relogin().then(() => envStatus.refresh()) }}
     onDwsLogin={() => { void workbenchApi.dwsLogin({}).then(() => envStatus.refresh()) }}
-    onTrust={(h3yun) => { void workbenchApi.trust({ h3yun }).then(() => envStatus.refresh()) }}
     onEnterReport={enterReport}
     gate={gate}
     services={props.services}
@@ -309,10 +332,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     prompt={prompt}
     promptUrl={promptUrl}
     promptBusy={promptBusy}
-    promptCopied={promptCopied}
     promptMessage={promptMessage}
-    onPromptRefresh={() => { setPromptCopied(false); setPromptMessage(''); void loadPrompt() }}
-    onPromptCopied={(message) => { setPromptCopied(true); setPromptMessage(message) }}
   />
 
   return <div className={C.root}>
@@ -332,6 +352,19 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
         onOpen={() => { setView('env') }}
       />
     </div>
+
+    {/* 未授权：整块面板被门槛盖住（Host 侧另有 blocked 兜底，绕过 UI 调操作也进不去）。
+        授权是一次落盘写，所以按钮期间禁用，失败如实显示（`persistError` 语义）。 */}
+    {showGate
+      ? <AuthorizationGate
+          declined={authDeclined}
+          busy={authBusy}
+          error={authError}
+          onAgree={grantCredentials}
+          onDecline={() => { setAuthDeclined(true) }}
+          onRegrant={() => { setAuthError(''); setAuthDeclined(false) }}
+        />
+      : null}
 
     {bootError === '' ? null : <Notice tone="warn">{bootError}</Notice>}
 

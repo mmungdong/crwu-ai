@@ -176,7 +176,7 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
     effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
     ...(sessions === undefined ? {} : { sessions }),
   }
-  return { state, operations: createCoreOperations(ctx, resolved, state, world) }
+  return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world) }
 }
 
 test('ping and boot answer with the state the panel needs to render', async () => {
@@ -290,12 +290,85 @@ test('workspace selection trims trailing slashes and can be reset to auto', asyn
   assert.deepEqual(workspaceView(state), { chosen: false, path: '', title: '', id: '', source: '', missing: false })
 })
 
-test('trust only switches on a strict boolean true', () => {
-  const { state, operations } = operationsFor()
-  assert.deepEqual(operations.trust({ h3yun: 'true' }), { ok: true, trust: { h3yun: false } })
-  assert.equal(state.trustH3yun, false)
-  assert.deepEqual(operations.trust({ h3yun: true }), { ok: true, trust: { h3yun: true } })
-  assert.equal(state.trustH3yun, true)
+test('trust 记一次长期授权：严格的 credentials 布尔 + 落盘（重启后仍有效）', async () => {
+  const { state, operations, ctx } = operationsFor()
+  const written = []
+  const policies = []
+  const fs = ctx.get('fs')
+  const inner = fs.writeText
+  fs.writeText = async (target, content, ...rest) => {
+    written.push(content)
+    // writeText(target, content, expected?, signal?, sandboxPolicy?) —— 策略是第 5 个参数。
+    policies.push(rest[2])
+    return await inner(target, content, ...rest)
+  }
+
+  // 只有严格 true 才算授权。
+  assert.deepEqual(await operations.trust({ credentials: 'true' }), { ok: true, trust: { credentials: false } })
+  assert.equal(state.trustCredentials, false)
+  assert.deepEqual(await operations.trust({ credentials: true }), { ok: true, trust: { credentials: true } })
+  assert.equal(state.trustCredentials, true)
+  // 旧客户端的字段名（h3yun）继续接受：协议号虽已 +1，没必要为一个布尔值让旧页面报错。
+  assert.deepEqual(await operations.trust({ h3yun: true }), { ok: true, trust: { credentials: true } })
+
+  // **落盘**：一次授权长期有效，否则员工每次重启都要重新授权。
+  assert.ok(written.length > 0, '授权必须写进工作台状态文件')
+  const parsed = JSON.parse(written[written.length - 1])
+  assert.equal(parsed.trustCredentials, true)
+  // 员工默认是受限沙箱（workspace-write）：写 `~/.dsh/` 会被拦，于是「点了同意却存不住、
+  // 重启又要重新授权」——实测踩到过。所以这次写入必须**逐次声明策略**。
+  assert.equal(
+    policies[policies.length - 1]?.mode,
+    'danger-full-access',
+    '状态文件写入必须带 sandboxPolicy，否则受限环境下授权存不住',
+  )
+})
+
+test('授权状态重启后仍在（从状态文件读回，不需要重新授权）', async () => {
+  // 这一条盯的是「一次授权、长期有效」：环境自检必须**先读盘**再决定是否阻塞。
+  const { loadEnvironment } = await import(new URL('src/host/environment/ops.ts', ROOT).href)
+  const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
+  const dirs = new Set(['/cases/space'])
+  const files = { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' }
+  const ctx = {
+    get(name) {
+      if (name === 'shell') {
+        return {
+          resolve: (request) => request,
+          async run(spec) {
+            const command = String(spec.command)
+            const out = command.includes('curl') ? '{}'
+              : command.includes('dws auth status') ? JSON.stringify({ authenticated: true })
+                : command.includes('h3yun session status') ? JSON.stringify({ data: { userId: 'u', expiresAt: '2099-01-01T00:00:00Z' } })
+                  : command.includes(' ls ') ? 'ok\n'
+                    : ''
+            return { exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: out, truncated: false }, stderr: { text: '', truncated: false } }
+          },
+        }
+      }
+      if (name === 'fs') {
+        return {
+          async resolve(path) { return { targetKey: path, displayPath: path } },
+          async stat(target) {
+            const key = String(target.targetKey).replace(/[\/]+$/, '')
+            if (dirs.has(key)) return { type: 'directory' }
+            return files[target.targetKey] === undefined ? undefined : { type: 'file' }
+          },
+          async readText(target) { return files[target.targetKey] ?? '' },
+          async writeText(target, content) { files[target.targetKey] = content; return { operation: 'update', version: 'v', before: null, after: content } },
+        }
+      }
+      if (name === 'workspaceRegistry') return { list: () => [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }] }
+      return undefined
+    },
+  }
+  const state = createWorkbenchState(resolveConfig({}))
+  const result = await loadEnvironment(
+    { ctx, config: resolveConfig({}), state, home: '/Users/x', platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' },
+    {},
+  )
+  assert.equal(state.trustCredentials, true, '重启后从状态文件恢复授权')
+  assert.equal(result.blocked.includes('授权读取本机凭据（氚云 / 钉钉）'), false, '已授权不再阻塞')
 })
 
 test('bind-session refuses a subagent session as the audit parent', async () => {

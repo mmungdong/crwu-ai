@@ -59,10 +59,13 @@ employee-side install command.
 > Do **not** copy Skills into `~/.dsh/skills/` any more; the package root outranks the user root, so a
 > stale copy only creates drift (`make skills-install AGENT_DIR=…` is for non-DSH hosts).
 
-> **Sandbox mode**: if the restricted mode has no usable backend on this host (on macOS, `sandbox-exec`
-> cannot nest), DSH refuses every shell call the plugin makes. Follow DSH's own hint and switch the mode
-> to `danger-full-access` (`DSH_PERMISSION_MODE=danger-full-access`, or the profile's
-> `dsh-sandbox-policy` `mode`). The plugin never escalates on its own — that decision belongs to the user.
+> **Permissions**: no startup parameters are needed (`DSH_PERMISSION_MODE` stays untouched), but the
+> **first run requires one authorization** — the "trust this plugin to read local credentials" switch in
+> the login layer. It is written to the workbench state file (`trustCredentials`), so it survives
+> restarts. Without it the plugin cannot read the H3Yun session or the DingTalk login state and the
+> self-check blocks the gate — and it never reports a false "not logged in". Once authorized, only the
+> commands that genuinely read local credentials ask for unconfined execution; everything else stays in
+> the profile's default sandbox.
 
 ### Updating and removing
 

@@ -49,7 +49,7 @@ test('runCrwu rejects an explicit escalation it is not allowed to make', async (
   assert.match(run.error, /不允许无沙箱执行/)
 })
 
-test('runCrwu escalates a whitelisted subcommand only when the user trusted h3yun', async () => {
+test('runCrwu 里白名单命令自己声明权限（员工零配置），非白名单给最小权限', async () => {
   const specs = []
   const ctx = {
     get: (name) => (name === 'shell'
@@ -61,12 +61,26 @@ test('runCrwu escalates a whitelisted subcommand only when the user trusted h3yu
         }
       : undefined),
   }
+  // 未授权：白名单命令也**不提权**（授权就是「允许读本机凭据」的同意；没授权时环境自检会硬阻塞）。
+  await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: false, platform: 'darwin-arm64', workdir: '/cases/x' })
+  assert.equal(specs[0].sandboxPolicy, undefined, '未授权不得无沙箱执行')
+  assert.equal(specs[0].command, 'crwu h3yun records list')
+
+  // 已授权 + 白名单：声明所需权限（读钥匙串必须在沙箱外）。
+  specs.length = 0
   await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: true, platform: 'darwin-arm64', workdir: '/cases/x' })
   assert.deepEqual(specs[0].sandboxPolicy, { mode: 'danger-full-access', workspaceRoot: '/cases/x' })
 
+  // 非白名单：即使已授权也给最小权限。
   specs.length = 0
-  await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: false, platform: 'darwin-arm64', workdir: '/cases/x' })
-  assert.equal(specs[0].sandboxPolicy, undefined, '未信任时不得提权')
+  await runCrwu(ctx, ['crwu', 'version'], { trusted: true, platform: 'darwin-arm64', workdir: '/cases/x' })
+  assert.equal(specs[0].sandboxPolicy, undefined, '非白名单命令即使已授权也不提权（能给最小权限就给最小）')
+
+  // 拿不到会话工作区时不能直接失败（提权请求必须带 workspaceRoot）→ 退回沙箱执行。
+  specs.length = 0
+  const fallback = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: true, platform: 'darwin-arm64' })
+  assert.equal(specs[0].sandboxPolicy, undefined, '没有 workspaceRoot 就退回沙箱')
+  assert.equal(fallback.ok, true, '不能因为拿不到工作区就把命令判失败')
 })
 
 test('runCrwu quotes arguments and passes the big stdout budget through', async () => {
@@ -110,10 +124,13 @@ test('runCrwu offers escalation when the keychain blocked a sandboxed run', asyn
         }
       : undefined),
   }
-  const run = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: false, platform: 'darwin-arm64' })
+  const run = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: false, platform: 'darwin-arm64', workdir: '/cases/x' })
   assert.equal(run.ok, false)
   assert.equal(run.keychainBlocked, true)
   assert.equal(run.escalateAvailable, true, '界面据此显示「去授权」而不是干瞪眼')
+  // 已经记住授权的人不该再被反复打扰（这条是「trusted 只作为优化保留」的落地断言）。
+  const trustedRun = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: true, platform: 'darwin-arm64', workdir: '/cases/x' })
+  assert.equal(trustedRun.escalateAvailable, false)
 })
 
 test('describeFailure prefers stderr, then error, then the exit code', () => {

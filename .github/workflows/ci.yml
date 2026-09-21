@@ -82,6 +82,12 @@ jobs:
       - name: version consistency
         run: npm run version:check
 
+      # 配置是**唯一部署源**（config/crwu-workbench.yml）：Schema 不合法或字段缺失时，
+      # 本地 `npm run check` / `prepack` 会红，但 CI 是逐条跑的，之前漏了这一步
+      # —— 于是坏 YAML 能过 CI、却卡住 `make plugin-pack` / 员工安装。
+      - name: config check
+        run: npm run config:check
+
       - name: typecheck
         run: npm run typecheck
 

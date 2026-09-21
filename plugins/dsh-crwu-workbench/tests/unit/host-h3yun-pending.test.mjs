@@ -18,7 +18,7 @@ const CONFIG = { caseRoot: '/cases', formName: '报告审核', installDocUrl: ''
 function stateOf(patch = {}) {
   return {
     caseRoot: '/cases', workspacePath: '', workspaceTitle: '', workspaceSource: '', workspaceChosen: false,
-    parentSessionId: '', trustH3yun: false, formCode: '', formName: '', audits: {},
+    parentSessionId: '', trustCredentials: false, formCode: '', formName: '', audits: {},
     activeKey: '', activeChildId: '', activeSince: 0, ...patch,
   }
 }

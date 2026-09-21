@@ -9,10 +9,12 @@ import type { ShellResult } from '../shell/run.ts'
  *
  * 三条门禁，缺一条就会变成「工作台能执行任意命令」：
  * 1. **只允许 argv[0] === 'crwu'**，其余一律拒绝；
- * 2. **无沙箱执行（escalate）只有白名单子命令能申请**：`crwu h3yun session login` 与
- *    `forms/records/apps/files/file/tools`。这些都必须在沙箱外跑（要读钥匙串）；
- * 3. `escalate` 只是**申请**，实际是否提权还取决于 `trustH3yun` —— 用户没在面板上信任氚云时，
- *    即使白名单命中也走沙箱，失败后再由界面引导用户显式打开。
+ * 2. **无沙箱执行（escalate）只有白名单子命令能声明**：`crwu h3yun session login` 与
+ *    `forms/records/apps/files/file/tools`。这些都必须在沙箱外跑（要读系统钥匙串）；
+ * 3. **员工零配置**（2026-09-22 定的口径）：命中白名单就**自己声明**所需权限
+ *    （`ShellExecSpec.sandboxPolicy`），不要求员工改任何启动参数、也不要求先勾选什么。
+ *    是否放行由 DSH 的审批策略决定；`trusted` 只是「记住授权、不再逐次询问」的优化，
+ *    它**不再**决定提不提权（旧口径是「没勾信任就退回沙箱」，结果员工读氚云一直撞钥匙串）。
  */
 
 export interface CrwuRun {
@@ -26,7 +28,7 @@ export interface CrwuRun {
   escalated: boolean
   /** stdout/stderr 命中「钥匙串被拒」特征：提示用户需要无沙箱执行。 */
   keychainBlocked: boolean
-  /** 本次没提权、但白名单允许提权 —— 界面据此显示「可授权」按钮。 */
+  /** 界面应显示一次「授权入口」：本次读本机凭据被拦，且用户还没记住授权。 */
   escalateAvailable: boolean
 }
 
@@ -74,13 +76,19 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
   if (options.escalate === true && !allowed) {
     return failed(`该 crwu 子命令不允许无沙箱执行：${clean.slice(0, 3).join(' ')}`)
   }
-  const effective = options.escalate === true || (options.trusted && allowed)
+  // 提权 = 白名单 ∧ 已授权（授权就是用户对「读本机凭据」的同意；没授权时环境自检会硬阻塞，
+  // 这里也不再偷偷无沙箱执行）。`options.escalate` 保留为客户端显式重试的通道（同样只对白名单生效）。
+  const effective = (options.trusted === true && allowed) || options.escalate === true
 
+  // 提权请求必须带 `workspaceRoot`（DSH 契约），所以会话工作区未知时**退回沙箱执行**：
+  // 不能因为拿不到工作区就把命令直接判失败 —— 那样员工看到的是一句基础设施错误，
+  // 而不是「钥匙串被拒，去授权」这条可操作的路径。
+  const canEscalate = effective && (options.workdir ?? '') !== ''
   const quote = (value: string): string => shellQuote(value, options.platform ?? '')
   const result: ShellResult = await runShell(ctx, clean.map(quote).join(' '), {
     ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
     timeoutMs: options.timeoutMs ?? 60_000,
-    escalate: effective,
+    escalate: canEscalate,
     ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
   })
 
@@ -93,9 +101,11 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
     stderr: text(result.stderr),
     truncated: result.truncated,
     timedOut: result.timedOut,
-    escalated: effective,
+    escalated: canEscalate,
     keychainBlocked: blocked,
-    escalateAvailable: blocked && !effective && allowed,
+    // 需要给员工一个「授权入口」的两种情况：凭据读取被钥匙串/沙箱拦下（blocked），
+    // 或者命令根本没跑起来（`error`：沙箱后端不可用、审批被拒）。已经记住授权就不再打扰。
+    escalateAvailable: (blocked || result.error !== '') && options.trusted !== true,
   }
 }
 

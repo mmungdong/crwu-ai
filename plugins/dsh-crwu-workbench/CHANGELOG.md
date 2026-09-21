@@ -33,6 +33,14 @@
 - **发布门禁**：新增 YAML Schema/地址边界测试、`config:check`、TGZ 必含配置断言，以及真实
   `npm pack` → `npm install` → 从包内 YAML 激活 Host 的回归测试。
 
+- **权限：员工零启动参数，但首次必须授权一次**（2026-09-22 用户口径）。环境自检把「授权读取本机凭据
+  （氚云 / 钉钉）」当**硬前置**：没授权就是阻塞项（插件不可用），并且**不再**谎报「钉钉没登录」——
+  没授权时干脆不去猜（沙箱里读钥匙串只会得到假的未登录）。授权开关在「③ 登录认证」层里可见，
+  一次授权**长期有效**（写进 `~/.dsh/crwu-workbench.json` 的 `trustCredentials`，重启 profile 后仍在，
+  由环境自检启动时读回）。授权后：读本机凭据的命令（`crwu h3yun session login|records|forms|…`、
+  `dws auth status|login`）声明 `sandboxPolicy` 去拿真结论；其余命令保持默认沙箱（最小权限）。
+  `trust` 的线协议字段由 `h3yun` 改为 `credentials`（协议号 3 → 4），旧客户端的 `h3yun` 字段仍接受。
+
 ## package · 0.0.1 · 2026-09-20（首个 npm 发布）
 
 **版本号定为 `0.0.1`**：此前 `0.1.1` / `0.1.2` 两个编号**从未发布过**，首个 npm 发布用最小

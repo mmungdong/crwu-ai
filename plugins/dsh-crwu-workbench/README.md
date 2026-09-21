@@ -97,7 +97,7 @@ node <仓库>/install/browser-check.mjs \
 | 侧栏入口 | 「中瑞世联工作台」出现 |
 | 点进面板 | 面板右上角渲染出环境指示灯；自检期间是 loading，出结论后**通过就直接落在待审核报告页** |
 | 右上角指示灯 | 绿 / 红与自检结论一致，悬停文案含结论与「还差什么」 |
-| 环境自检页 | 平台 `darwin-arm64`；`crwu` / `dws` / `python3` / `ossutil` 四条**通过**、带真实路径；氚云 `正常`、钉钉 `已登录`；iFinD 密钥 `已配置`（只显示长度 930）；通过率 `10/10`、OSS 回传与运行环境信息齐全 |
+| 环境自检页 | 四层结论（② 工具 / ③ 登录认证 / ④ 上传配置 / ⑤ 外部数据）各带 `x/y 已就绪`；展开后是真实路径与版本（`crwu` / `dws` / `python3` / `ossutil`）、氚云 `正常`、钉钉 `已登录`、iFinD `已配置`（只显示长度）；就绪的层默认收起；清单来源 / sha256 / 审核根会话 / 氚云授权开关在页脚「排查详情」里（默认不展开） |
 | ① 案例根目录 | **只讲插件选定的那个目录**，不拿"当前会话"说事 —— 从哪个工作空间的会话点进来都一样（会话事实在 ⑧ 里如实展示） |
 | 待审核报告页 | 画出真实氚云待办：`共 8610 条`、六列（报告名 / 流水号 / **风险等级** / 人工复核 / 氚云更新时间 / 操作）、真实项目名与流水号、**风险等级徽章 A/B/C**（A 红、B 黄）、复核级次「初审」、行内「已停止 / 已完成·已上云」徽章与「查看会话 / 审核信息 / 本机 HTML」入口；窄列不换行、整表无横向溢出 |
 | AI审核结果页 | 画出 4 个真实云端案例及其 `审核意见.*.html` + `审核结果.*.json` 交付件 |
@@ -127,22 +127,24 @@ node <仓库>/install/browser-check.mjs \
    第一个配对完整的 JSON 文档（正确处理字符串里的括号与转义，垃圾输入仍然返回 null）。
 2. **「命令跑不起来」被说成「没装」**：见下面「沙箱模式」。
 
-### 沙箱模式：装完必须确认这一条
+### 权限：不需要任何启动参数，但**首次必须授权一次**
 
-包形态的 shell 调用走 DSH 注入的 `ctx.shell`，**不带显式沙箱模式**，因此用的是 profile 的默认值
-（`dsh-sandbox-policy` 的 `mode`，默认取环境变量 `DSH_PERMISSION_MODE`，缺省 `workspace-write`）。
+员工侧**不需要**改启动参数（不需要 `DSH_PERMISSION_MODE`，也不需要动 profile 里的
+`dsh-sandbox-policy`）。但插件要读本机凭据（氚云会话、钉钉登录态），这需要员工**点一次授权**：
 
-在**本机**（进程本身已在沙箱内，`sandbox-exec` 无法套娃）受限模式**没有可用后端**，DSH 会按契约拒绝执行：
+> 环境自检 ③ 登录认证 里的「信任本插件读取本机凭据（氚云会话 / 钉钉登录态）」。
 
-```text
-sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host;
-refusing to run the command unconfined. … otherwise switch the consumer to danger-full-access.
-```
+- **这是一次性授权、长期有效**：写进工作台状态文件 `~/.dsh/crwu-workbench.json` 的
+  `trustCredentials`，重启 profile 后仍然生效。
+- **不授权 = 插件不可用**：环境自检把它算作阻塞项（「进入报告审核」被门禁挡住），
+  并且**不会**谎报「钉钉没登录」——那正是没授权时沙箱读不到钥匙串的假象。
+- **授权之后才谈真假**：凭据类命令才带 `sandboxPolicy: { mode: 'danger-full-access', workspaceRoot }`
+  去拿真结论（已登录 / 未登录 / 未绑定 / 已过期）。
+- **最小权限**：只有确实读本机凭据的命令提权；探二进制与版本、`command -v`、`ossutil` 上传/列举、
+  写案例目录、开浏览器等一律走 profile 的默认沙箱。
+- 授权被部署的审批策略拒绝时，界面如实报「本机凭据读取被拦住」，并指回那个开关。
 
-所以：环境自检把「命令跑不起来」如实报成 `无法探测` / `探测失败`（**不会**谎报「未安装」）；
-要让工作台真的能干活，按 DSH 自己的提示把模式切到 `danger-full-access`
-（`DSH_PERMISSION_MODE=danger-full-access`，或改 profile 里 `dsh-sandbox-policy` 的 `mode`）。
-插件**不会**自己去申请无沙箱执行 —— 那是用户的决定，不是插件的。
+`DSH_PERMISSION_MODE=danger-full-access` 只在**开发自测**（§「真实验证」里那个临时 profile）才需要。
 
 静态检查能挡住的是「产物形状不对」；挡不住的是「DSH 到底把 `shell` / `fs` / `subagents`
 交给我了没有」—— 那是只有装一次才知道的事。
@@ -176,11 +178,9 @@ dsh plugin --profile web add dsh-crwu-workbench   # 从 npm 取预构建产物�
 > 插件目录的 rank 比用户目录高，留着只会造成两处漂移（`make skills-install AGENT_DIR=…` 是给
 > 非 DSH 宿主用的）。
 
-> **沙箱模式**：本机的受限模式若没有可用沙箱后端（macOS 上 `sandbox-exec` 无法套娃），
-> 插件发出的所有 shell 调用都会被 DSH 按契约拒绝。这时按 DSH 的提示把模式切到
-> `danger-full-access`（`DSH_PERMISSION_MODE=danger-full-access`，或改 profile 里
-> `dsh-sandbox-policy` 的 `mode`）。插件**不会**自己去申请无沙箱执行 —— 那是用户的决定。
-> 详见「真实验证」一节。
+> **权限**：不需要任何启动参数；但**首次必须授权一次**（③ 登录认证 里的「信任本插件读取本机凭据」），
+> 否则插件读不到氚云会话与钉钉登录态、环境自检会拦住它。授权一次长期有效（存在本机状态文件里）。
+> 详见「权限」一节。
 
 ### 更新版本
 

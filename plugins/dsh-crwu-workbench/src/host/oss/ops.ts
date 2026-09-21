@@ -355,11 +355,17 @@ export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>):
   // 换行会破坏 ini 结构，等于写到配置文件里一行垃圾。
   if (/[\r\n]/.test(accessKeyId) || /[\r\n]/.test(accessKeySecret)) return failed('凭据不能包含换行。')
 
+  // 表单里已经去掉 endpoint 与 STS：新客户端不送这两个字段。
+  // endpoint 空着就**回落部署配置**（`config/crwu-workbench.yml` 的 `oss.protected.endpoint`），
+  // 否则写进 `~/.ossutilconfig` 的内容会缺 endpoint，后续 upload/ls 全都要显式带参。
+  // `stsToken` 继续接受（旧客户端/手工调用仍可传），只是不再由面板填写。
+  const requestedEndpoint = text(args.endpoint).trim()
+  const endpoint = requestedEndpoint === '' ? text(deps.manifest.oss.endpoint).trim() : requestedEndpoint
   const written = await writeOssCred(deps, {
     accessKeyId,
     accessKeySecret,
     stsToken: text(args.stsToken).trim(),
-    endpoint: text(args.endpoint).trim(),
+    endpoint,
   })
   if (!written.ok) return failed(written.error)
 

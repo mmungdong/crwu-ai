@@ -60,7 +60,12 @@ export interface WorkbenchState {
    * （用户已确认接受分叉）。落盘是为了跨进程复用同一个根。
    */
   auditRoot: { workspacePath: string; sessionId: string; title: string; assignedAt: string }
-  trustH3yun: boolean
+  /**
+   * 「信任本插件读取本机凭据」（氚云会话 / 钉钉登录态）。**一次授权、长期有效**：
+   * 写入 `~/.dsh/crwu-workbench.json`，重启 profile 后仍生效（2026-09-22 用户口径）。
+   * 没有它 = 读凭据的命令不被允许提权 → 环境自检把「需要授权」算作阻塞项，插件不可用。
+   */
+  trustCredentials: boolean
   /** 氚云表单「报告审核」的 code，首次定位后缓存（定位一次要 60 秒）。 */
   formCode: string
   /** 表单显示名，界面用。 */

@@ -169,23 +169,77 @@ async function main() {
           }
         })
 
-        // ── 第 6 条：环境自检页画真实探测结果（同时证明 Host→Client 链路） ──
+        // ── 第 6 条：环境自检页按四层画真实探测结果（同时证明 Host→Client 链路） ──
+        //
+        // 页面的读者是普通员工：四层结论（工具 / 登录认证 / 上传配置 / 外部数据）+ 每层
+        // `x/y 已就绪`；**就绪的层收成一行、没就绪的层默认展开**；维护者信息（清单来源、
+        // sha256、会话 id）收在页脚「排查详情」里，默认不展开；
+        // 但**授权开关不在那里** —— 它是员工必须点一次的东西，常驻在「③ 登录认证」层头（下面单独断言）。
         await phase('环境自检页', async () => {
           await lamp().click()
           await page.waitForTimeout(1500)
           const envText = await body()
           checks.that('环境自检显示真实平台', /darwin|linux|win32/.test(envText))
-          checks.that('环境自检显示真实二进制路径', envText.includes('/Users/') || envText.includes('/usr/'))
-          checks.that('环境自检显示氚云与钉钉服务行', envText.includes('氚云') && envText.includes('钉钉'))
+          // 四层结论必须在（分层是这一版的全部意义）。
+          checks.that(
+            '环境自检按四层给结论',
+            envText.includes('② 工具') && envText.includes('③ 登录认证')
+              && envText.includes('④ 上传配置') && envText.includes('⑤ 外部数据'),
+          )
+          checks.that('每层给出「x/y 已就绪」计数', /\d+\/\d+ 已就绪/.test(envText))
+          checks.that('环境自检显示氚云与钉钉', envText.includes('氚云') && envText.includes('钉钉'))
           checks.that('环境自检显示 iFinD 密钥状态', envText.includes('iFinD'))
-          checks.that('环境自检显示 OSS 回传配置', envText.includes('交付件回传'))
-          checks.that('环境自检显示运行环境信息', envText.includes('运行环境信息'))
-          // 审核子代理挂在哪必须可见：这是「子代理树挂在谁下面」的唯一说明。
-          checks.that('运行环境信息里给出审核根会话', envText.includes('审核根会话'))
+          checks.that('环境自检显示 OSS 上传配置', envText.includes('OSS'))
           checks.that('环境自检显示通过率与阻塞计数', envText.includes('已通过') && envText.includes('未通过'))
+          // 复制入口全页只留一处（用户反馈：环境页上的「复制提示词 / 复制」按钮太多且没用）。
+          // 授权弹框挡在前面时整页不可达，这时跳过（弹框本身由「授权弹框」那段单独断言）。
+          if (!envText.includes('需要一项授权')) {
+            const copyEntry = page.getByRole('button', { name: '复制安装提示词' })
+            const copyCount = await copyEntry.count()
+            checks.that('全页只有一枚「复制安装提示词」按钮', copyCount === 1, `找到 ${copyCount} 个`)
+            checks.that('旧的「复制提示词」按钮已删除', await page.getByRole('button', { name: '复制提示词' }).count() === 0)
+            checks.that('旧的重生成按钮已删除', await page.getByRole('button', { name: '重新生成' }).count() === 0)
+          }
           // ① 只讲插件选定的案例根目录：不该因为"你从哪个会话点进来"而变样。
           checks.that('① 不拿当前会话说事（换会话不会变）', !envText.includes('不是同一个') && !envText.includes('的会话中打开工作台'))
           await page.screenshot({ path: join(out, 'env.png') })
+
+          // 员工视野里不该出现维护者信息：那些只在「排查详情」里。
+          const detailsHead = page.locator('.crwu-audit-details-head').first()
+          checks.that('页脚有「排查详情」入口', await detailsHead.count() > 0)
+          checks.that('排查详情默认不展开', !envText.includes('运行环境信息'), envText.slice(0, 120).replace(/\s+/g, ' '))
+          // 授权开关是「员工必须点一次」的东西：常驻在 ③ 登录认证 层，默认就在视野里。
+          checks.that('授权开关默认可见（③ 登录认证 层）', envText.includes('信任本插件读取本机凭据'), envText.slice(0, 160).replace(/\s+/g, ' '))
+          // 没授权时插件不可用：面板要说「需要授权」，而不是谎报「未登录」。
+          if (envText.includes('需要授权')) {
+            checks.that('未授权时状态词是「需要授权」，不谎报未登录', !envText.includes('钉钉认证｜未登录'))
+          }
+
+          // 就绪的层收成一行：层里的路径要点开才出现。逐层点开，核对真实探测值。
+          const layerHeads = page.locator('.crwu-audit-layer-head')
+          const layerCount = await layerHeads.count()
+          checks.that('四层都画出来了', layerCount === 4, `实际 ${String(layerCount)} 层`)
+          for (let index = 0; index < layerCount; index += 1) {
+            const expanded = String(await layerHeads.nth(index).getAttribute('aria-expanded') ?? '')
+            if (expanded === 'false') await layerHeads.nth(index).click()
+          }
+          await page.waitForTimeout(300)
+          const expandedText = await body()
+          checks.that('展开后能看到真实二进制路径', expandedText.includes('/Users/') || expandedText.includes('/usr/'))
+          checks.that('展开后能看到工具版本', /\d+\.\d+/.test(expandedText))
+          checks.that('④ 的 AK 表单就在这一层里', expandedText.includes('AccessKey') && expandedText.includes('endpoint'))
+          await page.screenshot({ path: join(out, 'env-layers.png') })
+
+          // 排查详情：点开后才是维护者信息（清单来源、运行环境信息、审核根会话）。
+          await detailsHead.click()
+          await page.waitForTimeout(300)
+          const detailText = await body()
+          checks.that('展开排查详情后出现运行环境信息', detailText.includes('运行环境信息'))
+          checks.that('运行环境信息里给出审核根会话', detailText.includes('审核根会话'))
+          checks.that('排查详情里给出清单来源', detailText.includes('环境清单'))
+          checks.that('排查详情里给出工具版本约束', detailText.includes('期望'))
+          checks.that('排查详情里不再需要授权开关（它常驻在 ③ 登录认证 层）', !detailText.includes('记住氚云授权'))
+          await page.screenshot({ path: join(out, 'env-details.png') })
         })
 
         // ── 重新自检也要有加载态（用户点下去到结论出来有好几秒）────────────────
@@ -457,7 +511,7 @@ async function main() {
           if (!envOk) return
           await lamp().click()
           await page.waitForTimeout(3000)
-          checks.that('切回环境自检仍然正常渲染', (await body()).includes('命令行工具与运行时'))
+          checks.that('切回环境自检仍然正常渲染', (await body()).includes('② 工具'))
         })
       }
     }

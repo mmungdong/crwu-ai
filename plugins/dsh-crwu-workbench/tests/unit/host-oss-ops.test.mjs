@@ -383,6 +383,24 @@ test('oss-cred-save writes the config, tightens permissions and re-probes', asyn
   assert.equal(result.cred.accessKeyIdMasked, 'AKID****7890')
 })
 
+test('oss-cred-save 不带 endpoint 时回落到部署配置（YAML 的 oss.protected.endpoint）', async () => {
+  const writes = []
+  const { deps } = ossDeps({
+    writes,
+    shell: (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: '' }),
+  })
+  // 新客户端只送 ID/Secret（表单已删掉 endpoint）；缺了它必须由 Host 从部署配置补，
+  // 否则写进 ~/.ossutilconfig 的配置没有 endpoint，后续 upload/ls 全要显式带参。
+  deps.manifest.oss.endpoint = 'oss-from-deploy.example.com'
+  const result = await ossCredSave(deps, { accessKeyId: 'AK', accessKeySecret: 'S' })
+  assert.equal(result.ok, true)
+  assert.match(
+    writes[0].content,
+    /endpoint=oss-from-deploy\.example\.com/,
+    '缺 endpoint 时必须回落部署配置，而不是写一条没有 endpoint 的配置',
+  )
+})
+
 test('oss-cred-save refuses empty and newline-carrying credentials', async () => {
   const { deps, commands } = ossDeps({ shell: ossutilOnPath })
   assert.match((await ossCredSave(deps, { accessKeyId: '', accessKeySecret: 'x' })).error, /都不能为空/)

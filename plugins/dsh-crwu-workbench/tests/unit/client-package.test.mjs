@@ -401,7 +401,7 @@ test('after boot and env the shell renders the self-check result', async () => {
         checks: [{ name: 'node', command: 'node', required: true, note: '', found: true, path: '/usr/bin/node', versionText: 'v22.19.0', actual: '22.19.0', expect: '>=16.7', ok: true, reason: '', url: '', sha256: '', target: '' }],
         ifindKey: { path: '/Users/x/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
         services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
-        blocked: [], allOk: true, home: '/Users/x', trust: { h3yun: false },
+        blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
         oss: { bucket: '', prefix: 'crwu/audit', linkMode: 'signed', autoUpload: true, ossutilReady: false },
@@ -412,9 +412,14 @@ test('after boot and env the shell renders the self-check result', async () => {
   const { tree } = await mount()
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.loadingEnv), false, '拿到数据后不该还显示加载中')
-  assert.equal(text.includes(zhCN.allOk), true, '环境就绪要有明确结论')
-  assert.equal(text.includes('https://x.invalid/m.json'), true, '清单来源必须显示：它决定下面各项的判据')
-  assert.equal(text.includes('/usr/bin/node'), true, '每项都要显示实际路径')
+  assert.equal(text.includes(zhCN.envHeroOk), true, '环境就绪要有明确结论')
+  // 四层都在，且全就绪的层收成一行 `x/y 已就绪`（层里的路径不铺在员工视野里）。
+  for (const title of [zhCN.envLayerTools, zhCN.envLayerAuth, zhCN.envLayerUpload, zhCN.envLayerExternal]) {
+    assert.equal(text.includes(title), true, `缺了分层「${title}」`)
+  }
+  assert.equal(text.includes(`1/1 ${zhCN.envLayerReady}`), true, '就绪的层要显示 x/y 已就绪')
+  assert.equal(text.includes('/usr/bin/node'), false, '全就绪的层默认收起，实际路径要点开才看')
+  assert.equal(text.includes('https://x.invalid/m.json'), false, '排查详情默认不展开（维护者信息）')
 })
 
 test('a blocked environment lists exactly what is missing', async () => {
@@ -426,7 +431,7 @@ test('a blocked environment lists exactly what is missing', async () => {
         manifestUpdatedAt: '', installDocUrl: '', platform: '', checks: [],
         ifindKey: { path: '/cfg', required: true, ok: false, reason: 'auth_token 为空', tokenLength: 0 },
         services: [], blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
-        allOk: false, home: '/Users/x', trust: { h3yun: false },
+        allOk: false, home: '/Users/x', trust: { credentials: true },
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
         oss: { bucket: '', prefix: '', linkMode: 'signed', autoUpload: true, ossutilReady: false },
@@ -455,7 +460,7 @@ test('the self-check never shows the iFinD token itself, only its length', async
         ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
         installDocUrl: '', platform: 'darwin-arm64', checks: [],
         ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
-        services: [], blocked: [], allOk: true, home: '/Users/x', trust: { h3yun: false },
+        services: [], blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
         oss: { bucket: '', prefix: '', linkMode: 'signed', autoUpload: true, ossutilReady: false },
@@ -463,8 +468,27 @@ test('the self-check never shows the iFinD token itself, only its length', async
       },
     },
   })
-  const { tree } = await mount()
-  const text = textOf(tree)
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const env = {
+    ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
+    installDocUrl: '', platform: 'darwin-arm64', checks: [],
+    ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
+    services: [], blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+    workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
+    sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
+    oss: { bucket: '', prefix: '', linkMode: 'signed', autoUpload: true, ossutilReady: false },
+    ossCred: { path: '/cfg', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
+  }
+  const paneProps = {
+    env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
+    onRelogin: () => {}, onDwsLogin: () => {},
+    services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
+    prompt: '', promptUrl: '', promptBusy: false, promptMessage: '',
+  }
+  const first = render(EnvironmentPane, paneProps)
+  assert.equal(textOf(first.tree).includes('长度 12'), false, '全就绪的层默认收起，摘要要点开才看')
+  expandLayer(first.tree, zhCN.envLayerExternal)
+  const text = textOf(rerender(EnvironmentPane, paneProps))
   assert.equal(text.includes('长度 12'), true)
   assert.equal(text.includes('your ifind-mcp key'), false)
 })
@@ -546,6 +570,41 @@ test('the run-card action also binds and offers a jump into the panel', async ()
 })
 
 /** 按标签找一个按钮节点。 */
+/**
+ * 找到带某个类名的第一个宿主元素（层级卡片头、排查详情头都用它）。
+ */
+function findByClass(node, className) {
+  return find(node, (item) => String(item.props?.className ?? '').split(/\s+/).includes(className))
+}
+
+/**
+ * 点开某一层的卡片头（`title` 是层标题的一部分，如 zhCN.envLayerTools）。
+ *
+ * 全就绪的层默认收成一行 `x/y 已就绪`，所以想断言层里的路径/版本，得先像用户那样点开。
+ */
+function expandLayer(tree, title) {
+  const head = find(tree, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.layerHead)
+    && textOf(node).includes(title))
+  assert.ok(head, `找不到「${title}」这层的卡片头`)
+  head.props.onClick()
+}
+
+/** 点开页脚的「排查详情」（维护者信息默认收起）。 */
+function expandDetails(tree) {
+  const head = findByClass(tree, WORKBENCH_CLASSES.detailsHead)
+  assert.ok(head, '环境自检页要有「排查详情」入口')
+  head.props.onClick()
+}
+
+/** 数一数宿主树里有多少个按钮，文本恰好等于 `label`。用于「全页只留一枚复制入口」这类断言。 */
+function countButtonsLike(node, label) {
+  if (node === null || typeof node !== 'object') return 0
+  if (Array.isArray(node)) return node.reduce((sum, child) => sum + countButtonsLike(child, label), 0)
+  const self = node.type === 'button' && textOf(node) === label ? 1 : 0
+  return self + countButtonsLike(node.props?.children, label)
+}
+
 function findButtonLike(node, label) {
   if (node === null || typeof node !== 'object') return null
   if (Array.isArray(node)) {
@@ -841,20 +900,24 @@ test('the AK form posts the credential and never keeps the secret in state', asy
   }
   const { OssAuthCard } = await import(new URL('src/client/features/environment/OssAuthCard.tsx', ROOT).href)
   let refreshed = 0
-  const { tree, instance } = render(OssAuthCard, { cred: null, defaultEndpoint: 'oss-cn-x.aliyuncs.com', onRefresh: () => { refreshed += 1 } })
+  const { tree, instance } = render(OssAuthCard, { cred: null, onRefresh: () => { refreshed += 1 } })
   // 填表：直接改 state（替身没有真实 DOM 事件）。
   const inputs = collectInputs(tree)
-  assert.equal(inputs.length >= 3, true, 'AK ID / Secret / STS / endpoint 四个输入框')
+  // 表单**只有** ID / Secret：STS 与 endpoint 已从员工视野删掉（endpoint 由 Host 回落部署配置）。
+  assert.equal(inputs.length, 2, 'AK 表单只有 AccessKey ID 与 AccessKey Secret 两个输入框')
   instance.state[0] = 'AKID1234567890'
   instance.state[1] = 'TOPSECRET'
   instance.cursor = 0
-  const filled = rerender(OssAuthCard, { cred: null, defaultEndpoint: 'oss-cn-x.aliyuncs.com', onRefresh: () => { refreshed += 1 } })
+  const filled = rerender(OssAuthCard, { cred: null, onRefresh: () => { refreshed += 1 } })
   findButtonLike(filled, zhCN.ossCredSave).props.onClick()
   for (let i = 0; i < 6; i += 1) await settle()
   assert.equal(posts.length, 1)
   assert.equal(posts[0].op, 'oss-cred-save')
   assert.equal(posts[0].args.accessKeyId, 'AKID1234567890')
   assert.equal(posts[0].args.accessKeySecret, 'TOPSECRET')
+  // 新客户端不送 stsToken / endpoint（endpoint 空着时由 Host 回落到部署配置）。
+  assert.equal('stsToken' in posts[0].args, false, '面板不再提交 STS Token')
+  assert.equal('endpoint' in posts[0].args, false, '面板不再提交 endpoint（交给 Host 回落）')
   // 提交成功后密钥必须从组件状态里消失。
   assert.equal(instance.state[1], '', 'Secret 提交后必须清空')
   assert.equal(refreshed >= 1, true, '保存后要刷新自检页以拿到新的脱敏视图')
@@ -916,45 +979,65 @@ function collectInputs(node, found = []) {
 
 // ── 氚云授权开关与免沙箱重试（Host 的提权链路要有人能开）──────────────────────
 
-test('the trust toggle posts the standing authorization and refreshes', async () => {
-  // 没有这个开关，`state.trustH3yun` 永远是 false，白名单内的 crwu 子命令
-  // 就不会自动免沙箱 —— 读氚云会一直撞钥匙串。
+test('未授权时插件被授权弹框挡住：拒绝 → 说明与「再次授权」；同意 → 落盘并重检', async () => {
+  // 口径（用户 2026-09-22）：授权是**插件级硬前置** —— 不是环境自检里的一行勾选框。
+  // 未授权先弹框挡住整个面板；拒绝后给一屏说明 + 「再次授权」；同意才落盘（持久）。
   const posts = []
+  let granted = false
   globalThis.fetch = async (url, init) => {
-    posts.push(JSON.parse(init.body))
-    const op = JSON.parse(init.body).op
+    const body = JSON.parse(init.body)
+    posts.push(body)
+    const envBody = { ...okEnvBody(), trust: { credentials: granted } }
     return {
       ok: true,
       status: 200,
       async json() {
-        return op === 'trust' ? { ok: true, trust: { h3yun: true } } : { ok: true, trust: { h3yun: true }, checks: [], services: [], blocked: [], allOk: true, manifestSource: '', manifestLoaded: true, platform: 'darwin-arm64', ifindKey: { ok: true, tokenLength: 1, path: 'p', required: true, reason: '' }, workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false }, sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' }, oss: {}, ossCred: { exists: false, path: '', endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' } }
+        if (body.op === 'trust') { granted = true; return { ok: true, trust: { credentials: true } } }
+        return envBody
       },
     }
   }
-  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const env = {
-    ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
-    installDocUrl: '', platform: 'darwin-arm64', checks: [],
-    ifindKey: { path: 'p', required: true, ok: true, reason: '', tokenLength: 1 },
-    services: [], blocked: [], allOk: true, home: '/Users/x', trust: { h3yun: false },
-    workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
-    sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-    oss: {}, ossCred: { path: '', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
-  }
-  const pending = []
-  const { tree } = render(EnvironmentPane, {
-    env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onTrust: (v) => { pending.push(v) },
-    services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
-    onPromptRefresh: () => {}, onPromptCopied: () => {},
-  })
-  const box = collectInputs(tree).find((node) => node.props.type === 'checkbox')
-  assert.ok(box, '要有「记住氚云授权」复选框')
-  assert.equal(box.props.checked, false, '默认关闭')
-  box.props.onChange({ target: { checked: true } })
-  assert.deepEqual(pending, [true])
-  void posts
+  const services = fakeServices()
+  const { tree } = await mountChecked(services)
+  const before = textOf(tree)
+  assert.equal(before.includes(zhCN.authTitle), true, '未授权必须先弹授权框')
+  assert.equal(before.includes(zhCN.authWhat), true, '要讲清「要什么」')
+  assert.equal(before.includes(zhCN.authWhy), true, '要讲清「为什么需要」')
+  assert.equal(before.includes(zhCN.authNo), true, '要讲清「不会做什么」')
+
+  const decline = findButtonLike(tree, zhCN.authDecline)
+  assert.ok(decline, '弹框要有「拒绝」')
+  decline.props.onClick()
+  const declined = rerender(WorkbenchPanel, { services })
+  assert.equal(textOf(declined).includes(zhCN.authDeclinedTitle), true, '拒绝后要有说明屏')
+  const regrant = findButtonLike(declined, zhCN.authRegrant)
+  assert.ok(regrant, '说明屏要有「再次授权」')
+  assert.equal(posts.some((post) => post.op === 'trust'), false, '拒绝不落盘')
+
+  regrant.props.onClick()
+  assert.equal(textOf(rerender(WorkbenchPanel, { services })).includes(zhCN.authAgree), true, '再次授权要能回到弹框')
+
+  const agree = findButtonLike(rerender(WorkbenchPanel, { services }), zhCN.authAgree)
+  assert.ok(agree, '弹框要有「同意并继续」')
+  agree.props.onClick()
+  await new Promise((resolve) => { setTimeout(resolve, 0) })
+  const trustPost = posts.find((post) => post.op === 'trust')
+  assert.ok(trustPost, '同意要真的发 trust 操作')
+  assert.deepEqual(trustPost.args, { credentials: true })
+  const after = textOf(rerender(WorkbenchPanel, { services }))
+  assert.equal(after.includes(zhCN.authTitle), false, '授权后弹框消失')
+  // 授权后照既定门禁走：环境本来就是好的，于是直接落到报告审核页（③ 层那行「已授权…」
+  // 只在环境页出现，环境页自己的用例断言它）。
+  assert.equal(after.includes(zhCN.tabPending), true, '授权后要继续走到报告审核')
+})
+
+test('已授权的部署不弹框，认证层显示已满足的前置条件', async () => {
+  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  const services = fakeServices()
+  const { tree } = await mountChecked(services)
+  const shown = textOf(tree)
+  assert.equal(shown.includes(zhCN.authTitle), false, '已授权不该再弹框')
+  assert.equal(shown.includes(zhCN.tabPending), true, '已授权就直接按环境结论进面板')
 })
 
 test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是「没挂到我的工作空间里」）', async () => {
@@ -962,7 +1045,7 @@ test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是�
   const baseEnv = {
     ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '',
     manifestUpdatedAt: '', installDocUrl: '', platform: 'darwin-arm64', checks: [], services: [],
-    blocked: [], allOk: true, home: '/Users/mungdong', trust: { h3yun: false },
+    blocked: [], allOk: true, home: '/Users/mungdong', trust: { credentials: true },
     ifindKey: { ok: true, tokenLength: 1, path: 'p', required: true, reason: '' },
     workspace: { chosen: true, path: '/Users/mungdong/中瑞世联工作空间', title: '中瑞世联工作空间', id: 'w1', source: 'manifest-workspace', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
@@ -970,20 +1053,28 @@ test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是�
   }
   const props = (env) => ({
     env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onTrust: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
     prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
     onPromptRefresh: () => {}, onPromptCopied: () => {},
   })
   const ROOT_WORKSPACE = '/Users/mungdong/中瑞世联工作空间'
+  /** 审核根会话属于维护者信息（在页脚「排查详情」里）：先点开，再重渲染同一实例。 */
+  const rooted = (env) => {
+    const paneProps = props(env)
+    const collapsed = render(EnvironmentPane, paneProps)
+    assert.equal(rowValueOf(collapsed.tree, zhCN.envAuditRoot), null, '排查详情默认不展开时不该出现这一行')
+    expandDetails(collapsed.tree)
+    return rerender(EnvironmentPane, paneProps)
+  }
 
-  const { tree } = render(EnvironmentPane, props({
+  const tree = rooted({
     ...baseEnv,
     auditRoot: {
       sessionId: 'session-abcdef12-3456', title: '审核子代理根节点 · 09-20 22:40',
       workspacePath: ROOT_WORKSPACE, assignedAt: '2026-09-20T14:40:00Z', usable: true, reason: '',
     },
-  }))
+  })
   // 必须**只看那一行**：整页 includes 会被 ① 里同一个路径满足 —— 一开始就是这么写的，
   // 把「这一行不显示工作空间」的缺陷放过去了（§6「文本包含式断言」那一类）。
   const row = rowValueOf(tree, zhCN.envAuditRoot)
@@ -996,23 +1087,23 @@ test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是�
   assert.equal(row.includes(ROOT_WORKSPACE), true, '这一行自己要给出工作空间路径，别让人去比对 ①')
   assert.equal(row.includes(zhCN.envAuditRootStale), false, '可用的根不该说「已失效」')
 
-  const staleTree = render(EnvironmentPane, props({
+  const staleTree = rooted({
     ...baseEnv,
     auditRoot: {
       sessionId: 'session-abcdef12-3456', title: '审核子代理根节点 · 09-20 22:40',
       workspacePath: ROOT_WORKSPACE, assignedAt: '', usable: false, reason: '工作空间已换',
     },
-  })).tree
+  })
   assert.equal(
     rowValueOf(staleTree, zhCN.envAuditRoot).includes(zhCN.envAuditRootStale),
     true,
     '失效的根要说明下次会自动新建',
   )
 
-  const noneTree = render(EnvironmentPane, props({
+  const noneTree = rooted({
     ...baseEnv,
     auditRoot: { sessionId: '', title: '', workspacePath: '', assignedAt: '', usable: false, reason: '' },
-  })).tree
+  })
   assert.equal(
     rowValueOf(noneTree, zhCN.envAuditRoot).includes(zhCN.envAuditRootNone),
     true,
@@ -1320,9 +1411,11 @@ test('the prompt block shows the instruction verbatim instead of embedding the c
   const { tree } = render(InstallPromptBlock, {
     prompt: '请完成本机 crwu 审核环境的安装。',
     url: 'https://doc.invalid/install.md',
-    busy: false, copied: false, message: '',
-    onRefresh: () => {}, onCopied: () => {},
+    busy: false, message: '',
   })
+  // 复制入口全页只有 Hero 那一枚；块里不许再有按钮（用户反馈"按钮太多且没用"）。
+  assert.equal(findButtonLike(tree, zhCN.copyPrompt), null, '提示词块不该再有复制按钮')
+  assert.equal(findButtonLike(tree, zhCN.promptRegenerate), null, '提示词块不该再有重生成按钮')
   const inputs = collectInputs(tree)
   assert.equal(inputs.length, 1, '提示词要放在只读输入框里，剪贴板被拒时还能手动全选')
   assert.equal(inputs[0].props.readOnly, true)
@@ -1332,16 +1425,17 @@ test('the prompt block shows the instruction verbatim instead of embedding the c
   assert.equal(text.includes('可公开读取'), true, '403 是最常见的失败原因，要说明')
 })
 
-test('the prompt block regenerates on demand', async () => {
-  stubOps({})
-  const { InstallPromptBlock } = await import(new URL('src/client/features/environment/InstallPromptBlock.tsx', ROOT).href)
-  let refreshed = 0
-  const { tree } = render(InstallPromptBlock, {
-    prompt: 'x', url: '', busy: false, copied: false, message: '',
-    onRefresh: () => { refreshed += 1 }, onCopied: () => {},
-  })
-  findButtonLike(tree, zhCN.promptRegenerate).props.onClick()
-  assert.equal(refreshed, 1)
+test('复制入口只有一处：Hero 上的「复制安装提示词」恰好一枚', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  // 未就绪：它是主按钮（最该做的就是把它交给 Agent）。
+  const missing = render(EnvironmentPane, envPaneProps(blockedEnvBody()))
+  assert.equal(countButtonsLike(missing.tree, zhCN.envCopyInstallPrompt), 1, '未就绪时全页只该有一枚复制入口')
+  // 就绪：降为次要按钮，仍然只有一枚。
+  const ok = render(EnvironmentPane, envPaneProps(okEnvBody()))
+  assert.equal(countButtonsLike(ok.tree, zhCN.envCopyInstallPrompt), 1, '就绪时也只该有一枚复制入口')
+  // 工具项里的复制按钮、底部块的复制/重生成按钮都已删除。
+  assert.equal(countButtonsLike(ok.tree, zhCN.copyPrompt), 0, '旧的「复制提示词」按钮不该再出现')
+  assert.equal(countButtonsLike(missing.tree, zhCN.promptRegenerate), 0, '重生成按钮已删')
 })
 
 test('the iFinD card never echoes the token and points at the source when missing', async () => {
@@ -1349,7 +1443,7 @@ test('the iFinD card never echoes the token and points at the source when missin
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const base = {
     error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onTrust: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
     prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
     onPromptRefresh: () => {}, onPromptCopied: () => {},
@@ -1357,19 +1451,24 @@ test('the iFinD card never echoes the token and points at the source when missin
   const envBase = {
     ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
     installDocUrl: '', platform: 'darwin-arm64', checks: [], services: [], blocked: ['iFinD 密钥'], allOk: false,
-    home: '/Users/x', trust: { h3yun: false },
+    home: '/Users/x', trust: { credentials: true },
     workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
     oss: {}, ossCred: { path: '', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
   }
   const missing = render(EnvironmentPane, { ...base, env: { ...envBase, ifindKey: { path: '/cfg.json', required: true, ok: false, reason: 'auth_token 为空', tokenLength: 0 } } })
   const text = textOf(missing.tree)
-  assert.equal(text.includes(zhCN.ifindTitle), true)
+  // ⑤ 外部数据层没就绪 → 默认展开，员工一眼看到"为什么 + 怎么配"。
+  assert.equal(text.includes(zhCN.envLayerExternal), true, '要有「⑤ 外部数据」这一层')
   assert.equal(text.includes('auth_token 为空'), true, '要说清为什么没过')
   assert.equal(text.includes('mcp.51ifind.com'), true, '要给出密钥来源地址')
+  assert.equal(text.includes(zhCN.envFixIfind), true, '要给出"怎么配"')
+  assert.equal(text.includes('<你的令牌>'), true, '要给字段示例')
 
-  const ok = render(EnvironmentPane, { ...base, env: { ...envBase, blocked: [], allOk: true, ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 } } })
-  const okText = textOf(ok.tree)
+  const okProps = { ...base, env: { ...envBase, blocked: [], allOk: true, ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 } } }
+  const okCollapsed = render(EnvironmentPane, okProps)
+  expandLayer(okCollapsed.tree, zhCN.envLayerExternal)
+  const okText = textOf(rerender(EnvironmentPane, okProps))
   assert.equal(okText.includes(`${zhCN.ifindConfigured}12`), true, '只回长度')
 })
 
@@ -1392,7 +1491,7 @@ function okEnvBody(patch = {}) {
     }],
     ifindKey: { path: '/Users/x/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
     services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
-    blocked: [], allOk: true, home: '/Users/x', trust: { h3yun: false },
+    blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
     workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
     sessionWorkspace: { parentSessionId: 'p1', sessionCwd: '/cases/a', workspaceId: 'w1', workspacePath: '/cases/a', workspaceTitle: 'A' },
     oss: {
@@ -1582,37 +1681,88 @@ test('envLampOf and envTally derive the light and the pass rate from the snapsho
   assert.equal(envTally(null).ratio, 0)
 })
 
-test('the self-check page shows every section, including the facts that used to be missing', async () => {
-  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const { tree } = render(EnvironmentPane, {
-    env: okEnvBody(),
+/** 环境自检页的公共 props（直接渲染这一页，不走外壳）。 */
+function envPaneProps(env, patch = {}) {
+  return {
+    env,
     error: '', busy: false, checkedAt: '2026-09-20T10:00:00.000Z',
     onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onTrust: () => {}, onEnterReport: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {}, onEnterReport: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
     prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
     onPromptRefresh: () => {}, onPromptCopied: () => {},
-  })
+    ...patch,
+  }
+}
+
+test('环境自检页给员工看的是四层结论：分层标题 + x/y 已就绪 + 就绪的层收起', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const { tree } = render(EnvironmentPane, envPaneProps(okEnvBody()))
   const text = textOf(tree)
   for (const expected of [
     zhCN.envHeroOk,
     zhCN.wsSectionTitle,
-    zhCN.envSectionRuntime,
-    zhCN.envSectionAccounts,
-    zhCN.envSectionIfind,
-    zhCN.envSectionOss,
+    zhCN.envLayerTools,
+    zhCN.envLayerAuth,
+    zhCN.envLayerUpload,
+    zhCN.envLayerExternal,
     zhCN.promptTitle,
-    zhCN.envSectionInfo,
+    'darwin-arm64',
+    '/cases/a',
+  ]) assert.equal(text.includes(expected), true, `自检页缺了「${expected}」`)
+  assert.equal(text.includes(`1/1 ${zhCN.envLayerReady}`), true, '就绪的层要给出 x/y 已就绪')
+  assert.equal(text.includes('/usr/bin/node'), false, '全就绪的层默认收起，路径要点开才看')
+  assert.equal(text.includes(zhCN.envDetailsTitle), true, '页脚要有「排查详情」入口')
+  // 授权开关是**员工要能一眼看到并点**的东西，所以它不在排查详情里（维护者明细仍默认收起，
+  // 由「维护者信息收在排查详情里」那条盯着）。
+  assert.equal(text.includes(zhCN.authGrantedLine), true, '③ 层要显示已授权这一行')
+})
+
+test('没就绪的层默认展开：状态词 + 原因 + 怎么配 + 下载地址都在', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const base = okEnvBody()
+  const missingCrwu = {
+    ...base,
+    allOk: false,
+    blocked: ['crwu'],
+    checks: [{
+      ...base.checks[0], name: 'crwu', command: 'crwu', found: false, path: '', versionText: '', actual: '',
+      ok: false, reason: '未找到命令 crwu', url: 'https://x.invalid/crwu.tgz', target: '/usr/local/bin/crwu',
+    }],
+  }
+  const { tree } = render(EnvironmentPane, envPaneProps(missingCrwu))
+  const text = textOf(tree)
+  assert.equal(text.includes(zhCN.envHeroBad), true, '结论要明说未通过')
+  assert.equal(text.includes(`${zhCN.envHeroTodo}1${zhCN.envHeroTodoTail}`), true, '要说"还有 1 项要处理"')
+  assert.equal(text.includes(zhCN.envItemMissing), true, '没就绪项要有状态词')
+  assert.equal(text.includes('未找到命令 crwu'), true, '要说清原因')
+  assert.equal(text.includes(zhCN.envFixTool), true, '要给出怎么配')
+  assert.equal(text.includes('https://x.invalid/crwu.tgz'), true, '有平台包就给下载地址')
+  assert.equal(text.includes(zhCN.envCopyInstallPrompt), true, '工具层要给"复制安装提示词"的入口')
+  assert.equal(text.includes(zhCN.envLoginH3yun), false, '氚云已就绪，不该给登录按钮')
+})
+
+test('维护者信息（工具/OSS 明细、运行环境信息、氚云授权）收在「排查详情」里', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const paneProps = envPaneProps(okEnvBody())
+  const collapsed = render(EnvironmentPane, paneProps)
+  assert.equal(textOf(collapsed.tree).includes(zhCN.envDetailsInfo), false, '排查详情默认不展开')
+  expandDetails(collapsed.tree)
+  const text = textOf(rerender(EnvironmentPane, paneProps))
+  for (const expected of [
+    zhCN.envDetailsTools,
+    zhCN.envDetailsOss,
+    zhCN.envDetailsInfo,
     '/usr/bin/node',
     'v22.19.0',
     'AKID****7890',
     'crwu/audit',
-    'darwin-arm64',
     'https://doc.invalid/install.md',
-    '/cases/a',
-    `${zhCN.ifindConfigured}12`,
-  ]) assert.equal(text.includes(expected), true, `自检页缺了「${expected}」`)
-  assert.equal(text.includes(zhCN.trustHint), true, '氚云授权开关要留着（没有它 crwu 读氚云会一直撞钥匙串）')
+    'https://x.invalid/m.json',
+  ]) assert.equal(text.includes(expected), true, `排查详情里缺了「${expected}」`)
+  // 这条测试只管维护者明细；授权开关已在 ③ 层默认可见（上面那条测试盯着），这里核对它
+  // **不是**靠展开排查详情才出现的。
+  assert.equal(textOf(collapsed.tree).includes(zhCN.authGrantedLine), true, '这一行不该依赖展开排查详情')
 })
 
 test('a blocked self-check lists the blockers and still offers the install prompt', async () => {
@@ -1621,7 +1771,7 @@ test('a blocked self-check lists the blockers and still offers the install promp
     env: blockedEnvBody(),
     error: '', busy: false, checkedAt: '',
     onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onTrust: () => {}, onEnterReport: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {}, onEnterReport: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
     prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
     onPromptRefresh: () => {}, onPromptCopied: () => {},
@@ -1643,7 +1793,7 @@ test('the lamp in the panel header switches back to the self-check page', async 
   assert.ok(lamp, '面板头部要有环境指示灯')
   lamp.props.onClick()
   const after = rerender(WorkbenchPanel, { services })
-  assert.equal(textOf(after).includes(zhCN.envSectionRuntime), true, '点灯要能回到环境自检页')
+  assert.equal(textOf(after).includes(zhCN.envLayerTools), true, '点灯要能回到环境自检页')
   assert.equal(textOf(after).includes(zhCN.tabPending), false)
 })
 
@@ -1737,7 +1887,7 @@ test('the self-check page draws a progress bar and dims the body while re-checki
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const props = {
     error: '', checkedAt: '', onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onTrust: () => {}, onEnterReport: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {}, onEnterReport: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
     prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
     onPromptRefresh: () => {}, onPromptCopied: () => {},

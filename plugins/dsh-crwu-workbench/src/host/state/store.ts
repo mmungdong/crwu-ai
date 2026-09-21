@@ -21,7 +21,7 @@ export function createWorkbenchState(config: WorkbenchConfig): WorkbenchState {
     runs: {},
     parentSessionId: '',
     auditRoot: { workspacePath: '', sessionId: '', title: '', assignedAt: '' },
-    trustH3yun: false,
+    trustCredentials: false,
     formCode: '',
     formName: '',
     audits: {},

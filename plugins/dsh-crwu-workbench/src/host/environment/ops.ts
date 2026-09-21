@@ -12,6 +12,7 @@ import { ossConfigPath, readOssCred, type OssCredView } from '../oss/cred.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { WorkspaceView } from '../../shared/types.ts'
 import { ensureRegistry } from '../state/registry.ts'
+import { readWorkbenchConfig } from '../state/persist.ts'
 import { workspaceView } from '../state/store.ts'
 import { ensureWorkspace, sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
@@ -43,7 +44,12 @@ export interface EnvResult {
   allOk: boolean
   home: string
   platform: string
-  trust: { h3yun: boolean }
+  /**
+   * 「信任本插件读取本机凭据」当前是否已授权。
+   * 字段名从 `h3yun` 改成 `credentials`（2026-09-22，协议号 +1）：授权范围是**读本机凭据**，
+   * 覆盖氚云会话与钉钉登录态，不再只是氚云。
+   */
+  trust: { credentials: boolean }
   workspace: WorkspaceView
   /** 审核子代理挂在哪个会话下（建在选定工作空间里的那个顶层会话）。 */
   auditRoot: ReturnType<typeof auditRootView>
@@ -75,6 +81,9 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
   state.manifest = manifest
 
   await ensureRegistry(ctx, home, state)
+  // 「信任本插件读取本机凭据」是**一次授权、长期有效**的：从工作台状态文件恢复，
+  // 否则员工每次重启 profile 都要重新授权（用户 2026-09-22 口径）。
+  state.trustCredentials = (await readWorkbenchConfig(ctx, home)).trustCredentials === true
   await ensureWorkspace(ctx, home, state, {
     preferTitle: config.preferWorkspaceTitle,
     preferPath: manifest.workspace.preferPath,
@@ -88,7 +97,7 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
   const sessionRun = await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], {
     workdir: await deps.sessionRoot(),
     timeoutMs: 20_000,
-    trusted: state.trustH3yun,
+    trusted: state.trustCredentials,
     platform,
   })
   let sessionData: Record<string, unknown> | null = null
@@ -119,25 +128,50 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
 
   // 钉钉：dws 自带 JSON 输出，直接解析，不要靠文本匹配。
   // 注意 dws 不是 crwu，不能走 runCrwu（那条路会拒绝非 crwu 的 argv）。
-  const dwsRun = await runShell(ctx, 'dws auth status --format json', {
-    workdir: await deps.sessionRoot(),
-    timeoutMs: 30_000,
-  })
+  //
+  // **授权是硬前置**（用户 2026-09-22 口径）：没授权 → 这条报「需要授权」并且整体阻塞，插件不可用；
+  // 已授权 → 凭据类命令自己声明无沙箱权限（`sandboxPolicy`）去问，拿到的是**真结论**。
+  //
+  // 为什么必须提权：dws 的 token 在系统钥匙串里，受限沙箱下读不到，它会如实回
+  // `{"authenticated":false,"message":"未登录"}` —— 实测同一台机器同一时刻：沙箱里 false、
+  // 带 `sandboxPolicy: danger-full-access` 时 true。所以「未授权时不许猜」：宁可说需要授权，
+  // 也不能报一个假的「未登录」把员工指去重新登录。
+  const trustedCredentials = state.trustCredentials === true
+  const dwsRun = trustedCredentials
+    ? await runShell(ctx, 'dws auth status --format json', {
+      workdir: await deps.sessionRoot(),
+      timeoutMs: 30_000,
+      escalate: true,
+    })
+    : null
   let dwsDoc: Record<string, unknown> | null = null
-  try {
-    const parsed: unknown = parseJsonLoose(dwsRun.stdout)
-    dwsDoc = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
-  } catch (error) {
-    void error
-    dwsDoc = null
+  if (dwsRun !== null) {
+    try {
+      const parsed: unknown = parseJsonLoose(dwsRun.stdout)
+      dwsDoc = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    } catch (error) {
+      void error
+      dwsDoc = null
+    }
   }
+  const dwsAuthed = dwsDoc?.authenticated === true
+  // 已授权、但命令**根本没跑起来**（沙箱后端不可用 / 审批被拒）→ 读不到，也要如实说「被拦住」。
+  const dwsUnconfirmed = trustedCredentials && !dwsAuthed && dwsRun !== null && shellUnavailable(dwsRun)
   services.push({
     id: 'dingtalk',
     label: '钉钉认证',
     required: serviceRequired(manifest, 'dingtalk', true),
-    ok: dwsDoc?.authenticated === true,
-    state: shellUnavailable(dwsRun) ? '探测失败' : (dwsDoc === null ? '未知' : (dwsDoc.authenticated === true ? '已登录' : '未登录')),
-    detail: dwsDoc?.message === undefined ? (text(dwsRun.stderr) || dwsRun.error) : text(dwsDoc.message),
+    ok: dwsAuthed,
+    state: !trustedCredentials
+      ? '需要授权'
+      : (dwsUnconfirmed
+        ? '本机凭据读取被拦住'
+        : (dwsDoc === null ? '未知' : (dwsAuthed ? '已登录' : '未登录'))),
+    detail: !trustedCredentials
+      ? '还没授权读取本机凭据：授权后本插件才能读钉钉登录态、拉氚云待办与回传结果。在 ③ 登录认证 里勾选「信任本插件读取本机凭据」——只需授权一次，长期有效。'
+      : (dwsUnconfirmed
+        ? `读本机凭据的命令没跑起来：${text(dwsRun?.error) || '未知原因'}。这不是「没登录」—— 你已经授权，仍被拦住说明是 DSH 的沙箱/审批策略在挡，请让部署方放行本插件读取钥匙串。`
+        : (dwsDoc?.message === undefined ? (text(dwsRun?.stderr) || text(dwsRun?.error)) : text(dwsDoc.message))),
   })
 
   const oss = manifest.oss
@@ -156,6 +190,9 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
     blocked.push(`未找到工作空间「${text(prefer.preferTitle)}」，请手动选择`)
   }
   if (platform === '') blocked.push('运行平台未识别')
+  // 授权是**硬前置**：没它就读不到本机凭据（氚云待办 / 钉钉登录态 / 结果回传），插件不可用。
+  // 放在平台之后、具体检查项之前 —— 它不是一个"某项没配好"，而是"整条链路还没被允许"。
+  if (!state.trustCredentials) blocked.push('授权读取本机凭据（氚云 / 钉钉）')
   for (const check of checks) {
     if (check.required && !check.ok) blocked.push(check.name)
   }
@@ -181,7 +218,7 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
     allOk: blocked.length === 0,
     home,
     platform,
-    trust: { h3yun: state.trustH3yun },
+    trust: { credentials: state.trustCredentials },
     workspace: workspaceView(state),
     auditRoot: auditRootView(ctx, state),
     sessionWorkspace: sessionWorkspaceInfo(ctx, state),

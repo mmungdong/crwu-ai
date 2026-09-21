@@ -12,7 +12,7 @@ import { workbenchApi } from '../report-audit/api.ts'
  * 是来不及的。所以这个表单是必要的，不是锦上添花。
  *
  * 三条凭据处理约束（与 Host 一致，这里只做展示层配合）：
- * 1. **密钥不回显**：Secret 与 STS 都是 `type=password`，提交成功后立刻清空 state；
+ * 1. **密钥不回显**：Secret 是 `type=password`，提交成功后立刻清空 state；
  * 2. **只展示掩码**：AK ID 由 Host 掩码后返回（`AKID****7890`），页面不做二次处理；
  * 3. **保存即实测**：Host 写完文件会立刻用这套 AK 列一次对象，界面把实测结果如实显示 ——
  *    「写进文件了」不等于「AK 能用」。
@@ -29,8 +29,6 @@ export interface OssAuthCardProps {
     hasSts: boolean
     language: string
   } | null
-  /** 清单里的 endpoint，作为表单默认值。 */
-  defaultEndpoint: string
   onRefresh: () => void
 }
 
@@ -43,8 +41,6 @@ interface SavedState {
 export function OssAuthCard(props: OssAuthCardProps): React.ReactElement {
   const [akId, setAkId] = React.useState('')
   const [akSecret, setAkSecret] = React.useState('')
-  const [sts, setSts] = React.useState('')
-  const [endpoint, setEndpoint] = React.useState('')
   const [saved, setSaved] = React.useState<SavedState>({ busy: false, message: '', ok: false })
 
   const save = (): void => {
@@ -56,8 +52,6 @@ export function OssAuthCard(props: OssAuthCardProps): React.ReactElement {
     workbenchApi.ossCredSave({
       accessKeyId: akId.trim(),
       accessKeySecret: akSecret.trim(),
-      stsToken: sts.trim(),
-      endpoint: endpoint.trim() === '' ? props.defaultEndpoint : endpoint.trim(),
     })
       .then((result) => {
         if (result.ok !== true) {
@@ -66,7 +60,6 @@ export function OssAuthCard(props: OssAuthCardProps): React.ReactElement {
         }
         // 提交成功立刻清空密钥：它们已经写进文件了，留在 React state 里没有理由。
         setAkSecret('')
-        setSts('')
         const probe = (result.probe ?? {}) as { ok?: boolean; state?: string; detail?: string }
         const detail = probe.ok === true
           ? `${zhCN.ossCredProbeOk}${String(probe.state ?? '')}`
@@ -104,8 +97,6 @@ export function OssAuthCard(props: OssAuthCardProps): React.ReactElement {
           <span className={`${C.badge} ${cred.hasSecret ? C.badgeOk : C.badgeHigh} ${C.mono}`}>
             {`Secret · ${cred.hasSecret ? zhCN.ossCredConfigured : zhCN.ossCredAbsent}`}
           </span>
-          {cred.hasSts ? <span className={`${C.badge} ${C.badgeLow} ${C.mono}`}>{`STS Token · ${zhCN.ossCredConfigured}`}</span> : null}
-          <span className={`${C.badge} ${C.badgeLow} ${C.mono}`}>{`endpoint · ${cred.endpoint === '' ? zhCN.ossCredUnset : cred.endpoint}`}</span>
         </div>
       : null}
 
@@ -127,24 +118,6 @@ export function OssAuthCard(props: OssAuthCardProps): React.ReactElement {
         value={akSecret}
         placeholder={zhCN.ossCredSecretPlaceholder}
         onChange={(event) => setAkSecret(readValue(event))}
-      />
-      <label className={C.kvKey} htmlFor="crwu-ak-sts">STS Token</label>
-      <input
-        id="crwu-ak-sts"
-        className={`${C.input} ${C.mono}`}
-        type="password"
-        value={sts}
-        placeholder={zhCN.ossCredStsPlaceholder}
-        onChange={(event) => setSts(readValue(event))}
-      />
-      <label className={C.kvKey} htmlFor="crwu-ak-endpoint">endpoint</label>
-      <input
-        id="crwu-ak-endpoint"
-        className={`${C.input} ${C.mono}`}
-        type="text"
-        value={endpoint}
-        placeholder={props.defaultEndpoint === '' ? 'oss-cn-beijing.aliyuncs.com' : props.defaultEndpoint}
-        onChange={(event) => setEndpoint(readValue(event))}
       />
     </div>
 

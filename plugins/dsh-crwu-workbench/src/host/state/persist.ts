@@ -79,10 +79,21 @@ export async function writeWorkbenchConfig(
   const next = { ...current.value, ...patch }
   try {
     const target = await resolveTarget(ctx, workbenchConfigPath(home))
-    await fs.writeText(target, `${JSON.stringify(next, null, 2)}\n`)
+    // 这份文件是插件**自己的**状态（授权、工作空间选择、占用锁），不是用户数据，也是插件唯一的
+    // 持久化出口。员工默认的受限沙箱（workspace-write）下写 `~/.dsh/` 会被拦 —— 表现就是
+    // 「点了同意但授权存不住，重启又要重新授权」（2026-09-22 实测）。fs 的 writeText 支持
+    // 逐次声明策略，所以这里像凭据命令一样显式声明；读不需要（stat/readText 没有该参数）。
+    await fs.writeText(target, `${JSON.stringify(next, null, 2)}\n`, undefined, undefined, {
+      mode: 'danger-full-access',
+      workspaceRoot: home,
+    })
     return true
   } catch (error) {
-    void error
+    // 不吞：写不进去的原因必须能从日志里看到（界面只能给一句话）。
+    ctx.logger?.warn?.('crwu-workbench: 状态写入失败 %o', {
+      path: workbenchConfigPath(home),
+      error: error instanceof Error ? error.message : String(error),
+    })
     return false
   }
 }

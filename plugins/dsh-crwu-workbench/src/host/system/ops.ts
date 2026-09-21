@@ -139,7 +139,7 @@ export async function relogin(deps: SystemDeps): Promise<ReloginResult> {
     workdir: await deps.workdir(),
     timeoutMs: 300_000,
     escalate: true,
-    trusted: deps.state.trustH3yun,
+    trusted: deps.state.trustCredentials,
     platform: deps.platform,
   })
   return {
@@ -164,7 +164,7 @@ export async function sessionStatus(deps: SystemDeps): Promise<SessionResult> {
   const run = await runCrwu(deps.ctx, ['crwu', 'h3yun', 'session', 'status'], {
     workdir: await deps.workdir(),
     timeoutMs: 20_000,
-    trusted: deps.state.trustH3yun,
+    trusted: deps.state.trustCredentials,
     platform: deps.platform,
   })
   return {

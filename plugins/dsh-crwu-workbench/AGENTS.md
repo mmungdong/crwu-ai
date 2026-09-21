@@ -176,6 +176,11 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 - 任何 OSS Key 都必须限制在配置的前缀内；不得接受任意 Bucket 或任意对象路径。
 - Shell 操作必须走 DSH 注入的 Shell 服务，不得使用 `node:child_process` 绕过 DSH 沙箱和授权机制。
 - 凭据、Token、AccessKey 和签名 URL 不得写入日志、错误详情、测试快照或前端持久状态。
+- **权限按命令声明、且以「员工授权」为前提**（2026-09-22 口径）：读本机凭据的命令
+  （`crwu h3yun session login|records|forms|…`、`dws auth status|login`）在请求里带
+  `sandboxPolicy`，但这个提权**只在用户授权后**发生 —— 授权是插件状态文件里的
+  `trustCredentials`（一次授权、长期有效），没授权时环境自检把它算作**阻塞项**，
+  绝不谎报「未登录」。其余命令一律走 profile 的默认沙箱（能给最小权限就给最小）。
 
 ### 4.4 Client UI
 
@@ -343,9 +348,10 @@ cp ~/.dsh/crwu-workbench.json /tmp/crwu-state-backup.json
 光看它分不清新旧。所以 `ping` 另外回一个 `builtAt` = **这份正在运行的代码被加载那一刻**产物的写入时间。
 
 ```bash
-# token 每次启动会打印在 profile 的启动输出里（也可以直接从浏览器地址栏 ?token= 后面复制）；
-# 本机实测它**跨重启保持不变**，所以存一次就能反复用：
+# 每次启动都会打印**新的** URL 与 token（同一个日志文件里会累积多份，实测各次互不相同），
+# 所以取最后一行；重启脚本会把最新那份写到 /tmp/dsh-web-url.txt，也可以直接用那个：
 TOKEN=$(grep -o 'token=[A-Za-z0-9_-]*' ~/.dsh/logs/dsh-web-3080.log | tail -1 | cut -d= -f2)
+# 或：TOKEN=$(sed -n 's/.*token=\([A-Za-z0-9_-]*\).*/\1/p' /tmp/dsh-web-url.txt | tail -1)
 
 curl -s -X POST "http://127.0.0.1:3080/api/crwu-workbench?token=$TOKEN" \
      -H 'Content-Type: application/json' -d '{"op":"ping","args":{}}'
@@ -418,7 +424,10 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile smoke --port 3099 --no-open
 - **沙箱模式是必看项**：受限模式在**没有可用沙箱后端**的机器上（macOS 上进程本身已在沙箱内，
   `sandbox-exec: sandbox_apply: Operation not permitted`）会被 DSH 按契约拒绝执行 —— 插件发出的每个
   shell 调用都会失败。这时按 DSH 自己的提示用 `DSH_PERMISSION_MODE=danger-full-access`
-  （或改 profile 里 `dsh-sandbox-policy` 的 `mode`）。**插件不会自己申请无沙箱执行**，那是用户的决定。
+  （或改 profile 里 `dsh-sandbox-policy` 的 `mode`）。**产品口径是「员工零启动参数、但首次必须授权一次」**：
+  插件不要求员工改启动方式，读本机凭据的命令由插件按 DSH 的请求契约声明 `sandboxPolicy`，
+  且只在员工授权（`trustCredentials`）之后才提权；没授权时环境自检把它当阻塞项。上面这条
+  `DSH_PERMISSION_MODE` 只是**开发自测**临时 profile 的用法。
 - 只读操作可以随便调：`ping` / `boot` / `env` / `pending` / `audit-status` / `workspace` /
   `oss-index` / `oss-result` / `oss-cred` / `session` / `install-prompt` / `oss-link`
   （`oss-link` 返回签名 URL：**只看结构，不要把 URL 本体回显或落日志**）。

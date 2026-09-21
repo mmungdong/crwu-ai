@@ -10,6 +10,7 @@ import { auditRelease, auditStart, auditStatus, auditStop } from '../audit/ops.t
 import { DEFAULT_INSTALL_DOC, buildInstallPromptText } from '../environment/install-prompt.ts'
 import { WORKBENCH_PROTOCOL } from '../../shared/consts.ts'
 import { ensureRegistry } from '../state/registry.ts'
+import { writeWorkbenchConfig } from '../state/persist.ts'
 import { adoptWorkspace, autoWorkspace, pickWorkspace } from '../workspace/ops.ts'
 import { sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
@@ -126,9 +127,17 @@ export function createCoreOperations(
 
     'workspace-auto': async () => await autoWorkspace({ ctx, config, state, world }),
 
-    trust: (args) => {
-      state.trustH3yun = args.h3yun === true
-      return { ok: true, trust: { h3yun: state.trustH3yun } }
+    trust: async (args) => {
+      // `h3yun` 是旧客户端的字段名，继续接受（协议号已 +1，但没必要为一个布尔值让旧页面报错）。
+      const granted = args.credentials === true || args.h3yun === true
+      state.trustCredentials = granted
+      // **落盘**：一次授权长期有效，否则员工每次重启 profile 都要重新授权（用户 2026-09-22 口径）。
+      const saved = await writeWorkbenchConfig(ctx, await world.home(), { trustCredentials: granted })
+      return {
+        ok: true,
+        trust: { credentials: state.trustCredentials },
+        ...(saved ? {} : { persistError: '授权没能写入磁盘，重启后需要重新授权' }),
+      }
     },
     'bind-session': async (args) => {
       const id = text(args.sessionId)
@@ -178,7 +187,7 @@ export function createCoreOperations(
       // 平台探测要跑子进程，所以按实例缓存一次；提权执行必须带工作区，由 loadPending 统一解析。
       const platform = await world.platform()
       return await loadPending(
-        { ctx, config, state, trusted: state.trustH3yun, platform, sessionRoot: () => world.workdir() },
+        { ctx, config, state, trusted: state.trustCredentials, platform, sessionRoot: () => world.workdir() },
         args,
       )
     },
@@ -192,7 +201,7 @@ export function createCoreOperations(
         ...(workdir === '' ? {} : { workdir }),
         timeoutMs: finiteNumber(args.timeoutMs) > 0 ? finiteNumber(args.timeoutMs) : 60_000,
         escalate: args.escalate === true,
-        trusted: state.trustH3yun,
+        trusted: state.trustCredentials,
         platform,
       })
     },
