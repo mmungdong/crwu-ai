@@ -27,10 +27,13 @@ import { WORKBENCH_CLASSES as C } from './consts.ts'
  */
 export function WorkbenchLoading(props: { title?: string; hint?: string; size?: number } = {}): React.ReactElement {
   const size = props.size ?? 76
+  // `hint` 显式给空串 = **这一页不要说明行**（例如"正在加载报告…"只需要一行标题）：
+  // 留一个空 div 会白白多出 12px 的 flex 间距。
+  const hint = props.hint ?? zhCN.loadingHint
   return <div className={C.loadingPane} role="status" aria-live="polite">
     <span className={C.loadingMark} aria-hidden={true}><BrandMark size={size} /></span>
     <div className={C.loadingTitle}>{props.title ?? zhCN.loadingEnv}</div>
-    <div className={C.loadingHint}>{props.hint ?? zhCN.loadingHint}</div>
+    {hint === '' ? null : <div className={C.loadingHint}>{hint}</div>}
     <div className={C.loadBar}><span className={C.loadBarFill} /></div>
   </div>
 }

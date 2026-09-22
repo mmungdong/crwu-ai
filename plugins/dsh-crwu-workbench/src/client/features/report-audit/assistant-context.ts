@@ -30,10 +30,17 @@ export interface DiscussionFacts {
   currentNode: string
   modifiedAt: string
   formName: string
-  /** 云端交付件 / crwu 查到与该报告相关的全部对象名（可能为空 = 还没上云）。 */
+  /**
+   * **远端**资料行（氚云附件 + 云端交付件）。
+   *
+   * 用户 2026-09-23 强制口径：报告业务会话只允许用远端资料 ——
+   * 这里**不许**出现本地案例目录的文件名或路径，也不许把工作空间路径写进上下文。
+   */
   files: readonly string[]
-  /** 环境里选中的工作空间路径（讨论会话就建在它下面）。 */
-  workspacePath: string
+  /** 本次从远端获取这批资料的时刻。 */
+  fetchedAt: string
+  /** 远端来源清单（provider + 远端标识 + 版本/时间 + 指纹），**不含 localPath**。 */
+  sources: readonly string[]
 }
 
 /**
@@ -89,23 +96,32 @@ export function discussionBrief(facts: DiscussionFacts): string {
     line(zhCN.aiFactReview, [facts.reviewLevel, facts.reviewState].filter((part) => part !== '').join(' · ')),
     line(zhCN.aiFactNode, facts.currentNode),
     line(zhCN.aiFactModified, facts.modifiedAt),
-    line(zhCN.aiFactWorkspace, facts.workspacePath),
+    // **不写工作空间路径**：本地路径既不是业务来源，也会把模型引向本机文件（用户 §4/§11）。
+    line(zhCN.auditCtxFetchedAt, facts.fetchedAt),
   ].filter((row) => row !== '')
 
   const files = facts.files.length === 0
     ? [zhCN.aiFactFilesNone]
     : facts.files.map((name) => `- ${name}`)
+  const sources = facts.sources.length === 0
+    ? [zhCN.auditCtxNone]
+    : facts.sources.map((ref) => `- ${ref}`)
 
   return [
-    // 专业版协作 Prompt 逐字注入（用户 2026-09-22 定稿）。只在**新建对话**时发一次，
-    // 「继续上次对话」不重复注入 —— 历史里已经有它了。
+    // 专业版协作 Prompt 逐字注入（用户 2026-09-22 定稿）+ 数据边界（用户 2026-09-23 定稿）。
+    // 只在**新建对话**时发一次，「继续上次对话」不重复注入 —— 历史里已经有它了。
     zhCN.aiSystemPrompt,
+    '',
+    zhCN.aiDataBoundaryDiscuss,
     '',
     `${zhCN.aiFactHead}：`,
     ...rows,
     '',
-    `${zhCN.aiFileHead}（${String(facts.files.length)}）：`,
+    `${zhCN.aiFileHead}（远端资料 ${String(facts.files.length)} 项）：`,
     ...files,
+    '',
+    `${zhCN.auditCtxSourceHead}（${String(facts.sources.length)}）：`,
+    ...sources,
   ].join('\n')
 }
 

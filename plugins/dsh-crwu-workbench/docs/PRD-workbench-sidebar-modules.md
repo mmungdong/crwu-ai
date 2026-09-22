@@ -535,3 +535,171 @@ DSH 侧栏可加的席位只有两个，且都是**平铺列表**：
 - 判据：客户端单测（无会话→拉完直跳并注入三组文件、有会话→只弹气泡不建、继续→打开旧会话）
   + 会话/命名/上下文单测 + Host 单测 6 条；验收脚本改成"只挑**已经有绑定会话**的那份报告去点"
   —— 没有绑定会话时点它会真发一次上下文（一次真实 AI 回合），验收脚本不该烧这个钱。
+
+### 9.15 报告审核页整体重构：Workspace Surface + Segmented 页签 + 行动作收口（2026-09-23）
+
+用户口径：**从回退后的稳定代码重新做一次完整但克制的 UI/UX 重构**——不改业务逻辑、不改 API、
+不改数据结构、不重构侧栏（侧栏只允许极小的视觉兼容）；并给出了一整套 Design Token、
+Header / 背景 / 标题 / 页签 / 工具条 / 列表 / 操作列 / 浮层 / 分页 / 空态 / 动画的书面规范。
+
+本轮**取代**下面两处 9.12 时代的口径（历史记录保留，但以本节为准）：
+
+- ❌ 文字型页签 + 2px 品牌色下划线（9.12 的「页签改下划线式」）→ ✅ 轻量 Segmented Workspace Tabs：
+  浅槽容器（`--crwu-tab-track` / padding 3 / 圆角 9）+ 选中项浮起白片（`--crwu-surface` +
+  `--crwu-shadow-tab` + 600）。不要红色 underline、不要底色 + 下划线双重选中、hover 不出红线或大灰块。
+- ❌ 主操作 / 小鲸鱼 / ••• 三个都实心反色（9.13 的「••• 也改实心反色」）→ ✅ 一屏只允许**一处实心**：
+  主操作实心反色（32px）、小鲸鱼浅中性 Icon Button（32×32、`--crwu-icon-btn`）、••• 透明 Ghost
+  （hover `--crwu-menu-hover` / 打开 `--crwu-menu-open`）。组件上不再挂 `C.btn + C.btnPrimary`。
+
+本轮新增/改动的可验收点：
+
+- **Design Token**：`consts.ts` §19 是唯一允许写字面量的块；浅色一套，深色按
+  `body[data-ds-dark-theme] .crwu-audit-root` 覆盖同名 token（不再依赖 `prefers-color-scheme`）。
+- **Workspace Surface**：root 底 `--crwu-app-bg`、正文 body padding 20×24、一块 `--crwu-surface`
+  14px 圆角 + `--crwu-shadow-surface`；Header 54px + `blur(18px)` + 1px 发丝底边。
+- **列表**：表头 39px / 12px 500 / `--crwu-surface-subtle`；行 82px；报告名 14px 600 两行截断 +
+  hash 12px mono 辅助行；流水号 13px mono 且**悬停才浮出复制按钮**（复制成功短暂变对勾）。
+- **工具条**：搜索（400×38、默认只有填充、聚焦白底 + 3px 环、Enter 查询、× 清空）与刷新（Ghost、
+  刷新时只转图标）**同一行**；刷新不再挂页面右上角。
+- **AI 审核列表**：交付件按业务语义「N 个交付件 + 审核报告 / 审核数据」呈现，
+  **不再显示 `crwu/audit/.../*.html|json` 原始路径**；操作 = 查看报告（主）+ •••（审核信息 /
+  原始交付件 / 复制流水号）；空态「暂无 AI 审核结果」+ 一句下一步说明。
+- **浮层**：Tooltip（深底白字 + 箭头）与 ••• Dropdown 仍是 fixed Floating Layer（无 react-dom，
+  用 rect 自算就是 Portal 的等价实现）；列表一滚就关闭；同一时间只允许一个菜单。
+- **分页**：`« ‹ 1 … 123 124 125 126 127 … 433 › »` + 跳至 `[n]` 页；总数只在页签里出现一次。
+- **加载与空态**：首次加载 = 中瑞logo 呼吸（1 → 1.04 → 1 / 1.8s）+「正在加载报告…」，只盖列表数据区；
+  刷新/翻页保留已有数据（进度条 + 压暗），不清空、不白屏、不 Layout Shift。
+
+判据：`tests/unit/client-package.test.mjs` 新增 8 条（Segmented 页签 / 工具条 Ghost / 流水号复制 /
+两套操作列组合 / 交付件语义与菜单 / 不暴露 OSS 路径与空态 / 分页四向 + 跳页 / 操作列无状态噪音），
+**每条都注入过缺陷并确认真红**（8/8）；`npm run check` 全绿；`install/browser-check.mjs` 的页签断言
+同步改成量「浅槽 + 白片 + 无指示条」，并按 Enter / × 重写了按流水号查找那一段。
+
+#### 9.15.1 追加返工：次级控件收成一套中性底（2026-09-23）
+
+用户当场回报：「**操作列的按钮颜色不一致，还有刷新按钮**」。查证下来他在 **dark 主题**
+（`~/.dsh/settings.yaml` 的 `ui-theme.preference: dark`，文件写入时间与报障时间同分钟）——
+这正好说明"改配色必须在当前真实主题下量"。
+
+现场（真机计算样式，深色）：主操作 `rgb(242,242,243)` 实心反色、小鲸鱼 `rgb(35,36,39)` 填充、
+••• `rgba(0,0,0,0)` 全透明、工具条刷新又是一种 Ghost；且小鲸鱼填充 `#232427` 与行悬停底
+`#222326` 几乎同格 —— 鼠标移到那一行，它的底就"消失"了。
+
+改法：`--crwu-control` / `--crwu-control-hover` / `--crwu-control-active` / `--crwu-control-text`
+四个 token，**刷新 / 小鲸鱼 / ••• / 流水号复制四者逐字共用**，只有主操作为实心；
+旧的一次性 token（`--crwu-icon-btn*`、`--crwu-ghost-hover`、`--crwu-ghost-text`、`--crwu-menu-open`）删除，
+避免同一件事有两个名字。判据：单测新增 1 条（证伪两次：••• 退回透明、中性底与行悬停同格，均真红）
++ `install/browser-check.mjs` 两条真机断言（操作列同类控件底色一致 ≤2 种、小鲸鱼与刷新同底）。
+
+### 9.16 「审核信息」Drawer：从 Debug Panel 改成审核结果摘要（2026-09-23）
+
+用户口径：功能数据基本完整，但信息架构偏开发者视角（字段纵向平铺、程序枚举直接显示 `fail`/`performed`、
+JSON 原始对象直接展示、命中率公式塞在主页面、项目编号与流水号重复、时间格式不统一且省略年份），
+「整体更像 Debug Panel，而不是企业审核产品」。**只改**信息架构 / 字段展示 / 排版 / 状态视觉 /
+Drawer 交互 / 时间格式，**不动** API、数据结构、审核逻辑、命中率与复核算法。
+
+- **五段结构**：审核摘要 → 问题情况 → 复核情况 → 报告信息 → 技术详情（默认折叠）。
+  结论是第一视觉重点（dot 7px + 15px/600），问题总数 24px/600，高/中/低用 6px dot，
+  待确认/未检查降级到 12px secondary。
+- **程序枚举业务化**：只翻**有权威定义**的取值（schema enum + `REVIEW_STATUS_LABEL` + 交付规范 §6.1 三条带），
+  认不出的显示 `—` 并把原值交给技术详情。
+- **命中率**：主界面只留 `33.3%` + `1 / 3 条命中` + `精确 1 · 部分 0`；引擎写在 `metrics.aiHitRate`
+  里的完整公式（`33.3% (= (exact 1 + partial 0) / evaluable 3；…)`）移进技术详情。不做图表 / 进度条。
+- **复核计数**：`{"overlap":1,"aiOnly":12,"reviewerOnly":0,"divergent":0}` 改成 2 列统计网格
+  （共同发现 / 仅 AI 发现 / 仅复核发现 / 结论分歧），原 JSON 进技术详情。
+- **报告版本**：结构里只有一个原始字符串 → **不解析**，只做换行 / 行高 / 限宽。
+- **时间**：全链路绝对化（`time.ts`），报告列表的「更新时间」一并从「昨天 / 09-20 18:15」改成
+  `2026-09-20 18:18`；列宽 12% → 14%（否则年份被截断）。
+- **Drawer 本体**：宽 540、复用 `--crwu-surface`、遮罩 `.32/.36 + blur(2px)`、开 200ms / 关 150ms
+  （父层延迟卸载）、头部改成「标题 + 等宽流水号 + ×」并删掉「关闭」文字按钮、关闭后不动列表上下文。
+- 判据：新增 13 条单测（逐条证伪，8/8 真红）+ 验收脚本抽屉阶段重写；`npm run check` 518 通过。
+  其中「命中率主行」一条最初是 `includes('33.3%')` 假通过（引擎原值里也含 `33.3%`），
+  已改成对数值单元格的整格断言并重新证伪 —— 又一次「文本包含式断言」的实例。
+
+### 9.17 「审核信息」Drawer 二轮返工：从「审核状态详情」改成「AI 审核质量与问题摘要」（2026-09-23）
+
+用户口径：上一版「虽然比原始字段列表好看，但信息权重仍然错误」——结论/复核状态占了最重要的位置
+（实际价值低）、真正的命中情况被压在下面、看不到 AI 到底发现了多少问题、也没有突出
+「人工提过但当前仍未整改」这个最该看的场景。**只改**信息架构 / 字段展示 / 排版 / 状态视觉 /
+Drawer 交互 / 时间格式；不重算命中率与复核算法，不发明字段语义。
+
+- **P0–P4 重排**：复核命中率（32px/600，无评分色）→ AI 检出问题数 + 已提未改 →
+  AI 检出的具体问题 → 报告信息（折叠）→ 技术详情（折叠）。删掉顶部 Summary Card 与结论大状态。
+- **两块新内容**：「AI 检出问题列表」（`issue.title` + `gapAnalysis.difference`，高→中→低，
+  点开给位置/建议/回完整报告；不调模型、不复述规则证据）与「已提出但仍未整改」
+  （`linkedIssueIds` × `L-open`，折叠区，给人工原话与 AI 当前检出）。
+- **数据通道**：抽屉原来拿不到 `issues[]` / `reviewItems[]`，所以在 `auditInfoFromResult` 里
+  **追加两组裁剪最小集**（同一操作纯新增；`WORKBENCH_PROTOCOL` 7 → 8），证据链仍不进列表接口。
+- **判定靠真实字段**：`reviewItems[].linkedIssueIds`（schema: string[]）+
+  `inFileResolution === 'L-open'`（交付规范 §6.1「被审件未落实」）；`L-resolved` / `L-unclosed` /
+  `L-uncheckable` 与无关联项都不算。**不用** `overlap`、**不用** `flowStatus`。
+- **降级**：`aiOnly` → 「其中独立发现 N」；高/中/低 → 标题下一条 secondary；待确认/未检查与其余三条带
+  → 默认折叠的「其他事项」。
+- 判据：客户端 10 条 + Host 4 条新断言，逐条证伪（客户端 11/11、Host 3/3 真红）；
+  `npm run check` 527 通过；验收脚本抽屉阶段整段重写，并把数据条件型的断言改成条件式跳过。
+  两次「文本包含式假通过」的教训（命中率、业务区 JSON）都写进了 `docs/development-notes.md` §11。
+
+### 9.18 AI 审核列表增加「AI 审核结果分析会话」入口（audit_analysis，2026-09-23）
+
+用户口径：本轮重点不是普通聊天入口，而是建立「AI 审核结果分析会话」——让项目负责人基于
+最新原始报告 + AI 审核报告 + AI 审核结构化数据 + 已有人工复核意见，与 DeepSeek 一起分析当前报告的问题。
+
+- **入口**：AI 审核列表 `[查看报告] [DeepSeek SVG] [•••]`，复用报告列表同一个 `DeepSeekIcon`
+  与同一套 Icon Button；Tooltip 换成「与 DeepSeek 分析审核结果」区分业务含义；不加文字按钮与状态 Tag。
+- **归属**：共用 Report → Conversations，靠会话名前缀区分 `report_discussion` / `audit_analysis`
+  （`ensureDiscussion({kind})`），不改会话数据库。
+- **Preflight**：`report-files` → `oss-result` → `freshnessOf()` → 弹框或直进。
+  版本判定优先级 digest → version → etag → mtime → 时间退化；四态只给程序用；
+  **纯时间差只能是 possibly_stale**，`stale` 需要强证据。
+- **四类拦截**：stale（重新审核 / 仍以旧结果分析 / 取消）、possibly_stale（用最新资料重新分析 /
+  继续原上下文）、缺原始报告（重试 / 有限资料继续）、已有会话（继续 / 新建 + 更新建议）。
+- **Fresh Snapshot**：新建必重取资料；§20 System Instruction 逐字注入 + §21 版本 Notice；
+  原始报告优先于审核结论（模型回看原文，不形成 AI Auditor 自证闭环）。
+- **Snapshot**：`crwu.audit-analysis.<流水号>` 存 9 个字段，用于"历史会话是否过期"；本地不可用则退化为
+  会话行 `updatedAt`。历史审核产物永不回写。
+- 判据：9 条新断言 + **11/11 证伪**；`npm run check` 537 通过；验收脚本补 4 条真机断言。
+- **未做**（如实记录）：① 把原始报告**作为会话附件上传** —— 端口只暴露 `session.prompt`/`rename`，
+  当前做法是把真实文件名/路径写进上下文，模型在案例目录里按路径读原文（用户 §19 也要求不要把
+  文件正文拼进 Prompt）；② 截图里的「已有审核分析会话」状态需要真机上已存在一条会话，
+  验收脚本不制造真实 AI 回合，所以该对话框由单测覆盖（注入式渲染）而不是真机截图。
+
+#### 9.18.1 追加：OSS 列举改用长格式（2026-09-23）
+
+用户提示：「oss 一次可以查询一个目录下有多少个文件」。查证 `ossutil help ls` 的样本逐字写明
+默认长格式为 `LastModifiedTime / Size(B) / StorageClass / ETAG / ObjectName` + `Object Number is: N`
+—— 也就是说**一次列举**本来就能同时拿到对象个数、大小、最后写入时间与 ETag；
+`oss-index` 原先给自己加 `--short-format` 等于把这些信息丢掉。
+
+- `parseLsEntries()` 按长格式解析（时区段不逐字匹配、跨桶对象隔离、认不出的行跳过）；
+  `oss-index` 去掉 `--short-format`，解析不到条目时退回老的 key 解析（清单不丢）。
+- `CloudItem.files[]` / `report-files.oss[]` 带 `size / lastModified / etag`；
+  `report-files.local[]` 带 DSH `fs` 的 `version` 令牌。协议 8 → 9。
+- 真机实跑（只读）：`ossutil ls oss://crwu-workspace/crwu/audit/` → 10 对象 / 5 份报告，
+  含 `2026-302474-LX9995-BG8740` 的 html(254300, 17:11:18, ETag 46F9…) 与 json(96903, 17:11:19, ETag 4850…)；
+  解析结果与样本逐字一致，样本已抄进单测。
+- 用途：`auditArtifactOf()` 的 ETag 进版本证据与快照；`reportFingerprintOf()` 的本地指纹进快照；
+  「报告资料变过 / 审核结果重新生成过」成为**同源客观**信号（记录时间没动也能判出来）。
+  跨源仍不可互比 → 初次判定照旧退化，不伪造 STALE（有单测钉着）。
+- 顺带：AI 审核列表「N 个交付件」以真实对象个数为准。
+
+### 9.19 DeepSeek 会话统一数据边界（远端-only，2026-09-23 强制规则）
+
+用户口径：所有从中瑞世联工作台发起的报告相关 DeepSeek 会话，**只允许使用本次会话由系统从远端业务
+数据源获取并显式加入 Conversation Context 的资料**；禁止任何本地文件，且「不要仅仅依赖 System Prompt」。
+
+- **上下文层（已落地）**：`fileLinesOf()` 只列氚云附件 + 云端交付件（带大小/ETag）；`report-files.local`
+  整组不进上下文；不再下发案例根目录路径。新增 `sourcesOf()` 来源清单（只有远端标识，无 localPath）。
+- **快照层（已落地）**：`reportRemoteId`（氚云 fileId + OSS key）/ `auditRemoteId`（OSS key）/ `fetchedAt`
+  取代上一轮的本地文件指纹；`changesSince()` 只比远端标识 / ETag / 远端时间。
+- **失败路径（已落地）**：远端两侧都空（哪怕本地目录有同名文件）→ 弹「无法获取当前报告的远端最新资料，
+  为避免使用过期或来源不明的数据，本次未创建分析会话」+ **只给重试**；上一轮的"仍以有限资料继续"按 §8/§16 删除。
+- **Prompt 层（已落地）**：§12 / §13 / §14 逐字注入（含事实来源优先级：远端报告 > 远端 Metadata >
+  人工复核 > AI 审核结果，AI 审核属历史快照）。
+- **工具层（未落地，待用户确认）**：插件侧无法给会话指定 agent preset（客户端 `sessions.create()`
+  重建 payload 丢掉 `agentPreset`，证据见 `dsh-api-session-controller/lib/client.js`）。
+  可行路线是宿主侧新建一个 Host 操作：用插件自带的 preset 目录（composition 里**不挂 bash/fs 工具**）
+  走 `agents.create({meta:{agentPreset:'crwu-report'}})` + `agentPresets.mount()` 建这两个业务会话，
+  并通过 `cordis.patch.yml` 把 preset root 指到包内目录。影响面：改动 Harness 的 agent plane、
+  需重启 profile 真机验证、业务会话将完全没有工具（只做上下文分析）。
+  **用户 2026-09-23 当场确认：采用方案 B（只保留上下文 + Prompt 边界），工具层不做。**
+- 判据：新增 3 条断言 + 5/5 证伪；`npm run check` 548 通过。

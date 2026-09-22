@@ -10,6 +10,15 @@ import { labelOf, pick } from '../h3yun/fields.ts'
  *
  * **为什么只提取摘要**：审核结果 JSON 含完整问题清单与证据链，整包传到浏览器既慢又把
  * 内部细节铺到前端状态里。列表接口只回摘要，完整报告仍通过原 HTML 查看。
+ *
+ * 2026-09-23 追加两组**裁剪过的最小集**（用户口径：「AI 检出问题列表」与「已提出但仍未整改」
+ * 必须直接长在抽屉里，不能让人跳到报告才知道 AI 发现了什么）：
+ *   - `issues[]`：只留 issueId / title / severity / decision / problemDescription /
+ *     gapAnalysis.difference / locationSummary / handlingRequirement，逐字段截断、整体封顶 100 条；
+ *   - `reviewComparison.reviewItems[]`：只留 itemId / title / matchStatus / linkedIssueIds /
+ *     inFileResolution / reviewerEvidence.quote（**关联字段**，抽屉据此判定"已提未改"）。
+ * `ruleEvidence` / `materialEvidence` / `quote` 全文 / 知识库路径 / 证据链一律**不进**这个接口 ——
+ * 那些仍然只在完整交付件里。客户端拿到新字段是加分项：旧宿主不给时抽屉照常降级渲染。
  */
 
 function asText(value: unknown): string {
@@ -31,6 +40,23 @@ function num(value: unknown): number {
 
 function labels(value: unknown): string[] {
   return arr(value).map((item) => labelOf(item)).filter((item) => item !== '')
+}
+
+/**
+ * 抽屉里一次能看完的问题条数上限。
+ *
+ * 100 条 ≈ 150KB 上限（每个问题已被截断到 ~1.5KB），对一次同源 RPC 是安全的；真机上
+ * 单份报告的 issues 通常在十几条量级。超过上限时客户端会用 `counts.issuesTotal` 与
+ * 实际条数对比，在列表尾部说明"仅显示前 N 条，完整清单见报告"——不新增字段。
+ */
+const DRAWER_ISSUE_LIMIT = 100
+
+/** 复核项上限：它只服务于"已提未改"与计数，不需要全量。 */
+const DRAWER_REVIEW_ITEM_LIMIT = 100
+
+/** 逐字段截断：外部 JSON 里这些文本是给人读的正文，超长只可能是异常数据。 */
+function clipped(value: unknown, max: number): string {
+  return asText(value).slice(0, max)
 }
 
 export function auditInfoFromResult(doc: unknown): Record<string, unknown> {
@@ -60,8 +86,40 @@ export function auditInfoFromResult(doc: unknown): Record<string, unknown> {
   ;['overlap', 'aiOnly', 'reviewerOnly', 'divergent'].forEach(function (key) {
     if (bands[key] !== undefined && bands[key] !== null) selectedBands[key] = numberOrText(bands[key])
   })
+  // 问题清单（裁剪）：抽屉的"AI 检出问题"直接用这些字段渲染，**不在前端生成第二套描述**。
+  const issues = arr(root.issues).slice(0, DRAWER_ISSUE_LIMIT).map(function (item) {
+    const one = rec(item)
+    const gap = rec(one.gapAnalysis)
+    return {
+      issueId: asText(one.issueId),
+      title: clipped(one.title, 200),
+      severity: asText(one.severity),
+      decision: asText(one.decision),
+      // 首屏简述优先用 gapAnalysis.difference（比整段 problemDescription 短），原文兜底。
+      difference: clipped(gap.difference, 300),
+      problemDescription: clipped(one.problemDescription, 400),
+      locationSummary: clipped(one.locationSummary, 240),
+      handlingRequirement: clipped(one.handlingRequirement, 400),
+    }
+  })
+  // 复核项（裁剪）：`linkedIssueIds` + `inFileResolution` 是"已提未改"的唯一判据来源。
+  const reviewItems = arr(review.reviewItems).slice(0, DRAWER_REVIEW_ITEM_LIMIT).map(function (item) {
+    const one = rec(item)
+    const evidence = rec(one.reviewerEvidence)
+    return {
+      itemId: asText(one.itemId),
+      title: clipped(one.title, 200),
+      matchStatus: asText(one.matchStatus),
+      linkedIssueIds: arr(one.linkedIssueIds)
+        .map(function (id) { return asText(id) })
+        .filter(function (id) { return id !== '' }),
+      inFileResolution: asText(one.inFileResolution),
+      reviewerQuote: clipped(evidence.quote, 300),
+    }
+  })
   return {
     schemaVersion: asText(root.schemaVersion),
+    issues: issues,
     projectId: asText(task.projectId),
     auditTime: asText(task.auditTime),
     engineVersion: asText(task.engineVersion),
@@ -76,6 +134,7 @@ export function auditInfoFromResult(doc: unknown): Record<string, unknown> {
       status: asText(review.status),
       metrics: selectedMetrics,
       bands: selectedBands,
+      reviewItems: reviewItems,
       reviewFiles: arr(review.reviewFiles).slice(0, 20).map(function (file) {
         const f = rec(file)
         return {

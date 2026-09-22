@@ -79,21 +79,46 @@ const ossutilOnPath = (command) => (command.startsWith('command -v') ? { stdout:
 
 // ── oss-index ───────────────────────────────────────────────────────────────
 
-test('oss-index groups objects and reports the count', async () => {
+test('oss-index：一次 ls 就带回 个数/大小/最后写入时间/ETag（不加 --short-format）', async () => {
+  // 逐字照 `ossutil help ls` 的长格式样本（默认格式；`--short-format` 才只剩 key）。
   const listing = [
-    `oss://bkt/crwu/audit/${SEQ}/审核意见.${SEQ}.html`,
-    `oss://bkt/crwu/audit/${SEQ}/审核结果.${SEQ}.json`,
+    'LastModifiedTime              Size(B)  StorageClass   ETAG                              ObjectName',
+    `2026-09-20 17:41:02 +0800 CST  20481      Standard   7E2F4A7F1AC9D2F0996E8332D5EA5B41  oss://bkt/crwu/audit/${SEQ}/审核意见.${SEQ}.html`,
+    `2026-09-20 17:41:03 +0800 CST  9032       Standard   6185CA2E8EB8510A61B3A845EAFE4174  oss://bkt/crwu/audit/${SEQ}/审核结果.${SEQ}.json`,
     'Object Number is: 2',
   ].join('\n')
   const { deps, commands } = ossDeps({ shell: (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: listing }) })
   const result = await ossIndex(deps)
   assert.equal(result.ok, true)
-  assert.equal(result.count, 2, '汇总行不能被当成对象')
+  assert.equal(result.count, 2, '表头与汇总行都不能被当成对象')
   assert.deepEqual(Object.keys(result.items), [SEQ])
-  // 没有 -r：ossutil 不接受它，传了会被直接拒绝。
+  const item = result.items[SEQ]
+  assert.equal(item.htmlKey, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
+  assert.equal(item.jsonKey, `crwu/audit/${SEQ}/审核结果.${SEQ}.json`)
+  // **一次列举**就带回了每个对象的大小 / 最后写入时间 / ETag
+  const json = item.files.find((file) => file.key === item.jsonKey)
+  assert.deepEqual(
+    { size: json.size, lastModified: json.lastModified, etag: json.etag },
+    { size: 9032, lastModified: '2026-09-20 17:41:03', etag: '6185ca2e8eb8510a61b3a845eafe4174' },
+  )
+  // 长格式下**不能**再传 --short-format（那会把上面三样丢掉）；ossutil 也不接受 -r。
   const ls = commands.find((command) => command.includes(' ls ')) ?? ''
-  assert.match(ls, /--short-format/)
+  assert.equal(ls.includes('--short-format'), false, '长格式才有元数据')
   assert.equal(ls.includes(' -r'), false)
+})
+
+test('oss-index：长格式认不出来时退回"只要 key"，清单不能整段丢', async () => {
+  // 某些版本/语言下列宽或表头不同：解析不到条目就退回老的 key 解析（少元数据，但清单还在）。
+  const listing = [
+    `oss://bkt/crwu/audit/${SEQ}/审核意见.${SEQ}.html`,
+    'Object Number is: 1',
+  ].join('\n')
+  const { deps } = ossDeps({ shell: (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: listing }) })
+  const result = await ossIndex(deps)
+  assert.equal(result.ok, true)
+  assert.equal(result.count, 1)
+  assert.equal(result.items[SEQ].htmlKey, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
+  assert.deepEqual(result.items[SEQ].files[0], { key: `crwu/audit/${SEQ}/审核意见.${SEQ}.html`, name: `审核意见.${SEQ}.html` })
 })
 
 test('oss-index refuses when OSS is disabled, has no bucket, or has no ossutil', async () => {
@@ -138,7 +163,8 @@ test('oss-index 不传流水号 = 照旧列举整段前缀（既有行为不能�
   const { deps, commands } = ossDeps({ shell: ossutilOnPath })
   await ossIndex(deps, { seqNo: '   ' })
   const ls = commands.find((command) => command.includes(' ls ')) ?? ''
-  assert.ok(ls.endsWith('oss://bkt/crwu/audit/ --short-format') || ls.includes('oss://bkt/crwu/audit/ '), `空流水号应是整段列举：${ls}`)
+  assert.match(ls, /oss:\/\/bkt\/crwu\/audit\/?(\s|$)/, `空流水号应是整段列举：${ls}`)
+  assert.equal(ls.includes('--short-format'), false, '长格式才有元数据')
 })
 
 test('oss-index 按流水号查：没找到是 ok:true / 0 条（不是命令失败）', async () => {

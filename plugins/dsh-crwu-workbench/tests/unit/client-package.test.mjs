@@ -878,11 +878,14 @@ test('an unmounted self-check never writes late state', async () => {
 })
 
 test('the panel reads copy through the locale table, not inline strings', async () => {
-  const source = await readFile(new URL('src/client/features/workbench/WorkbenchPanel.tsx', ROOT), 'utf8')
-  // 只检查 JSX 文本节点（`>中文<`）与属性里的中文字符串，注释与类型参数不算。
-  const inline = [...source.matchAll(/>\s*([^<>{}\n]*[\u4e00-\u9fff][^<>{}\n]*?)\s*</g)].map((m) => m[1])
-  assert.deepEqual(inline, [], `面板里的中文文案必须走 locales，不能内联：${inline.join(' / ')}`)
-  assert.match(source, /zhCN\./)
+  // 「审核信息」Drawer 一起纳入：它的字段名/小节名全是用户可见文案，内联一份就必然与 locales 漂移。
+  for (const file of ['src/client/features/workbench/WorkbenchPanel.tsx', 'src/client/features/report-audit/AuditInfoDrawer.tsx']) {
+    const source = await readFile(new URL(file, ROOT), 'utf8')
+    // 只检查 JSX 文本节点（`>中文<`）与属性里的中文字符串，注释与类型参数不算。
+    const inline = [...source.matchAll(/>\s*([^<>{}\n]*[\u4e00-\u9fff][^<>{}\n]*?)\s*</g)].map((m) => m[1])
+    assert.deepEqual(inline, [], `${file} 里的中文文案必须走 locales，不能内联：${inline.join(' / ')}`)
+    assert.match(source, /zhCN\./)
+  }
 })
 
 // ── 会话头「子会话父级」按钮 ────────────────────────────────────────────────
@@ -2418,6 +2421,8 @@ function reportPaneProps(patch = {}) {
     onOpenAuditInfo: () => {}, onOpenPath: () => {}, onEscalateRetry: () => {},
     onOpenCloud: (key) => { patch.onOpenCloud?.(key) },
     onSearchCloud: (seqNo) => { patch.onSearchCloud?.(seqNo) },
+    // 「AI 审核结果分析会话」读审核摘要的门面（默认返回空摘要，用例按需覆盖）。
+    onLoadAuditInfo: (key, cloud) => patch.onLoadAuditInfo?.(key, cloud) ?? Promise.resolve({ info: null, error: '' }),
     onClearCloudSearch: () => { patch.onClearCloudSearch?.() },
     handoffCopied: false, onHandoffCopied: () => {},
     // 右侧 AI 讨论面板要的两样：环境里选中的工作空间 + 会话服务。这里给一个空 port：
@@ -2482,7 +2487,10 @@ test('点小鲸鱼：没有绑定会话时，用 crwu 拉完文件就直接进�
   assert.ok(sent.includes('你是一名资深资产评估师'), '要注入专业版协作 Prompt')
   assert.ok(sent.includes('共同发现问题'), 'Prompt 正文要完整注入')
   assert.ok(sent.includes('V2定稿-估值报告.zip'), '氚云附件要进上下文')
-  assert.ok(sent.includes('/ws/seq/说明.md'), '本地案例目录的文件也要进上下文')
+  // 用户 2026-09-23 强制口径：报告业务会话**只允许远端资料** —— 本地案例目录的内容不进上下文。
+  assert.equal(sent.includes('/ws/seq/说明.md'), false, '本地文件不得进入上下文')
+  assert.equal(sent.includes('/ws/seq'), false, '本地路径不得出现在上下文里')
+  assert.equal(sent.includes('本地案例目录'), false)
   assert.ok(sent.includes('审核意见.html'), '云端交付件也要进上下文')
   assert.deepEqual(opened, ['session-new'], '拉完直接跳到新对话')
 })
@@ -2687,12 +2695,12 @@ test('the audit info opens in a right-side drawer, loads, and closes back to the
     assert.ok(menuButton, '这一行要有 ••• 菜单按钮')
     assert.equal(String(menuButton.props['aria-haspopup']), 'menu', '••• 要声明它弹出菜单')
     assert.equal(menuButton.props['aria-expanded'], false)
-    // ••• 的底色/字色复用主操作那套变体（用户 2026-09-23：「更多操作的三个点也需要改下颜色适配，
-    // 和前面的 AI 审核一样，按钮的背景色什么的」）。挂的是常量而不是手写类名，这条断言就是
-    // 「菜单按钮和主操作共用同一个变体」的机器判据 —— 少挂一个，菜单会退回透明幽灵按钮。
+    // ••• 是 **Ghost Icon Button**（用户 2026-09-23 口径：透明底、悬停 `#F0F1F3`、打开 `#EDEEF0`）。
+    // 与主操作共用实心变体那条旧口径已撤：一屏里只允许一处实心，••• 不该是第二处实心。
     const menuClasses = String(menuButton.props.className).split(/\s+/)
-    assert.ok(menuClasses.includes(WORKBENCH_CLASSES.btn), '••• 要有按钮基类')
-    assert.ok(menuClasses.includes(WORKBENCH_CLASSES.btnPrimary), '••• 要和主操作共用同一个实心变体')
+    assert.ok(menuClasses.includes(WORKBENCH_CLASSES.menu), '••• 要有自己的几何类')
+    assert.equal(menuClasses.includes(WORKBENCH_CLASSES.btn), false, '••• 不该再复用按钮基类')
+    assert.equal(menuClasses.includes(WORKBENCH_CLASSES.btnPrimary), false, '••• 不该再是实心主按钮')
 
     menuButton.props.onClick()
     const withMenu = rerender(ReportPane, pane)
@@ -2733,23 +2741,27 @@ function openResults(Component, props, instance) {
   return rerender(Component, props)
 }
 
-/** 找「按流水号查找」的输入框（按 placeholder 认，别用文本包含）。 */
+/** 找「按流水号查找」的输入框（按 aria-label 认，别用 placeholder —— 两个列表的 placeholder 相同）。 */
 function findCloudSearchInput(tree) {
-  return find(tree, (node) => node.type === 'input' && node.props?.placeholder === zhCN.cloudSearchPlaceholder)
+  return find(tree, (node) => node.type === 'input' && node.props?.['aria-label'] === zhCN.cloudSearchAria)
 }
 
-test('按流水号查找：搜索框只在「AI审核结果」页里，待审核报告页没有', async () => {
+/** 在搜索框里按 Enter（新口径：**没有「查找」按钮**，Enter 才发起查询）。 */
+function submitSearchInput(input) {
+  input.props.onKeyDown({ key: 'Enter' })
+}
+
+test('按流水号查找：搜索框只在「AI审核列表」页里，报告列表页没有', async () => {
   stubOps({})
   const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
   const props = reportPaneProps({})
   const { tree, instance } = render(ReportPane, props)
-  assert.equal(findCloudSearchInput(tree), null, '「待审核报告」页里不该有流水号查找框')
+  assert.equal(findCloudSearchInput(tree), null, '「报告列表」页里不该有按流水号查交付件的搜索框')
   const results = openResults(ReportPane, props, instance)
-  assert.ok(findCloudSearchInput(results), '「AI审核结果」页里要有流水号查找框')
-  assert.equal(textOf(results).includes(zhCN.cloudSearchAll), true, '默认要看得出"正在看全量"')
+  assert.ok(findCloudSearchInput(results), '「AI审核列表」页里要有按流水号查交付件的搜索框')
 })
 
-test('按流水号查找：输入过程不发请求，点「查找」才把流水号交给 Host', async () => {
+test('按流水号查找：输入过程不发请求，按 Enter 才把流水号交给 Host', async () => {
   const posts = []
   globalThis.fetch = async (url, init) => {
     posts.push(JSON.parse(init.body))
@@ -2771,18 +2783,18 @@ test('按流水号查找：输入过程不发请求，点「查找」才把流�
   assert.deepEqual(posts, [], '输入过程不发请求')
   assert.deepEqual(searched, [], '输入过程不触发查找')
 
-  findButtonLike(typed, zhCN.cloudSearchButton).props.onClick()
-  assert.deepEqual(searched, [CLOUD_SEQ], '点「查找」才把流水号交给 Host')
+  submitSearchInput(findCloudSearchInput(typed))
+  assert.deepEqual(searched, [CLOUD_SEQ], '按 Enter 才把流水号交给 Host')
 })
 
-test('按流水号查找：命中就只列该流水号的交付件与「查看报告」，并写清正在看哪个流水号', async () => {
+test('按流水号查找：命中就只列该流水号的交付件与「查看报告」，交付件按业务语义呈现', async () => {
   stubOps({})
   const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
   const item = {
     seqNo: CLOUD_SEQ,
     files: [{ key: `crwu/audit/${CLOUD_SEQ}/审核意见.${CLOUD_SEQ}.html`, name: `审核意见.${CLOUD_SEQ}.html` }],
     htmlKey: `crwu/audit/${CLOUD_SEQ}/审核意见.${CLOUD_SEQ}.html`,
-    jsonKey: '',
+    jsonKey: `crwu/audit/${CLOUD_SEQ}/审核结果.${CLOUD_SEQ}.json`,
   }
   let opened = ''
   const props = reportPaneProps({
@@ -2792,9 +2804,14 @@ test('按流水号查找：命中就只列该流水号的交付件与「查看�
   const { instance } = render(ReportPane, props)
   const results = openResults(ReportPane, props, instance)
   const text = textOf(results)
-  assert.equal(text.includes(item.htmlKey), true, '要把命中的对象 key 列出来')
-  assert.equal(text.includes(zhCN.cloudSearchAll), false, '命中时不该还说"正在看全量"')
-  assert.equal(text.includes(CLOUD_SEQ), true, '要写清正在看哪个流水号')
+  // 用户 2026-09-23 口径：普通员工不需要看到 OSS 原始路径（crwu/audit/... .html）。
+  assert.equal(text.includes(item.htmlKey), false, '不该把 OSS 原始对象 key 端到列表上')
+  assert.equal(text.includes('crwu/audit'), false, '不该出现 OSS 前缀')
+  // 只讲业务语义：N 个交付件 + 「审核报告 / 审核数据」两枚轻量 Chip。
+  assert.equal(text.includes(zhCN.resultFileReport), true, '要显示「审核报告」')
+  assert.equal(text.includes(zhCN.resultFileData), true, '要显示「审核数据」')
+  assert.equal(text.includes(zhCN.resultFilesCount.replace('%s', '2')), true, '要显示交付件数量')
+  assert.equal(text.includes(CLOUD_SEQ), true, '要写清是哪个流水号')
   const open = findButtonLike(results, zhCN.openReport)
   assert.ok(open, '命中时要有「查看报告」')
   open.props.onClick()
@@ -2859,7 +2876,7 @@ test('按流水号查找：形状不对就地拦下，不发请求也不去找�
   instance.state[2] = '../../other-prefix'
   instance.cursor = 0
   const typed = rerender(ReportPane, props)
-  findButtonLike(typed, zhCN.cloudSearchButton).props.onClick()
+  submitSearchInput(findCloudSearchInput(typed))
   const after = rerender(ReportPane, props)
   assert.deepEqual(searched, [], '非法流水号不得发请求')
   assert.equal(textOf(after).includes(zhCN.cloudSearchInvalid), true, '要给人话提示')
@@ -2921,6 +2938,14 @@ test('审核记录没回来之前**不画行**：标签不会从「AI 审核」�
     '这时候列表区应该是中瑞世联等待页',
   )
   assert.equal(textOf(pendingAudits.tree).includes(zhCN.loadingReports), true)
+  // 等待页**只盖列表数据区**（用户 2026-09-23 口径）：页头 / 页签 / 工具条仍然可见。
+  const area = findByClass(pendingAudits.tree, WORKBENCH_CLASSES.listArea)
+  assert.ok(area, '要有列表数据区容器（等待页挂在它里面）')
+  assert.ok(findByClass(area, WORKBENCH_CLASSES.loadingPane), '等待页要落在列表数据区里')
+  assert.ok(findByClass(pendingAudits.tree, WORKBENCH_CLASSES.tabs), '首次加载时页签仍可见')
+  assert.ok(findByClass(pendingAudits.tree, WORKBENCH_CLASSES.toolbar), '首次加载时工具条仍可见')
+  assert.ok(findByClass(pendingAudits.tree, WORKBENCH_CLASSES.searchWrap), '首次加载时搜索框仍可见')
+  assert.ok(findByClass(pendingAudits.tree, WORKBENCH_CLASSES.pageTitle), '首次加载时页面标题仍可见')
 
   // ② 记录到位（这条有记录）：行画出来时主操作**已经是**「重新审核」，中间没有 AI 审核那一帧。
   const ready = render(ReportPane, reportPaneProps({
@@ -2965,4 +2990,1203 @@ test('按钮变体一律用双类选择器，不会被靠后的基础按钮样�
   const hoverRule = /\.crwu-audit-btn\.crwu-audit-btn-primary:hover[^{]*\{([^}]*)\}/.exec(WORKBENCH_STYLE_TEXT)
   assert.ok(hoverRule !== null, '找不到主按钮 hover 规则')
   assert.match(hoverRule[1], /background\s*:/, '主按钮 hover 必须自己声明底色')
+})
+
+// ── 报告审核页 2026-09-23 视觉重构：Segmented 页签 / 工具条 / 操作列 / AI 列表语义 ──
+
+test('页签是浅槽里的轻量 Segmented 控件，没有下划线指示条', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const { tree } = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 } }))
+  const track = findByClass(tree, WORKBENCH_CLASSES.tabs)
+  assert.ok(track, '要有页签容器')
+  const tabs = findAll(track, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.tab))
+  assert.equal(tabs.length, 2, '只有两个视图：报告列表 / AI 审核列表')
+  const active = tabs.filter((node) => String(node.props.className).split(/\s+/).includes(WORKBENCH_CLASSES.tabOn))
+  assert.equal(active.length, 1, '同一时间只有一个选中页签（不是背景 + 下划线双重选中）')
+  // 计数（8652 / 5）只出现在页签里，且两个页签各一份。
+  const counts = findAll(track, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.tabCount))
+  assert.equal(counts.length, 2, '两个页签各带一个计数')
+  // 文字型 + 品牌色下划线那套已撤：DOM 里不该再有那枚指示条。
+  assert.equal(
+    findAll(tree, (node) => String(node.props?.className ?? '').includes('crwu-audit-tab-ind')).length,
+    0,
+    '下划线指示条应当已删除',
+  )
+  // 选中态靠「容器是浅槽、选中项是白片」，样式表里必须有这条槽底色。
+  const tabsRule = /\.crwu-audit-tabs\s*\{([^}]*)\}/.exec(WORKBENCH_STYLE_TEXT)
+  assert.ok(tabsRule !== null, '找不到页签容器规则')
+  assert.match(tabsRule[1], /background:\s*var\(--crwu-tab-track\)/, '容器要有浅槽底色（Segmented 而不是纯文字页签）')
+  const onRule = /\.crwu-audit-tab-on,\s*\.crwu-audit-tab-on:hover\s*\{([^}]*)\}/.exec(WORKBENCH_STYLE_TEXT)
+  assert.ok(onRule !== null, '找不到选中页签规则')
+  assert.match(onRule[1], /background:\s*var\(--crwu-surface\)/, '选中项要是浮起的白片')
+  assert.match(onRule[1], /box-shadow:\s*var\(--crwu-shadow-tab\)/, '选中项要有一层轻投影')
+})
+
+test('列表工具条：搜索 + 刷新同属一行，刷新是 Ghost 按钮', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const busy = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 }, gating: { busy: true } }))
+  const toolbar = findByClass(busy.tree, WORKBENCH_CLASSES.toolbar)
+  assert.ok(toolbar, '列表工具条要在（搜索与刷新同一行）')
+  const ghost = findByClass(toolbar, WORKBENCH_CLASSES.ghost)
+  assert.ok(ghost, '刷新要是 Ghost 按钮')
+  assert.equal(ghost.props.disabled, true, '刷新中按钮禁用（但列表保持显示）')
+  assert.ok(
+    String(ghost.props.className).split(/\s+/).includes(WORKBENCH_CLASSES.ghostBusy),
+    '刷新中图标要转（只转图标，不清列表）',
+  )
+  const search = findByClass(toolbar, WORKBENCH_CLASSES.searchWrap)
+  assert.ok(search, '搜索框与刷新同属工具条')
+  // 刷新不在页面头：页面头里只有标题。
+  const head = findByClass(busy.tree, WORKBENCH_CLASSES.pageHead)
+  assert.equal(findByClass(head, WORKBENCH_CLASSES.ghost), null, '刷新不该回到页面右上角')
+})
+
+test('流水号单元格带悬停才出现的复制按钮', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const { tree } = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 } }))
+  const copy = findAll(tree, (node) => node.type === 'button' && node.props?.['aria-label'] === zhCN.copySeqNo)
+  assert.equal(copy.length, 1, '流水号旁要有一枚复制按钮')
+  // 平时不显示（opacity 0），行悬停/聚焦才浮出 —— 这条由样式表里的悬停规则保证。
+  assert.match(
+    WORKBENCH_STYLE_TEXT,
+    /\.crwu-audit-tbody-row:hover \.crwu-audit-seq-copy[\s\S]*?\{\s*opacity:\s*1/,
+    '复制图标只在行悬停时出现',
+  )
+})
+
+test('操作列：没有线上报告的行走「AI 审核 + 小鲸鱼」，没有 •••', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const { tree } = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 } }))
+  const action = findByClass(tree, WORKBENCH_CLASSES.tdAction)
+  assert.ok(findButtonLike(action, 'AI 审核'), '首次发起是 AI 审核')
+  assert.ok(findByClass(action, WORKBENCH_CLASSES.aiRowBtn), '要有小鲸鱼')
+  assert.equal(findByClass(action, WORKBENCH_CLASSES.menu), null, '只有一个主操作时不该出现 •••')
+})
+
+test('操作列：已有线上报告的行走「查看报告 + 小鲸鱼 + •••」', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const { tree } = render(ReportPane, reportPaneProps({
+    state: { tasks: [PENDING_TASK], total: 1, ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } },
+  }))
+  const action = findByClass(tree, WORKBENCH_CLASSES.tdAction)
+  assert.ok(findButtonLike(action, zhCN.openReport), '有线上报告时主操作是「查看报告」')
+  assert.ok(findByClass(action, WORKBENCH_CLASSES.aiRowBtn), '要有小鲸鱼')
+  assert.ok(findByClass(action, WORKBENCH_CLASSES.menu), '要有 •••')
+  // 操作列不再出现「已出结果 / 已上云 / 未出结果」这类状态噪音。
+  const actionText = textOf(action)
+  for (const noise of ['已出结果', '已上云', '未出结果', '未查看会话']) {
+    assert.equal(actionText.includes(noise), false, `操作列不该出现「${noise}」`)
+  }
+})
+
+test('AI 审核列表一行的交付件走业务语义，••• 只放真实存在的功能', async () => {
+  const { fileKindsOf, resultMenuOf } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  assert.deepEqual(fileKindsOf(PENDING_CLOUD), [zhCN.resultFileReport, zhCN.resultFileData])
+  assert.deepEqual(fileKindsOf({ seqNo: 'S', files: [], htmlKey: 'a.html', jsonKey: '' }), [zhCN.resultFileReport])
+  assert.deepEqual(fileKindsOf({ seqNo: 'S', files: [], htmlKey: '', jsonKey: 'a.json' }), [zhCN.resultFileData])
+  // HTML + JSON 都在 → 审核信息可用；原始交付件永远可用；复制流水号永远可用。
+  assert.deepEqual(resultMenuOf(PENDING_CLOUD).map((item) => item.label), [zhCN.auditInfo, zhCN.rawArtifact, zhCN.copySeqNo])
+  // 只有 HTML（没有 JSON）时不给「审核信息」——抽屉里没有内容，给了就是假功能。
+  assert.deepEqual(
+    resultMenuOf({ seqNo: 'S', files: [], htmlKey: 'a.html', jsonKey: '' }).map((item) => item.label),
+    [zhCN.rawArtifact, zhCN.copySeqNo],
+  )
+})
+
+test('AI 审核列表不暴露 OSS 原始路径，空态给业务说明', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const props = reportPaneProps({ state: { ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } } })
+  const { instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  const text = textOf(results)
+  assert.equal(text.includes('crwu/audit'), false, '不该显示 OSS 路径')
+  assert.equal(text.includes('.html'), false, '不该显示 .html 后缀')
+  assert.equal(text.includes('.json'), false, '不该显示 .json 后缀')
+  assert.equal(text.includes(zhCN.resultFileReport), true)
+  assert.equal(text.includes(zhCN.resultFileData), true)
+
+  const blank = render(ReportPane, reportPaneProps({}))
+  const emptyText = textOf(openResults(ReportPane, reportPaneProps({}), blank.instance))
+  assert.equal(emptyText.includes(zhCN.noResults), true, '空态要说明"暂无 AI 审核结果"')
+  assert.equal(emptyText.includes(zhCN.noResultsHint), true, '空态要给出下一步说明')
+})
+
+test('分页支持首页 / 上一页 / 下一页 / 末页与跳页', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const goto = []
+  const { tree } = render(ReportPane, reportPaneProps({
+    state: { tasks: [PENDING_TASK], total: 8652, page: 125, pageSize: 20 },
+    onGoPage: (page) => { goto.push(page) },
+  }))
+  const pager = findByClass(tree, WORKBENCH_CLASSES.pager)
+  assert.ok(pager, '要有分页条')
+  for (const label of [zhCN.paginationFirst, zhCN.paginationPrev, zhCN.paginationNext, zhCN.paginationLast]) {
+    assert.ok(
+      find(pager, (node) => node.type === 'button' && node.props?.['aria-label'] === label),
+      `要有「${label}」`,
+    )
+  }
+  // 页码窗口：1 … 123 124 125 126 127 … 433。
+  const numbers = findAll(pager, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.pagerPage))
+    .map((node) => textOf(node))
+  assert.deepEqual(numbers, ['1', '123', '124', '125', '126', '127', '433'])
+  assert.ok(findByClass(pager, WORKBENCH_CLASSES.pagerJumpWrap), '要有跳至指定页')
+  // 总数已经在页签上，分页条不再重复「共 N 条」。
+  assert.equal(textOf(pager).includes('共'), false)
+})
+
+test('次级控件共用同一套中性底：刷新 / 小鲸鱼 / ••• 三者底色一致，主操作是唯一实心', () => {
+  // 用户 2026-09-23 报的缺陷：「操作列的按钮颜色不一致，还有刷新按钮」。
+  // 现场是同一行里三种形态：主操作实心反色、小鲸鱼填充浅中性、••• 完全透明、工具条的刷新又是另一套 Ghost。
+  // 现在规则是：**所有次级控件走同一对 token**（`--crwu-control` / `--crwu-control-hover`），
+  // 只有主操作（`.crwu-audit-btn-primary`）实心。这条断言把"同一套底"钉成机器判据。
+  const rule = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hit = new RegExp(`${escaped}(?:\\s*,\\s*[^{}]*)?\\s*\\{([^}]*)\\}`).exec(WORKBENCH_STYLE_TEXT)
+    assert.ok(hit !== null, `样式里找不到 ${selector} 规则`)
+    return hit[1]
+  }
+  const background = (selector) => {
+    const hit = /background:\s*([^;]+)/.exec(rule(selector))
+    assert.ok(hit !== null, `${selector} 没声明 background`)
+    return hit[1].trim()
+  }
+
+  const controls = ['.crwu-audit-ghost', '.crwu-audit-ai-row-btn', '.crwu-audit-menu']
+  for (const selector of controls) {
+    assert.equal(
+      background(selector),
+      'var(--crwu-control)',
+      `${selector} 必须和另外两个次级控件共用同一套中性底`,
+    )
+  }
+  // 悬停也要同格，否则"颜色不一致"只是从静止态挪到了悬停态。
+  for (const selector of ['.crwu-audit-ghost:hover:not(:disabled)', '.crwu-audit-ai-row-btn:hover', '.crwu-audit-menu:hover']) {
+    assert.equal(/background:\s*([^;]+)/.exec(rule(selector))?.[1].trim(), 'var(--crwu-control-hover)', `${selector} 的悬停底要和别人一致`)
+  }
+  // 中性底必须与行悬停底**分得开**：同格的话，悬停到那一行时小鲸鱼 / ••• 的底会被行底吃掉。
+  for (const [, value] of WORKBENCH_STYLE_TEXT.matchAll(/--crwu-control:\s*([^;]+);/g)) {
+    assert.notEqual(value.trim(), 'var(--crwu-hover)', '--crwu-control 不能和 --crwu-hover 指同一个值')
+  }
+  const lightControl = /--crwu-control:\s*([^;]+);/.exec(WORKBENCH_STYLE_TEXT)?.[1].trim() ?? ''
+  const lightHover = /--crwu-hover:\s*([^;]+);/.exec(WORKBENCH_STYLE_TEXT)?.[1].trim() ?? ''
+  assert.notEqual(lightControl, lightHover, '浅色下中性底与行悬停底不能是同一档')
+  // 深色那一份（body[data-ds-dark-theme] 块）同样要分开。
+  const darkBlock = /body\[data-ds-dark-theme\] \.crwu-audit-root\s*\{([\s\S]*?)\n\}/.exec(WORKBENCH_STYLE_TEXT)
+  assert.ok(darkBlock !== null, '找不到深色 token 块')
+  const darkControl = /--crwu-control:\s*([^;]+);/.exec(darkBlock[1])?.[1].trim() ?? ''
+  const darkHover = /--crwu-hover:\s*([^;]+);/.exec(darkBlock[1])?.[1].trim() ?? ''
+  assert.notEqual(darkControl, darkHover, '深色下中性底与行悬停底不能是同一档')
+  assert.notEqual(darkControl, '', '深色块里要有 --crwu-control')
+
+  // 主操作仍然是唯一的实心：中性控件不许再偷偷挂主按钮变体。
+  assert.match(rule('.crwu-audit-btn.crwu-audit-btn-primary'), /background:\s*var\(--crwu-primary-bg\)/)
+  assert.equal(
+    /\.crwu-audit-menu\s*\{[^}]*background:\s*var\(--crwu-primary-bg\)/.test(WORKBENCH_STYLE_TEXT),
+    false,
+    '••• 不能是实心主色',
+  )
+})
+
+// ── 「审核信息」Drawer：时间规范 / 程序枚举映射 / 信息架构（2026-09-23 重构）──────────
+
+test('业务时间一律绝对化：YYYY-MM-DD HH:mm / YYYY-MM-DD，永不相对', async () => {
+  const { formatDateTime, formatDate, parseStamp } = await import(
+    new URL('src/client/features/report-audit/time.ts', ROOT).href
+  )
+  assert.equal(formatDateTime('2026-09-20 17:40:00'), '2026-09-20 17:40')
+  assert.equal(formatDateTime('2026-09-20T17:40:00+0800'), '2026-09-20 17:40')
+  assert.equal(formatDateTime('2026-09-20T17:40:00.000Z'), '2026-09-20 17:40')
+  // 不做时区换算：记录里写的墙钟时刻就是展示的时刻（offset 原文留在 title / 技术详情）。
+  assert.equal(formatDateTime('2026-09-20T09:40:00+08:00'), '2026-09-20 09:40')
+  // 只有日期不补 00:00（那会凭空造出一个不存在的时刻）。
+  assert.equal(formatDateTime('2026-09-20'), '2026-09-20')
+  assert.equal(formatDate('2026-09-20 17:40:00'), '2026-09-20')
+  assert.equal(formatDate('2026-09-20T17:40:00+0800'), '2026-09-20')
+  // 认不出的形状原样返回：不猜、不取子串、不补零。
+  assert.equal(formatDateTime('2026年8月12日'), '2026年8月12日')
+  assert.equal(formatDateTime(''), '')
+  assert.equal(parseStamp('不是时间'), null)
+  // **今天的数据也必须带年份**（用户口径：这是审核留痕系统，禁止"今天/昨天"）。
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} 18:15:08`
+  const out = formatDateTime(today)
+  assert.equal(out, `${today.slice(0, 10)} 18:15`)
+  for (const value of [out, formatDateTime('2026-09-20 17:40:00')]) {
+    assert.match(value, /^\d{4}-\d{2}-\d{2}/, '业务时间必须以完整年份开头')
+    assert.equal(/昨天|今天|前天|天前|小时前|分钟前/.test(value), false, `不许出现相对时间：${value}`)
+  }
+})
+
+test('报告列表的更新时间保留完整年份，不再出现「昨天 / 09-20」', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const task = { ...PENDING_TASK, modifiedAt: '2026-09-20 18:18:59' }
+  const { tree } = render(ReportPane, reportPaneProps({ state: { tasks: [task], total: 1 } }))
+  const row = textOf(tree)
+  // 只看窄列（流水号 / 风险 / 更新时间）的**整格文本**：用 includes 判断"省略年份"会被
+  // `2026-09-20 18:18` 里的子串 `09-20 18:18` 满足 —— 那是假通过。
+  const nowrap = findAll(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.tdNowrap))
+    .map(textOf)
+  assert.equal(nowrap.includes('2026-09-20 18:18'), true, '列表里的业务时间要带完整年份')
+  assert.equal(nowrap.some((text) => /^\d{2}-\d{2} \d{2}:\d{2}$/.test(text)), false, '不许再出现省略年份的写法')
+  assert.equal(/昨天|今天|前天|天前/.test(row), false, '不许再出现相对时间')
+})
+
+test('程序枚举只在有权威定义时才翻中文，认不出的原值不构造语义', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  // summary.overallDecision：schema enum = pass / fail / pending_confirmation
+  assert.deepEqual(m.decisionOf('fail'), { tone: 'fail', label: zhCN.auditDecisionFail, raw: 'fail' })
+  assert.equal(m.decisionOf('pass').tone, 'pass')
+  assert.equal(m.decisionOf('pass').label, zhCN.auditDecisionPass)
+  assert.equal(m.decisionOf('pending_confirmation').label, zhCN.auditDecisionPending)
+  // reviewComparison.status：schema enum + audit_delivery.py 的 REVIEW_STATUS_LABEL
+  assert.equal(m.reviewStatusOf('performed').label, zhCN.auditReviewPerformed)
+  assert.equal(m.reviewStatusOf('not_performed').label, zhCN.auditReviewNotPerformed)
+  // 没定义过的取值：**不翻译**，只留原值（界面显示 —，原值进技术详情）。
+  for (const [fn, raw] of [[m.decisionOf, 'weird_state'], [m.reviewStatusOf, 'something_else']]) {
+    const view = fn(raw)
+    assert.equal(view.label, '', `认不出的取值不许编中文：${raw}`)
+    assert.equal(view.raw, raw)
+  }
+  assert.equal(m.decisionOf('').label, '')
+})
+
+test('命中率只取第一个百分数：公式留在原始字段里，不进主界面', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  const raw = '33.3% (= (exact 1 + partial 0) / evaluable 3；部分命中计为命中)'
+  assert.equal(m.percentOf(raw), '33.3%')
+  assert.equal(m.percentOf('66.7%'), '66.7%')
+  assert.equal(m.percentOf(33.3), '33.3%')
+  assert.equal(m.percentOf('没有百分数'), '')
+  const hit = m.hitOf({ evaluable: 3, exactHits: 1, partialHits: 0, aiHitRate: raw })
+  assert.equal(hit.rate, '33.3%', '主界面只留百分数')
+  assert.equal(hit.count, zhCN.auditHitCount.replace('%s', '1').replace('%s', '3'))
+  assert.equal(hit.detail, zhCN.auditHitDetail.replace('%s', '1').replace('%s', '0'))
+  // 分母为 0 → 规范口径是「不适用」，不得伪造 0%（11-html-delivery-spec §6.2）。
+  assert.equal(m.hitOf({ evaluable: 0, exactHits: 0, partialHits: 0 }).rate, zhCN.auditNotApplicable)
+  // 分母缺失 → 不写 0 / 0（会被读成"一条都没命中"）。
+  assert.equal(m.hitOf({ exactHits: 1, partialHits: 0 }).count, '')
+})
+
+test('复核三条带只列载荷里存在的项，标签与悬停说明都来自交付规范', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  const bands = m.bandsOf({ overlap: 1, aiOnly: 12, reviewerOnly: 0, divergent: 0 })
+  assert.deepEqual(bands.map((b) => b.label), [
+    zhCN.auditBandOverlap, zhCN.auditBandAiOnly, zhCN.auditBandReviewerOnly, zhCN.auditBandDivergent,
+  ])
+  assert.deepEqual(bands.map((b) => b.value), [1, 12, 0, 0])
+  // 权威措辞逐字保留（悬停可读），短标签只是它的压缩写法。
+  assert.equal(bands[0].full, zhCN.auditBandOverlapFull)
+  assert.equal(bands[1].full, zhCN.auditBandAiOnlyFull)
+  assert.equal(bands[2].full, zhCN.auditBandReviewerOnlyFull)
+  assert.equal(bands[3].full, zhCN.auditBandDivergentFull)
+  // 载荷里没有的带不出现在界面上（不补 0）。
+  assert.deepEqual(m.bandsOf({ overlap: 2 }).map((b) => b.key), ['overlap'])
+  assert.deepEqual(m.bandsOf({}), [])
+})
+
+test('问题计数：缺字段不画 0，待确认/未检查是辅助位', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  const full = m.countsOf({ issuesTotal: 13, fail: 4, high: 2, medium: 9, low: 2, pendingConfirmation: 2, notChecked: 3 })
+  assert.equal(full.total, 13)
+  assert.equal(full.hasTotal, true)
+  assert.deepEqual(full.risks.map((r) => [r.key, r.value]), [['high', 2], ['medium', 9], ['low', 2]])
+  assert.equal(full.hasPending, true)
+  assert.equal(full.hasNotChecked, true)
+  assert.equal(full.empty, false)
+  // 只有一部分字段时：只列存在的那几项。
+  const partial = m.countsOf({ issuesTotal: 3, high: 1 })
+  assert.deepEqual(partial.risks.map((r) => r.key), ['high'])
+  assert.equal(partial.hasPending, false)
+  assert.equal(partial.hasAux, false)
+  const none = m.countsOf({})
+  assert.equal(none.empty, true, '一个计数都没有时整段不渲染')
+  assert.equal(none.hasTotal, false)
+})
+
+/**
+ * 一份**逐字段照 Host 裁剪结果**（`auditInfoFromResult`）写的真实形状样本。
+ *
+ * 2026-09-23 起它多了两组字段：`issues[]`（已裁剪）与 `reviewComparison.reviewItems[]`
+ * —— 抽屉的「AI 检出问题」与「已提未改」直接读它们。
+ */
+function auditInfoFixture(patch = {}) {
+  return {
+    schemaVersion: '1.0',
+    projectId: '2026-302474-LX9995-BG8740',
+    auditTime: '2026-09-20T17:40:00+0800',
+    engineVersion: 'crwu-engine/1.4',
+    reportVersion: '复核报告（中瑞评报字[2026]第123号） / 复核报告日期2026年8月12日',
+    stage: '复核',
+    issues: [
+      {
+        issueId: 'ISS-02', title: '收益法评估结果数值小数点与千分位混用', severity: 'medium', decision: 'fail',
+        difference: '同一金额存在不同数字格式，导致金额量级失真。',
+        problemDescription: '收益法评估结果数值格式错误。汇总表与正文的写法不一致。',
+        locationSummary: '收益法评估结果汇总表', handlingRequirement: '统一金额格式并复核量级。',
+      },
+      {
+        issueId: 'ISS-01', title: '资产基础法评估结果在三处出现两个不同数值', severity: 'high', decision: 'fail',
+        difference: '正文与汇总表同一指标存在 362.68 万元差异。',
+        problemDescription: '资产基础法评估结果不一致。正文、汇总表与结论段三处数值不同。',
+        locationSummary: '二、被复核资产评估报告简介……资产评估结果汇总表……',
+        handlingRequirement: '核定资产基础法股东全部权益的唯一数值，并同步修改汇总表、结论分析与结论段。',
+      },
+      {
+        issueId: 'ISS-03', title: '披露章节缺少评估依据的说明', severity: 'low',
+        difference: '', problemDescription: '评估依据章节未列示行为依据。补充说明即可。',
+        locationSummary: '评估依据章节', handlingRequirement: '补列行为依据。',
+      },
+    ],
+    summary: {
+      decision: 'fail',
+      counts: { issuesTotal: 13, fail: 4, high: 2, medium: 9, low: 2, pendingConfirmation: 2, notChecked: 3 },
+    },
+    reviewComparison: {
+      status: 'performed',
+      metrics: {
+        total: 12, evaluable: 3, resolved: 1, uncheckable: 0, exactHits: 1, partialHits: 0, misses: 2,
+        hitRate: '33.3%',
+        aiHitRate: '33.3% (= (exact 1 + partial 0) / evaluable 3；部分命中计为命中)',
+      },
+      bands: { overlap: 1, aiOnly: 12, reviewerOnly: 0, divergent: 0 },
+      reviewItems: [
+        // 人工提出过 + 被审件未落实（L-open）→ 计入「已提未改」
+        {
+          itemId: 'R-1', title: '未见委托合同', matchStatus: 'partial', linkedIssueIds: ['ISS-01'],
+          inFileResolution: 'L-open', reviewerQuote: '未见委托合同',
+        },
+        // 已经落实（L-resolved）→ **不算**未整改
+        {
+          itemId: 'R-2', title: '复核依据缺少行为依据', matchStatus: 'exact', linkedIssueIds: ['ISS-03'],
+          inFileResolution: 'L-resolved', reviewerQuote: '复核依据章节缺少行为依据',
+        },
+        // L-open 但没关联任何 AI issue（人工提出、AI 没检出）→ 不算
+        {
+          itemId: 'R-3', title: '底稿未见复核记录', matchStatus: 'miss', linkedIssueIds: [],
+          inFileResolution: 'L-open', reviewerQuote: '底稿未见复核记录',
+        },
+      ],
+    },
+    fileTrace: { generatedAt: '2026-09-20 17:41:02', rendererVersion: 'renderer/2', sourceDigest: 'sha256:abc' },
+    ...patch,
+  }
+}
+
+/** Drawer 里 `data-open` 的折叠块（已提未改 / 其他事项 / 报告信息 / 技术详情）。 */
+function drawerFolds(tree) {
+  return findAll(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.fold))
+}
+
+test('审核信息 Drawer：数据没回来时只显示加载态，不画空小节', async () => {
+  stubOps({})
+  const { AuditInfoDrawer } = await import(new URL('src/client/features/report-audit/AuditInfoDrawer.tsx', ROOT).href)
+  const loading = render(AuditInfoDrawer, { seqNo: 'S-4', info: null, error: '' })
+  assert.equal(textOf(loading.tree).includes(zhCN.loadingAuditInfo), true)
+  assert.equal(findByClass(loading.tree, WORKBENCH_CLASSES.km), null, '没有数据时不该画核心指标块')
+  assert.deepEqual(drawerFolds(loading.tree), [], '没有数据时不该画折叠小节')
+  const failed = render(AuditInfoDrawer, { seqNo: 'S-4', info: null, error: '不是合法 JSON' })
+  assert.equal(textOf(failed.tree).includes('不是合法 JSON'), true, '失败要给真实原因')
+})
+
+test('Drawer 头部：标题 + 一行等宽流水号 + × 关闭（不再有「关闭」文字按钮）', async () => {
+  stubOps({})
+  const { SideDrawer } = await import(new URL('src/client/components/SideDrawer.tsx', ROOT).href)
+  const { tree } = render(SideDrawer, { title: zhCN.auditInfo, subtitle: '2026-302474-LX9995-BG8740', onClose: () => {} })
+  const head = findByClass(tree, WORKBENCH_CLASSES.sideDrawerHead)
+  assert.equal(textOf(findByClass(head, WORKBENCH_CLASSES.sideDrawerTitle)).includes(zhCN.auditInfo), true)
+  // 流水号只在头部出现一次。
+  assert.equal(textOf(tree).split('2026-302474-LX9995-BG8740').length - 1, 1)
+  assert.ok(findByClass(head, WORKBENCH_CLASSES.sideDrawerSub), '副标题用等宽小字')
+  assert.equal(findButtonLike(head, zhCN.closeDrawer), null, '「关闭」文字按钮已删除')
+  const close = find(head, (node) => node.type === 'button' && node.props?.['aria-label'] === zhCN.closeDrawer)
+  assert.ok(close, '要有 × 关闭按钮（aria-label=关闭）')
+  assert.equal(textOf(close), '×')
+})
+
+test('Drawer 关闭动画：onClose 立刻回调，`-out` 类只在 closing 时加', async () => {
+  stubOps({})
+  const { SideDrawer } = await import(new URL('src/client/components/SideDrawer.tsx', ROOT).href)
+  let closed = 0
+  const base = { title: zhCN.auditInfo, subtitle: 'S', onClose: () => { closed += 1 } }
+  const plain = render(SideDrawer, base)
+  assert.equal(hasExactClass(plain.tree, WORKBENCH_CLASSES.sideDrawerOut), false)
+  const closing = render(SideDrawer, { ...base, closing: true })
+  assert.equal(hasExactClass(closing.tree, WORKBENCH_CLASSES.sideDrawerOut), true, '关闭中要加 -out 类')
+  assert.equal(hasExactClass(closing.tree, WORKBENCH_CLASSES.sideDrawerBackdropOut), true)
+  find(closing.tree, (node) => node.type === 'button' && node.props?.['aria-label'] === zhCN.closeDrawer).props.onClick()
+  assert.equal(closed, 1, '点 × 立刻回调（动画由父层延迟卸载）')
+})
+
+// ── 「审核信息」Drawer 第二轮：它是「AI 审核质量与问题摘要」（2026-09-23）──────────
+
+test('AI 检出问题：取 title/severity/difference，按 高 → 中 → 低 稳定排序', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  const issues = m.issuesOf(auditInfoFixture())
+  assert.deepEqual(issues.map((i) => i.issueId), ['ISS-01', 'ISS-02', 'ISS-03'], '高 → 中 → 低')
+  assert.deepEqual(issues.map((i) => i.severityLabel), [zhCN.auditRiskHigh, zhCN.auditRiskMedium, zhCN.auditRiskLow])
+  assert.equal(issues[0].title, '资产基础法评估结果在三处出现两个不同数值', '标题逐字用 issue.title')
+  assert.equal(issues[0].brief, '正文与汇总表同一指标存在 362.68 万元差异。', '简述优先 gapAnalysis.difference')
+  // 没有 difference 时退回 problemDescription 的第一句（并补回句号）。
+  assert.equal(issues[2].brief, '评估依据章节未列示行为依据。')
+  // 同级保持原有顺序；认不出的严重程度排最后且不编中文。
+  const mixed = m.issuesOf({
+    issues: [
+      { issueId: 'A', title: '中', severity: 'medium' },
+      { issueId: 'B', title: '未知', severity: 'weird' },
+      { issueId: 'C', title: '高', severity: 'high' },
+    ],
+  })
+  assert.deepEqual(mixed.map((i) => i.issueId), ['C', 'A', 'B'])
+  assert.equal(mixed[2].severityLabel, '', '认不出的严重程度不翻译')
+  assert.equal(mixed[2].severity, 'weird', '原值保留')
+})
+
+test('firstSentence：先取第一行，没有换行才取第一句', async () => {
+  const { firstSentence } = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  assert.equal(firstSentence('第一行\n第二行'), '第一行')
+  assert.equal(firstSentence('一句话说清问题。第二段补充。'), '一句话说清问题。')
+  assert.equal(firstSentence('没有句号的一整句'), '没有句号的一整句')
+  assert.equal(firstSentence('  '), '')
+})
+
+test('已提未改：必须 linkedIssueIds 与 L-open 同时成立，宁可少显示也不误报', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  const raised = m.raisedUnresolvedOf(auditInfoFixture())
+  assert.deepEqual(raised.map((i) => i.issueId), ['ISS-01'], '只有 R-1 那条同时满足两个条件')
+  assert.equal(raised[0].itemId, 'R-1')
+  assert.equal(raised[0].reviewerQuote, '未见委托合同', '人工当时提出的原话')
+  assert.equal(raised[0].brief, '正文与汇总表同一指标存在 362.68 万元差异。', 'AI 当前仍然发现的')
+  assert.equal(raised[0].severityLabel, zhCN.auditRiskHigh)
+
+  const base = auditInfoFixture()
+  const withItems = (items) => m.raisedUnresolvedOf({
+    ...base,
+    reviewComparison: { ...base.reviewComparison, reviewItems: items },
+  })
+  // 已落实 → 不算未整改（这是最要紧的一条：不能把改好的说成没改）
+  assert.deepEqual(withItems([{ itemId: 'X', linkedIssueIds: ['ISS-01'], inFileResolution: 'L-resolved' }]), [])
+  // 答复称已改但未落地 / 材料缺失：都不属于 L-open 这一档
+  assert.deepEqual(withItems([{ itemId: 'X', linkedIssueIds: ['ISS-01'], inFileResolution: 'L-unclosed' }]), [])
+  assert.deepEqual(withItems([{ itemId: 'X', linkedIssueIds: ['ISS-01'], inFileResolution: 'L-uncheckable' }]), [])
+  // 没有关联 AI issue（人工提出、AI 没检出）→ 不算
+  assert.deepEqual(withItems([{ itemId: 'X', linkedIssueIds: [], inFileResolution: 'L-open' }]), [])
+  // 关联到不存在的 issueId → 不猜，直接不算
+  assert.deepEqual(withItems([{ itemId: 'X', linkedIssueIds: ['NOPE'], inFileResolution: 'L-open' }]), [])
+  // 同一个 issue 被两条复核意见指向 → 按 issueId 去重
+  const dup = withItems([
+    { itemId: 'X1', linkedIssueIds: ['ISS-01'], inFileResolution: 'L-open', reviewerQuote: '第一次' },
+    { itemId: 'X2', linkedIssueIds: ['ISS-01'], inFileResolution: 'L-open', reviewerQuote: '第二次' },
+  ])
+  assert.equal(dup.length, 1)
+  assert.equal(dup[0].reviewerQuote, '第一次')
+  // 没有 reviewItems（旧宿主）→ 空数组，界面降级成 0/—，不报错
+  assert.deepEqual(m.raisedUnresolvedOf({ ...base, reviewComparison: { metrics: {} } }), [])
+})
+
+test('AI 检出条数：优先 counts.issuesTotal，缺字段才退回 issues.length', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-summary.ts', ROOT).href)
+  const issues = m.issuesOf(auditInfoFixture())
+  const detected = m.detectedOf(auditInfoFixture(), issues)
+  assert.deepEqual(detected, { count: 13, hasCount: true }, 'counts.issuesTotal 是权威值（不是列表长度 3）')
+  // 没有 counts.issuesTotal → 退回列表长度
+  const noCounts = m.detectedOf({ ...auditInfoFixture(), summary: { decision: 'fail' } }, issues)
+  assert.deepEqual(noCounts, { count: 3, hasCount: true })
+  // 两边都没有 → 不显示数字
+  assert.deepEqual(m.detectedOf({}, []), { count: 0, hasCount: false })
+})
+
+test('Drawer 第一屏：命中率最大，其次是 AI 检出与已提未改，且没有结论大卡', async () => {
+  stubOps({})
+  const { AuditInfoDrawer } = await import(new URL('src/client/features/report-audit/AuditInfoDrawer.tsx', ROOT).href)
+  const { tree } = render(AuditInfoDrawer, { seqNo: 'S-9', info: auditInfoFixture(), error: '' })
+  const km = findByClass(tree, WORKBENCH_CLASSES.km)
+  assert.ok(km, '第一屏要有核心指标块')
+  // P0：命中率是最大的那个数字，且**只**展示百分数（公式不进主界面）
+  assert.equal(textOf(findByClass(km, WORKBENCH_CLASSES.rateValue)).trim(), '33.3%')
+  const kmText = textOf(km).replace(/\s+/g, ' ')
+  assert.equal(kmText.includes(zhCN.auditHitRate), true)
+  assert.equal(kmText.includes('1 / 3 条命中'), true)
+  assert.equal(kmText.includes('精确 1 · 部分 0'), true)
+  for (const noise of ['evaluable', '部分命中计为命中', '= (']) {
+    assert.equal(kmText.includes(noise), false, `命中率公式不进第一屏：${noise}`)
+  }
+  // P1：AI 检出（用 counts.issuesTotal=13，不是列表长度 3）与已提未改 1
+  const kmValues = findAll(km, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.kmValue))
+    .map((node) => textOf(node).trim())
+  assert.deepEqual(kmValues, [zhCN.auditCountUnit.replace('%s', '13'), zhCN.auditCountUnit.replace('%s', '1')])
+  assert.equal(kmText.includes(zhCN.auditDetected), true)
+  assert.equal(kmText.includes(zhCN.auditRaised), true)
+  assert.equal(kmText.includes(zhCN.auditDetectedAiOnly.replace('%s', '12')), true, '独立发现只作 secondary')
+  // 顶部不再有结论大卡：km 里不许出现「未通过 / 已执行」，它们挪进了折叠的报告信息
+  assert.equal(kmText.includes(zhCN.auditDecisionFail), false, '第一屏不放大结论')
+  assert.equal(kmText.includes(zhCN.auditReviewPerformed), false)
+  // 而且第一个 DOM 小节就是核心指标块（没有审核摘要卡）
+  const header = findByClass(tree, WORKBENCH_CLASSES.sideDrawerHead)
+  const order = findAll(tree, (node) => {
+    const cls = String(node.props?.className ?? '').split(/\s+/)
+    return cls.includes(WORKBENCH_CLASSES.km) || cls.includes(WORKBENCH_CLASSES.sec) || cls.includes(WORKBENCH_CLASSES.fold)
+  })
+  assert.ok(order.indexOf(km) >= 0)
+  assert.equal(textOf(header).includes(zhCN.auditSecSummary), false)
+})
+
+test('Drawer：AI 检出问题列表直接给标题与简述，点开才给位置与建议', async () => {
+  stubOps({})
+  const { AuditInfoDrawer } = await import(new URL('src/client/features/report-audit/AuditInfoDrawer.tsx', ROOT).href)
+  const props = { seqNo: 'S-10', info: auditInfoFixture(), error: '', onOpenReport: () => {} }
+  const { tree, instance } = render(AuditInfoDrawer, props)
+  const rows = findAll(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.issueRow))
+  // 3 条问题 + 0 条已提未改（已提未改在 raised 块里，raished 未展开但仍在 DOM）→ 这里是 3 + 1
+  assert.equal(rows.length, 4, '三条问题 + 一条已提未改')
+  const issueRows = rows.filter((row) => String(row.props.className).includes(WORKBENCH_CLASSES.acc))
+  assert.equal(String(issueRows[0].props['data-open']), 'false', '问题默认折叠')
+  const first = textOf(rows[1]).replace(/\s+/g, ' ')
+  assert.equal(first.includes('资产基础法评估结果在三处出现两个不同数值'), true, '直接展示 issue.title')
+  assert.equal(first.includes('正文与汇总表同一指标存在 362.68 万元差异。'), true, '简述用 difference')
+  assert.equal(first.includes('ISS-01'), false, '默认不显示内部编号')
+  // 展开第一条：位置与建议出现
+  const head = findByClass(rows[1], WORKBENCH_CLASSES.issueHead)
+  assert.equal(head.props['aria-expanded'], false)
+  head.props.onClick()
+  const opened = rerender(AuditInfoDrawer, props)
+  void instance
+  const openedRows = findAll(opened, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.issueRow))
+  const openedRow = openedRows[1]
+  assert.equal(String(openedRow.props['data-open']), 'true')
+  const detail = textOf(openedRow).replace(/\s+/g, ' ')
+  assert.equal(detail.includes(zhCN.auditIssueLocation), true)
+  assert.equal(detail.includes('资产评估结果汇总表'), true)
+  assert.equal(detail.includes(zhCN.auditIssueSuggestion), true)
+  assert.equal(detail.includes('核定资产基础法股东全部权益的唯一数值'), true)
+  assert.equal(detail.includes(zhCN.auditIssueMore), true, '有交付件时给回完整报告的入口')
+  // 一次只展开一条
+  const secondHead = findByClass(openedRows[2], WORKBENCH_CLASSES.issueHead)
+  secondHead.props.onClick()
+  const swapped = rerender(AuditInfoDrawer, props)
+  const swappedRows = findAll(swapped, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.issueRow))
+  assert.equal(String(swappedRows[1].props['data-open']), 'false', '展开另一条时上一条自动收起')
+  assert.equal(String(swappedRows[2].props['data-open']), 'true')
+})
+
+test('Drawer：「已提未改」默认折叠，展开后给出人工原话与 AI 当前检出', async () => {
+  stubOps({})
+  const { AuditInfoDrawer } = await import(new URL('src/client/features/report-audit/AuditInfoDrawer.tsx', ROOT).href)
+  const props = { seqNo: 'S-11', info: auditInfoFixture(), error: '' }
+  const { tree } = render(AuditInfoDrawer, props)
+  const raised = findByClass(tree, WORKBENCH_CLASSES.raised)
+  assert.ok(raised, '要有已提未改折叠区')
+  assert.equal(String(raised.props['data-open']), 'false', '默认折叠')
+  assert.equal(textOf(findByClass(raised, WORKBENCH_CLASSES.raisedCount)).trim(), '1', '数量 badge')
+  const raisedText = textOf(raised).replace(/\s+/g, ' ')
+  assert.equal(raisedText.includes(zhCN.auditRaisedTitle), true)
+  assert.equal(raisedText.includes(zhCN.auditRaisedSubtitle), true)
+  assert.equal(raisedText.includes(zhCN.auditRaisedReviewer), true)
+  assert.equal(raisedText.includes('未见委托合同'), true, '人工当时提出的原话')
+  assert.equal(raisedText.includes(zhCN.auditRaisedAi), true)
+  assert.equal(raisedText.includes('正文与汇总表同一指标存在 362.68 万元差异。'), true, 'AI 当前仍发现什么')
+  // 展开
+  findByClass(raised, WORKBENCH_CLASSES.raisedHead).props.onClick()
+  const opened = rerender(AuditInfoDrawer, props)
+  assert.equal(String(findByClass(opened, WORKBENCH_CLASSES.raised).props['data-open']), 'true')
+  // 没有「已提未改」时不画这一块
+  const none = render(AuditInfoDrawer, {
+    seqNo: 'S-12',
+    info: auditInfoFixture({ reviewComparison: { ...auditInfoFixture().reviewComparison, reviewItems: [] } }),
+    error: '',
+  })
+  assert.equal(findByClass(none.tree, WORKBENCH_CLASSES.raised), null)
+})
+
+test('Drawer：报告信息与技术详情默认折叠，结论/枚举/JSON 都在里面', async () => {
+  stubOps({})
+  const { AuditInfoDrawer } = await import(new URL('src/client/features/report-audit/AuditInfoDrawer.tsx', ROOT).href)
+  const { tree } = render(AuditInfoDrawer, { seqNo: 'S-13', info: auditInfoFixture(), error: '' })
+  const folds = drawerFolds(tree)
+  assert.equal(folds.length >= 2, true, '至少要有报告信息 + 技术详情两个折叠区')
+  for (const fold of folds) {
+    assert.equal(String(fold.props['data-open']), 'false', '折叠区默认全部收起')
+  }
+  const texts = folds.map((fold) => textOf(fold))
+  const report = texts.find((text) => text.includes(zhCN.auditSecReport))
+  const tech = texts.find((text) => text.includes(zhCN.auditSecTech))
+  assert.ok(report, '要有报告信息')
+  assert.equal(report.includes(zhCN.auditConclusion), true, '审核结论挪进报告信息')
+  assert.equal(report.includes(zhCN.auditDecisionFail), true)
+  assert.equal(report.includes(zhCN.auditReviewStatusLabel), true)
+  assert.equal(report.includes('2026-09-20 17:40'), true, '业务时间保留完整年份')
+  assert.equal(report.includes('crwu-engine/1.4'), false, '引擎版本不进报告信息')
+  assert.ok(tech, '要有技术详情')
+  assert.equal(tech.includes('crwu-engine/1.4'), true, '引擎版本进技术详情')
+  assert.equal(tech.includes('fail'), true, '原始结论值进技术详情')
+  assert.equal(tech.includes('performed'), true, '原始复核状态进技术详情')
+  assert.equal(tech.includes('"overlap":1'), true, '原始复核计数 JSON')
+  assert.equal(tech.includes('2026-09-20T17:40:00+0800'), true, '原始 ISO 时间')
+  assert.equal(tech.includes('R-1'), true, '原始复核项（reviewItems）可查')
+})
+
+test('Drawer：业务区不出现程序枚举 / 原始 JSON（只在折叠的技术详情里）', async () => {
+  stubOps({})
+  const { AuditInfoDrawer } = await import(new URL('src/client/features/report-audit/AuditInfoDrawer.tsx', ROOT).href)
+  const { tree } = render(AuditInfoDrawer, { seqNo: 'S-14', info: auditInfoFixture(), error: '' })
+  // 业务区 = 整棵树减去**技术详情那一整块**（子树文本在整串里是连续的一段，直接 split 掉最稳；
+  // 用"拼接若干行再 replace"会因为没有分隔符而替换失败，那是一次假通过）。
+  const techFold = drawerFolds(tree).find((fold) => textOf(fold).includes(zhCN.auditSecTech))
+  assert.ok(techFold, '要有技术详情折叠块')
+  const all = textOf(tree)
+  const business = all.split(textOf(techFold)).join('')
+  for (const noise of ['fail', 'performed', 'overlap', 'aiOnly', 'reviewerOnly', 'divergent', 'ISS-01', '{"', 'L-open', 'R-1']) {
+    assert.equal(business.includes(noise), false, `业务区不该出现程序原语/内部编号：${noise}`)
+  }
+})
+
+// ── 「AI 审核结果分析会话」（audit_analysis，2026-09-23）────────────────────────
+
+/**
+ * 对话框里的一个选项（标题 + 说明两行）。`findButtonLike` 是**逐字相等**匹配，
+ * 对这种两行按钮永远找不到 —— 这里按"包含"找，避免又一次假阴性。
+ */
+function findOptionLike(node, label) {
+  return find(node, (item) => item.type === 'button' && textOf(item).includes(label))
+}
+
+test('版本判定优先级：digest → version → etag → mtime，最后才退化到时间', async () => {
+  const { freshnessOf, digestComparable } = await import(new URL('src/client/features/report-audit/audit-freshness.ts', ROOT).href)
+  const base = {
+    reportDigest: '', auditSourceDigest: '', reportVersion: '', auditSourceVersion: '',
+    reportEtag: '', auditSourceEtag: '', reportModifiedAt: '', auditModifiedAt: '',
+    reportUpdatedAt: '', auditGeneratedAt: '',
+  }
+  // ① digest 两侧都有 → 唯一的**强结论**来源
+  assert.deepEqual(
+    freshnessOf({ ...base, reportDigest: 'sha:a', auditSourceDigest: 'sha:a', reportUpdatedAt: '2026-09-25 10:00', auditGeneratedAt: '2026-09-20 10:00' }),
+    { status: 'current', basis: 'digest', note: 'digest 一致' },
+    'digest 一致就是 CURRENT —— 即使记录更新时间更晚（那可能是非内容性操作）',
+  )
+  assert.equal(freshnessOf({ ...base, reportDigest: 'sha:a', auditSourceDigest: 'sha:b' }).status, 'stale')
+  // digest 优先于 version/etag/mtime：后面三个都不一致也不改变结论
+  assert.equal(
+    freshnessOf({ ...base, reportDigest: 'sha:a', auditSourceDigest: 'sha:a', reportVersion: 'v2', auditSourceVersion: 'v1' }).basis,
+    'digest',
+  )
+  // ② 只有一侧有 digest → 不可比，继续往下降级（不能因为"没得比"就下结论）
+  assert.equal(digestComparable({ ...base, reportDigest: 'sha:a' }), false)
+  assert.equal(
+    freshnessOf({ ...base, auditSourceDigest: 'sha:a', reportVersion: 'v2', auditSourceVersion: 'v1' }).basis,
+    'version',
+  )
+  assert.equal(freshnessOf({ ...base, reportEtag: 'e1', auditSourceEtag: 'e2' }).status, 'stale')
+  assert.equal(freshnessOf({ ...base, reportModifiedAt: '2026-09-21 10:00', auditModifiedAt: '2026-09-20 10:00' }).status, 'stale')
+  // ③ 只剩时间关系：**只能**得出 possibly_stale（更新时间可能来自非内容性操作）
+  assert.equal(
+    freshnessOf({ ...base, reportUpdatedAt: '2026-09-22 16:30', auditGeneratedAt: '2026-09-20 17:40' }).status,
+    'possibly_stale',
+  )
+  assert.equal(
+    freshnessOf({ ...base, reportUpdatedAt: '2026-09-19 10:00', auditGeneratedAt: '2026-09-20 17:40' }).status,
+    'current',
+  )
+  // ④ 有一侧时间读不出来 → UNKNOWN（不许猜）
+  assert.equal(freshnessOf({ ...base, reportUpdatedAt: '不是时间', auditGeneratedAt: '2026-09-20 17:40' }).status, 'unknown')
+  assert.equal(freshnessOf(base).status, 'unknown')
+})
+
+test('快照差异：报告 / AI 审核 / 复核意见三条信号各自独立', async () => {
+  const { changesSince } = await import(new URL('src/client/features/report-audit/audit-freshness.ts', ROOT).href)
+  const snap = {
+    reportSerialNumber: 'S', reportUpdatedAt: '2026-09-20 17:00', reportDigest: '',
+    auditGeneratedAt: '2026-09-20 17:40', auditSourceDigest: '', auditArtifactVersion: '',
+    reviewUpdatedAt: '2026-09-21 14:20', conversationCreatedAt: '2026-09-21 15:00', contextStatus: 'current',
+  }
+  assert.deepEqual(changesSince(snap, snap), { report: false, audit: false, review: false, digest: false, any: false })
+  const reportMoved = { ...snap, reportUpdatedAt: '2026-09-22 16:30' }
+  assert.deepEqual(changesSince(snap, reportMoved), { report: true, audit: false, review: false, digest: false, any: true })
+  assert.equal(changesSince(snap, { ...snap, auditGeneratedAt: '2026-09-22 09:00' }).audit, true)
+  assert.equal(changesSince(snap, { ...snap, reviewUpdatedAt: '2026-09-22 10:00' }).review, true)
+  assert.equal(changesSince(snap, { ...snap, reportDigest: 'sha:new' }).digest, false, '快照里没有 digest 就不比（不可比）')
+  assert.equal(
+    changesSince({ ...snap, reportDigest: 'sha:old' }, { ...snap, reportDigest: 'sha:new' }).digest,
+    true,
+  )
+})
+
+test('分析会话命名与找回：与报告讨论互不串味，且 X-1 不命中 X-10', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const { sessionsOfKind } = await import(new URL('src/client/features/report-audit/assistant-session.ts', ROOT).href)
+  assert.equal(m.auditAnalysisTitle('X-1'), `${zhCN.auditSessionPrefix}X-1`)
+  assert.equal(m.auditAnalysisTitle('X-1', 2), `${zhCN.auditSessionPrefix}X-1 #2`)
+  const sessions = [
+    { id: 'a', displayTitle: `${zhCN.auditSessionPrefix}X-1` },
+    { id: 'b', displayTitle: `${zhCN.auditSessionPrefix}X-1 #2` },
+    { id: 'c', displayTitle: `${zhCN.aiSessionPrefix}X-1` },
+    { id: 'd', displayTitle: `${zhCN.auditSessionPrefix}X-10` },
+  ]
+  assert.deepEqual(m.findAuditAnalyses(sessions, 'X-1').map((s) => s.id), ['a', 'b'], 'X-10 不能算进来')
+  assert.deepEqual(sessionsOfKind('report_discussion', sessions, 'X-1').map((s) => s.id), ['c'])
+  assert.deepEqual(sessionsOfKind('audit_analysis', sessions, 'X-1').map((s) => s.id), ['a', 'b'])
+  assert.equal(m.nextAuditOrdinal(sessions, 'X-1'), 3)
+})
+
+test('Context Snapshot：字段来自真实来源，可存可读，坏数据不炸', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const info = auditInfoFixture()
+  assert.equal(m.auditGeneratedAtOf(info), '2026-09-20 17:41:02', '优先 fileTrace.generatedAt')
+  assert.equal(m.auditGeneratedAtOf({ auditTime: '2026-09-20T17:40:00+0800' }), '2026-09-20T17:40:00+0800', '没有 generatedAt 才退回 auditTime')
+  // 复核更新时间取 reviewFiles[].occurredAt 里最晚的一个
+  assert.equal(m.reviewUpdatedAtOf({ reviewComparison: { reviewFiles: [{ occurredAt: '2026-08-12' }, { occurredAt: '2026-09-21 14:20' }] } }), '2026-09-21 14:20')
+  assert.equal(m.reviewUpdatedAtOf(info), '', 'fixture 里没有 reviewFiles → 复核更新时间留空（不猜）')
+  const snap = m.snapshotOf({ seqNo: 'S-1', info, reportUpdatedAt: '2026-09-22 16:30', createdAt: '2026-09-23T00:00:00.000Z' })
+  assert.equal(snap.reportSerialNumber, 'S-1')
+  assert.equal(snap.reportUpdatedAt, '2026-09-22 16:30')
+  assert.equal(snap.auditGeneratedAt, '2026-09-20 17:41:02')
+  assert.equal(snap.auditSourceDigest, 'sha256:abc')
+  assert.equal(snap.conversationCreatedAt, '2026-09-23T00:00:00.000Z')
+  assert.equal(snap.contextStatus, 'possibly_stale', '只有时间关系 → possibly_stale')
+  // 本地留存（stub localStorage）
+  const store = new Map()
+  globalThis.localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, value) },
+  }
+  m.saveSnapshot(snap)
+  assert.deepEqual(m.loadSnapshot('S-1'), snap)
+  assert.equal(m.loadSnapshot('NOPE'), null)
+  // 被手改 / 旧版本写坏的 JSON：当作"没有快照"，不抛
+  store.set('crwu.audit-analysis.S-1', '{ not json')
+  assert.equal(m.loadSnapshot('S-1'), null)
+  store.set('crwu.audit-analysis.S-1', JSON.stringify({ reportSerialNumber: 'S-1', contextStatus: 'weird' }))
+  assert.equal(m.loadSnapshot('S-1').contextStatus, 'unknown', '认不出的状态码归到 unknown')
+  delete globalThis.localStorage
+})
+
+test('上下文包：逐字注入 System Instruction，并如实写出缺失项与版本关系', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const { freshnessOf } = await import(new URL('src/client/features/report-audit/audit-freshness.ts', ROOT).href)
+  const verdict = freshnessOf({
+    reportDigest: '', auditSourceDigest: 'sha256:abc', reportVersion: '', auditSourceVersion: '',
+    reportEtag: '', auditSourceEtag: '', reportModifiedAt: '', auditModifiedAt: '',
+    reportUpdatedAt: '2026-09-22 16:30', auditGeneratedAt: '2026-09-20 17:41',
+  })
+  const block = m.buildAuditContextBlock({
+    seqNo: '2026-302474-LX9995-BG8740', project: '某项目', reportUpdatedAt: '2026-09-22 16:30',
+    reportVersion: '复核报告', auditGeneratedAt: '2026-09-20 17:41', auditSourceDigest: 'sha256:abc',
+    auditArtifactVersion: '1.0', reviewUpdatedAt: '2026-08-12',
+    fetchedAt: '2026-09-23T10:00:00.000Z',
+    sources: [{ sourceType: 'remote', provider: 'h3yun', remoteId: 'f1', remoteVersion: '报告.zip', remoteUpdatedAt: '', digest: '', fetchedAt: '2026-09-23T10:00:00.000Z' }],
+    reportLines: ['V2定稿-估值报告.zip（氚云附件 · 1.0 MB）'],
+    auditLines: ['审核报告：crwu/audit/S/审核意见.html', '审核数据：crwu/audit/S/审核结果.json'],
+    reviewLines: ['一级复核 · 复核报告（2026-08-12）'],
+    missing: ['本次未取到 AI 审核结构化数据（只有 HTML），无法做结构化问题分析。'],
+    verdict,
+  })
+  // System Instruction 逐字在（抽样三句 + 流水号替换）
+  assert.equal(block.includes('你是一名资深资产评估师，正在与当前报告的项目负责人共同分析这份报告及其 AI 审核结果。'), true)
+  // §13 的数据边界强制规则必须在（不是只写在文档里）
+  assert.equal(block.includes('数据边界（强制）：'), true)
+  assert.equal(block.includes('你不得主动读取、搜索、引用或依赖任何未加入当前会话的本地文件、工作区文件、缓存文件或其它文件系统内容。'), true)
+  assert.equal(block.includes('你的目标不是证明 AI 审核是正确的。'), true)
+  assert.equal(block.includes('【REPORT_SERIAL_NUMBER】'), false, '占位符要被真实流水号替换')
+  assert.equal(block.includes('2026-302474-LX9995-BG8740'), true)
+  assert.equal(block.includes('避免只修改一个点而造成前后文、表格或结论仍然不一致'), true)
+  // 版本关系的中文表述（不是英文枚举、也不是过度确定的语言）
+  assert.equal(block.includes(zhCN.auditFreshPossibly), true)
+  assert.equal(/(current|possibly_stale|stale|unknown)/.test(block), false, '不许把英文枚举写进上下文')
+  // 来源清单（只有远端标识）+ 缺失项都在；**本地路径一律不出现**（用户 §4/§7）
+  assert.equal(block.includes(zhCN.auditCtxSourceHead), true)
+  assert.equal(block.includes(`h3yun · ${zhCN.auditCtxRemoteId}：f1`), true, '来源清单要写明远端标识')
+  assert.equal(/\/Users\/|\/tmp\/|\/ws\//.test(block), false, 'System Prompt / 上下文里不许出现本地路径')
+  assert.equal(block.includes('本地案例目录'), false)
+  assert.equal(block.includes('工作区下面'), false)
+  // 三类资料 + 缺失项都在
+  assert.equal(block.includes('V2定稿-估值报告.zip'), true)
+  assert.equal(block.includes('审核意见.html'), true)
+  assert.equal(block.includes('一级复核 · 复核报告（2026-08-12）'), true)
+  assert.equal(block.includes(zhCN.auditCtxMissingHead), true)
+  // 业务时间保留完整年份
+  assert.equal(block.includes('2026-09-22 16:30'), true)
+})
+
+test('AI 审核列表：统一的 DeepSeek 入口（同一个组件 + Icon Button，Tooltip 区分业务）', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const props = reportPaneProps({ state: { ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } } })
+  const { tree, instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  const action = findByClass(results, WORKBENCH_CLASSES.tdAction)
+  // 同一枚小鲸鱼按钮类 + 同一个 aria-label（= 同一个组件、同一套视觉）
+  const whale = find(action, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn))
+  assert.ok(whale, 'AI 审核列表要有 DeepSeek 入口')
+  assert.equal(whale.props['aria-label'], zhCN.auditTooltipAnalyze)
+  assert.equal(String(whale.props.className).split(/\s+/).includes(WORKBENCH_CLASSES.menu), false, '不是 •••')
+  // 没有新增文字按钮 / 噪音 Tag
+  const actionText = textOf(action)
+  for (const noise of ['AI分析', '查看会话', '可分析', 'AI ready', '已同步', '上下文完整']) {
+    assert.equal(actionText.includes(noise), false, `不该出现「${noise}」`)
+  }
+  // Tooltip：AI 列表那枚是「分析审核结果」，报告列表那枚仍是「讨论报告」
+  whale.props.onMouseEnter({ currentTarget: { getBoundingClientRect: () => ({ left: 10, right: 42, top: 100, bottom: 132 }) } })
+  const withTip = rerender(ReportPane, props)
+  assert.equal(textOf(findByClass(withTip, WORKBENCH_CLASSES.floatTip)).includes(zhCN.auditTooltipAnalyze), true)
+  // 报告列表那枚的 Tooltip 不变
+  const pending = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 } }))
+  findByClass(pending.tree, WORKBENCH_CLASSES.aiRowBtn).props.onMouseEnter({
+    currentTarget: { getBoundingClientRect: () => ({ left: 10, right: 42, top: 100, bottom: 132 }) },
+  })
+  const pendingTip = rerender(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 } }))
+  assert.equal(textOf(findByClass(pendingTip, WORKBENCH_CLASSES.floatTip)).includes(zhCN.aiRowButton), true)
+})
+
+test('点 DeepSeek：报告在审核后更新过 → 弹「存在更新记录」选择框（不静默进入）', async () => {
+  stubOps({ 'report-files': { body: { ok: true, error: '', seqNo: PENDING_TASK.seqNo, h3yun: [{ field: 'F', fileId: 'f1', name: '报告.zip', size: 1024, contentType: 'application/zip' }], h3yunError: '', oss: [], local: [], localDir: '', localExists: false, truncated: false } } })
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const props = reportPaneProps({
+    state: { tasks: [PENDING_TASK], total: 1, ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } },
+    onLoadAuditInfo: () => Promise.resolve({ info: auditInfoFixture(), error: '' }),
+  })
+  const view = render(ReportPane, props)
+  const results = openResults(ReportPane, props, view.instance)
+  const whale = find(results, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn))
+  whale.props.onClick()
+  for (let i = 0; i < 10; i += 1) await settle()
+  const asked = rerender(ReportPane, props)
+  const dialog = findByClass(asked, WORKBENCH_CLASSES.aiDialog)
+  assert.ok(dialog, '要弹版本检查对话框')
+  const text = textOf(dialog)
+  // PENDING_TASK.modifiedAt = 2026-09-20 18:18，审核生成时间 2026-09-20 17:41 → 报告更晚 → possibly_stale
+  assert.equal(text.includes(zhCN.auditPossibleTitle), true, '只用时间关系时是"存在更新记录"，不是"已失效"')
+  assert.equal(text.includes(zhCN.auditStaleTitle), false, '没有 digest 证据就不能说"报告已更新"')
+  assert.equal(text.includes('2026-09-20 18:18'), true, '报告更新时间保留完整年份')
+  assert.equal(text.includes('2026-09-20 17:41'), true, 'AI 审核时间保留完整年份')
+  assert.ok(findOptionLike(dialog, zhCN.auditProceedFresh), '要有「使用最新资料重新分析」')
+  assert.ok(findOptionLike(dialog, zhCN.auditContinueOld), '要有「继续查看原审核上下文」')
+})
+
+test('点 DeepSeek：没有历史会话且版本一致 → 直接新建 audit_analysis 会话并注入上下文', async () => {
+  const ops = stubOps({ 'report-files': { body: { ok: true, error: '', seqNo: PENDING_TASK.seqNo, h3yun: [{ field: 'F', fileId: 'f1', name: '报告.zip', size: 1024, contentType: 'application/zip' }], h3yunError: '', oss: [{ key: 'k', name: '审核意见.html' }], local: [{ name: '说明.md', path: '/ws/S/说明.md', size: 20 }], localDir: '/ws/S', localExists: true, truncated: false } } })
+  void ops
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  // 让报告更新时间不晚于审核时间 → CURRENT → 无历史会话 → 直进
+  const task = { ...PENDING_TASK, modifiedAt: '2026-09-19 10:00' }
+  const made = { created: [], renamed: [], prompted: [], opened: [] }
+  const port = {
+    create: async (input) => { made.created.push(input); return 'session-audit' },
+    open: (id) => { made.opened.push(id) },
+    binding: () => ({ session: { rename: async (t) => { made.renamed.push(t) }, prompt: async (c, m) => { made.prompted.push({ c, m }) } } }),
+    list: { getSnapshot: () => ({ ids: [], byId: {} }) },
+  }
+  const store = new Map()
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, v) } }
+  const props = reportPaneProps({
+    state: { tasks: [task], total: 1, ossIndex: { [task.seqNo]: PENDING_CLOUD } },
+    onLoadAuditInfo: () => Promise.resolve({ info: auditInfoFixture(), error: '' }),
+  })
+  // 注意：`openResults` 会 rerender，闭包里用的是**它自己那份 props** ——
+  // onOpenDiscussion 必须一起传进去，否则点下去走的是默认空函数（这条踩过一次）。
+  const paneProps = { ...props, port, onOpenDiscussion: (id) => { made.opened.push(`open:${id}`) } }
+  const view = render(ReportPane, paneProps)
+  const results = openResults(ReportPane, paneProps, view.instance)
+  const whale = find(results, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn))
+  whale.props.onClick()
+  for (let i = 0; i < 12; i += 1) await settle()
+  assert.equal(made.created.length, 1, '直接建一条会话（不弹框）')
+  assert.deepEqual(made.renamed, [`${zhCN.auditSessionPrefix}${task.seqNo}`], '会话名走 audit_analysis 前缀')
+  assert.equal(made.prompted.length, 1)
+  const sent = made.prompted[0].c[0].text
+  assert.equal(sent.includes('你是一名资深资产评估师，正在与当前报告的项目负责人共同分析这份报告及其 AI 审核结果。'), true, 'System Instruction 逐字注入')
+  assert.equal(sent.includes('你不得主动读取、搜索、引用或依赖任何未加入当前会话的本地文件、工作区文件、缓存文件或其它文件系统内容。'), true, '数据边界逐字注入')
+  assert.equal(sent.includes(task.seqNo), true)
+  assert.equal(sent.includes('报告.zip'), true, '原始报告必须在上下文里（§15）')
+  assert.equal(sent.includes('说明.md'), false, '本地案例目录的文件不得进上下文（远端-only）')
+  assert.equal(sent.includes(zhCN.auditCtxHead), true)
+  assert.equal(made.opened.includes('open:session-audit'), true, '建完跳到那条会话')
+  // Context Snapshot 落盘（下次打开它判"是否已经过期"）
+  const saved = JSON.parse(store.get(`crwu.audit-analysis.${task.seqNo}`))
+  assert.equal(saved.reportSerialNumber, task.seqNo)
+  assert.equal(saved.reportUpdatedAt, '2026-09-19 10:00')
+  assert.equal(saved.auditGeneratedAt, '2026-09-20 17:41:02')
+  delete globalThis.localStorage
+})
+
+test('点 DeepSeek：已有分析会话 → 弹「继续 / 新建」；资料没变时推荐继续', async () => {
+  stubOps({ 'report-files': { body: { ok: true, error: '', seqNo: PENDING_TASK.seqNo, h3yun: [{ field: 'F', fileId: 'f1', name: '报告.zip', size: 1024, contentType: 'application/zip' }], h3yunError: '', oss: [], local: [], localDir: '', localExists: false, truncated: false } } })
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const task = { ...PENDING_TASK, modifiedAt: '2026-09-19 10:00' }
+  const store = new Map()
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, v) } }
+  // 预置一份与当前完全一致的快照 → changes 全 false
+  const { snapshotOf } = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const snap = snapshotOf({ seqNo: task.seqNo, info: auditInfoFixture(), reportUpdatedAt: task.modifiedAt, createdAt: '2026-09-20T00:00:00.000Z' })
+  store.set(`crwu.audit-analysis.${task.seqNo}`, JSON.stringify(snap))
+  const old = { id: 'session-old', displayTitle: `${zhCN.auditSessionPrefix}${task.seqNo}` }
+  const port = {
+    create: async () => 'session-new',
+    open: () => {},
+    binding: () => ({ session: { rename: async () => undefined, prompt: async () => undefined } }),
+    list: { getSnapshot: () => ({ ids: [old.id], byId: { [old.id]: old } }) },
+  }
+  const props = reportPaneProps({
+    state: { tasks: [task], total: 1, ossIndex: { [task.seqNo]: PENDING_CLOUD } },
+    onLoadAuditInfo: () => Promise.resolve({ info: auditInfoFixture(), error: '' }),
+  })
+  const opened = []
+  const view = render(ReportPane, { ...props, port, onOpenDiscussion: (id) => { opened.push(id) } })
+  const results = openResults(ReportPane, { ...props, port }, view.instance)
+  const whale = find(results, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn))
+  whale.props.onClick()
+  for (let i = 0; i < 12; i += 1) await settle()
+  const asked = rerender(ReportPane, { ...props, port, onOpenDiscussion: (id) => { opened.push(id) } })
+  const dialog = findByClass(asked, WORKBENCH_CLASSES.aiDialog)
+  assert.ok(dialog, '已有分析会话要弹选择框')
+  const text = textOf(dialog)
+  assert.equal(text.includes(zhCN.auditAskExistingTitle), true)
+  assert.equal(text.includes(zhCN.auditContinueAnalysis), true)
+  assert.equal(text.includes(zhCN.auditNewAnalysis), true)
+  assert.equal(text.includes(zhCN.auditUpdatedHint), false, '资料没变时不提"建议新建"')
+  // 点「继续上次分析」→ 打开旧会话（不新建）
+  findOptionLike(dialog, zhCN.auditContinueAnalysis).props.onClick()
+  for (let i = 0; i < 4; i += 1) await settle()
+  assert.deepEqual(opened, ['session-old'])
+  delete globalThis.localStorage
+})
+
+test('点 DeepSeek：远端原始资料一项都取不到 → 只给重试，不 fallback 本地、不建会话', async () => {
+  stubOps({ 'report-files': { body: { ok: true, error: '', seqNo: PENDING_TASK.seqNo, h3yun: [], h3yunError: '', oss: [], local: [], localDir: '', localExists: false, truncated: false } } })
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const view = render(ReportPane, reportPaneProps({
+    state: { tasks: [PENDING_TASK], total: 1, ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } },
+    onLoadAuditInfo: () => Promise.resolve({ info: auditInfoFixture(), error: '' }),
+  }))
+  const props = reportPaneProps({
+    state: { tasks: [PENDING_TASK], total: 1, ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } },
+    onLoadAuditInfo: () => Promise.resolve({ info: auditInfoFixture(), error: '' }),
+  })
+  const results = openResults(ReportPane, props, view.instance)
+  const whale = find(results, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn))
+  whale.props.onClick()
+  for (let i = 0; i < 12; i += 1) await settle()
+  const asked = rerender(ReportPane, props)
+  const dialog = findByClass(asked, WORKBENCH_CLASSES.aiDialog)
+  assert.ok(dialog, '缺原始报告必须拦一下')
+  const text = textOf(dialog)
+  assert.equal(text.includes(zhCN.auditRemoteMissingTitle), true)
+  assert.equal(text.includes(zhCN.auditRemoteMissingBody), true, '要说清"为避免用过期/来源不明的数据，本次未创建会话"')
+  assert.ok(findOptionLike(dialog, zhCN.auditRetry), '要有重试')
+  assert.equal(findOptionLike(dialog, zhCN.auditLimitedProceed), null, '不许有"仍以有限资料继续"（那会去找本地替代）')
+})
+
+// ── OSS 一次列举带回的元数据：审核对象 ETag + 报告资料指纹（2026-09-23）──────────
+
+test('审核对象元数据：取审核结果 JSON 的 ETag / 最后写入时间，没有就退回 HTML', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const cloud = {
+    jsonKey: 'crwu/audit/S/审核结果.S.json',
+    htmlKey: 'crwu/audit/S/审核意见.S.html',
+    files: [
+      { key: 'crwu/audit/S/审核意见.S.html', name: '审核意见.S.html', size: 254300, lastModified: '2026-09-20 17:11:18', etag: '46f90eb092e15b169f30fcd429d7b885' },
+      { key: 'crwu/audit/S/审核结果.S.json', name: '审核结果.S.json', size: 96903, lastModified: '2026-09-20 17:11:19', etag: '4850d73d2a28ca5a70e337afddc16e04' },
+    ],
+  }
+  assert.deepEqual(m.auditArtifactOf(cloud), {
+    etag: '4850d73d2a28ca5a70e337afddc16e04',
+    lastModified: '2026-09-20 17:11:19',
+  })
+  // 没有 JSON → 退回 HTML
+  assert.deepEqual(m.auditArtifactOf({ ...cloud, jsonKey: '' }).etag, '46f90eb092e15b169f30fcd429d7b885')
+  // 旧宿主不带元数据 → 空串（界面按"没有版本证据"处理，不许猜）
+  assert.deepEqual(m.auditArtifactOf({ jsonKey: 'k', htmlKey: '', files: [{ key: 'k', name: 'k' }] }), { etag: '', lastModified: '' })
+})
+
+test('报告远端标识：只用远端 fileId / OSS key，**不把本地路径当身份**', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const pulled = {
+    h3yun: [{ fileId: 'f1', name: '报告.zip' }, { fileId: 'f2', name: '说明.pdf' }],
+    oss: [{ key: 'crwu/audit/S/审核意见.S.html' }],
+    // 本地那份即使也在，也不参与标识（用户 §11）
+    local: [{ name: '报告.docx', path: '/ws/S/报告.docx', size: 1024, version: 'v1' }],
+  }
+  const base = m.reportRemoteIdOf(pulled)
+  assert.equal(base !== '', true)
+  assert.equal(m.reportRemoteIdOf(pulled), base, '同一批远端资料 → 同一个标识')
+  assert.equal(m.reportRemoteIdOf({ ...pulled, local: [{ name: 'x', path: '/tmp/x' }] }), base, '本地文件变了**不影响**远端标识（localPath 不是业务身份）')
+  assert.notEqual(m.reportRemoteIdOf({ ...pulled, h3yun: [{ fileId: 'f9', name: '报告.zip' }] }), base, '远端换了附件 → 标识变')
+  assert.notEqual(m.reportRemoteIdOf({ ...pulled, oss: [] }), base, '云端交付件变了 → 标识变')
+  assert.equal(m.reportRemoteIdOf({ h3yun: [], oss: [] }), '')
+  assert.equal(m.reportRemoteIdOf(null), '')
+  // 审核产物的远端标识 = 它的 OSS key（与顺序无关）
+  assert.equal(m.auditRemoteIdOf({ htmlKey: 'h', jsonKey: 'j' }), m.auditRemoteIdOf({ htmlKey: 'j', jsonKey: 'h' }))
+  assert.equal(m.auditRemoteIdOf({}), '')
+})
+
+test('快照比对：远端标识 / ETag 是**远端客观**信号，记录时间没动也能判出"变过"', async () => {
+  const { changesSince } = await import(new URL('src/client/features/report-audit/audit-freshness.ts', ROOT).href)
+  const snap = {
+    reportSerialNumber: 'S', reportUpdatedAt: '2026-09-20 17:00', reportDigest: '',
+    reportRemoteId: 'abc123', auditGeneratedAt: '2026-09-20 17:40', auditSourceDigest: '',
+    auditRemoteId: 'aud-1', fetchedAt: '2026-09-23T10:00:00.000Z',
+    auditEtag: 'aaa', auditLastModified: '2026-09-20 17:40', auditArtifactVersion: '',
+    reviewUpdatedAt: '', conversationCreatedAt: '', contextStatus: 'current',
+  }
+  // 记录时间没动、复核没动，但远端换了附件（远端标识变了）→ 报告已更新（客观）
+  assert.deepEqual(
+    changesSince(snap, { ...snap, reportRemoteId: 'def456' }),
+    { report: true, audit: false, review: false, digest: false, any: true },
+  )
+  // 审核产物的远端标识 / ETag 变了 → 审核结果重新生成过
+  assert.equal(changesSince(snap, { ...snap, auditRemoteId: 'aud-2' }).audit, true)
+  assert.equal(changesSince(snap, { ...snap, auditEtag: 'bbb' }).audit, true)
+  // 两侧都没有该字段（旧宿主）→ 不猜
+  assert.equal(changesSince({ ...snap, reportRemoteId: '' }, { ...snap, reportRemoteId: '' }).report, false)
+  assert.equal(changesSince({ ...snap, auditEtag: '', auditRemoteId: '' }, { ...snap, auditEtag: '', auditRemoteId: '' }).audit, false)
+})
+
+test('审核摘要里的 ETag 会进入版本证据（供"与上次快照比"用）', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const evidence = m.evidenceOf({
+    info: auditInfoFixture(),
+    reportUpdatedAt: '2026-09-22 16:30',
+    auditEtag: '4850d73d2a28ca5a70e337afddc16e04',
+    auditLastModified: '2026-09-20 17:11:19',
+  })
+  assert.equal(evidence.auditSourceEtag, '4850d73d2a28ca5a70e337afddc16e04')
+  assert.equal(evidence.auditModifiedAt, '2026-09-20 17:11:19')
+  // 报告侧没有 OSS 对象 → 这一侧仍然缺位；两侧不齐时**不许**拿 audit 的 ETag 去和空值比出 STALE
+  const { freshnessOf } = await import(new URL('src/client/features/report-audit/audit-freshness.ts', ROOT).href)
+  assert.equal(freshnessOf(evidence).status, 'possibly_stale', '仍按时间退化判断，不伪造强结论')
+  // 快照把两者都记下来
+  const snap = m.snapshotOf({
+    seqNo: 'S', info: auditInfoFixture(), reportUpdatedAt: '2026-09-22 16:30',
+    reportRemoteId: 'remote-abc', auditRemoteId: 'aud-xyz',
+    auditEtag: evidence.auditSourceEtag, auditLastModified: evidence.auditModifiedAt,
+    fetchedAt: '2026-09-23T10:00:00.000Z', createdAt: 'T',
+  })
+  assert.equal(snap.reportRemoteId, 'remote-abc')
+  assert.equal(snap.auditRemoteId, 'aud-xyz')
+  assert.equal(snap.fetchedAt, '2026-09-23T10:00:00.000Z')
+  assert.equal(snap.auditEtag, '4850d73d2a28ca5a70e337afddc16e04')
+  assert.equal(snap.auditLastModified, '2026-09-20 17:11:19')
+})
+
+test('AI 审核列表的交付件数量以一次列举真实看到的对象个数为准', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  // 目录里有 3 个对象（含一个辅助文件）：数量说 3，语义 Chip 仍然只有审核报告 / 审核数据。
+  const item = {
+    seqNo: PENDING_TASK.seqNo,
+    files: [
+      { key: 'crwu/audit/S/审核意见.S.html', name: '审核意见.S.html', size: 254300, lastModified: '2026-09-20 17:11:18', etag: '46f9' },
+      { key: 'crwu/audit/S/审核结果.S.json', name: '审核结果.S.json', size: 96903, lastModified: '2026-09-20 17:11:19', etag: '4850' },
+      { key: 'crwu/audit/S/说明.txt', name: '说明.txt' },
+    ],
+    htmlKey: 'crwu/audit/S/审核意见.S.html',
+    jsonKey: 'crwu/audit/S/审核结果.S.json',
+  }
+  const props = reportPaneProps({ state: { ossIndex: { [PENDING_TASK.seqNo]: item } } })
+  const { tree, instance } = render(ReportPane, props)
+  const results = openResults(ReportPane, props, instance)
+  const text = textOf(results).replace(/\s+/g, ' ')
+  assert.equal(text.includes(zhCN.resultFilesCount.replace('%s', '3')), true, '数量取真实对象个数')
+  assert.equal(text.includes(zhCN.resultFileReport), true)
+  assert.equal(text.includes(zhCN.resultFileData), true)
+  assert.equal(text.includes('说明.txt'), false, '辅助文件不进 Chip（仍然是业务语义）')
+})
+
+// ── DeepSeek 会话的统一数据边界：只允许本次会话注入的**远端**资料（2026-09-23 强制）──
+
+test('数据来源清单：只记远端标识，绝不含 localPath', async () => {
+  const m = await import(new URL('src/client/features/report-audit/audit-analysis.ts', ROOT).href)
+  const refs = m.sourcesOf({
+    pulled: {
+      h3yun: [{ field: 'F', fileId: 'f1', name: '报告.zip', size: 1024 }],
+      oss: [{ key: 'crwu/audit/S/审核结果.S.json', name: '审核结果.S.json', size: 96903, lastModified: '2026-09-20 17:11:19', etag: '4850d73d' }],
+      // 本地那份也在对象里 —— 但**不许**变成来源
+      local: [{ name: '说明.md', path: '/ws/S/说明.md', size: 20, version: 'v1' }],
+    },
+    cloud: { htmlKey: 'crwu/audit/S/审核意见.S.html', jsonKey: 'crwu/audit/S/审核结果.S.json' },
+    info: auditInfoFixture(),
+    fetchedAt: '2026-09-23T10:00:00.000Z',
+  })
+  assert.equal(refs.every((ref) => ref.sourceType === 'remote'), true, '本地文件系统不是业务来源')
+  assert.equal(refs.every((ref) => ref.provider === 'h3yun' || ref.provider === 'oss'), true)
+  assert.equal(refs.some((ref) => ref.provider === 'h3yun' && ref.remoteId === 'f1'), true)
+  assert.equal(refs.some((ref) => ref.provider === 'oss' && ref.remoteId.endsWith('审核结果.S.json')), true)
+  assert.equal(refs.every((ref) => ref.fetchedAt === '2026-09-23T10:00:00.000Z'), true)
+  // 来源对象里**没有** localPath 之类的字段：本地路径只能属于内部实现，不是业务来源
+  for (const ref of refs) {
+    assert.equal('localPath' in ref, false)
+    assert.equal(JSON.stringify(ref).includes('/ws/'), false, '来源里不许出现本地路径')
+  }
+  assert.equal(refs.some((ref) => ref.remoteId === '/ws/S/说明.md'), false)
+})
+
+test('报告讨论上下文：写入远端数据边界，且不含任何本地路径', async () => {
+  const { discussionBrief } = await import(new URL('src/client/features/report-audit/assistant-context.ts', ROOT).href)
+  const text = discussionBrief({
+    seqNo: 'S-1', objectId: 'o-1', project: '某项目', name: '某报告', risk: 'B',
+    reviewLevel: '初审', reviewState: '审核中', currentNode: '一级复核人',
+    modifiedAt: '2026-09-22 16:30', formName: '报告审核',
+    files: ['氚云附件 报告.zip（1.0 MB）', '云端交付件 审核意见.S.html'],
+    fetchedAt: '2026-09-23T10:00:00.000Z',
+    sources: ['h3yun · 远端标识：f1 · 报告.zip', 'oss · 远端标识：crwu/audit/S/审核意见.S.html'],
+  })
+  // §12 的数据边界逐字在
+  for (const line of [
+    '你不得主动读取、搜索、引用或依赖任何未明确加入当前会话的本地文件、工作区文件、缓存文件或其它文件系统内容。',
+    '即使你能够访问文件系统工具，也不得将这些工具用于获取当前报告的业务资料。',
+    '不得通过其它文件补齐缺失信息。',
+  ]) {
+    assert.equal(text.includes(line), true, `数据边界要逐字注入：${line.slice(0, 20)}…`)
+  }
+  // 只描述"远端提供"，**不许**出现本地路径 / 本地目录提法（用户 §4）
+  assert.equal(/\/Users\/|\/tmp\/|\/ws\/|\/cases\//.test(text), false, '上下文里不许出现本地路径')
+  for (const forbidden of ['本地案例目录', '本地已经', '工作区下面', '从本地读取', '本地缓存']) {
+    assert.equal(text.includes(forbidden), false, `不许提示模型去本地找：${forbidden}`)
+  }
+  // 远端资料与来源清单都在
+  assert.equal(text.includes('氚云附件 报告.zip'), true)
+  assert.equal(text.includes('云端交付件 审核意见.S.html'), true)
+  assert.equal(text.includes(zhCN.auditCtxSourceHead), true)
+  assert.equal(text.includes('h3yun · 远端标识：f1'), true)
+})
+
+test('点小鲸鱼：远端一项都取不到（只有本地文件）→ 不建会话，也不读本地', async () => {
+  // 远端两侧都空、只有本地案例目录有文件：**这正是"fallback 到本地"的诱饵**。
+  const ops = stubOps({
+    'report-files': { body: { ok: true, error: '', seqNo: PENDING_TASK.seqNo, h3yun: [], h3yunError: '', oss: [], local: [{ name: '报告.docx', path: '/ws/S/报告.docx', size: 1024, version: 'v1' }], localDir: '/ws/S', localExists: true, truncated: false } },
+  })
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const made = { created: [], prompted: [] }
+  const port = {
+    create: async () => { made.created.push('x'); return 'session-1' },
+    open: () => {},
+    binding: () => ({ session: { rename: async () => undefined, prompt: async (c) => { made.prompted.push(c) } } }),
+    list: { getSnapshot: () => ({ ids: [], byId: {} }) },
+  }
+  const props = reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1, ossIndex: {} } })
+  const { tree } = render(ReportPane, { ...props, port })
+  const whale = findByClass(tree, WORKBENCH_CLASSES.aiRowBtn)
+  whale.props.onClick()
+  for (let i = 0; i < 10; i += 1) await settle()
+  const after = rerender(ReportPane, { ...props, port })
+  assert.deepEqual(made.created, [], '远端没有资料时**不许**建会话')
+  assert.deepEqual(made.prompted, [], '更不许把本地文件路径发进会话')
+  const dialog = findByClass(after, WORKBENCH_CLASSES.aiDialog)
+  assert.ok(dialog, '要给"远端资料拿不到"的提示')
+  assert.equal(textOf(dialog).includes(zhCN.auditRemoteMissingTitle), true)
+  assert.ok(findOptionLike(dialog, zhCN.auditRetry), '只给重试')
+  assert.equal(textOf(after).includes('/ws/S/报告.docx'), false, '界面上也不回显"我们有本地这份"')
+  assert.equal(ops.includes('oss-result'), false, '没资料就不该继续往后走')
 })

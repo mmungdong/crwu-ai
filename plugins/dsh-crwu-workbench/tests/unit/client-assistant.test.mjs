@@ -33,8 +33,10 @@ const FACTS = {
   currentNode: '一级复核人',
   modifiedAt: '2026-09-22 18:15:08',
   formName: '报告审核',
-  files: ['V2定稿-估值报告.zip（氚云附件 · 75.1 MB）', '/ws/seq/说明.md（本地案例目录）'],
-  workspacePath: '/Users/me/中瑞世联工作空间',
+  // **远端-only**：不许出现本地案例目录的文件名或路径（用户 2026-09-23 强制口径）。
+  files: ['氚云附件 V2定稿-估值报告.zip（75.1 MB）', '云端交付件 审核意见.S.html'],
+  fetchedAt: '2026-09-23T10:00:00.000Z',
+  sources: ['h3yun · f1 · V2定稿-估值报告.zip', 'oss · crwu/audit/S/审核意见.S.html · digest 4850d73d2a28ca5a'],
 }
 
 // ── 1. 会话名：多会话的前缀匹配 ──────────────────────────────────────────────
@@ -110,7 +112,7 @@ function fakePort(options = {}) {
   return { port, calls }
 }
 
-const BASE = { seqNo: FACTS.seqNo, workspaceId: 'ws-1', workspacePath: FACTS.workspacePath }
+const BASE = { seqNo: FACTS.seqNo, workspaceId: 'ws-1', workspacePath: '/Users/me/中瑞世联工作空间' }
 
 test('已经有讨论会话就复用（不新建、只 open）', async () => {
   const { port, calls } = fakePort({ existing: 'session-old' })

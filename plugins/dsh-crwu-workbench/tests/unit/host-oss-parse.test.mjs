@@ -16,6 +16,7 @@ const {
   parseSignUrl,
   joinUrl,
   groupObjects,
+  parseLsEntries,
   seqNoFromObjectKey,
   isResultJson,
 } = await import(new URL('src/host/oss/parse.ts', ROOT).href)
@@ -104,4 +105,47 @@ test('isResultJson only accepts a .json suffix', () => {
   assert.equal(isResultJson('crwu/audit/S1/审核结果.S1.JSON'), true)
   assert.equal(isResultJson('crwu/audit/S1/审核意见.S1.html'), false)
   assert.equal(isResultJson('crwu/audit/S1/x.json.bak'), false, '后缀不在结尾就不算 JSON')
+})
+
+test('parseLsEntries：真实长格式一次列举就带回 大小 / 最后写入时间 / ETag', () => {
+  // **逐字**取自真机 `ossutil ls oss://crwu-workspace/crwu/audit/` 的输出（2026-09-23 实跑）。
+  const listing = [
+    'LastModifiedTime                   Size(B)  StorageClass   ETAG                                  ObjectName',
+    '2026-09-20 17:11:18 +0800 CST       254300      Standard   46F90EB092E15B169F30FCD429D7B885      oss://crwu-workspace/crwu/audit/2026-302474-LX9995-BG8740/审核意见.2026-302474-LX9995-BG8740.html',
+    '2026-09-20 17:11:19 +0800 CST        96903      Standard   4850D73D2A28CA5A70E337AFDDC16E04      oss://crwu-workspace/crwu/audit/2026-302474-LX9995-BG8740/审核结果.2026-302474-LX9995-BG8740.json',
+    'Object Number is: 2',
+  ].join('\n')
+  const entries = parseLsEntries(listing, 'crwu-workspace')
+  assert.equal(entries.length, 2, '表头与汇总行都不是对象')
+  assert.deepEqual(entries[0], {
+    key: 'crwu/audit/2026-302474-LX9995-BG8740/审核意见.2026-302474-LX9995-BG8740.html',
+    size: 254300,
+    lastModified: '2026-09-20 17:11:18',
+    etag: '46f90eb092e15b169f30fcd429d7b885',
+  })
+  assert.equal(entries[1].key.endsWith('审核结果.2026-302474-LX9995-BG8740.json'), true)
+  assert.equal(entries[1].etag, '4850d73d2a28ca5a70e337afddc16e04')
+  // 别的 bucket 的对象不算（跨桶隔离）
+  assert.deepEqual(parseLsEntries('2026-09-20 17:11:18 +0800 CST  1  Standard  ABCDEF12  oss://other/key', 'crwu-workspace'), [])
+  // 认不出的输出（比如 --short-format / 只有 key）→ 空数组，由调用方退化
+  assert.deepEqual(parseLsEntries('oss://crwu-workspace/crwu/audit/X/a.html', 'crwu-workspace'), [])
+})
+
+test('groupObjects：带元数据的分组把 大小/时间/ETag 一起挂到 files[] 上', () => {
+  const entries = parseLsEntries([
+    '2026-09-20 17:11:19 +0800 CST  96903  Standard  4850D73D2A28CA5A70E337AFDDC16E04  oss://bkt/crwu/audit/2026-302474-LX9995-BG8740/审核结果.2026-302474-LX9995-BG8740.json',
+  ].join('\n'), 'bkt')
+  const items = groupObjects(entries, 'crwu/audit')
+  const item = items['2026-302474-LX9995-BG8740']
+  assert.equal(item.jsonKey.endsWith('审核结果.2026-302474-LX9995-BG8740.json'), true)
+  assert.deepEqual(item.files[0], {
+    key: item.jsonKey,
+    name: '审核结果.2026-302474-LX9995-BG8740.json',
+    size: 96903,
+    lastModified: '2026-09-20 17:11:19',
+    etag: '4850d73d2a28ca5a70e337afddc16e04',
+  })
+  // 纯 key 数组的老调用方式仍然可用（只有 key+name）
+  const plain = groupObjects([item.jsonKey], 'crwu/audit')
+  assert.deepEqual(plain['2026-302474-LX9995-BG8740'].files[0], { key: item.jsonKey, name: '审核结果.2026-302474-LX9995-BG8740.json' })
 })

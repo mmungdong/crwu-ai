@@ -111,6 +111,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [query, setQuery] = React.useState('')
   const [page, setPage] = React.useState(1)
   const [drawer, setDrawer] = React.useState<{ key: string; info: Record<string, unknown> | null; error: string } | null>(null)
+  /** Drawer 正在播关闭动画（150ms 后再卸载）。 */
+  const [drawerClosing, setDrawerClosing] = React.useState(false)
+  const drawerTimer = React.useRef<number | null>(null)
   const [wsBusy, setWsBusy] = React.useState(false)
   const [wsMessage, setWsMessage] = React.useState('')
   const [escalateAvailable, setEscalateAvailable] = React.useState(false)
@@ -128,6 +131,11 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const mounted = React.useRef(true)
 
   const describe = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause))
+
+  // 卸载时清掉关闭动画的计时器（面板关掉之后不许再 setState）。
+  React.useEffect(() => () => {
+    if (drawerTimer.current !== null) window.clearTimeout(drawerTimer.current)
+  }, [])
 
   const loadPrompt = React.useCallback(async () => {
     setPromptBusy(true)
@@ -291,7 +299,40 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     })
   }
 
+  /** 抽屉里「查看更多审核依据」的动作：打开这一行的交付件 HTML（没有就不给入口）。 */
+  const reportOpenerOf = (key: string): (() => void) | undefined => {
+    const cloud = ossIndex[key]
+    if (cloud === undefined || cloud.htmlKey === '') return undefined
+    const htmlKey = cloud.htmlKey
+    return () => {
+      void workbenchApi.ossLink({ key: htmlKey })
+        // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
+        // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
+        .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
+        .catch((cause: unknown) => { setNotice(describe(cause)) })
+    }
+  }
+
+  /**
+   * 关闭 Drawer：**先播 150ms 关闭动画，再卸载**。
+   *
+   * `onClose` 依旧被立刻调用（Esc / 遮罩 / × 的行为不变），只是把"从 DOM 上消失"
+   * 推迟到动画之后；重新打开会取消上一次的计时器，避免"关到一半又打开"时被中途卸载。
+   */
+  const closeDrawer = React.useCallback((): void => {
+    setDrawerClosing(true)
+    if (drawerTimer.current !== null) window.clearTimeout(drawerTimer.current)
+    drawerTimer.current = window.setTimeout(() => {
+      drawerTimer.current = null
+      setDrawer(null)
+      setDrawerClosing(false)
+    }, 150)
+  }, [])
+
   const openAuditInfo = async (key: string, cloud: CloudItem): Promise<void> => {
+    // 上一次的关闭动画还没跑完就又打开了：取消卸载，直接换成新的内容。
+    if (drawerTimer.current !== null) { window.clearTimeout(drawerTimer.current); drawerTimer.current = null }
+    setDrawerClosing(false)
     setDrawer({ key, info: null, error: '' })
     if (cloud.jsonKey === '') {
       setDrawer({ key, info: null, error: '这条报告没有审核结果 JSON' })
@@ -564,6 +605,17 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                     })
                 }}
                 onOpenAuditInfo={(key, cloud) => { void openAuditInfo(key, cloud) }}
+                // 「AI 审核结果分析会话」要的是**数据**（不是抽屉界面）：同一个 `oss-result`
+                // 操作，把裁剪过的审核摘要直接交回去；失败如实返回原因，由页内降级处理。
+                onLoadAuditInfo={async (key, cloud) => {
+                  if (cloud.jsonKey === '') return { info: null, error: '' }
+                  try {
+                    const result = await workbenchApi.ossResult({ key: cloud.jsonKey })
+                    return { info: result.ok ? result.info : null, error: result.ok ? '' : result.error }
+                  } catch (cause: unknown) {
+                    return { info: null, error: describe(cause) }
+                  }
+                }}
                 handoffCopied={handoffCopied}
                 onHandoffCopied={setHandoffCopied}
                 onEscalateRetry={() => {
@@ -592,10 +644,19 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
 
     {/* 审核信息走**右侧抽屉**：不离开当前列表就能看明细，关掉之后列表还在原来的位置。 */}
     {drawer === null ? null : <SideDrawer
-      title={`${zhCN.auditInfo} · ${drawer.key}`}
-      onClose={() => setDrawer(null)}
+      title={zhCN.auditInfo}
+      subtitle={drawer.key}
+      closing={drawerClosing}
+      onClose={closeDrawer}
     >
-      <AuditInfoDrawer seqNo={drawer.key} info={drawer.info} error={drawer.error} />
+      <AuditInfoDrawer
+        seqNo={drawer.key}
+        info={drawer.info}
+        error={drawer.error}
+        // 「查看更多审核依据」回到完整审核报告（交付件 HTML）——抽屉里不放规则证据链。
+        // 这一行**没有**交付件时不给入口（给了就是假功能）。
+        onOpenReport={reportOpenerOf(drawer.key)}
+      />
     </SideDrawer>}
   </div>
 }

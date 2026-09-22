@@ -8,11 +8,17 @@ export const WORKBENCH_ROUTE = '/api/crwu-workbench'
  * 于是很容易出现「界面是新的、逻辑是旧的」——审核挂错会话那次就是这么来的（用户看到新按钮、
  * 跑的是老代码，报障说「还是挂错位置」）。
  *
+ * 9：`oss-index` 改用 `ossutil ls` 的**长格式**（一次列举就带回 size / lastModified / **ETag**），
+ *    `CloudItem.files[]` 与 `report-files` 的 `oss[]` / `local[]`（DSH fs 的 `version` 令牌）随之带上元数据
+ *    —— 这些是"审核结果 / 报告资料有没有变过"的客观依据；旧宿主不传时客户端按缺失处理。
+ * 8：`oss-result` 的摘要新增两组**裁剪字段**（`issues[]`、`reviewComparison.reviewItems[]`），
+ *    抽屉的「AI 检出问题」与「已提未改」直接读它们 —— 旧宿主不给时抽屉降级（不显示这两块）。
+ *
  * 规则：**每次改动跨进程契约（Host 操作的字段/语义、审核父级这类关键行为）就把这里 +1**，
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 7
+export const WORKBENCH_PROTOCOL = 9
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

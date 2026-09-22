@@ -33,13 +33,23 @@ import { ossIndex, type OssDeps } from '../oss/ops.ts'
 export interface ReportCloudFile {
   key: string
   name: string
+  /** 下面三项来自 `ossutil ls` 的长格式（一次列举就有）：大小 / 最后写入时间 / ETag。 */
+  size?: number
+  lastModified?: string
+  etag?: string
 }
 
-/** 本地案例目录里的一个文件（相对路径 + 字节数）。 */
+/** 本地案例目录里的一个文件（相对路径 + 字节数 + DSH fs 的版本令牌）。 */
 export interface ReportLocalFile {
   name: string
   path: string
   size: number
+  /**
+   * DSH `FsDirEntry.version`：**后端给的权威新鲜度令牌**（`stat`/写入结果才有）。
+   * 它比 mtime 强：同一份文件没动过就是同一个令牌，动过就换。
+   * 组合成目录级指纹后，用来判断"这份报告的资料在会话之后是否变过"。
+   */
+  version?: string
 }
 
 /** 氚云上的一个附件（只元数据，不下载）。 */
@@ -144,7 +154,12 @@ async function collectLocal(
       continue
     }
     if (entry.type !== 'file') continue
-    out.push({ name: entry.name, path: joinPath(base, name), size: typeof entry.size === 'number' ? entry.size : 0 })
+    out.push({
+      name: entry.name,
+      path: joinPath(base, name),
+      size: typeof entry.size === 'number' ? entry.size : 0,
+      ...(typeof entry.version === 'string' ? { version: entry.version } : {}),
+    })
   }
 }
 
@@ -199,10 +214,18 @@ export async function reportFiles(deps: ReportFilesDeps, args: Record<string, un
   // `oss-index` 的 items 在类型上是 `Record<string, unknown>`（它面向客户端、形状由线上契约定），
   // 这里按我们真正用到的两个字段收窄，缺字段就跳过 —— 不为一个显示用的字段去改跨进程契约。
   for (const raw of Object.values(listed.items)) {
-    const item = raw as { files?: Array<{ key?: unknown; name?: unknown }> } | null
+    const item = raw as {
+      files?: Array<{ key?: unknown; name?: unknown; size?: unknown; lastModified?: unknown; etag?: unknown }>
+    } | null
     for (const file of item?.files ?? []) {
       if (typeof file.key === 'string' && typeof file.name === 'string') {
-        oss.push({ key: file.key, name: file.name })
+        oss.push({
+          key: file.key,
+          name: file.name,
+          ...(typeof file.size === 'number' ? { size: file.size } : {}),
+          ...(typeof file.lastModified === 'string' ? { lastModified: file.lastModified } : {}),
+          ...(typeof file.etag === 'string' ? { etag: file.etag } : {}),
+        })
       }
     }
   }

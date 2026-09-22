@@ -127,10 +127,10 @@ export interface ReportFilesResult {
   h3yun: Array<{ field: string; fileId: string; name: string; size: number; contentType: string }>
   /** 氚云那一路失败的原因（不影响本地/云端两组照常显示）。 */
   h3yunError: string
-  /** 云端对象（只列举，不下载）。 */
-  oss: Array<{ key: string; name: string }>
-  /** 本地案例目录里的文件（名字 + 绝对路径 + 字节数）。 */
-  local: Array<{ name: string; path: string; size: number }>
+  /** 云端对象（只列举，不下载）；长格式下带 size / lastModified / etag。 */
+  oss: Array<{ key: string; name: string; size?: number; lastModified?: string; etag?: string }>
+  /** 本地案例目录里的文件（名字 + 绝对路径 + 字节数 + DSH fs 版本令牌）。 */
+  local: Array<{ name: string; path: string; size: number; version?: string }>
   /** 本地案例目录的绝对路径；空串 = 还没选定工作空间。 */
   localDir: string
   /** 本地是否真的存在这个案例目录（"不存在"与"存在但空"要分开说）。 */

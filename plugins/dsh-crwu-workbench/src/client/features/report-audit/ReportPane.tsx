@@ -1,15 +1,24 @@
 import * as React from 'react'
-import { Badge, Button, Empty, Loading, LoadingBar, Notice, Spinner } from '../../components/primitives.tsx'
-import { DeepSeekIcon } from '../../components/icons.tsx'
+import { Button, Loading, LoadingBar, Notice } from '../../components/primitives.tsx'
+import { CheckIcon, CopyIcon, DeepSeekIcon, RefreshIcon, SearchIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import type { CloudItem } from '../../../shared/types.ts'
 import { isSafeSeqNo } from '../../../shared/consts.ts'
 import { Handoff } from '../workbench/Handoff.tsx'
 import { workbenchApi } from './api.ts'
+import { formatDateTime } from './time.ts'
 import type { ReportFilesResult } from './api.ts'
 import { discussionPrompt, findDiscussions, type DiscussionFacts } from './assistant-context.ts'
-import { askDiscussion, ensureDiscussion, type DiscussionPort, type SessionSummaryLike } from './assistant-session.ts'
+import { askDiscussion, ensureDiscussion, sessionsOfKind, type DiscussionPort, type SessionSummaryLike } from './assistant-session.ts'
+import {
+  auditArtifactOf, auditGeneratedAtOf, auditRemoteIdOf, buildAuditContextBlock, loadSnapshot,
+  reportRemoteIdOf, saveSnapshot, snapshotOf, evidenceOf, reviewUpdatedAtOf, sourcesOf,
+  type AuditAnalysisContext,
+} from './audit-analysis.ts'
+import { changesSince, freshnessOf, type AuditContextSnapshot, type SnapshotChange } from './audit-freshness.ts'
+import { asRecord, textOf } from './audit-summary.ts'
+import { AuditAnalysisDialog, type AuditAskState } from './AuditAnalysisDialog.tsx'
 import { WorkbenchLoading } from '../workbench/LoadingPane.tsx'
 import { buildRows, menuActionsOf, pageCount, primaryActionOf, resultItems, riskBadge } from './row.ts'
 import type { AuditView, ButtonSpec, RowView, TaskRow } from './types.ts'
@@ -19,11 +28,12 @@ import type { AuditView, ButtonSpec, RowView, TaskRow } from './types.ts'
  *
  * 页内两个页签：**报告列表**（氚云记录 + 审核状态）与 **AI 审核列表**（云端交付件）。
  *
- * 形态（用户 2026-09-22 口径）：正文**只有一个大圆角框**（`.crwu-audit-surface`），
- * 页签是下划线式、框内的卡片不再各自带描边（见 consts.ts §16）。
+ * 形态（用户 2026-09-23 口径）：一层 **Workspace Surface**（白面 + 14px 圆角 + 一层轻阴影）
+ * 落在浅灰的 App 底上；页签是浅槽里的 Segmented 白片；工具条 = 搜索 + 刷新；列表是发丝分隔的
+ * 现代 Data List；操作列只有「一个主操作 + 小鲸鱼 + 必要时一个 •••」。详见 consts.ts §20。
  *
- * **右侧自绘对话框已撤**（用户同日晚些时候改口径：「这里不设计右侧对话框了，去掉吧，
- * 只会增加负担」）。现在点操作列那枚小鲸鱼只做两件事：
+ * **右侧自绘对话框已撤**（用户 2026-09-22 口径：「这里不设计右侧对话框了，去掉吧」）。
+ * 点操作列那枚小鲸鱼只做两件事：
  * 1. 用 crwu **拉一次这份报告的全部文件元数据**（`report-files`：氚云附件 + 本地案例目录 +
  *    云端交付件，只列举不下载），拼进给 AI 的上下文；
  * 2. **有绑定的讨论会话** → 弹一个气泡问「新建对话 / 继续上次聊天」；
@@ -32,7 +42,7 @@ import type { AuditView, ButtonSpec, RowView, TaskRow } from './types.ts'
  *
  * 一条重要约束（本仓反复强调的那个坑）：**切标签、翻页、检索都不得重新列举 OSS**。
  * 上云清单只在首次进入、显式刷新、或上传成功后拉取 —— 每次交互都扫一遍 OSS 会让页面
- * 变成几秒一次的对象列举。所以这一页只接收已经拉好的 `ossIndex`，自己不发起列举。
+ * 变成几秒一次的对象列举。所以这一页只接收已经拉好的 `ossIndex`。
  */
 
 export interface ReportPaneState {
@@ -88,7 +98,12 @@ export interface ReportPaneProps {
   onOpenSession: (key: string) => void
   onOpenAuditInfo: (key: string, cloud: CloudItem) => void
   onOpenPath: (path: string) => void
-  /** 按流水号查云端交付件（用户点「查找」才发，输入过程不发请求）。 */
+  /**
+   * 读一份报告的**已裁剪审核摘要**（`oss-result`），供「AI 审核结果分析会话」构建上下文。
+   * 与抽屉走同一个 Host 操作，只是这里要的是数据而不是界面。
+   */
+  onLoadAuditInfo: (key: string, cloud: CloudItem) => Promise<{ info: Record<string, unknown> | null; error: string }>
+  /** 按流水号查云端交付件（用户在输入框里按 Enter 才发，输入过程不发请求）。 */
   onSearchCloud: (seqNo: string) => void
   onClearCloudSearch: () => void
   onEscalateRetry: () => void
@@ -100,6 +115,46 @@ export interface ReportPaneProps {
   port: DiscussionPort
   /** 在原生对话里打开讨论会话（切主面板回 conversation）。 */
   onOpenDiscussion: (sessionId: string) => void
+}
+
+/** 触发元素自己的 rect（浮层按它定位；列表层拿去做 fixed 浮层）。 */
+type AnchorRect = { left: number; right: number; top: number; bottom: number }
+
+/**
+ * 复用的搜索组件（报告列表与 AI 审核列表是**同一个**）。
+ *
+ * 只支持流水号一条查询路径：输入过程不发请求，**Enter 才发起**；清空是输入框右侧那个 ×。
+ * 没有「搜索 / 清空」两个传统按钮 —— 那是把网页表单的习惯带进工作台。
+ */
+function SearchField(props: {
+  value: string
+  placeholder: string
+  ariaLabel: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+  onClear: () => void
+}): React.ReactElement {
+  return <span className={C.searchWrap}>
+    <span className={C.searchGlyph} aria-hidden={true}><SearchIcon size={15} /></span>
+    <input
+      className={C.input}
+      value={props.value}
+      placeholder={props.placeholder}
+      aria-label={props.ariaLabel}
+      onChange={(event) => { props.onChange(String((event.target as { value?: unknown }).value ?? '')) }}
+      onKeyDown={(event) => {
+        if ((event as unknown as { key?: string }).key !== 'Enter') return
+        props.onSubmit()
+      }}
+    />
+    {props.value === '' ? null : <button
+      type="button"
+      className={C.searchClear}
+      aria-label={zhCN.clear}
+      title={zhCN.clear}
+      onClick={props.onClear}
+    >×</button>}
+  </span>
 }
 
 /** 一个按钮描述 → 元素。`confirm` 由组件本地状态承担（两段式点击）。 */
@@ -115,16 +170,15 @@ function RowButtons(props: {
   discussing: boolean
   /** 菜单是否开着（由列表层决定；行自己不持有 open，避免同时开多个）。 */
   menuOpen: boolean
-  onToggleMenu: (rect: { left: number; right: number; top: number; bottom: number }) => void
-  onShowTip: (rect: { left: number; right: number; top: number; bottom: number }) => void
+  onToggleMenu: (rect: AnchorRect) => void
+  onShowTip: (rect: AnchorRect) => void
   onHideTip: () => void
 }): React.ReactElement {
   const [confirming, setConfirming] = React.useState(false)
   const primary = primaryActionOf(props.view)
   const menu = menuActionsOf(props.view)
 
-  /** 触发元素自己的 rect（浮层按它定位；列表层拿去做 fixed 浮层）。 */
-  const rectOf = (element: { getBoundingClientRect?: () => DOMRect } | null): { left: number; right: number; top: number; bottom: number } => {
+  const rectOf = (element: { getBoundingClientRect?: () => DOMRect } | null): AnchorRect => {
     const rect = element?.getBoundingClientRect?.()
     return rect === undefined
       ? { left: 0, right: 0, top: 0, bottom: 0 }
@@ -151,13 +205,12 @@ function RowButtons(props: {
                 small
                 onClick={() => { setConfirming(false); props.onStart(primary.retry === true) }}
               />
-              <Button label="取消" small onClick={() => setConfirming(false)} />
+              <Button label="取消" small onClick={() => { setConfirming(false) }} />
             </>
           : <Button
               label={primary.label}
               tone={primary.tone}
               disabled={primary.disabled}
-              small
               onClick={() => {
                 if (primary.confirm === true) { setConfirming(true); return }
                 if (primary.id === 'start') { props.onStart(primary.retry === true); return }
@@ -171,7 +224,6 @@ function RowButtons(props: {
       type="button"
       className={C.aiRowBtn}
       aria-label={zhCN.aiRowButton}
-      aria-describedby={undefined}
       disabled={props.discussing}
       onMouseEnter={(event) => { props.onShowTip(rectOf(event?.currentTarget ?? null)) }}
       onMouseLeave={props.onHideTip}
@@ -182,13 +234,11 @@ function RowButtons(props: {
       <DeepSeekIcon size={18} />
     </button>
 
-    {/* •••：真正的 Icon Button；菜单本身由**列表层**渲染成浮层（见 ReportPane）。
-        打开时按钮保持 selected，用户一眼知道菜单属于哪一行。 */}
+    {/* •••：Ghost Icon Button；菜单本身由**列表层**渲染成浮层（见 ReportPane）。
+        打开时按钮保持一层略深的底，用户一眼知道菜单属于哪一行。 */}
     {menu.length === 0 ? null : <button
       type="button"
-      // 底色/字色复用主操作那套变体（用户 2026-09-23：「更多操作的三个点也需要改下颜色适配，
-      // 和前面的 AI 审核一样，按钮的背景色什么的，这样看起来很清楚」）；C.menu 只给几何与选中环。
-      className={[C.btn, C.btnPrimary, C.menu, props.menuOpen ? C.menuOpen : ''].filter((one) => one !== '').join(' ')}
+      className={[C.menu, props.menuOpen ? C.menuOpen : ''].filter((one) => one !== '').join(' ')}
       aria-haspopup="menu"
       aria-expanded={props.menuOpen}
       aria-label={zhCN.moreActions}
@@ -197,22 +247,45 @@ function RowButtons(props: {
   </div>
 }
 
+/** 流水号单元格：等宽文字 + 悬停才浮出的复制图标（复制完短暂变成对勾）。 */
+function SeqNoCell(props: {
+  value: string
+  copied: boolean
+  onCopy: () => void
+}): React.ReactElement {
+  return <span className={C.seq}>
+    <span className={C.mono}>{props.value}</span>
+    <button
+      type="button"
+      className={[C.seqCopy, props.copied ? C.seqCopyOn : ''].filter((one) => one !== '').join(' ')}
+      aria-label={zhCN.copySeqNo}
+      title={props.copied ? zhCN.copied : zhCN.copySeqNo}
+      onClick={props.onCopy}
+    >{props.copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}</button>
+  </span>
+}
+
 function PendingTable(props: ReportPaneProps & {
   rows: RowView[]
   /** 正在拉这份报告的文件（按钮禁用，防连点）。 */
   discussing: string
   /** 点那枚小鲸鱼：拉文件 → 问用户 / 直接进新对话。 */
   onDiscuss: (key: string) => void
+  /** 刚复制过的流水号（短暂显示对勾）。 */
+  copiedSeq: string
+  onCopySeq: (value: string) => void
   /** 当前开着菜单的那一行（列表层持有，天然只有一个）。 */
   openMenuKey: string
-  onToggleMenu: (key: string, rect: { left: number; right: number; top: number; bottom: number }, items: ButtonSpec[]) => void
-  onShowTip: (key: string, rect: { left: number; right: number; top: number; bottom: number }) => void
+  onToggleMenu: (key: string, rect: AnchorRect) => void
+  onShowTip: (key: string, rect: AnchorRect, kind?: 'discuss' | 'analyze') => void
   onHideTip: () => void
 }): React.ReactElement {
   const { state } = props
-  // 首屏/翻页/检索都可能还没拿到数据：这时说「没有待审核报告」是错的（上一秒还在加载）。
+  // 首屏/翻页/检索都可能还没拿到数据：这时说「暂无报告」是错的（上一秒还在加载）。
   if (props.rows.length === 0) {
-    return props.gating.busy === true ? <Loading text={zhCN.loadingList} /> : <Empty text={zhCN.noRows} />
+    return props.gating.busy === true ? <Loading text={zhCN.loadingList} /> : <div className={C.empty}>
+      <div>{zhCN.noRows}</div>
+    </div>
   }
   return <div className={C.tableWrap}><table className={C.table}>
     {/* 列宽分工写在 colgroup + consts.ts 的 .crwu-audit-col-* 里：
@@ -230,7 +303,6 @@ function PendingTable(props: ReportPaneProps & {
       <th className={C.th}>{zhCN.colName}</th>
       <th className={C.th}>{zhCN.colSeqNo}</th>
       <th className={C.th}>{zhCN.colRisk}</th>
-
       <th className={C.th}>{zhCN.colReview}</th>
       <th className={C.th}>{zhCN.colModified}</th>
       <th className={C.th}>{zhCN.colAction}</th>
@@ -251,7 +323,13 @@ function PendingTable(props: ReportPaneProps & {
             <div className={C.cellMono}>{task.idTail}</div>
           </td>
           {/* nowrap 列在固定布局里可能被压窄：截断时用 title 兜住完整值。 */}
-          <td className={`${C.td} ${C.tdNowrap}`} title={task.seqNo}><div className={C.mono}>{task.seqNo}</div></td>
+          <td className={`${C.td} ${C.tdNowrap}`} title={task.seqNo}>
+            <SeqNoCell
+              value={task.seqNo}
+              copied={props.copiedSeq === task.seqNo}
+              onCopy={() => { props.onCopySeq(task.seqNo) }}
+            />
+          </td>
           {/* 风险等级是**扫描信息**，不是装饰：小圆点 + 等级字母，没有底色也没有描边
               （用户 2026-09-22 口径：不要 Ant Design Tag 那种彩色矩形）。 */}
           <td className={`${C.td} ${C.tdNowrap}`} title={`${zhCN.colRisk} ${risk.text}`}>
@@ -264,16 +342,16 @@ function PendingTable(props: ReportPaneProps & {
             {/* 主状态 13px、处理节点 12px（两级字重不同），间距 4px。**不新增任何业务枚举**：
                 显示的还是氚云给的那两个字段，只是排版分开。 */}
             <div className={C.reviewMain}>{`${task.reviewLevel} · ${task.reviewState}`}</div>
-            {task.currentNode === '' ? null : <div className={C.cellSub} style={{ marginTop: '4px' }}>{task.currentNode}</div>}
-            {view.badges.map((badge) => <div key={badge.text} style={{ marginTop: '4px' }}>
-              <Badge text={badge.text} tone={badge.tone} />
-            </div>)}
+            {task.currentNode === '' ? null : <div className={C.cellSub}>{task.currentNode}</div>}
+            {view.badges.map((badge) => <div key={badge.text} className={C.cellSub}>{badge.text}</div>)}
             {/* 门禁说明（"宿主插件是旧构建，请重启 web profile"这类）必须说得出原因：
                 它是**状态解释**，所以留在状态列，不进行动区。 */}
-            {view.notes.map((note) => <div key={note} className={C.muted} style={{ marginTop: '4px' }}>{note}</div>)}
+            {view.notes.map((note) => <div key={note} className={C.cellSub}>{note}</div>)}
           </td>
+          {/* 业务时间**一律保留完整年份**（用户 2026-09-23 口径：禁止「昨天 / 09-20」这类相对时间，
+              这是审核留痕系统，跨年数据很容易被误读）。完整原值留在 title 里。 */}
           <td className={`${C.td} ${C.tdNowrap}`} title={task.modifiedAt}>
-            <div className={C.mono}>{formatWhen(task.modifiedAt)}</div>
+            <div className={C.mono}>{formatDateTime(task.modifiedAt)}</div>
           </td>
           <td className={`${C.td} ${C.tdAction}`}>
             {/* 行动区只有操作：**一个主操作 + 小鲸鱼 + 必要时一个 •••**。
@@ -285,9 +363,7 @@ function PendingTable(props: ReportPaneProps & {
               onRetryUpload={() => props.onRetryUpload(view.key)}
               onOpenCloud={() => {
                 // **行 key 是流水号，不是 OSS 对象 key**：`oss-link` 会按清单里配置的 prefix
-                // 做隔离检查，把裸流水号拒掉（实测 `ok:false`「对象不在配置的 OSS 前缀内」，
-                // 界面只弹一句提示 —— 就是「查看报告打不开」）。这一行要打开的是它云端交付件
-                // 里的 HTML，所以取 `state.ossIndex[view.key].htmlKey`。
+                // 做隔离检查，把裸流水号拒掉。这一行要打开的是它云端交付件里的 HTML。
                 const cloud = state.ossIndex[view.key]
                 props.onOpenCloud(cloud?.htmlKey ?? '')
               }}
@@ -299,8 +375,8 @@ function PendingTable(props: ReportPaneProps & {
               onDiscuss={() => { props.onDiscuss(view.key) }}
               discussing={props.discussing !== ''}
               menuOpen={props.openMenuKey === view.key}
-              onToggleMenu={(rect) => { props.onToggleMenu(view.key, rect, menuActionsOf(view)) }}
-              onShowTip={(rect) => { props.onShowTip(view.key, rect) }}
+              onToggleMenu={(rect) => { props.onToggleMenu(view.key, rect) }}
+              onShowTip={(rect) => { props.onShowTip(view.key, rect, 'discuss') }}
               onHideTip={props.onHideTip}
             />
           </td>
@@ -310,33 +386,179 @@ function PendingTable(props: ReportPaneProps & {
   </table></div>
 }
 
-function ResultsTable(props: ReportPaneProps & { items: CloudItem[] }): React.ReactElement {
+/** 交付件的**业务语义**：只认「审核报告 / 审核数据」两种，不把 .html/.json 或 OSS 路径端出去。 */
+export function fileKindsOf(item: CloudItem): string[] {
+  const kinds: string[] = []
+  if (item.htmlKey !== '') kinds.push(zhCN.resultFileReport)
+  if (item.jsonKey !== '') kinds.push(zhCN.resultFileData)
+  return kinds
+}
+
+/** AI 审核列表一行的 ••• 菜单（只放真实存在的功能）。 */
+export function resultMenuOf(item: CloudItem): ButtonSpec[] {
+  const items: ButtonSpec[] = []
+  if (item.htmlKey !== '' && item.jsonKey !== '') {
+    items.push({ id: 'audit-info', label: zhCN.auditInfo, tone: 'plain', disabled: false })
+  }
+  if (item.htmlKey !== '' || item.jsonKey !== '') {
+    items.push({ id: 'raw-artifact', label: zhCN.rawArtifact, tone: 'plain', disabled: false })
+  }
+  items.push({ id: 'copy-seqno', label: zhCN.copySeqNo, tone: 'plain', disabled: false })
+  return items
+}
+
+/** `inFileResolution` 的中文口径（**逐字取交付规范 §6.1 的三态表**；认不出的保留原值）。 */
+export function resolutionLabel(code: string): string {
+  if (code === 'L-resolved') return zhCN.auditResolutionResolved
+  if (code === 'L-open') return zhCN.auditResolutionOpen
+  if (code === 'L-unclosed') return zhCN.auditResolutionUnclosed
+  if (code === 'L-uncheckable') return zhCN.auditResolutionUncheckable
+  return code
+}
+
+/**
+ * 把审核摘要里的复核信息整理成给模型的**复核意见行**。
+ *
+ * 用户 §17：按真实数据结构读取，不假设固定三级。所以这里就是**有什么列什么** ——
+ * `reviewFiles`（复核文件 + 级次 + 版本 + 时间）与 `reviewItems`（人工意见条目 + 原话 + 落实状态）。
+ */
+export function reviewLinesOf(info: Record<string, unknown>): string[] {
+  const review = asRecord(info.reviewComparison)
+  const lines: string[] = []
+  const files = Array.isArray(review.reviewFiles) ? review.reviewFiles : []
+  for (const raw of files) {
+    const file = asRecord(raw)
+    const head = [textOf(file.level), textOf(file.displayName), textOf(file.version)]
+      .filter((part) => part !== '').join(' · ')
+    if (head === '') continue
+    const at = textOf(file.occurredAt)
+    lines.push(at === '' ? head : `${head}（${formatDateTime(at)}）`)
+  }
+  const items = Array.isArray(review.reviewItems) ? review.reviewItems : []
+  for (const raw of items) {
+    const item = asRecord(raw)
+    const parts = [
+      textOf(item.title),
+      textOf(item.reviewerQuote) === '' ? '' : `原话：${textOf(item.reviewerQuote)}`,
+      resolutionLabel(textOf(item.inFileResolution)),
+      Array.isArray(item.linkedIssueIds) && item.linkedIssueIds.length > 0
+        ? `关联 AI 问题：${item.linkedIssueIds.map((id) => textOf(id)).filter((id) => id !== '').join('、')}`
+        : '',
+    ].filter((part) => part !== '')
+    if (parts.length > 0) lines.push(parts.join('；'))
+  }
+  return lines
+}
+
+function ResultsTable(props: ReportPaneProps & {
+  items: CloudItem[]
+  copiedSeq: string
+  onCopySeq: (value: string) => void
+  openMenuKey: string
+  onToggleMenu: (key: string, rect: AnchorRect, items: ButtonSpec[], cloud: CloudItem) => void
+  /** 统一的 DeepSeek 入口：对**这一行**的 AI 审核结果开一次分析会话。 */
+  onAnalyze: (cloud: CloudItem) => void
+  analyzing: boolean
+  onShowTip: (key: string, rect: AnchorRect, kind?: 'discuss' | 'analyze') => void
+  onHideTip: () => void
+}): React.ReactElement {
   if (props.items.length === 0) {
-    return props.state.ossLoading ? <Loading text={zhCN.loadingCloud} /> : <Empty text={zhCN.noResults} />
+    return props.state.ossLoading
+      ? <Loading text={zhCN.loadingCloud} />
+      : <div className={C.empty}>
+          <div>{zhCN.noResults}</div>
+          <div className={C.emptyHint}>{zhCN.noResultsHint}</div>
+        </div>
   }
   return <div className={C.tableWrap}><table className={C.table}>
+    {/* 三列分工 38% / 42% / 20%：三列间距不再被 auto 布局极度拉开。 */}
+    <colgroup>
+      <col className={C.colResSeqNo} />
+      <col className={C.colResFiles} />
+      <col className={C.colResAction} />
+    </colgroup>
     <thead><tr>
       <th className={C.th}>{zhCN.colResultSeqNo}</th>
-      <th className={C.th}>{zhCN.colResultCloud}</th>
+      <th className={C.th}>{zhCN.colResultFiles}</th>
       <th className={C.th}>{zhCN.colAction}</th>
     </tr></thead>
     <tbody>
       {props.items.map((item) => {
-        // 结果页只列**规范交付件**：辅助文件不该出现在「AI审核结果」里。
-        const files = [item.htmlKey, item.jsonKey].filter((key) => key !== '')
-        return <tr key={item.seqNo} className={C.tbodyRow}>
-          <td className={C.td}><div className={C.mono}>{item.seqNo}</div></td>
+        // 结果页只列**规范交付件**：辅助文件不该出现在「AI审核列表」里。
+        const kinds = fileKindsOf(item)
+        const menu = resultMenuOf(item)
+        const open = props.openMenuKey === item.seqNo
+        // 「N 个交付件」取**这一次列举真实看到的对象个数**（`item.files.length`），
+        // 语义 Chip 仍是审核报告 / 审核数据；旧宿主没带 files[] 时退回语义条数。
+        const deliverableCount = Math.max(item.files.length, kinds.length)
+        return <tr key={item.seqNo} className={[C.tbodyRow, open ? C.tbodyRowOn : ''].filter((one) => one !== '').join(' ')}>
+          <td className={`${C.td} ${C.tdNowrap}`} title={item.seqNo}>
+            <SeqNoCell
+              value={item.seqNo}
+              copied={props.copiedSeq === item.seqNo}
+              onCopy={() => { props.onCopySeq(item.seqNo) }}
+            />
+          </td>
           <td className={C.td}>
-            {files.map((key) => <div key={key} className={C.mono}>{key}</div>)}
+            {/* 交付件按业务语义展示：N 个交付件 + 轻量 Chip（审核报告 / 审核数据）。
+                完整 OSS 路径只允许出现在「审核信息」与开发模式里，普通员工不需要知道。 */}
+            <div className={C.resultFiles}>
+              <span className={C.resultCount}>{zhCN.resultFilesCount.replace('%s', String(deliverableCount))}</span>
+              {kinds.map((kind) => <span key={kind} className={C.fileChip}>{kind}</span>)}
+            </div>
           </td>
           <td className={`${C.td} ${C.tdAction}`}>
-            <div className={C.row}>
-              {item.htmlKey === '' ? null : <Button label={zhCN.openReport} tone="primary" small onClick={() => props.onOpenCloud(item.htmlKey)} />}
-              {item.jsonKey === '' || item.htmlKey === '' ? null : <Button
-                label={zhCN.auditInfo}
-                small
-                onClick={() => props.onOpenAuditInfo(item.seqNo, item)}
+            <div className={C.rowActions}>
+              {item.htmlKey === '' ? null : <Button
+                label={zhCN.openReport}
+                tone="primary"
+                onClick={() => { props.onOpenCloud(item.htmlKey) }}
               />}
+              {/* 与「报告列表」**同一个 DeepSeek 图标组件 + 同一套 Icon Button 视觉**，
+                  靠 Tooltip 区分业务含义：这里是「与 DeepSeek 分析审核结果」。
+                  不加文字按钮、不加「可分析 / AI ready」这类噪音 Tag。 */}
+              <button
+                type="button"
+                className={C.aiRowBtn}
+                aria-label={zhCN.auditTooltipAnalyze}
+                aria-describedby={undefined}
+                disabled={props.analyzing}
+                onMouseEnter={(event) => {
+                  const rect = event?.currentTarget?.getBoundingClientRect?.()
+                  props.onShowTip(item.seqNo, rect === undefined
+                    ? { left: 0, right: 0, top: 0, bottom: 0 }
+                    : { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }, 'analyze')
+                }}
+                onMouseLeave={props.onHideTip}
+                onFocus={(event) => {
+                  const rect = event?.currentTarget?.getBoundingClientRect?.()
+                  props.onShowTip(item.seqNo, rect === undefined
+                    ? { left: 0, right: 0, top: 0, bottom: 0 }
+                    : { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }, 'analyze')
+                }}
+                onBlur={props.onHideTip}
+                onClick={() => { props.onAnalyze(item) }}
+              >
+                <DeepSeekIcon size={18} />
+              </button>
+              {menu.length === 0 ? null : <button
+                type="button"
+                className={[C.menu, open ? C.menuOpen : ''].filter((one) => one !== '').join(' ')}
+                aria-haspopup="menu"
+                aria-expanded={open}
+                aria-label={zhCN.moreActions}
+                onClick={(event) => {
+                  const rect = event?.currentTarget?.getBoundingClientRect?.()
+                  props.onToggleMenu(
+                    item.seqNo,
+                    rect === undefined
+                      ? { left: 0, right: 0, top: 0, bottom: 0 }
+                      : { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+                    menu,
+                    item,
+                  )
+                }}
+              >•••</button>}
             </div>
           </td>
         </tr>
@@ -376,26 +598,62 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
   // （用户 2026-09-22 口径）。切到另一行时浮层是同一个 DOM 节点、left/top 有过渡，
   // 看起来是"滑过去"而不是闪一下。
   const [openMenu, setOpenMenu] = React.useState<{
-    key: string; x: number; y: number; flip: boolean; items: ButtonSpec[]
+    key: string; x: number; y: number; flip: boolean; items: ButtonSpec[]; cloud: CloudItem | null
   } | null>(null)
-  const [tip, setTip] = React.useState<{ key: string; x: number; y: number } | null>(null)
-  const tabsRef = React.useRef<{ querySelector?: (selector: string) => { offsetLeft?: number; offsetWidth?: number } | null } | null>(null)
-  const [tabInd, setTabInd] = React.useState({ x: 0, w: 0 })
-  React.useEffect(() => {
-    const row = tabsRef.current
-    if (row?.querySelector === undefined) return
-    const active = row.querySelector('.crwu-audit-tab-on')
-    if (active?.offsetLeft === undefined || active.offsetWidth === undefined) return
-    // 指示条是**固定宽度的小横条**（设计稿 28–36px），居中在选中页签下方 ——
-    // 不是铺满整条页签（实测那样会变成 92px，像下划线）。
-    const width = 32
-    setTabInd({ x: (active.offsetLeft ?? 0) + ((active.offsetWidth ?? 0) - width) / 2, w: width })
-  }, [view, state.auditsReady, state.total, state.ossIndex])
+  // 浮层提示带 kind：报告列表那枚是「讨论报告」，AI 审核列表那枚是「分析审核结果」——
+  // 同一个图标、同一套浮层，靠文案区分业务含义（用户 §1）。
+  const [tip, setTip] = React.useState<{ key: string; x: number; y: number; kind: 'discuss' | 'analyze' } | null>(null)
   const [jump, setJump] = React.useState('')
   const [jumpHint, setJumpHint] = React.useState('')
+  // 刚复制过的流水号（1.2s 后自动收掉对勾）；定时器归组件管，卸载时清掉。
+  const [copiedSeq, setCopiedSeq] = React.useState('')
+  const copyTimer = React.useRef<number | null>(null)
+  React.useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+  }, [])
 
-  /** 把一行氚云记录翻译成给 AI 的「报告事实」。 */
-  const factsOf = (key: string): DiscussionFacts => {
+  // ── 「AI 审核结果分析会话」的页内状态 ─────────────────────────────────────
+  /** 真实阶段（不显示假百分比）；非空即在列表数据区盖中瑞企业 Loading。 */
+  const [analysisStage, setAnalysisStage] = React.useState('')
+  /** 建立会话前的版本检查对话框（stale / possibly / existing / limited）。 */
+  const [auditAsk, setAuditAsk] = React.useState<AuditAskState | null>(null)
+  /** 远端资料一项都取不到：**不 fallback 本地**，也不建会话（用户 §8/§16）。 */
+  const [remoteMissing, setRemoteMissing] = React.useState<{ mode: 'discuss' | 'analyze'; seqNo: string; canRestart: boolean } | null>(null)
+  const [auditBusy, setAuditBusy] = React.useState(false)
+  /** 待确认的上下文（用户在对话框里点了哪个选项，就用这一份去建/续会话）。 */
+  const pendingAudit = React.useRef<{
+    cloud: CloudItem
+    context: AuditAnalysisContext
+    /** 与注入内容同源的那份快照（保证"存下来的"就是"注入进去的"）。 */
+    snapshot: AuditContextSnapshot
+    existing: SessionSummaryLike[]
+    task: TaskRow | undefined
+  } | null>(null)
+
+  /** 复制流水号：剪贴板不可用（老宿主 / 非安全上下文）时静默不改状态，不假装成功。 */
+  const copySeqNo = (value: string): void => {
+    const clipboard = (globalThis.navigator as { clipboard?: { writeText?: (text: string) => Promise<void> } } | undefined)?.clipboard
+    if (typeof clipboard?.writeText !== 'function' || value === '') return
+    void clipboard.writeText(value).then(() => {
+      setCopiedSeq(value)
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => {
+        setCopiedSeq((current) => (current === value ? '' : current))
+      }, 1200)
+    }).catch((cause: unknown) => {
+      // 复制失败只是"没复制上"：不改状态、不弹错，用户再点一次即可。
+      void cause
+    })
+  }
+
+  /**
+   * 把一行氚云记录翻译成给 AI 的「报告事实」。
+   *
+   * `remote` 传本次远端拉到的资料（`report-files` 的**氚云附件 + 云端交付件**）：
+   * 用户 2026-09-23 强制口径 —— 报告业务会话只允许用远端资料，所以这里**不写工作空间路径、
+   * 不写本地案例目录内容**，只把远端资料的来源清单交给模型。
+   */
+  const factsOf = (key: string, remote?: { lines: string[]; sources: string[]; files: string[] }): DiscussionFacts => {
     const task = state.tasks[rows.findIndex((row) => row.key === key)]
     return {
       seqNo: key,
@@ -409,18 +667,25 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       currentNode: task?.currentNode ?? '',
       modifiedAt: task?.modifiedAt ?? '',
       formName: state.formName,
-      files: (state.ossIndex[key]?.files ?? []).map((file) => file.name),
-      workspacePath: props.workspace.path,
+      files: remote?.files ?? (state.ossIndex[key]?.files ?? []).map((file) => `云端交付件 ${file.name}`),
+      fetchedAt: new Date().toISOString(),
+      sources: remote?.sources ?? [],
     }
   }
 
-  /** 把 crwu 拉到的三组文件拼成注入上下文里那份清单（只名字与大小，不含正文）。 */
-  // 逐组兜底：旧宿主或异常回包可能缺某一组（实测缺组会让整个点击崩掉），
-  // 缺一组就当那一组为空，绝不因此挡住"开对话"这件事。
+  /**
+   * 拼注入上下文的那份**远端资料清单**。
+   *
+   * 用户 2026-09-23 强制口径：报告业务会话**只允许用远端资料**，
+   * 所以这里**只列氚云附件与云端交付件** —— 本地案例目录（`pulled.local`）一律不进上下文：
+   * 既不给路径，也不给文件名，模型没有任何"本机文件"可引用。本地那份仍然在 Host 侧被列举，
+   * 但只用于界面显示与内部实现，不作为会话的业务来源（见 §15 数据边界）。
+   *
+   * 逐组兜底：旧宿主或异常回包可能缺某一组，缺一组就当那一组为空，不因此崩掉。
+   */
   const fileLinesOf = (pulled: ReportFilesResult): string[] => [
-    ...(pulled.h3yun ?? []).map((file) => `${file.name}（氚云附件${file.size > 0 ? ` · ${formatBytes(file.size)}` : ''}）`),
-    ...(pulled.local ?? []).map((file) => `${file.path}（本地案例目录）`),
-    ...(pulled.oss ?? []).map((file) => `${file.name}（云端交付件）`),
+    ...(pulled.h3yun ?? []).map((file) => `氚云附件 ${file.name}${file.size > 0 ? `（${formatBytes(file.size)}）` : ''}`),
+    ...(pulled.oss ?? []).map((file) => `云端交付件 ${file.name}${typeof file.size === 'number' && file.size > 0 ? `（${formatBytes(file.size)}）` : ''}${file.etag === undefined || file.etag === '' ? '' : ` · ETag ${file.etag.slice(0, 16)}`}`),
   ]
 
   /** 新建一条讨论会话：注入上下文 + 开场，然后把主面板切到那条原生会话。 */
@@ -432,21 +697,30 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
    * 也不要直接复用旧会话里的附件上下文」。所以这条路径**一定**重新拉。
    */
   const startNewChat = async (key: string): Promise<void> => {
-    const facts = factsOf(key)
     setAiError('')
     setPulling(key)
     try {
-      // 一次调用同时取三组：氚云附件 / 本地案例目录 / 该流水号的 OSS 审核产物。
+      // 一次调用取远端资料：氚云附件（权威来源）+ 云端交付件。**本地案例目录不进上下文**。
       let pulled: ReportFilesResult | null = null
       try {
-        pulled = await workbenchApi.reportFiles({ seqNo: key, objectId: facts.objectId })
+        pulled = await workbenchApi.reportFiles({ seqNo: key, objectId: factsOf(key).objectId })
         if (!pulled.ok && pulled.error !== '') setAiError(pulled.error)
       } catch (cause: unknown) {
-        // 拉资料失败不白屏：给出原因，用户仍然可以围绕已有信息讨论。
         setAiError(describe(cause))
       }
       const lines = pulled === null ? [] : fileLinesOf(pulled)
-      const briefFacts = lines.length === 0 ? facts : { ...facts, files: lines }
+      // 远端资料一项都取不到 → **不建会话、不找本地替代**（用户 §8/§16）：
+      // 直接说"远端资料拿不到"，给重试。
+      if (lines.length === 0) {
+        setRemoteMissing({ mode: 'discuss', seqNo: key, canRestart: true })
+        return
+      }
+      const facts = factsOf(key, {
+        lines,
+        files: lines,
+        sources: (pulled === null ? [] : sourcesOf({ pulled, cloud: { htmlKey: '', jsonKey: '' }, info: {}, fetchedAt: new Date().toISOString() }))
+          .map((ref) => [ref.provider, ref.remoteId, ref.remoteVersion, ref.remoteUpdatedAt === '' ? '' : formatDateTime(ref.remoteUpdatedAt), ref.digest === '' ? '' : `digest ${ref.digest.slice(0, 16)}`].filter((part) => part !== '').join(' · ')),
+      })
       const created = await ensureDiscussion({
         port: props.port,
         sessions,
@@ -456,7 +730,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         forceNew: true,
       })
       if (!created.ok) { setAiError(created.error); return }
-      const failure = await askDiscussion(props.port, created.id, discussionPrompt(briefFacts, zhCN.aiKickoff, true))
+      const failure = await askDiscussion(props.port, created.id, discussionPrompt(facts, zhCN.aiKickoff, true))
       if (failure !== '') setAiError(failure)
       props.onOpenDiscussion(created.id)
     } finally {
@@ -479,6 +753,185 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       return
     }
     await startNewChat(key)
+  }
+
+  /**
+   * **AI 审核结果分析会话**（用户 2026-09-23）。
+   *
+   * 点 DeepSeek 之后**不立刻建会话**，先做一次 Audit Conversation Preflight：
+   * 1. 取最新原始资料（`report-files`：氚云附件 + 本地案例目录 + 云端交付件，只列举不下载）；
+   * 2. 取该报告的**已裁剪审核摘要**（`oss-result`）——AI 审核报告 / 结构化结果 / 复核意见都在里面；
+   * 3. 与上次的 Context Snapshot 比版本（digest → version → etag → mtime → 时间退化）；
+   * 4. 按结论决定：直进 / stale 选择框 / possibly 选择框 / 已有会话选择框 / 缺原始资料（Limited）。
+   *
+   * 全程**不修改任何历史审核产物**：AI Audit T1 / Current Report T2 / 本会话分析 T3 三者独立。
+   */
+  const runAuditAnalysis = async (cloud: CloudItem): Promise<void> => {
+    const key = cloud.seqNo
+    const task = state.tasks.find((row) => (row.seqNo !== '' ? row.seqNo : row.name) === key)
+    setAiError('')
+    setAuditAsk(null)
+    setPulling('')
+    setAnalysisStage(zhCN.auditStageReport)
+    try {
+      // 1) 最新原始资料（只列举元数据；模型在会话里按路径回看原文）
+      let pulled: ReportFilesResult | null = null
+      try {
+        pulled = await workbenchApi.reportFiles({ seqNo: key, objectId: task?.id ?? '' })
+      } catch (cause: unknown) {
+        setAiError(describe(cause))
+      }
+      // 2) AI 审核报告 + 结构化结果 + 复核意见
+      setAnalysisStage(zhCN.auditStageAudit)
+      let loaded: { info: Record<string, unknown> | null; error: string } = { info: null, error: '' }
+      try {
+        loaded = await props.onLoadAuditInfo(key, cloud)
+      } catch (cause: unknown) {
+        loaded = { info: null, error: describe(cause) }
+      }
+      if (loaded.error !== '') setAiError(loaded.error)
+      const info = loaded.info ?? {}
+
+      // 3) 复核意见时间 + 版本关系
+      setAnalysisStage(zhCN.auditStageReview)
+      const reportUpdatedAt = task?.modifiedAt ?? ''
+      // 审核产物对象在 OSS 上的 ETag / 最后写入时间（`ossutil ls` 长格式一次列举就有）：
+      // 判"审核结果有没有重新生成过"用它，比产物内部写的 generatedAt 更硬。
+      const artifact = auditArtifactOf(cloud)
+      const evidence = evidenceOf({
+        info, reportUpdatedAt, auditEtag: artifact.etag, auditLastModified: artifact.lastModified,
+      })
+      setAnalysisStage(zhCN.auditStageVersion)
+      const verdict = freshnessOf(evidence)
+      const fetchedAt = new Date().toISOString()
+
+      // 4) 组装上下文（缺失项**如实记录**，不伪装成完整分析）
+      const reportLines = pulled === null ? [] : fileLinesOf(pulled)
+      const missing: string[] = []
+      if (reportLines.length === 0) missing.push(zhCN.auditCtxLimitedOriginal)
+      if (cloud.htmlKey === '') missing.push(zhCN.auditCtxLimitedHtml)
+      if (loaded.info === null) missing.push(zhCN.auditCtxLimitedJson)
+      if (reviewUpdatedAtOf(info) === '') missing.push(zhCN.auditCtxLimitedReview)
+      const auditLines = [
+        cloud.htmlKey === '' ? '' : `${zhCN.resultFileReport}：${cloud.htmlKey}`,
+        cloud.jsonKey === '' ? '' : `${zhCN.resultFileData}：${cloud.jsonKey}`,
+      ].filter((line) => line !== '')
+      const context: AuditAnalysisContext = {
+        seqNo: key,
+        project: task === undefined ? '' : (task.project !== '' ? task.project : task.name),
+        reportUpdatedAt,
+        reportVersion: textOf(info.reportVersion),
+        auditGeneratedAt: auditGeneratedAtOf(info),
+        auditSourceDigest: evidence.auditSourceDigest,
+        auditArtifactVersion: textOf(info.schemaVersion),
+        reviewUpdatedAt: reviewUpdatedAtOf(info),
+        fetchedAt,
+        sources: sourcesOf({ pulled, cloud, info, fetchedAt }),
+        reportLines,
+        auditLines,
+        reviewLines: reviewLinesOf(info),
+        missing,
+        verdict,
+      }
+
+      const existing = sessionsOfKind('audit_analysis', sessions, key)
+      const snapshot = loadSnapshot(key)
+      const current = snapshotOf({
+        seqNo: key, info, reportUpdatedAt,
+        // 报告资料的同源指纹（DSH fs 的版本令牌聚合）：以后判"资料是否变过"用它。
+        reportRemoteId: reportRemoteIdOf(pulled),
+        auditRemoteId: auditRemoteIdOf(cloud),
+        auditEtag: artifact.etag,
+        auditLastModified: artifact.lastModified,
+        fetchedAt,
+        createdAt: new Date().toISOString(),
+      })
+      const changes: SnapshotChange | null = snapshot === null ? null : changesSince(snapshot, current)
+      pendingAudit.current = { cloud, context, snapshot: current, existing, task }
+
+      // 5) 决定：缺原始资料 / 确认过期 / 可能过期 / 已有会话 / 直进
+      // 远端原始资料一项都没取到：**不建会话、不 fallback 本地**（用户 §8/§16），只给重试。
+      if (reportLines.length === 0) {
+        setAuditAsk({
+          mode: 'insufficient', seqNo: key, reportUpdatedAt, auditGeneratedAt: context.auditGeneratedAt,
+          reviewUpdatedAt: context.reviewUpdatedAt, changes, canRestart: task !== undefined,
+        })
+        return
+      }
+      if (verdict.status === 'stale') {
+        setAuditAsk({
+          mode: 'stale', seqNo: key, reportUpdatedAt, auditGeneratedAt: context.auditGeneratedAt,
+          reviewUpdatedAt: context.reviewUpdatedAt, changes, canRestart: task !== undefined,
+        })
+        return
+      }
+      if (verdict.status === 'possibly_stale') {
+        setAuditAsk({
+          mode: 'possibly', seqNo: key, reportUpdatedAt, auditGeneratedAt: context.auditGeneratedAt,
+          reviewUpdatedAt: context.reviewUpdatedAt, changes, canRestart: task !== undefined,
+        })
+        return
+      }
+      if (existing.length > 0) {
+        setAuditAsk({
+          mode: 'existing', seqNo: key, reportUpdatedAt, auditGeneratedAt: context.auditGeneratedAt,
+          reviewUpdatedAt: context.reviewUpdatedAt, changes, canRestart: task !== undefined,
+        })
+        return
+      }
+      await createAuditAnalysis()
+    } finally {
+      setAnalysisStage('')
+    }
+  }
+
+  /**
+   * 新建分析会话 = **Fresh Snapshot**：一定要用刚取到的那份上下文重新注入，
+   * 绝不复用上次会话的附件/缓存（用户 §14）。
+   */
+  const createAuditAnalysis = async (): Promise<void> => {
+    const pending = pendingAudit.current
+    if (pending === null) return
+    setAuditBusy(true)
+    setAnalysisStage(zhCN.auditStagePrepare)
+    try {
+      const created = await ensureDiscussion({
+        port: props.port,
+        sessions,
+        seqNo: pending.context.seqNo,
+        workspaceId: props.workspace.id,
+        workspacePath: props.workspace.path,
+        forceNew: true,
+        kind: 'audit_analysis',
+      })
+      if (!created.ok) { setAiError(created.error); return }
+      const failure = await askDiscussion(props.port, created.id, buildAuditContextBlock(pending.context))
+      if (failure !== '') setAiError(failure)
+      // Context Snapshot：以后打开这条会话时用它判"是否已经过期"。
+      // **存的就是刚才注入的那一份**（不是重新算一遍 —— 两份一旦不同，续聊检查会误报）。
+      saveSnapshot(pending.snapshot)
+      props.onOpenDiscussion(created.id)
+    } finally {
+      setAuditBusy(false)
+      setAnalysisStage('')
+      setAuditAsk(null)
+    }
+  }
+
+  /** 继续已有分析会话：**只做轻量元数据检查**（不重新下载大文件），资料没变就直接进。 */
+  const continueAuditAnalysis = async (): Promise<void> => {
+    const pending = pendingAudit.current
+    if (pending === null || pending.existing.length === 0) return
+    setAuditAsk(null)
+    props.onOpenDiscussion(pending.existing[0].id)
+  }
+
+  /** 「重新 AI 审核」：走**已有**的审核发起流程，不在这里另写一套。 */
+  const restartAuditFromAsk = (): void => {
+    const pending = pendingAudit.current
+    if (pending === null || pending.task === undefined) return
+    setAuditAsk(null)
+    props.onStart(pending.task, true)
   }
 
   /** ESC、点浮层之外这两条通用关闭路径（滚动关闭挂在滚动容器的 onScroll 上）。 */
@@ -505,19 +958,21 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
    *  默认贴按钮下方、右边缘对齐；下方放不下就翻到按钮上方（两处都留 8px 间距）。 */
   const toggleMenu = (
     key: string,
-    rect: { left: number; right: number; top: number; bottom: number },
-    items: ButtonSpec[],
+    rect: AnchorRect,
+    menuItems: ButtonSpec[],
+    cloud: CloudItem | null,
   ): void => {
     setTip(null)
     if (openMenu?.key === key) { setOpenMenu(null); return }
     const menuWidth = 152
-    const menuHeight = 10 + items.length * 34
+    const menuHeight = 10 + menuItems.length * 34
     const viewportW = typeof window === 'undefined' ? 1440 : window.innerWidth
     const viewportH = typeof window === 'undefined' ? 900 : window.innerHeight
     const flip = rect.bottom + 8 + menuHeight > viewportH && rect.top - 8 - menuHeight > 0
     setOpenMenu({
       key,
-      items,
+      items: menuItems,
+      cloud,
       x: Math.max(8, Math.min(rect.right - menuWidth, viewportW - menuWidth - 8)),
       y: flip ? rect.top - 8 - menuHeight : rect.bottom + 8,
       flip,
@@ -525,53 +980,62 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
   }
 
   /** 小鲸鱼的提示：悬停**立刻**出现在按钮上方（自绘浮层；原生 title 要等约一秒、样式也不受控）。 */
-  const showTip = (key: string, rect: { left: number; right: number; top: number; bottom: number }): void => {
+  const showTip = (key: string, rect: AnchorRect, kind: 'discuss' | 'analyze' = 'discuss'): void => {
     if (openMenu !== null) return
-    const width = 152
+    const width = 190
     const viewportW = typeof window === 'undefined' ? 1440 : window.innerWidth
     const center = rect.left + (rect.right - rect.left) / 2
-    setTip({ key, x: Math.max(8, Math.min(center - width / 2, viewportW - width - 8)), y: rect.top - 12 - 30 })
+    setTip({ key, kind, x: Math.max(8, Math.min(center - width / 2, viewportW - width - 8)), y: rect.top - 12 - 30 })
   }
 
   /** 菜单项动作 → 行为（与原来行内的派发完全一致，只是移到了列表层）。 */
   const handleMenuAction = (id: string): void => {
-    const key = openMenuKeyRef.current
+    const current = openMenuRef.current
+    const key = current?.key ?? ''
     const task = state.tasks[rows.findIndex((row) => row.key === key)]
-    const cloud = state.ossIndex[key]
+    const cloud = current?.cloud ?? state.ossIndex[key]
     if (id === 'restart') { if (task !== undefined) props.onStart(task, true); return }
     if (id === 'stop') { props.onStop(''); return }
     if (id === 'retry-upload') { props.onRetryUpload(key); return }
     if (id === 'cloud-report') { props.onOpenCloud(cloud?.htmlKey ?? ''); return }
-    if (id === 'audit-info') { if (cloud !== undefined) props.onOpenAuditInfo(key, cloud); return }
+    if (id === 'audit-info') { if (cloud !== undefined && cloud !== null) props.onOpenAuditInfo(key, cloud); return }
     if (id === 'open-html') { props.onOpenLocalHtml(key); return }
+    // 「原始交付件」= 打开这一行的 OSS 原始对象（有审核数据就先给数据，否则给审核报告）。
+    if (id === 'raw-artifact') {
+      const raw = cloud?.jsonKey !== undefined && cloud.jsonKey !== '' ? cloud.jsonKey : (cloud?.htmlKey ?? '')
+      if (raw !== '') props.onOpenCloud(raw)
+      return
+    }
+    if (id === 'copy-seqno') { copySeqNo(key); return }
     if (id === 'start') { if (task !== undefined) props.onStart(task, false) }
   }
-  const openMenuKeyRef = React.useRef('')
-  openMenuKeyRef.current = openMenu?.key ?? ''
+  const openMenuRef = React.useRef<typeof openMenu>(null)
+  openMenuRef.current = openMenu
 
   return <>
     <div className={C.surface}>
-    {/* 页面头：只有标题 + 右侧一个「同步」。用户口径（2026-09-22）：
-        「不要副标题」「不要把 8652 份报告 / 5 份交付件放在标题旁边 —— 这些数据应该存在于下面的
-        View Switch」「页面标题区域必须非常安静」。计数只在下方的视图切换里出现一次。 */}
+    {/* 页面头：只有标题。用户口径（2026-09-22）：「不要副标题」「不要把 8652 份报告 / 5 份交付件
+        放在标题旁边 —— 这些数据应该存在于下面的 View Switch」「页面标题区域必须非常安静」。
+        计数只在页签里出现一次。 */}
     <div className={C.pageHead}>
       <div className={C.pageTitle}>{zhCN.auditPageTitle}</div>
     </div>
 
     <div className={C.paneHead}>
-      <div className={C.tabs} ref={tabsRef as never}>
-        <span className={C.tabInd} aria-hidden={true} style={{ transform: `translateX(${tabInd.x}px)`, width: `${tabInd.w}px` }} />
+      {/* 轻量 Segmented Workspace Tabs：容器是浅槽，选中项是浮起的白片（样式见 §4）。
+          没有下划线指示条、没有品牌红 underline —— 那套已按用户 2026-09-23 口径撤掉。 */}
+      <div className={C.tabs}>
         <button
           className={`${C.tab} ${view === 'pending' ? C.tabOn : ''}`}
           type="button"
-          onClick={() => setView('pending')}
+          onClick={() => { setView('pending') }}
         >
           {zhCN.tabPending}<span className={C.tabCount}>{String(state.total)}</span>
         </button>
         <button
           className={`${C.tab} ${view === 'results' ? C.tabOn : ''}`}
           type="button"
-          onClick={() => setView('results')}
+          onClick={() => { setView('results') }}
         >
           {/* 计数**只在这一处**（用户口径：不要"页面头 + 卡头 + 共 N 条"三处重复）。
               按流水号查过之后，显示的是**那一份**的结果 —— 计数就跟着它走，
@@ -583,7 +1047,12 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       </div>
     </div>
 
-    <div className={C.paneMain}>
+    <div
+      className={C.paneMain}
+      // 列表一滚就收掉浮层（用户口径：菜单不该在内容移动后还悬在原处）。
+      // scroll 事件不冒泡，所以必须挂在真正滚动的这个容器上。
+      onScroll={() => { if (openMenu !== null) setOpenMenu(null); if (tip !== null) setTip(null) }}
+    >
     {state.notice === '' ? null : <Notice tone="warn">{state.notice}</Notice>}
 
     {state.handoff === null
@@ -594,28 +1063,19 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
     {state.activeKey === '' ? null : <Notice tone="warn">
       {zhCN.activePrefix + state.activeKey + zhCN.activeSuffix}
       <div className={C.row} style={{ marginTop: '6px' }}>
-        <Button label={zhCN.stopAudit} tone="warn" onClick={() => props.onStop('')} />
+        <Button label={zhCN.stopAudit} tone="warn" onClick={() => { props.onStop('') }} />
         <span className={C.grow}>{zhCN.stopHint}</span>
       </div>
       {/*
         「只释放占用（不停子会话）」按钮在 2026-09-20 按用户要求删掉了：他说用不到。
-        宿主侧的 `audit-release` 操作保留（`client-rpc-facade.test.mjs` 的 HOST_ONLY），
-        但界面上不再提供 —— 它会把占用锁解开而子会话继续跑，正是「两条子会话往同一个
-        案例目录对写」那条闸门要拦的状态。
+        宿主侧的 `audit-release` 操作保留，但界面上不再提供 —— 它会把占用锁解开而子会话继续跑，
+        正是「两条子会话往同一个案例目录对写」那条闸门要拦的状态。
       */}
     </Notice>}
 
     {state.ossIndexError === '' ? null : <Notice tone="warn">{zhCN.cloudFailed + state.ossIndexError}</Notice>}
 
-    {/* 准备会话期间的等待页：**只盖列表区**（用户口径：Loading 必须出现在报告数据区域，
-        而不是锁死整个 Workspace —— 页头/搜索/刷新/视图切换仍然可见），并且 min-height
-        与列表可视区齐平，数据回来时不会 Layout Shift。 */}
-    {pulling === '' ? null : <div className={C.aiMask}>
-      {/* 用户 2026-09-22 口径：loading 只留中瑞世联的 logo + 一句干净文案，
-          不要出现"正在拉取氚云数据 / 正在读取报告文件"这类分步字样。 */}
-      <WorkbenchLoading title={zhCN.prepTitle} size={56} />
-    </div>}
-
+    {/* 读本机凭据被钥匙串拦住时的免沙箱重试（与「列表有没有画出来」无关，所以放在视图分支之外）。 */}
     {state.escalateAvailable
       ? <Notice tone="warn">
           <div>{zhCN.escalateReason}</div>
@@ -625,147 +1085,137 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         </Notice>
       : null}
 
-    {view === 'pending' && !state.auditsReady
-      // 审核记录还没回来：**先别画行**（否则标签会从「AI 审核」跳成「重新审核」）。
-      // 只遮列表区，页头/视图切换/搜索/刷新照常可见 —— 与拉报告资料时同一套等待页。
-      ? <div className={C.aiMask}><WorkbenchLoading title={zhCN.loadingReports} size={56} /></div>
-      : view === 'pending'
-      // **不再套 Card**（用户口径：不要再嵌套一个巨大的 Card，减少 Border/Card/Header/Container
-      // 层级；Apple 风格的核心是"减少不必要的视觉容器"）。内容直接落在工作台主体里。
+    {view === 'pending'
+      // **不再套 Card**（用户口径：不要再嵌套一个巨大的 Card）：内容直接落在 Workspace Surface 里。
       ? <>
-          <LoadingBar active={props.gating.busy === true} />
-          <div className={C.row}>
-            {/* Spotlight 式搜索：输入即搜（回车触发），不设「搜索 / 清空」两个传统按钮；
-                清空是输入框右侧那个 ×。 */}
-            <span className={C.searchWrap}>
-              <input
-                className={C.input}
-                value={query}
-                placeholder={zhCN.searchPlaceholder}
-                aria-label={zhCN.searchPlaceholder}
-                onChange={(event) => setQuery(String((event.target as { value?: unknown }).value ?? ''))}
-                onKeyDown={(event) => {
-                  if ((event as unknown as { key?: string }).key !== 'Enter') return
-                  props.onSearch(query)
-                }}
-              />
-              {query === '' ? null : <button
-                type="button"
-                className={C.searchClear}
-                aria-label={zhCN.clear}
-                title={zhCN.clear}
-                onClick={() => { setQuery(''); props.onSearch('') }}
-              >×</button>}
-            </span>
+          {/* 首次加载那一轮不挂顶部进度条：等待页自己已经有一条，两条同时动只是噪音。 */}
+          <LoadingBar active={props.gating.busy === true && state.auditsReady} />
+          <div className={C.toolbar}>
+            <SearchField
+              value={query}
+              placeholder={zhCN.searchPlaceholder}
+              ariaLabel={zhCN.searchPlaceholder}
+              onChange={setQuery}
+              onSubmit={() => { props.onSearch(query) }}
+              onClear={() => { setQuery(''); props.onSearch('') }}
+            />
             {/* 刷新属于**列表工具条**（刷的是这张列表），不属于页面头 —— 放这里用户才能建立
-                "刷新 → 刷新当前列表"的直接关系。刷新期间按钮禁用，已有列表保持展示。 */}
+                "刷新 → 刷新当前列表"的直接关系。刷新期间只有图标转，已有列表保持展示。 */}
             <span className={C.searchAction}>
-              <Button
-                label={zhCN.refreshGlyph}
+              <button
+                type="button"
+                className={[C.ghost, props.gating.busy === true ? C.ghostBusy : ''].filter((one) => one !== '').join(' ')}
                 disabled={props.gating.busy === true}
                 onClick={props.onRefreshPending}
-              />
+              >
+                <RefreshIcon size={15} />{zhCN.refresh}
+              </button>
             </span>
           </div>
-          <div className={props.gating.busy === true ? C.dim : ''}>
-            <PendingTable
-              {...props}
-              rows={rows}
-              discussing={pulling}
-              onDiscuss={openDiscussion}
-              openMenuKey={openMenu?.key ?? ''}
-              onToggleMenu={toggleMenu}
-              onShowTip={showTip}
-              onHideTip={() => { setTip(null) }}
-            />
-            <div className={C.pager}>
-              <Button label={zhCN.paginationFirst} small disabled={busyPage} onClick={() => props.onGoPage(1)} />
-              <Button label={zhCN.paginationPrev} small disabled={busyPage || state.page <= 1} onClick={() => props.onGoPage(state.page - 1)} />
-              {pageWindow(state.page, pages).map((item, index) => item === 0
-                ? <span key={`gap-${String(index)}`} className={C.pagerGap}>…</span>
-                : <button
-                    key={item}
-                    type="button"
-                    className={[C.pagerPage, item === state.page ? C.pagerPageOn : ''].filter((one) => one !== '').join(' ')}
-                    aria-current={item === state.page ? 'page' : undefined}
-                    disabled={busyPage}
-                    onClick={() => props.onGoPage(item)}
-                  >{String(item)}</button>)}
-              <Button label={zhCN.paginationNext} small disabled={busyPage || state.page >= pages} onClick={() => props.onGoPage(state.page + 1)} />
-              <Button label={zhCN.paginationLast} small disabled={busyPage || state.page >= pages} onClick={() => props.onGoPage(pages)} />
-              <span className={C.grow} />
-              {/* 跳页：非法/越界一律 clamp 到合法范围并给一句提示，**不发请求**。 */}
-              <span className={C.pagerJumpWrap}>
-                <span className={C.muted}>{zhCN.paginationJump}</span>
-                <input
-                  className={C.pagerJump}
-                  value={jump}
-                  inputMode="numeric"
-                  aria-label={zhCN.paginationJump}
-                  onChange={(event) => { setJump(String((event.target as { value?: unknown }).value ?? '')); setJumpHint('') }}
-                  onKeyDown={(event) => {
-                    if ((event as unknown as { key?: string }).key !== 'Enter') return
-                    const target = Number(jump.trim())
-                    if (!Number.isFinite(target) || Math.floor(target) !== target || target < 1 || target > pages) {
-                      setJumpHint(zhCN.paginationRange.replace('%s', String(pages)))
-                      return
-                    }
-                    setJumpHint('')
-                    props.onGoPage(target)
-                  }}
-                />
-                <span className={C.muted}>{zhCN.paginationJumpSuffix}</span>
-              </span>
-              <span className={C.muted}>{zhCN.paginationPage.replace('%s', String(state.page)).replace('%s', String(pages))}</span>
-              {/* 翻页时不在这里再挂一条「正在加载…」：用户口径是把它去掉 ——
-                  顶部那条不确定进度条 + 列表压暗已经足够说明"正在取下一页"，右下角再挂一行只是噪音。 */}
-              {jumpHint === '' ? null : <span className={C.muted}>{jumpHint}</span>}
-            </div>
+          {/* 列表数据区：首次加载与拉报告资料的等待页**只盖这一块** ——
+              页头、页签、工具条保持可见（用户 2026-09-23 口径：Loading 只覆盖列表数据区）。
+              min-height 与列表可视区齐平，数据回来时不会 Layout Shift。 */}
+          <div className={C.listArea}>
+            {pulling === '' ? null : <div className={C.aiMask}>
+              {/* 用户 2026-09-22 口径：loading 只留中瑞世联的 logo + 一句干净文案，
+                  不要出现"正在拉取氚云数据 / 正在读取报告文件"这类分步字样。 */}
+              <WorkbenchLoading title={zhCN.prepTitle} size={56} />
+            </div>}
+            {!state.auditsReady
+              // 审核记录还没回来：**先别画行**（否则标签会从「AI 审核」跳成「重新审核」）。
+              // 只遮列表数据区，页头 / 页签 / 搜索 / 刷新照常可用。
+              ? <div className={C.aiMask}><WorkbenchLoading title={zhCN.loadingReports} size={56} hint="" /></div>
+              : <div className={props.gating.busy === true ? C.dim : ''}>
+                  <PendingTable
+                    {...props}
+                    rows={rows}
+                    discussing={pulling}
+                    onDiscuss={openDiscussion}
+                    copiedSeq={copiedSeq}
+                    onCopySeq={copySeqNo}
+                    openMenuKey={openMenu?.key ?? ''}
+                    onToggleMenu={(key, rect) => { toggleMenu(key, rect, menuActionsOf(rows.find((row) => row.key === key) ?? { key, badges: [], buttons: [], notes: [] }), state.ossIndex[key] ?? null) }}
+                    onShowTip={showTip}
+                    onHideTip={() => { setTip(null) }}
+                  />
+                  <Pager
+                    page={state.page}
+                    pages={pages}
+                    busy={busyPage}
+                    jump={jump}
+                    jumpHint={jumpHint}
+                    onJumpChange={(value) => { setJump(value); setJumpHint('') }}
+                    onJumpSubmit={() => {
+                      const target = Number(jump.trim())
+                      if (!Number.isFinite(target) || Math.floor(target) !== target || target < 1 || target > pages) {
+                        setJumpHint(zhCN.paginationRange.replace('%s', String(pages)))
+                        return
+                      }
+                      setJumpHint('')
+                      props.onGoPage(target)
+                    }}
+                    onGoPage={props.onGoPage}
+                  />
+                </div>}
           </div>
         </>
       : <>
           <LoadingBar active={state.ossLoading} />
           {/* 按流水号查交付件是**这一页**的工具条（这一页本来就是云端交付件列表）。
-              **只在点「查找」时发一次列举**；输入过程不发请求 —— 防抖自动查会变成反复扫 OSS。 */}
-          <div className={C.row}>
-            <input
-              className={C.input}
+              和报告列表共用同一个 SearchField：**只在 Enter 时发一次列举**；
+              输入过程不发请求 —— 防抖自动查会变成反复扫 OSS。 */}
+          <div className={C.toolbar}>
+            <SearchField
               value={cloudSeq}
               placeholder={zhCN.cloudSearchPlaceholder}
-              onChange={(event) => setCloudSeq(String((event.target as { value?: unknown }).value ?? ''))}
+              ariaLabel={zhCN.cloudSearchAria}
+              onChange={setCloudSeq}
+              onSubmit={() => {
+                // 形状不对就地拦下、**不发请求**；Host 侧还会再校验一次（那是安全边界）。
+                if (!isSafeSeqNo(cloudSeq)) { setCloudHint(zhCN.cloudSearchInvalid); return }
+                setCloudHint('')
+                props.onSearchCloud(cloudSeq.trim())
+              }}
+              onClear={() => { setCloudSeq(''); setCloudHint(''); props.onClearCloudSearch() }}
             />
-            <Button label={zhCN.cloudSearchButton} small onClick={() => {
-              // 形状不对就地拦下、**不发请求**；Host 侧还会再校验一次（那是安全边界）。
-              if (!isSafeSeqNo(cloudSeq)) { setCloudHint(zhCN.cloudSearchInvalid); return }
-              setCloudHint('')
-              props.onSearchCloud(cloudSeq.trim())
-            }} />
-            <Button label={zhCN.clear} small onClick={() => { setCloudSeq(''); setCloudHint(''); props.onClearCloudSearch() }} />
-            <span className={C.grow} />
-            {state.cloudSearchBusy === true || state.ossLoading ? <><Spinner /><span className={C.muted}>{zhCN.loadingCloud}</span></> : null}
-          </div>
-          {/* 说清"现在看的是哪一份"：只显示该流水号的结果 vs 全量列表 —— 否则员工会以为列表坏了。 */}
-          <div className={C.muted}>
-            {cloudWatching
-              ? `${zhCN.cloudSearchWatchingPrefix} ${state.cloudSearchSeqNo} ${zhCN.cloudSearchWatchingSuffix}`
-              : zhCN.cloudSearchAll}
+            <span className={C.searchAction}>
+              <button
+                type="button"
+                className={[C.ghost, state.ossLoading ? C.ghostBusy : ''].filter((one) => one !== '').join(' ')}
+                disabled={state.ossLoading}
+                onClick={props.onRefreshCloud}
+              >
+                <RefreshIcon size={15} />{zhCN.refresh}
+              </button>
+            </span>
           </div>
           {cloudHint === '' ? null : <Notice tone="warn">{cloudHint}</Notice>}
           {cloudError === '' ? null : <Notice tone="warn">{zhCN.cloudFailed + cloudError}</Notice>}
-          <div className={state.ossLoading ? C.dim : ''}>
-            {cloudWatching
-              ? (cloudItems.length === 0
-                  // 「没找到」是明确结论，不是错误、也不回退去猜别的流水号。
-                  ? <Empty text={zhCN.cloudSearchEmpty} />
-                  : <ResultsTable {...props} items={cloudItems} />)
-              : <ResultsTable {...props} items={items} />}
+          {/* 准备分析会话：只盖列表数据区，工具条与页签保持可见（真实阶段，不显示假百分比）。 */}
+          {analysisStage === '' ? null : <div className={C.aiMask}>
+            <WorkbenchLoading title={analysisStage} size={56} hint="" />
+          </div>}
+          <div className={C.listArea}>
+            <div className={state.ossLoading ? C.dim : ''}>
+              {cloudWatching && cloudItems.length === 0
+                // 「没找到」是明确结论，不是错误、也不回退去猜别的流水号。
+                ? <div className={C.empty}><div>{zhCN.cloudSearchEmpty}</div></div>
+                : <ResultsTable
+                    {...props}
+                    items={shownItems}
+                    copiedSeq={copiedSeq}
+                    onCopySeq={copySeqNo}
+                    openMenuKey={openMenu?.key ?? ''}
+                    onToggleMenu={(key, rect, menuItems, cloud) => { toggleMenu(key, rect, menuItems, cloud) }}
+                    onAnalyze={(cloud) => { void runAuditAnalysis(cloud) }}
+                    analyzing={analysisStage !== ''}
+                    onShowTip={(key, rect, kind) => { showTip(key, rect, kind) }}
+                    onHideTip={() => { setTip(null) }}
+                  />}
+            </div>
           </div>
         </>}
     </div>
-
-    {/* 拉文件期间的等待页：**整块正文**（用户口径：「crwu 在查询的时候，应该有个中瑞世联的
-        Loading 页面」）。查询只几分钟秒级，遮住正文也正好防住连点。 */}
-
 
   </div>
 
@@ -798,13 +1248,50 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       role="tooltip"
       style={{ left: tip.x, top: tip.y }}
     >
-      {zhCN.aiRowButton}
+      {tip.kind === 'analyze' ? zhCN.auditTooltipAnalyze : zhCN.aiRowButton}
       <span className={C.floatArrow} aria-hidden={true} />
     </div>}
 
+    {/* 远端资料一项都取不到：不建会话、不找本地替代（用户 §8/§16）。 */}
+    {remoteMissing === null ? null : <>
+      <div className={C.aiDialogBackdrop} onClick={() => { setRemoteMissing(null) }} />
+      <div className={C.aiDialog} role="dialog" aria-modal="true" aria-label={zhCN.auditRemoteMissingTitle}>
+        <div className={C.aiDialogTitle}>{zhCN.auditRemoteMissingTitle}</div>
+        <div className={C.aiDialogBody}>{zhCN.auditRemoteMissingBody}</div>
+        <button
+          type="button"
+          className={[C.aiDialogOption, C.aiDialogOptionOn].join(' ')}
+          onClick={() => {
+            const target = remoteMissing
+            setRemoteMissing(null)
+            if (target.mode === 'discuss') { void startNewChat(target.seqNo); return }
+            const cloud = state.ossIndex[target.seqNo]
+            if (cloud !== undefined) void runAuditAnalysis(cloud)
+          }}
+        >
+          <span className={C.aiDialogOptionTitle}>{zhCN.auditRetry}</span>
+        </button>
+        <div className={C.aiDialogActions}>
+          <Button label={zhCN.auditCancel} small onClick={() => { setRemoteMissing(null) }} />
+        </div>
+      </div>
+    </>}
+
+    {/* AI 审核结果分析会话的版本检查（stale / possibly / existing / insufficient）：
+        点 DeepSeek 之后**先检查报告与审核的版本关系**，绝不静默把旧审核结论当当前事实。 */}
+    {auditAsk === null ? null : <AuditAnalysisDialog
+      ask={auditAsk}
+      busy={auditBusy}
+      onRestart={restartAuditFromAsk}
+      onProceed={() => { void createAuditAnalysis() }}
+      onContinue={() => { void continueAuditAnalysis() }}
+      onRetry={() => { const cloud = pendingAudit.current?.cloud; if (cloud !== undefined) void runAuditAnalysis(cloud) }}
+      onCancel={() => { setAuditAsk(null) }}
+    />}
+
     {/* 已有报告会话：弹选择 Dialog（**这一步不拉任何文件** —— 续聊要快，新建才重读）。 */}
     {ask === null ? null : <>
-      <div className={C.aiDialogBackdrop} onClick={() => setAsk(null)} />
+      <div className={C.aiDialogBackdrop} onClick={() => { setAsk(null) }} />
       <div className={C.aiDialog} role="dialog" aria-modal="true" aria-label={zhCN.aiDialogTitle}>
         <div className={C.aiDialogTitle}>{zhCN.aiDialogTitle}</div>
         <div className={C.aiDialogBody}>{zhCN.aiDialogBody}</div>
@@ -837,11 +1324,69 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
           <span className={C.aiDialogOptionHint}>{zhCN.aiNewHint}</span>
         </button>
         <div className={C.aiDialogActions}>
-          <Button label={zhCN.aiDialogClose} small onClick={() => setAsk(null)} />
+          <Button label={zhCN.aiDialogClose} small onClick={() => { setAsk(null) }} />
         </div>
       </div>
     </>}
   </>
+}
+
+/** 分页：首页 / 上一页 / 页码窗口 / 下一页 / 末页 + 跳至第 N 页（越界只提示，不发请求）。 */
+function Pager(props: {
+  page: number
+  pages: number
+  busy: boolean
+  jump: string
+  jumpHint: string
+  onJumpChange: (value: string) => void
+  onJumpSubmit: () => void
+  onGoPage: (page: number) => void
+}): React.ReactElement {
+  return <div className={C.pager}>
+    <button
+      type="button" className={C.pagerNav} aria-label={zhCN.paginationFirst} title={zhCN.paginationFirst}
+      disabled={props.busy || props.page <= 1} onClick={() => { props.onGoPage(1) }}
+    >«</button>
+    <button
+      type="button" className={C.pagerNav} aria-label={zhCN.paginationPrev} title={zhCN.paginationPrev}
+      disabled={props.busy || props.page <= 1} onClick={() => { props.onGoPage(props.page - 1) }}
+    >‹</button>
+    {pageWindow(props.page, props.pages).map((item, index) => item === 0
+      ? <span key={`gap-${String(index)}`} className={C.pagerGap}>…</span>
+      : <button
+          key={item}
+          type="button"
+          className={[C.pagerPage, item === props.page ? C.pagerPageOn : ''].filter((one) => one !== '').join(' ')}
+          aria-current={item === props.page ? 'page' : undefined}
+          disabled={props.busy}
+          onClick={() => { props.onGoPage(item) }}
+        >{String(item)}</button>)}
+    <button
+      type="button" className={C.pagerNav} aria-label={zhCN.paginationNext} title={zhCN.paginationNext}
+      disabled={props.busy || props.page >= props.pages} onClick={() => { props.onGoPage(props.page + 1) }}
+    >›</button>
+    <button
+      type="button" className={C.pagerNav} aria-label={zhCN.paginationLast} title={zhCN.paginationLast}
+      disabled={props.busy || props.page >= props.pages} onClick={() => { props.onGoPage(props.pages) }}
+    >»</button>
+    {/* 跳页：非法/越界一律 clamp 到合法范围并给一句提示，**不发请求**。 */}
+    <span className={C.pagerJumpWrap}>
+      <span className={C.muted}>{zhCN.paginationJump}</span>
+      <input
+        className={C.pagerJump}
+        value={props.jump}
+        inputMode="numeric"
+        aria-label={zhCN.paginationJump}
+        onChange={(event) => { props.onJumpChange(String((event.target as { value?: unknown }).value ?? '')) }}
+        onKeyDown={(event) => {
+          if ((event as unknown as { key?: string }).key !== 'Enter') return
+          props.onJumpSubmit()
+        }}
+      />
+      <span className={C.muted}>{zhCN.paginationJumpSuffix}</span>
+    </span>
+    {props.jumpHint === '' ? null : <span className={C.muted}>{props.jumpHint}</span>}
+  </div>
 }
 
 /** 文件大小：人读的量级（清单里出现 78761669 没有意义）。 */
@@ -887,26 +1432,6 @@ function dotClassOf(tone: string): string {
 
 function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
-}
-
-/**
- * 更新时间：秒对审核流程没有价值，按"今天 / 昨天 / 更早"口语化，完整值留在 title 里。
- *
- * 用户口径（2026-09-22）：「统一显示 09-22 18:15；今天的数据 18:15；昨天 昨天 18:15；
- * 不要一直显示 2026-09-22 18:15:08」。认不出的形状**原样返回**（不猜、不吞）。
- */
-export function formatWhen(value: string, now: Date = new Date()): string {
-  const matched = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(value.trim())
-  if (matched === null) return value
-  const [, year, month, day, hour, minute] = matched
-  const sameDay = (offset: number): boolean => {
-    const probe = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset)
-    return probe.getFullYear() === Number(year) && probe.getMonth() + 1 === Number(month) && probe.getDate() === Number(day)
-  }
-  const clock = `${hour}:${minute}`
-  if (sameDay(0)) return clock
-  if (sameDay(1)) return `${zhCN.yesterday} ${clock}`
-  return `${month}-${day} ${clock}`
 }
 
 /**

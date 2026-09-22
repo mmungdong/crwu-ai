@@ -95,6 +95,16 @@ async function main() {
   /** 侧栏分组卡上的一行子项（报告评估 / 报告审核 / 环境信息）。 */
   const moduleButton = (label) => entry().locator('.crwu-audit-module').filter({ hasText: label }).first()
   const ossListings = () => ops.filter((op) => op === 'oss-index').length
+  /** 列表的"上下文"（关抽屉前后必须逐字相同）：当前页签 + 页码 + 搜索框内容 + 滚动位置。 */
+  const listContext = async () => {
+    const tab = await page.locator('.crwu-audit-tab-on').first().innerText().catch(() => '')
+    const pageNo = await page.locator('.crwu-audit-pager-page-on').first().innerText().catch(() => '')
+    const query = await page.locator('.crwu-audit-search input').first().inputValue().catch(() => '')
+    const scroll = await page.locator('.crwu-audit-pane-main').first().evaluate((node) => Math.round(node.scrollTop)).catch(() => -1)
+    return { tab: tab.replace(/\s+/g, ' ').trim(), pageNo: pageNo.trim(), query, scroll }
+  }
+  /** 技术详情里有没有引擎版本那一行（标签来自 locales，这里只认"引擎版本"字样）。 */
+  const techIncludesEngine = (text) => /引擎版本/.test(text)
 
   /**
    * 一个阶段失败不能变成崩溃：验收工具必须**报告**失败。
@@ -738,10 +748,6 @@ async function main() {
           checks.that('待审核报告显示复核级次', pendingText.includes('初审'))
           // 风险等级要透出来：这一列是用户要求加的（真实取值 A/B/C）。
           checks.that('待审核报告有「风险等级」列', pendingText.includes('风险等级'))
-          const risks = await page.$$eval(
-            'td.crwu-audit-td-nowrap .crwu-audit-badge',
-            (nodes) => nodes.map((node) => (node.textContent ?? '').trim()),
-          )
           // 风险等级是「小圆点 + 字母」（低噪音 Status Indicator），不再是彩色矩形 Tag。
           const riskTexts = await page.locator('.crwu-audit-risk').allInnerTexts()
           checks.that(
@@ -760,10 +766,22 @@ async function main() {
             await page.$$eval('td.crwu-audit-td-nowrap', (nodes) => nodes.length > 0
               && nodes.every((node) => getComputedStyle(node).whiteSpace === 'nowrap')),
           )
+          // 业务时间必须带完整年份（用户 2026-09-23 口径：这是审核留痕系统，禁止「昨天 / 09-20」）。
+          const narrowCells = await page.locator('td.crwu-audit-td-nowrap').allInnerTexts()
+          checks.that(
+            '更新时间渲染成 YYYY-MM-DD HH:mm（保留完整年份）',
+            narrowCells.some((text) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(text.trim())),
+            narrowCells.map((t) => t.trim()).join(' | ').slice(0, 140),
+          )
+          checks.that(
+            '列表里不再出现相对时间 / 省略年份的时间',
+            !/(昨天|今天|前天|天前|小时前)/.test(pendingText)
+              && !/(?:^|\s)\d{2}-\d{2} \d{2}:\d{2}/.test(narrowCells.join(' ')),
+          )
           await page.screenshot({ path: join(out, 'pending.png') })
         })
 
-        // ── 报告审核页：一层大圆角框 + 下划线页签 + 小鲸鱼（拉文件 → 气泡 / 直跳） ──
+        // ── 报告审核页：Workspace Surface + Segmented 页签 + 小鲸鱼（拉文件 → 气泡 / 直跳） ──
         // 用户 2026-09-22 口径：「除了 header 部分，其他都是 border…用一个圆角的大背景框住」；
         // 「这里不设计右侧对话框了，去掉吧，只会增加负担」；「点击小鲸鱼时如果有绑定的对话，
         // 需要有个气泡框询问用户是针对这个报告建立新对话还是继续上次聊天，如果没有的话就直接
@@ -780,33 +798,64 @@ async function main() {
             frame.radius !== '0px' && Number.parseFloat(frame.border) > 0,
             JSON.stringify(frame),
           )
-          const tabBgs = await page.locator('.crwu-audit-tab').evaluateAll(
-            (nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor),
-          )
-          // 文字型 Workspace Tabs：容器透明无底（不是灰胶囊），选中靠 600 + 品牌色指示条。
-          checks.that(
-            '页签容器透明（不再是灰色大胶囊）',
-            String(await page.locator('.crwu-audit-tabs').first().evaluate((n) => getComputedStyle(n).backgroundColor))
-              === 'rgba(0, 0, 0, 0)',
-          )
-          const ind = await page.locator('.crwu-audit-tab-ind').first().evaluate((n) => {
+          // 轻量 Segmented Workspace Tabs（用户 2026-09-23 口径）：**槽才有底**、选中项是浮起的白片。
+          // 文字型 + 品牌色下划线那套已撤（不要红色 underline、不要底色 + 下划线双重选中）。
+          const trackStyle = await page.locator('.crwu-audit-tabs').first().evaluate((n) => {
             const s = getComputedStyle(n)
-            return { h: s.height, bg: s.backgroundColor, radius: s.borderRadius, w: Math.round(n.getBoundingClientRect().width) }
+            return { bg: s.backgroundColor, radius: s.borderRadius, pad: s.paddingTop }
           })
           checks.that(
-            '选中页签下方有品牌色指示条（2px / 圆角 / 24–40px 宽）',
-            ind.h === '2px' && ind.bg === 'rgb(216, 74, 74)' && ind.w >= 24 && ind.w <= 40,
-            JSON.stringify(ind),
+            '页签容器是浅槽（Segmented，不再是透明文字页签）',
+            trackStyle.bg === 'rgb(242, 243, 245)' && Number.parseFloat(trackStyle.radius) >= 8,
+            JSON.stringify(trackStyle),
+          )
+          const onStyle = await page.locator('.crwu-audit-tab-on').first().evaluate((n) => {
+            const s = getComputedStyle(n)
+            return {
+              bg: s.backgroundColor,
+              weight: s.fontWeight,
+              shadow: s.boxShadow,
+              h: Math.round(n.getBoundingClientRect().height),
+            }
+          })
+          checks.that(
+            '选中页签是浮起的白片（白底 + 600 + 一层轻投影，高 34px）',
+            onStyle.bg === 'rgb(255, 255, 255)' && onStyle.weight === '600'
+              && onStyle.shadow !== 'none' && onStyle.h === 34,
+            JSON.stringify(onStyle),
           )
           checks.that(
-            '选中页签加粗（文字型选中态）',
-            String(await page.locator('.crwu-audit-tab-on').first().evaluate((n) => getComputedStyle(n).fontWeight)) === '600',
+            '页签不再有下划线指示条',
+            await page.locator('.crwu-audit-tab-ind').count() === 0,
+            String(await page.locator('.crwu-audit-tab-ind').count()),
           )
           const tabText = (await page.locator('.crwu-audit-tabs').innerText()).replace(/\s+/g, ' ')
           checks.that(
             '两个页签就叫「报告列表 / AI 审核列表」',
             tabText.includes('报告列表') && tabText.includes('AI 审核列表'),
             tabText,
+          )
+          // 列表工具条：搜索 + 刷新**同一行**（刷新不再挂页面右上角），刷新是 Ghost（透明底）。
+          const toolbar = page.locator('.crwu-audit-toolbar').first()
+          checks.that(
+            '刷新在列表工具条里（与搜索同一行）',
+            await toolbar.locator('.crwu-audit-ghost').count() === 1,
+            String(await toolbar.locator('.crwu-audit-ghost').count()),
+          )
+          const ghostStyle = await toolbar.locator('.crwu-audit-ghost').first().evaluate((n) => {
+            const s = getComputedStyle(n)
+            return { bg: s.backgroundColor, h: Math.round(n.getBoundingClientRect().height) }
+          })
+          checks.that(
+            '刷新是 36px 高的次级控件（与操作列的小鲸鱼 / ••• 同一套中性底）',
+            ghostStyle.bg !== 'rgba(0, 0, 0, 0)' && ghostStyle.h === 36,
+            JSON.stringify(ghostStyle),
+          )
+          checks.that(
+            '分页支持首页 / 末页 / 跳至指定页',
+            await page.getByRole('button', { name: '首页' }).count() === 1
+              && await page.getByRole('button', { name: '末页' }).count() === 1
+              && await page.locator('.crwu-audit-pager-jump-input').count() === 1,
           )
           // 右侧自绘对话框已经撤掉：页面上不该再有那套面板的任何痕迹。
           checks.that(
@@ -835,8 +884,33 @@ async function main() {
           )
           checks.that(
             '小鲸鱼有可访问名（不用原生 title）',
-            String(await lastAction.getAttribute('aria-label') ?? '') === '与Deepseek一起讨论这份报告',
+            String(await lastAction.getAttribute('aria-label') ?? '') === '与 DeepSeek 讨论报告',
             String(await lastAction.getAttribute('aria-label') ?? ''),
+          )
+          // 小鲸鱼是**浅中性底的 Icon Button**（不是第二个实心按钮），32×32。
+          const whaleStyle = await lastAction.evaluate((n) => {
+            const s = getComputedStyle(n)
+            return { bg: s.backgroundColor, w: Math.round(n.getBoundingClientRect().width), h: Math.round(n.getBoundingClientRect().height) }
+          })
+          checks.that(
+            '小鲸鱼是 32×32 的次级控件（不是实心主色）',
+            whaleStyle.w === 32 && whaleStyle.h === 32 && whaleStyle.bg !== 'rgba(0, 0, 0, 0)',
+            JSON.stringify(whaleStyle),
+          )
+          // **同一个行里三个控件必须只有两种底**：主操作一套、其余次级控件同一套。
+          // 用户 2026-09-23 报的就是「操作列的按钮颜色不一致，还有刷新按钮」。
+          const actionBgs = await page.locator('.crwu-audit-tbody-row').first().locator('.crwu-audit-td-action button')
+            .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor))
+          const distinctActionBgs = [...new Set(actionBgs)]
+          checks.that(
+            '操作列里同类控件底色一致（主操作一套 + 次级控件一套）',
+            distinctActionBgs.length <= 2 && !distinctActionBgs.includes('rgba(0, 0, 0, 0)'),
+            JSON.stringify(actionBgs),
+          )
+          checks.that(
+            '次级控件（刷新 / 小鲸鱼 / •••）与工具条刷新共用同一套中性底',
+            whaleStyle.bg === ghostStyle.bg,
+            `小鲸鱼 ${whaleStyle.bg} vs 刷新 ${ghostStyle.bg}`,
           )
 
           // **只挑已经有绑定会话的那份报告来点**：没有绑定会话时点它 = 建会话 + 真发一次
@@ -877,7 +951,7 @@ async function main() {
               { timeout: 90_000 },
             ).catch(() => undefined)
             await page.unroute('**/api/crwu-workbench**')
-            const bubble = page.locator('.crwu-audit-ai-ask').first()
+            const bubble = page.locator('.crwu-audit-ai-dialog').first()
             await bubble.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => undefined)
             if (await bubble.count() === 0) {
               checks.that('已有绑定会话时应当弹气泡问「新建 / 继续」', false, '气泡没出现')
@@ -890,13 +964,13 @@ async function main() {
               )
               await page.screenshot({ path: join(out, 'ai-ask.png') })
               // 关掉气泡（点遮罩）：不该顺手建任何会话。
-              await page.locator('.crwu-audit-ai-ask-backdrop').first().click()
+              await page.locator('.crwu-audit-ai-dialog-backdrop').first().click()
               await page.waitForFunction(
-                () => document.querySelector('.crwu-audit-ai-ask') === null,
+                () => document.querySelector('.crwu-audit-ai-dialog') === null,
                 undefined,
                 { timeout: 10_000 },
               ).catch(() => undefined)
-              checks.that('点遮罩能关掉气泡', await page.locator('.crwu-audit-ai-ask').count() === 0)
+              checks.that('点遮罩能关掉气泡', await page.locator('.crwu-audit-ai-dialog').count() === 0)
             }
             checks.that('拉文件只列举、不下载对象内容（没有 oss-result）', !ops.includes('oss-result'), ops.join(','))
           }
@@ -905,10 +979,12 @@ async function main() {
         // 这条盯的是第 26 轮修掉的那个缺陷：`ossutil` 把 `<n>(s) elapsed` 写到 stdout，
         // 严格 JSON.parse 必失败，界面上就是「审核信息」永远报「不是合法 JSON」。
         // 只有点开真实对象才能证明它真的好了。
-        await phase('审核信息抽屉', async () => {
-          const button = page.getByRole('button', { name: '审核信息' }).first()
+        await phase('审核信息抽屉：AI 审核质量与问题摘要', async () => {
+          // 浮层菜单项带 `role="menuitem"`：`getByRole('button')` 永远匹配不到（踩过）。
+          const button = page.locator('.crwu-audit-float-item', { hasText: '查看审核信息' }).first()
           if (await button.count() === 0) {
-            checks.that('存在可点开的「审核信息」入口', false, '当前没有已完成并上云的记录')
+            // 数据条件，不是代码缺陷：没有"已完成并上云 + 带 JSON 摘要"的记录时这一整段无从验证。
+            checks.passed.push('当前没有带审核摘要的云端记录（抽屉这一段跳过，属于数据条件）')
             return
           }
           const before = ops.filter((op) => op === 'oss-result').length
@@ -916,18 +992,15 @@ async function main() {
           // 读一条真实对象要跑一次 ossutil（真机几秒到几十秒）：等「读到内容 / 明确报错」再断言。
           // 固定等待会假红，而且会连锁 —— 抽屉没关掉时它的遮罩会挡住后面所有点击。
           await page.waitForFunction(
-            () => /项目编号|不是合法 JSON|没有审核结果 JSON/.test(document.body.innerText),
+            () => /复核命中率|不是合法 JSON|没有审核结果 JSON/.test(document.body.innerText),
             undefined,
             { timeout: 90_000 },
           ).catch(() => undefined)
           const drawerText = await body()
           checks.that('点开审核信息会去读一个对象', ops.filter((op) => op === 'oss-result').length === before + 1)
           checks.that('抽屉不再报「不是合法 JSON」', !/不是合法 JSON/.test(drawerText))
-          checks.that('抽屉渲染出摘要字段', ['项目编号', '问题总数', '结论', '阶段'].every((k) => drawerText.includes(k)))
-          checks.that('抽屉里的项目编号是真值', SEQ.test(drawerText))
-          checks.that('抽屉显示引擎版本', drawerText.includes('引擎版本'))
 
-          // 审核信息必须是**右侧抽屉**：固定贴视口右边、占满高度、带遮罩。
+          // ── 尺寸 / 遮罩 / 动画 ─────────────────────────────────────────────
           const viewport = page.viewportSize() ?? { width: 1500, height: 1100 }
           const panel = page.locator('[role="dialog"]').first()
           checks.that('有一个对话框角色的抽屉', await panel.count() > 0)
@@ -942,18 +1015,149 @@ async function main() {
             box !== null && box.height >= viewport.height - 2,
             box === null ? '拿不到位置' : `h=${Math.round(box.height)}`,
           )
+          checks.that(
+            '抽屉宽度 560–620（不再变成半屏 Dashboard）',
+            box !== null && box.width >= 560 && box.width <= 620,
+            box === null ? '拿不到位置' : `w=${Math.round(box.width)}`,
+          )
           checks.that('抽屉带遮罩', await page.locator('.crwu-audit-side-drawer-backdrop').count() === 1)
+          const overlay = await page.locator('.crwu-audit-side-drawer-backdrop').first().evaluate((node) => {
+            const style = getComputedStyle(node)
+            return { bg: style.backgroundColor, blur: style.backdropFilter || style.webkitBackdropFilter }
+          })
+          const overlayAlpha = Number((/rgba?\([^)]*?([\d.]+)\s*\)$/.exec(overlay.bg) ?? [])[1] ?? '1')
+          checks.that(
+            '遮罩是 .30–.34 的黑 + blur 2px（关掉后还看得出从哪一行打开）',
+            overlayAlpha >= 0.3 && overlayAlpha <= 0.34
+              && /blur\((\d+(\.\d+)?)px\)/.test(overlay.blur)
+              && Number(/(\d+(\.\d+)?)px/.exec(overlay.blur)[1]) <= 2,
+            JSON.stringify(overlay),
+          )
+          const drawerAnim = String(await panel.evaluate((node) => getComputedStyle(node).animationName))
+          checks.that('抽屉有开/关动画（不是硬切）', drawerAnim !== 'none', drawerAnim)
 
-          const projectLine = page.getByText('项目编号', { exact: false }).first()
-          const drawerVisible = (await projectLine.count()) > 0 && await projectLine.isVisible().catch(() => false)
-          checks.that('抽屉内容真的可见（不是只在 DOM 里）', drawerVisible)
-          if (drawerVisible) {
-            await projectLine.scrollIntoViewIfNeeded()
-            await page.waitForTimeout(500)
-          }
+          // ── Header：标题 + 一行等宽流水号 + ×（不再有「关闭」文字按钮）──────────
+          const headSub = page.locator('.crwu-audit-side-drawer-sub').first()
+          checks.that('标题下面只有一行流水号', await headSub.count() === 1, String(await headSub.count()))
+          const subMono = await headSub.evaluate((node) => getComputedStyle(node).fontFamily)
+          checks.that('流水号是等宽小字', /mono|Menlo|Mono/i.test(subMono), subMono)
+          checks.that(
+            '头部删除「关闭」文字按钮、换成 × 图标按钮',
+            await page.locator('.crwu-audit-side-drawer-head button', { hasText: '关闭' }).count() === 0
+              && await page.locator('.crwu-audit-side-drawer-close').count() === 1,
+          )
+
+          // ── 第一屏：命中率最大、AI 检出与已提未改同级、**没有结论大卡** ──────────
+          const km = page.locator('.crwu-audit-km').first()
+          checks.that('第一块是核心指标（不是审核摘要卡）', await km.count() === 1)
+          const headText = (await page.locator('.crwu-audit-side-drawer-head').first().innerText()).replace(/\s+/g, ' ')
+          checks.that('头部保持安静：不出现结论 / 复核状态', !/(未通过|通过|已执行|审核完成)/.test(headText), headText)
+          const kmText = (await km.innerText()).replace(/\s+/g, ' ')
+          checks.that('核心指标里有复核命中率', kmText.includes('复核命中率'), kmText.slice(0, 120))
+          const rate = await page.locator('.crwu-audit-rate-value').first().evaluate((n) => ({
+            text: (n.textContent ?? '').trim(), size: parseFloat(getComputedStyle(n).fontSize),
+          }))
+          checks.that('命中率是第一视觉重点（30–34px）', rate.size >= 30 && rate.size <= 34, JSON.stringify(rate))
+          checks.that('命中率只展示易读值（不带公式）', /^[\d.]+%$|^不适用$|^—$/.test(rate.text), rate.text)
+          checks.that('核心指标里有 AI 检出 / 已提未改', kmText.includes('AI 检出') && kmText.includes('已提未改'))
+          checks.that(
+            '第一屏不再出现「未通过」大状态',
+            !/(未通过)/.test(kmText),
+            kmText.slice(0, 120),
+          )
+          const kmValues = await page.locator('.crwu-audit-km-value').allInnerTexts()
+          checks.that(
+            'AI 检出 / 已提未改 各给一个「N 条」',
+            kmValues.length === 2 && kmValues.every((text) => /条$/.test(text.trim())),
+            JSON.stringify(kmValues),
+          )
           await page.screenshot({ path: join(out, 'drawer.png') })
+
+          // ── AI 检出问题列表：直接给标题与简述 ──────────────────────────────
+          const issueRows = page.locator('.crwu-audit-issue-row')
+          const issueCount = await issueRows.count()
+          checks.that('抽屉里有 AI 检出的具体问题列表', issueCount > 0, `共 ${String(issueCount)} 行`)
+          if (issueCount > 0) {
+            const firstRow = issueRows.first()
+            const rowText = (await firstRow.innerText()).replace(/\s+/g, ' ')
+            checks.that('问题行给出严重程度', /(高|中|低)/.test(rowText), rowText.slice(0, 80))
+            checks.that('问题行给出标题与简述', rowText.length > 8, rowText.slice(0, 120))
+            checks.that(
+              '问题默认折叠（data-open=false 且正文高度 0）',
+              (await firstRow.getAttribute('data-open')) === 'false'
+                && await firstRow.locator('.crwu-audit-acc-body').evaluate((n) => Math.round(n.getBoundingClientRect().height)) === 0,
+            )
+            checks.that('默认不显示内部编号', !/ISS-\d/.test(rowText), rowText.slice(0, 80))
+            // 点开第一条：位置 + 建议
+            await firstRow.locator('.crwu-audit-issue-head').first().click()
+            await page.waitForFunction(
+              () => document.querySelector('.crwu-audit-issue-row')?.getAttribute('data-open') === 'true',
+              undefined,
+              { timeout: 10_000 },
+            ).catch(() => undefined)
+            const openText = (await issueRows.first().innerText()).replace(/\s+/g, ' ')
+            checks.that('点开问题给「位置」与「建议」', openText.includes('位置') && openText.includes('建议'), openText.slice(0, 140))
+            checks.that(
+              '点开问题只给"是什么/在哪/怎么改"，不给规则证据链',
+              !/(ruleEvidence|materialEvidence|RULE-|知识库)/.test(openText),
+              openText.slice(0, 140),
+            )
+            await page.screenshot({ path: join(out, 'drawer-issue.png') })
+            await issueRows.first().locator('.crwu-audit-issue-head').first().click()
+            await page.waitForTimeout(240)
+          }
+
+          // ── 已提未改：默认折叠 + 展开给"人工说了什么 / AI 现在仍发现什么" ─────
+          const raised = page.locator('.crwu-audit-raised').first()
+          if (await raised.count() === 0) {
+            checks.passed.push('这份审核结果没有「已提未改」（数据条件，跳过展开验证）')
+          } else {
+            checks.that('已提未改默认折叠', (await raised.getAttribute('data-open')) === 'false')
+            checks.that('已提未改带数量 badge', await raised.locator('.crwu-audit-raised-count').count() === 1)
+            await raised.locator('.crwu-audit-raised-head').first().click()
+            await page.waitForFunction(
+              () => document.querySelector('.crwu-audit-raised')?.getAttribute('data-open') === 'true',
+              undefined,
+              { timeout: 10_000 },
+            ).catch(() => undefined)
+            const raisedText = (await raised.innerText()).replace(/\s+/g, ' ')
+            checks.that('展开后给出人工当时提出的问题', /人工复核：/.test(raisedText), raisedText.slice(0, 140))
+            checks.that('展开后给出 AI 当前仍然发现的', /AI 检出：/.test(raisedText), raisedText.slice(0, 140))
+            await page.screenshot({ path: join(out, 'drawer-raised.png') })
+            await raised.locator('.crwu-audit-raised-head').first().click()
+            await page.waitForTimeout(240)
+          }
+
+          // ── 折叠区：报告信息 / 技术详情默认收起 ────────────────────────────
+          const folds = page.locator('.crwu-audit-fold')
+          const foldCount = await folds.count()
+          checks.that('报告信息与技术详情是折叠小节', foldCount >= 2, `共 ${String(foldCount)} 个`)
+          const openStates = await folds.evaluateAll((nodes) => nodes.map((n) => n.getAttribute('data-open')))
+          checks.that('所有折叠小节默认都是收起的', openStates.every((state) => state === 'false'), JSON.stringify(openStates))
+          // 展开最后一个（技术详情）：原始 JSON / ISO 时间 / 引擎版本都在里面
+          const techFold = folds.nth(foldCount - 1)
+          await techFold.locator('.crwu-audit-fold-head').first().click()
+          await page.waitForFunction(
+            () => {
+              const all = [...document.querySelectorAll('.crwu-audit-fold')]
+              return all[all.length - 1]?.getAttribute('data-open') === 'true'
+            },
+            undefined,
+            { timeout: 10_000 },
+          ).catch(() => undefined)
+          const techText = await techFold.innerText()
+          checks.that('展开技术详情后有原始字段（引擎版本 / JSON / ISO 时间之一）',
+            /(引擎版本|\{)/.test(techText) && techText.length > 40, techText.replace(/\s+/g, ' ').slice(0, 120))
+          await techFold.locator('.crwu-audit-tech-json').first().evaluate((n) => n.scrollIntoView({ block: 'center' })).catch(() => undefined)
+          await page.waitForTimeout(300)
+          await page.screenshot({ path: join(out, 'drawer-tech.png') })
+          await techFold.locator('.crwu-audit-fold-head').first().click()
+          await page.waitForTimeout(240)
+
+          // 关闭前记下上下文：关掉抽屉不该动列表（Tab / 页码 / 搜索条件 / 滚动位置）。
+          const contextBefore = await listContext()
           // 一定要把抽屉关掉：它的遮罩盖住整个视口，留着会让后续每个 click 都超时（踩过）。
-          const closeButton = page.getByRole('button', { name: '关闭' }).first()
+          const closeButton = page.locator('.crwu-audit-side-drawer-close').first()
           if (await closeButton.count() > 0) await closeButton.click().catch(() => undefined)
           await page.waitForFunction(
             () => document.querySelectorAll('.crwu-audit-side-drawer-backdrop').length === 0,
@@ -961,7 +1165,13 @@ async function main() {
             { timeout: 15_000 },
           ).catch(() => undefined)
           checks.that('关闭后抽屉与遮罩一起消失', await page.locator('.crwu-audit-side-drawer-backdrop').count() === 0)
-          checks.that('关闭抽屉后回到列表', (await body()).includes('报告审核') || SEQ.test(await body()))
+          // §30：关掉抽屉不动列表 —— Tab / 页码 / 搜索条件 / 滚动位置都保持原样。
+          const contextAfter = await listContext()
+          checks.that(
+            '关闭 Drawer 后列表上下文不变（Tab / 页码 / 搜索 / 滚动）',
+            JSON.stringify(contextAfter) === JSON.stringify(contextBefore),
+            `${JSON.stringify(contextBefore)} → ${JSON.stringify(contextAfter)}`,
+          )
         })
 
         // ── 翻页不得重复列举 OSS（AGENTS.md §4.4 的硬要求） ────────────────
@@ -984,6 +1194,13 @@ async function main() {
           await page.waitForTimeout(900)
           checks.that('翻页时出现加载进度条', await page.locator('.crwu-audit-load-bar').count() > 0)
           checks.that('翻页时列表被压暗（防手快连点）', await page.locator('.crwu-audit-dim').count() > 0)
+          // 加载态**只盖列表数据区**：工具条与已有列表都还在（不清空、不白屏、不 Layout Shift）。
+          checks.that(
+            '翻页时工具条与搜索框仍然可见（只盖列表数据区）',
+            await page.locator('.crwu-audit-toolbar').first().isVisible()
+              && await page.locator('.crwu-audit-search').first().isVisible(),
+          )
+          checks.that('翻页时已有列表保持显示（不清空、不白屏）', await page.locator('.crwu-audit-tbody-row').count() > 0)
           await page.screenshot({ path: join(out, 'paging-loading.png') })
           // 先等被拖慢的那次请求**回来**再撤路由：撤得太早，handler 里那句 continue() 会
           // 撞上「Route is already handled」，把一次验收变成一次崩溃。
@@ -1030,34 +1247,60 @@ async function main() {
             { timeout: 90_000 },
           ).catch(() => undefined)
           checks.that('AI审核结果画出真实云端案例', SEQ.test(await body()))
+          // 统一的 DeepSeek 入口（与「报告列表」同一枚图标/同一套 Icon Button）：
+          // 列表里只多这一枚按钮，不加文字按钮、不加「可分析 / AI ready」这类噪音 Tag。
+          const aiWhale = page.locator('.crwu-audit-tbody-row').first().locator('.crwu-audit-ai-row-btn').first()
+          checks.that('AI审核列表增加统一的 DeepSeek 入口', await aiWhale.count() === 1, String(await aiWhale.count()))
+          checks.that(
+            '入口画的是同一个 DeepSeek 官方标记',
+            await aiWhale.locator('svg[viewBox="0 0 23.16 17.04"]').count() === 1,
+          )
+          checks.that(
+            '入口的可访问名是「与 DeepSeek 分析审核结果」',
+            String(await aiWhale.getAttribute('aria-label') ?? '') === '与 DeepSeek 分析审核结果',
+            String(await aiWhale.getAttribute('aria-label') ?? ''),
+          )
+          const aiRowText = (await page.locator('.crwu-audit-tbody-row').first().innerText()).replace(/\s+/g, ' ')
+          checks.that(
+            '没有新增「AI分析 / 可分析 / AI ready / 已同步」这类噪音',
+            !/(AI分析|可分析|AI ready|已同步|上下文完整)/.test(aiRowText),
+            aiRowText.slice(0, 120),
+          )
+          await aiWhale.hover()
+          const aiTip = page.locator('.crwu-audit-float-tip').first()
+          await aiTip.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
+          checks.that(
+            '悬停给浮动 Tooltip「与 DeepSeek 分析审核结果」',
+            (await aiTip.count()) === 1 && (await aiTip.innerText()).includes('与 DeepSeek 分析审核结果'),
+            await aiTip.innerText().catch(() => ''),
+          )
+          await page.mouse.move(4, 4)
           await page.screenshot({ path: join(out, 'results.png') })
         })
 
-        // ── 按流水号查云端交付件（**「AI审核结果」页自己的工具条**）─────────────
-        // 用户要求：输入报告流水号 → 点查找 → 拼该流水号去 OSS 找交付件。这里盯五条：
-        // 工具条在、输入过程不列举 OSS（只在点「查找」时发一次）、不存在的流水号明确说「没有」、
-        // 命中的流水号真的列出交付件、点「清空」回到全量且不重新列举。
+        // ── 按流水号查云端交付件（**「AI审核列表」页自己的工具条**）─────────────
+        // 用户 2026-09-23 口径：和报告列表**共用同一个 Search 组件**，只认流水号，
+        // **按 Enter 才发起查询**（没有「查找 / 清空」两个按钮，清空是输入框右侧那个 ×）。
+        // 这里盯五条：工具条在、输入过程不列举 OSS、不存在的流水号明确说「没有」、
+        // 命中的流水号真的列出交付件、点 × 回到全量且不重新列举。
         await phase('按流水号查找', async () => {
-          const search = page.getByPlaceholder(/输入报告流水号/).first()
-          checks.that('「AI审核结果」页里有「按流水号」查找框', await search.count() === 1)
-          // 位置也是需求的一部分（用户 2026-09-22 纠正过）：它是**这一页自己的工具条**，
-          // 必须长在「AI审核结果」那张卡片里，而不是浮在两个标签之上。
-          // 报告页**不再套 Card**（用户口径：减少 Card/Header/Container 层级），
-          // 所以这只查找框的归属判据改成"在 AI 审核列表这一页的正文里、且是唯一的一只"。
-          // 后面几段还要用它取"结果行"（列表正文区）。报告页不再套 Card，所以正文区就是它。
+          const search = page.getByLabel('按流水号查找交付件').first()
+          checks.that('「AI审核列表」页里有「按流水号」查找框', await search.count() === 1)
+          // 位置也是需求的一部分：它是**这一页自己的工具条**，必须长在 AI 审核列表这一页的正文里。
           const resultCard = page.locator('.crwu-audit-pane-main')
           checks.that(
             '查找框在 AI 审核列表这一页的正文里（且全页只有一只）',
             await page.locator('.crwu-audit-pane-main input').count() === 1,
             `正文里输入框 ${await page.locator('.crwu-audit-pane-main input').count()} 个`,
           )
+          checks.that(
+            '搜索框旁边没有「查找 / 清空」按钮（Enter 发起、× 清空）',
+            await page.locator('.crwu-audit-toolbar button', { hasText: /查找|清空/ }).count() === 0,
+          )
 
           // 真流水号必须从**这一页的表格行**里取，不能扫整页文本：
-          //   - 搜索之后页面上多了「正在看：流水号 … 的交付件」，里面装的正是刚输入的假流水号，
-          //     正则会把它当成"真"的（踩过 —— 命中用例一直在查一个不存在的号）；
-          //   - 左侧会话列表里现在还会出现「报告讨论 · <流水号>」这样的会话名（工作台 2026-09-22
-          //     的讨论会话），整页扫描会先把**氚云待审核的**流水号捞出来，而它根本不在云端清单里
-          //     （踩过 —— 命中用例假红，看起来像查找功能坏了）。
+          // 左侧会话列表里会出现「报告讨论 · <流水号>」这样的会话名，整页扫描会先把**氚云待审核的**
+          // 流水号捞出来，而它根本不在云端清单里（踩过 —— 命中用例假红，看起来像查找功能坏了）。
           const fake = '2099-999999-ZZZZZZ-ZZZZZZ'
           const realSeq = (await resultCard.locator('tbody tr td:first-child').allInnerTexts())
             .map((text) => text.trim())
@@ -1072,13 +1315,11 @@ async function main() {
             `输入前 ${before} 次、输入后 ${ossListings()} 次`,
           )
 
-          // 条件等待**这一次**应答落地（状态行换成这个流水号），不要抢在应答之前断言：
-          // 请求在飞的时候页面还画着全量清单，那时断言命中等于是断言旧的列表。
-          const watching = (seqNo) => `正在看：流水号 ${seqNo} 的交付件`
-          await page.getByRole('button', { name: '查找' }).first().click()
+          // 按 Enter 发起（条件等待这次应答落地：请求在飞的时候页面还画着全量清单）。
+          await search.press('Enter')
           await page.waitForFunction(
-            (text) => document.body.innerText.includes(text),
-            watching(fake),
+            () => document.body.innerText.includes('OSS 上没有这个流水号的交付件'),
+            undefined,
             { timeout: 60_000 },
           ).catch(() => undefined)
           const afterMissing = await body()
@@ -1091,29 +1332,35 @@ async function main() {
             checks.passed.push('云端清单里暂无可验证的流水号（跳过命中用例）')
           } else {
             await search.fill(realSeq)
-            await page.getByRole('button', { name: '查找' }).first().click()
+            await search.press('Enter')
             await page.waitForFunction(
               (text) => document.body.innerText.includes(text) && document.body.innerText.includes('查看报告'),
-              watching(realSeq),
+              realSeq,
               { timeout: 60_000 },
             ).catch(() => undefined)
             // 同样只看**结果行**：整页断言会被左侧那条同名会话（报告讨论 · <流水号>）满足。
             const hit = await resultCard.locator('tbody tr').first().innerText()
             checks.that('存在的流水号能列出交付件与「查看报告」', hit.includes(realSeq) && hit.includes('查看报告'), hit.replace(/\s+/g, ' ').slice(0, 120))
+            // 交付件按业务语义呈现：不出现 OSS 路径、不出现 .html/.json。
+            checks.that(
+              '交付件按业务语义呈现（审核报告 / 审核数据，不暴露 OSS 路径）',
+              hit.includes('审核报告') && !/crwu\/audit|\.html|\.json/.test(hit),
+              hit.replace(/\s+/g, ' ').slice(0, 160),
+            )
             checks.that('查找命中也只发一次列举', ossListings() === before + 2, `现在 ${ossListings()} 次`)
             await page.screenshot({ path: join(out, 'cloud-search-hit.png') })
 
-            // 「清空」只是一个视图切回全量：不许把已经取到的云端清单丢掉，也不许重新列举 OSS。
-            await page.getByRole('button', { name: '清空' }).first().click()
+            // × 只是一个视图切回全量：不许把已经取到的云端清单丢掉，也不许重新列举 OSS。
+            await page.locator('.crwu-audit-search-clear').first().click()
             await page.waitForFunction(
-              () => document.body.innerText.includes('正在看：全部云端交付件'),
-              undefined,
+              (text) => !document.body.innerText.includes(text),
+              'OSS 上没有这个流水号的交付件',
               { timeout: 30_000 },
             ).catch(() => undefined)
             const cleared = await body()
             checks.that(
-              '点「清空」回到全量云端清单',
-              cleared.includes('正在看：全部云端交付件') && cleared.includes('查看报告'),
+              '点 × 回到全量云端清单',
+              !cleared.includes('OSS 上没有这个流水号的交付件') && cleared.includes('查看报告'),
             )
             checks.that('清空不重新列举 OSS', ossListings() === before + 2, `现在 ${ossListings()} 次`)
           }

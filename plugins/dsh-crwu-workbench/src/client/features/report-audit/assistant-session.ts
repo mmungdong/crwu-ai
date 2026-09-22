@@ -1,4 +1,5 @@
 import { discussionTitle, findDiscussions, nextOrdinal } from './assistant-context.ts'
+import { auditAnalysisTitle, findAuditAnalyses, nextAuditOrdinal } from './audit-analysis.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 
 /**
@@ -61,6 +62,48 @@ export interface DiscussionPort {
   list?: SessionListStore
 }
 
+/**
+ * 会话的**业务来源**。
+ *
+ * `report_discussion` = 报告列表那枚小鲸鱼（讨论原报告）；
+ * `audit_analysis` = AI 审核列表那枚小鲸鱼（分析 AI 审核结果）。
+ *
+ * 两者**共用同一套 DSH 会话**（`Report → Conversations`，1:N），只是会话名前缀不同 ——
+ * 这是本仓既有的"名字即映射"机制（`sessions.create` 不接受 metadata）。不去改会话数据库，
+ * 也就不会影响左侧会话列表的统一管理。
+ */
+export type DiscussionKind = 'report_discussion' | 'audit_analysis'
+
+const TITLE_OF: Record<DiscussionKind, (seqNo: string, ordinal?: number) => string> = {
+  report_discussion: discussionTitle,
+  audit_analysis: auditAnalysisTitle,
+}
+
+const FIND_OF: Record<DiscussionKind, <T extends { id: string; displayTitle?: string; title?: string }>(
+  sessions: readonly T[],
+  seqNo: string,
+) => T[]> = {
+  report_discussion: findDiscussions,
+  audit_analysis: findAuditAnalyses,
+}
+
+const ORDINAL_OF: Record<DiscussionKind, <T extends { id: string; displayTitle?: string; title?: string }>(
+  sessions: readonly T[],
+  seqNo: string,
+) => number> = {
+  report_discussion: nextOrdinal,
+  audit_analysis: nextAuditOrdinal,
+}
+
+/** 这份报告在某一来源下的全部会话（报告讨论 / 审核分析各自独立）。 */
+export function sessionsOfKind<T extends { id: string; displayTitle?: string; title?: string }>(
+  kind: DiscussionKind,
+  sessions: readonly T[],
+  seqNo: string,
+): T[] {
+  return FIND_OF[kind](sessions, seqNo)
+}
+
 export interface EnsureDiscussionInput {
   port: DiscussionPort | undefined
   /** 会话列表快照（来自标准 hook `useSessions`）。 */
@@ -70,6 +113,8 @@ export interface EnsureDiscussionInput {
   workspacePath: string
   /** 真 = 不管有没有旧的都新建一条（气泡里选「新建对话」时走这条）。 */
   forceNew?: boolean
+  /** 业务来源（默认报告讨论）；决定会话名前缀与"找回哪一类会话"。 */
+  kind?: DiscussionKind
 }
 
 export type EnsureDiscussionResult =
@@ -91,7 +136,8 @@ export async function ensureDiscussion(input: EnsureDiscussionInput): Promise<En
   if (typeof port?.create !== 'function' || typeof port?.binding !== 'function') {
     return { ok: false, error: zhCN.aiUnsupported }
   }
-  const existing = findDiscussions(sessions, seqNo)[0]
+  const kind = input.kind ?? 'report_discussion'
+  const existing = FIND_OF[kind](sessions, seqNo)[0]
   if (input.forceNew !== true && existing !== undefined) {
     port.open?.(existing.id)
     return { ok: true, id: existing.id, created: false }
@@ -103,7 +149,7 @@ export async function ensureDiscussion(input: EnsureDiscussionInput): Promise<En
     // 面板照样能聊，只是下次打开会再建一条（所以失败要如实报出来）。
     const face = port.binding(id)?.session
     if (typeof face?.rename === 'function') {
-      await face.rename(discussionTitle(seqNo, input.forceNew === true ? nextOrdinal(sessions, seqNo) : 1))
+      await face.rename(TITLE_OF[kind](seqNo, input.forceNew === true ? ORDINAL_OF[kind](sessions, seqNo) : 1))
     }
     port.open?.(id)
     return { ok: true, id, created: true }

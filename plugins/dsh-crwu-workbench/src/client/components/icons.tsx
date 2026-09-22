@@ -90,6 +90,38 @@ export function WarnIcon(props: IconProps): React.ReactElement {
   </svg>
 }
 
+/**
+ * 刷新：一段带箭头的整圆。
+ *
+ * 与「重新自检」那个转圈不同 —— 这只是**列表工具条**里的一次重新拉取，
+ * 所以图标本身是静态的，转起来由 `.crwu-audit-ghost-busy` 那条 transform 动画负责。
+ */
+export function RefreshIcon(props: IconProps): React.ReactElement {
+  const box = frame(props.size, props.className)
+  return <svg {...box} {...STROKE}>
+    <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" />
+    <path d="M19.6 4.6v4.2h-4.2" />
+  </svg>
+}
+
+/** 复制：两张错开的纸（流水号那类辅助信息的悬停动作）。 */
+export function CopyIcon(props: IconProps): React.ReactElement {
+  const box = frame(props.size, props.className)
+  return <svg {...box} {...STROKE}>
+    <rect x={9} y={9} width={11} height={11} rx={2.6} />
+    <path d="M15.2 6.4A2.4 2.4 0 0 0 13 4H6.6A2.6 2.6 0 0 0 4 6.6V13a2.4 2.4 0 0 0 2.4 2.2" />
+  </svg>
+}
+
+/** 搜索：一枚放大镜（放在输入框左侧，只做形状提示、不参与交互）。 */
+export function SearchIcon(props: IconProps): React.ReactElement {
+  const box = frame(props.size, props.className)
+  return <svg {...box} {...STROKE}>
+    <circle cx={11} cy={11} r={6.4} />
+    <path d="m15.8 15.8 3.6 3.6" />
+  </svg>
+}
+
 /** 尚未开发的模块：一只沙漏，比问号更少「报错」味。 */export function PendingIcon(props: IconProps): React.ReactElement {
   const box = frame(props.size, props.className)
   return <svg {...box} {...STROKE}>
