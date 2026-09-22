@@ -107,6 +107,28 @@
   TGZ 断言、README、CHANGELOG 和版本号；最低测试为 `host-yaml-config.test.mjs`、
   `dist-config.test.mjs` 与 `host-package.test.mjs`。
 
+### 3.3 开发要点与设计规范放在插件的 `docs/` 下
+
+`plugins/dsh-crwu-workbench/docs/` 是这个插件的**延伸阅读**：规则判据仍以
+`plugins/dsh-crwu-workbench/AGENTS.md` 为准（它是门禁口径），但"为什么这么设计、具体怎么写、
+踩过什么坑"整理在 `docs/` 里，改代码前按需读：
+
+| 文档 | 什么时候读 | 内容要点 |
+| --- | --- | --- |
+| [`docs/ui-design-guidelines.md`](../dsh-crwu-workbench/docs/ui-design-guidelines.md) | 动界面、样式、交互 | 视觉语言（办公 + Apple）、DSH token 白名单与踩过的假 token、样式交付与模板字符串禁反引号、类名与选择器纪律、布局硬规则（滚动 / 表格 / 浮层）、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
+| [`docs/development-notes.md`](../dsh-crwu-workbench/docs/development-notes.md) | 动交付形态、Cordis 生命周期、Host 操作、协议号、沙箱与授权、测试与发版 | 三条加载契约、生命周期归属表、bundle patch 的 `baseUrl` 陷阱、Host/Client 分开加载与协议号、沙箱与授权口径、「我是谁」的来源、增删 Host 操作的最小清单、本地开发循环与两道人工关卡、测试与证伪纪律、发版与同版本不可覆盖、常见坑速查表 |
+| [`docs/PRD-workbench-sidebar-modules.md`](../dsh-crwu-workbench/docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块、面板壳的形态与口径 | 需求与取舍、历次返工记录、真机几何证据与证伪清单 |
+
+三条维护要求：
+
+1. **新踩的坑写回对应文档**，不要只留在提交信息或对话里；不确定放哪就放
+   `development-notes.md` 的「常见坑速查」。
+2. 文档与插件自己的 `AGENTS.md` 冲突时，**以插件 `AGENTS.md` 为准**，并在同一批修正文档 ——
+   不许出现两套互相矛盾的口径。
+3. 这两份文档是**给维护者读的**（写为什么、写取舍、写复现步骤），不是运行时读物：
+   技能自洽性 lint 只扫技能根，`docs/` 不属于技能根，也不得把"必须某文档在手边才能干活"
+   这类依赖写进 `SKILL.md` 或技能脚本。
+
 ## 4. 审核 Skill 的领域与维护流程
 
 ### 4.1 资产轴与业务轴

@@ -2,6 +2,17 @@
 
 本仓库是一个 **DeepSeek Harness（DSH）插件**。所有代码、目录、测试和发布改动都必须遵守 DSH 的插件装配、Host/Client 分层、Cordis 生命周期与浏览器模块规范。不能把它当作普通 Node.js 网站或独立 React 应用处理。
 
+**延伸阅读（`docs/`，给维护者读的"为什么"）**：本文件是**门禁口径**；写代码前按需读下面三份，
+它们与本文件冲突时以本文件为准，并在同一批把文档改回来。
+
+| 文档 | 什么时候读 |
+| --- | --- |
+| [`docs/ui-design-guidelines.md`](docs/ui-design-guidelines.md) | 动界面 / 样式 / 交互：视觉语言、DSH token 白名单、样式交付与模板字符串禁反引号、类名纪律、布局硬规则、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
+| [`docs/development-notes.md`](docs/development-notes.md) | 动交付形态 / Cordis 生命周期 / Host 操作 / 协议号 / 沙箱与授权 / 测试与发版：加载契约、`baseUrl` 陷阱、协议号规则、增删操作清单、开发循环与证伪纪律、常见坑速查 |
+| [`docs/PRD-workbench-sidebar-modules.md`](docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块或面板壳的形态与口径：需求、取舍、历次返工与证伪记录 |
+
+`plugins/AGENTS.md` §3.3 也指向这三份文档；新踩的坑**写回对应文档**，不要只留在提交信息或对话里。
+
 ## 1. 形态与修改原则
 
 仓库只有**一条形态**：`src/` 是唯一源码，由 tsdown 打包成 `lib/index.js` 与 `lib/client.js`，
