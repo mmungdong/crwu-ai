@@ -119,6 +119,25 @@ export interface OssIndexResult {
   truncated: boolean
 }
 
+export interface ReportFilesResult {
+  ok: boolean
+  error: string
+  seqNo: string
+  /** 氚云附件（权威来源：这份报告该有哪些文件；只元数据、不下载）。 */
+  h3yun: Array<{ field: string; fileId: string; name: string; size: number; contentType: string }>
+  /** 氚云那一路失败的原因（不影响本地/云端两组照常显示）。 */
+  h3yunError: string
+  /** 云端对象（只列举，不下载）。 */
+  oss: Array<{ key: string; name: string }>
+  /** 本地案例目录里的文件（名字 + 绝对路径 + 字节数）。 */
+  local: Array<{ name: string; path: string; size: number }>
+  /** 本地案例目录的绝对路径；空串 = 还没选定工作空间。 */
+  localDir: string
+  /** 本地是否真的存在这个案例目录（"不存在"与"存在但空"要分开说）。 */
+  localExists: boolean
+  truncated: boolean
+}
+
 export interface OssResultResult {
   ok: boolean
   error: string
@@ -169,6 +188,8 @@ export interface WorkbenchApi {
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
   auditStop: (args?: { childId?: string }) => Promise<StopResult>
+  /** 一份报告的全部相关文件（只列举、不下载）：面板一打开就查，见 AssistantPanel。 */
+  reportFiles: (args: { seqNo: string; objectId?: string }) => Promise<ReportFilesResult>
   ossIndex: (args?: { seqNo?: string }) => Promise<OssIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
   ossLink: (args: { key: string }) => Promise<OssLinkResult>
@@ -200,6 +221,7 @@ export const workbenchApi: WorkbenchApi = {
   auditStatus: (args) => call('audit-status', args),
   auditStart: (args) => call('audit-start', args),
   auditStop: (args) => call('audit-stop', args),
+  reportFiles: (args) => call('report-files', args),
   ossIndex: (args) => call('oss-index', args ?? {}),
   ossResult: (args) => call('oss-result', args),
   ossLink: (args) => call('oss-link', args),
@@ -232,6 +254,7 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   auditStatus: 'audit-status',
   auditStart: 'audit-start',
   auditStop: 'audit-stop',
+  reportFiles: 'report-files',
   ossIndex: 'oss-index',
   ossResult: 'oss-result',
   ossLink: 'oss-link',

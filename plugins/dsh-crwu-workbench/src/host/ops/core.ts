@@ -16,6 +16,7 @@ import { sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
 import { maybeAutoUpload } from '../oss/auto.ts'
 import { ossCredSave, ossIndex, ossLink, ossResult, ossUpload, type OssDeps } from '../oss/ops.ts'
+import { reportFiles } from '../report/files.ts'
 import { createUploadWatch } from '../oss/watch.ts'
 import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
 import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
@@ -136,6 +137,8 @@ export function createCoreOperations(
           'audit-start', 'audit-stop', 'audit-status', 'audit-release',
           // 第 4 层：OSS 交付件（列举 / 按精确 key 读摘要 / 签名链接 / 重传 / 凭据保存）。
           'oss-index', 'oss-result', 'oss-link', 'oss-upload', 'oss-cred-save',
+          // 第 4 层补：一份报告的全部相关文件（只列举、不下载）。
+          'report-files',
           // 第 5 层：零碎但用户每天会点的那些。
           'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred'],
         // 24 个 legacy RPC 已全部搬完；这里保留空数组，是为了让「声明跟着实现走」的测试继续成立。
@@ -252,6 +255,20 @@ export function createCoreOperations(
       return result
     },
     'audit-release': async () => await auditRelease({ ctx, config, state, world }),
+    'report-files': async (args) => await reportFiles(
+      {
+        ctx,
+        oss: await ossDeps(),
+        workspacePath: () => state.workspacePath || state.caseRoot,
+        // 氚云附件是「这份报告该有哪些文件」的权威来源：与 `pending` 同一个表单 code、
+        // 同一条授权纪律（没授权就不去读钥匙串）。
+        formCode: () => state.formCode,
+        trusted: state.trustCredentials === true,
+        platform: await world.platform(),
+        workdir: () => world.workdir(),
+      },
+      args,
+    ),
     'oss-index': async (args) => await ossIndex(await ossDeps(), args),
     'oss-result': async (args) => await ossResult(await ossDeps(), args),
     'oss-link': async (args) => await ossLink(await ossDeps(), args),

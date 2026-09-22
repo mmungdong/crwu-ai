@@ -204,10 +204,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
   }, [])
 
+  // 「本地的审核记录 / 子会话是否已经查过一次」。报告行的主操作标签（AI 审核 / 重新审核）
+  // 取决于这份数据，所以**必须先有它再画行**：否则用户会看到「AI 审核」先出现、
+  // 过一会儿跳成「重新审核」（用户 2026-09-22 报的一致性问题）。
+  const [auditsReady, setAuditsReady] = React.useState(false)
+
   const refreshAudits = React.useCallback(async () => {
     try {
       const result = await workbenchApi.auditStatus({})
       if (!mounted.current || !result.ok) return
+      setAuditsReady(true)
       const next: Record<string, AuditView> = {}
       for (const record of result.audits) next[record.key] = record
       setAudits(next)
@@ -347,6 +353,8 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const reportState = {
     tasks: (pending?.rows ?? []) as TaskRow[],
     audits,
+    /** 审核记录查过没有 —— 报告页据此决定"现在能不能画行"（见 ReportPaneState 注释）。 */
+    auditsReady,
     ossIndex,
     ossIndexError: ossError,
     ossLoading,
@@ -460,7 +468,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
           结论一到，autoEnter() 会把用户送到该去的那一页（通过 → 报告审核，不通过 → 环境信息）。 */}
       {awaitingEnv ? <WorkbenchLoading /> : null}
 
-      {!awaitingEnv && module === 'eval' ? <ReportEvalPane /> : null}
+      {/* 「报告评估」还没开放：这一页是 Coming Soon，页内给一条去「报告审核」的路。 */}
+      {!awaitingEnv && module === 'eval'
+        ? <ReportEvalPane onGoAudit={() => { modules.select('audit') }} />
+        : null}
 
       {!awaitingEnv && (module === 'env' || env === null) ? envPane : null}
 
@@ -469,6 +480,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
             ? <ReportPane
                 state={reportState}
                 gating={gating}
+                workspace={{ id: env?.workspace.id ?? '', path: env?.workspace.path ?? '' }}
+                // 讨论面板要的是**会话服务本身**（create/open/binding/list 四个动词）。
+                // 服务可能缺席（别的部署/旧宿主），面板会自己降级成一句「请用会话中打开」。
+                port={props.services.sessions ?? {}}
+                onOpenDiscussion={(sessionId) => {
+                  // 「在会话中打开」= 把这条讨论会话设为当前会话 + 主面板切回原生对话
+                  // （工具调用、审批、完整渲染都在那边）。
+                  props.services.sessions?.open?.(sessionId)
+                  props.services.layout?.selectPanel?.(null)
+                }}
                 onSearch={(next) => { setQuery(next); setPage(1); void loadReport(pendingArgs(next, 1)) }}
                 onGoPage={(next) => { setPage(next); void loadReport(pendingArgs(query, next)) }}
                 onRefreshPending={() => { void loadReport(pendingArgs(query, page)) }}

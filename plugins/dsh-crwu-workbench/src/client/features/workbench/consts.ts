@@ -74,14 +74,90 @@ export const WORKBENCH_CLASSES = {
   loadingTitle: 'crwu-audit-loading-title',
   loadingHint: 'crwu-audit-loading-hint',
 
-  /** 未开发的模块（报告评估）的占位页：正文里只有一枚灰色的「开发中」标签。 */
-  placeholder: 'crwu-audit-placeholder',
-  placeholderTag: 'crwu-audit-placeholder-tag',
+  /** 「报告评估」的 Coming Soon 页（无卡片、无边框，靠排版留白）。 */
+  eval: 'crwu-audit-eval',
+  evalInner: 'crwu-audit-eval-inner',
+  evalIcon: 'crwu-audit-eval-icon',
+  evalTitle: 'crwu-audit-eval-title',
+  evalSubtitle: 'crwu-audit-eval-subtitle',
+  evalDesc: 'crwu-audit-eval-desc',
+  evalStatus: 'crwu-audit-eval-status',
+  evalDot: 'crwu-audit-eval-dot',
+  evalNext: 'crwu-audit-eval-next',
+  evalNextLead: 'crwu-audit-eval-next-lead',
+  evalLink: 'crwu-audit-eval-link',
+  evalArrow: 'crwu-audit-eval-arrow',
 
   tabs: 'crwu-audit-tabs',
   tab: 'crwu-audit-tab',
   tabOn: 'crwu-audit-tab-on',
   tabCount: 'crwu-audit-tab-count',
+  /** Tab 下方的品牌色滑动指示条（2px）。 */
+  tabInd: 'crwu-audit-tab-ind',
+
+  /** 页面头：标题 + 副标题 + 右侧计数（Apple 的 Workspace Header 语汇）。 */
+  pageHead: 'crwu-audit-page-head',
+  pageTitle: 'crwu-audit-page-title',
+  pageMeta: 'crwu-audit-page-meta',
+  /** Spotlight 式搜索：输入框 + 右侧那个 × 清空。 */
+  searchWrap: 'crwu-audit-search',
+  searchClear: 'crwu-audit-search-clear',
+  /** 搜索行里的动作按钮（刷新）：与输入框同高，视觉上属于同一个工具条。 */
+  searchAction: 'crwu-audit-search-action',
+
+  /** 子页面的大圆角框（一个框住全部，框内靠发丝线分格，不再分成好多块）。 */
+  surface: 'crwu-audit-surface',
+  /** 大框顶部那一行：下划线式页签（+ 各视图自己的工具条仍在正文里）。 */
+  paneHead: 'crwu-audit-pane-head',
+  /** 大框身体：左数据 + 右 AI 讨论。 */
+  paneBody: 'crwu-audit-pane-body',
+  paneMain: 'crwu-audit-pane-main',
+
+  /** 「与 DeepSeek 共同讨论这份报告」：操作列那枚小图标 + 右侧面板。 */
+  /** 拉文件期间盖住正文的等待页。 */
+  aiMask: 'crwu-audit-ai-mask',
+  /** 「已有报告会话」的选择 Dialog。 */
+  aiDialog: 'crwu-audit-ai-dialog',
+  aiDialogBackdrop: 'crwu-audit-ai-dialog-backdrop',
+  aiDialogTitle: 'crwu-audit-ai-dialog-title',
+  aiDialogBody: 'crwu-audit-ai-dialog-body',
+  aiDialogOption: 'crwu-audit-ai-dialog-option',
+  aiDialogOptionOn: 'crwu-audit-ai-dialog-option-on',
+  aiDialogOptionTitle: 'crwu-audit-ai-dialog-option-title',
+  aiDialogOptionHint: 'crwu-audit-ai-dialog-option-hint',
+  aiDialogActions: 'crwu-audit-ai-dialog-actions',
+  /** 操作列：一行只放主操作 + 小鲸鱼 + •••；永不纵向堆叠。 */
+  rowActions: 'crwu-audit-row-actions',
+  progressChip: 'crwu-audit-progress-chip',
+  /** 操作列那枚 ••• 按钮（菜单打开时保持 selected）。 */
+  menu: 'crwu-audit-menu',
+  menuOpen: 'crwu-audit-menu-open',
+  /** 统一的浮层：Tooltip 与 Dropdown 共用一套视觉/动画（见样式 §18）。 */
+  floatLayer: 'crwu-audit-float',
+  floatTip: 'crwu-audit-float-tip',
+  floatMenu: 'crwu-audit-float-menu',
+  floatArrow: 'crwu-audit-float-arrow',
+  floatItem: 'crwu-audit-float-item',
+  /** 菜单打开时那一行保持浅选中（用户始终知道菜单属于谁）。 */
+  tbodyRowOn: 'crwu-audit-tbody-row-on',
+  /** 风险等级：低噪音 Status Indicator（小圆点 + 等级字母），不是彩色 Tag。 */
+  risk: 'crwu-audit-risk',
+  riskDot: 'crwu-audit-risk-dot',
+  riskDotHigh: 'crwu-audit-risk-dot-high',
+  riskDotMedium: 'crwu-audit-risk-dot-medium',
+  riskDotLow: 'crwu-audit-risk-dot-low',
+  riskDotOk: 'crwu-audit-risk-dot-ok',
+  /** 人工复核列：主状态 13px + 次级 12px（两行权重不同）。 */
+  reviewMain: 'crwu-audit-review-main',
+  /** 分页：页码 + 跳页。 */
+  pager: 'crwu-audit-pager',
+  pagerPage: 'crwu-audit-pager-page',
+  pagerPageOn: 'crwu-audit-pager-page-on',
+  pagerGap: 'crwu-audit-pager-gap',
+  pagerJumpWrap: 'crwu-audit-pager-jump',
+  pagerJump: 'crwu-audit-pager-jump-input',
+  aiRowBtn: 'crwu-audit-ai-row-btn',
+  aiRowBtnOn: 'crwu-audit-ai-row-btn-on',
 
   card: 'crwu-audit-card',
   cardTitle: 'crwu-audit-card-title',
@@ -356,12 +432,8 @@ export const WORKBENCH_STYLE_TEXT = `
 /* 「开发中」小标签：灰色、比子项名小一号，紧跟在名字后面。
    用户 2026-09-22 的口径是"图标太难看，就要一个灰色小 tag"，所以这里没有描边、没有状态色，
    只有一层极浅的中性底（深浅主题都成立），文字用 caption 灰。 */
-.crwu-audit-module-tag {
-  flex: none; padding: 0 6px; border-radius: 6px;
-  font-size: 10px; line-height: 16px; font-weight: 400; letter-spacing: 0.02em;
-  color: var(--dsw-alias-label-caption);
-  background: var(--dsw-alias-interactive-bg-hover);
-}
+.crwu-audit-module-tag { flex: none; padding: 0; border-radius: 0; font-size: 12px; line-height: 18px; font-weight: 400;
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) 78%, transparent); background: transparent; }
 
 /* ════════════════════════════════════════════════════════════════════
    2. 侧栏底部的分组卡（sidebar.footer.action，Settings 上方）
@@ -978,13 +1050,6 @@ export const WORKBENCH_STYLE_TEXT = `
 .crwu-audit-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .crwu-audit-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -1px; }
 .crwu-audit-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.crwu-audit-btn-primary {
-  background: var(--dsw-alias-button-primary-fill);
-  border-color: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-label-primary-foreground);
-}
-.crwu-audit-btn-primary:hover:not(:disabled) { opacity: 0.88; background: var(--dsw-alias-button-primary-fill); }
-.crwu-audit-btn-warn { border-color: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-state-warn-primary); }
 .crwu-audit-btn-small { padding: 3px 10px; font-size: 11.5px; line-height: 16px; }
 
 .crwu-audit-input {
@@ -1003,4 +1068,465 @@ export const WORKBENCH_STYLE_TEXT = `
 .crwu-audit-kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; align-items: baseline; }
 .crwu-audit-kv-key { color: var(--dsw-alias-label-caption); }
 .crwu-audit-kv-value { overflow-wrap: anywhere; }
+
+/* ════════════════════════════════════════════════════════════════════
+   16. 子页面骨架：一层大圆角框 + 左数据区
+   ────────────────────────────────────────────────────────────────────
+   Apple 风格的核心是"减少不必要的视觉容器"：正文只有一层框，
+   框内的卡片撤掉自己的描边/阴影，靠发丝线与留白分格。
+   ──────────────────────────────────────────────────────────────────── */
+.crwu-audit-surface {
+  box-sizing: border-box; display: flex; flex-direction: column;
+  height: 100%; min-height: 0; overflow: hidden;
+  border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-xl);
+  background: var(--crwu-surface-1);
+}
+.crwu-audit-pane-head {
+  flex: none; display: flex; align-items: center; gap: var(--crwu-space-3);
+  padding: 0 var(--crwu-space-5); border-bottom: 1px solid var(--crwu-border);
+}
+.crwu-audit-pane-body { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
+.crwu-audit-pane-main { position: relative; flex: 1 1 auto; min-width: 0; overflow: auto; padding: var(--crwu-space-4) var(--crwu-space-5) var(--crwu-space-5); }
+
+/* ════════════════════════════════════════════════════════════════════
+   17. Apple 式工作台视觉层（页面头 / Tabs / 搜索 / 列表 / 按钮 / 徽章）
+   ────────────────────────────────────────────────────────────────────
+   1. 结构色一律走 --crwu-*（§19 里映射到 DSH 主题 token），深浅主题自动成立；
+   2. 间距/圆角/动效只用 --crwu-space/radius/dur/ease；
+   3. 毛玻璃只用在"浮"的层。
+   ──────────────────────────────────────────────────────────────────── */
+.crwu-audit-root {
+  --crwu-space-1: 4px; --crwu-space-2: 8px; --crwu-space-3: 12px; --crwu-space-4: 16px;
+  --crwu-space-5: 20px; --crwu-space-6: 24px; --crwu-space-8: 32px;
+  --crwu-radius-sm: 8px; --crwu-radius-md: 10px; --crwu-radius-lg: 12px; --crwu-radius-xl: 16px;
+  --crwu-dur: 180ms; --crwu-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --crwu-shadow-1: 0 1px 2px color-mix(in srgb, var(--crwu-shadow-ink) 6%, transparent);
+  --crwu-shadow-2: 0 8px 30px color-mix(in srgb, var(--crwu-shadow-ink) 8%, transparent);
+  --crwu-ai-1: var(--crwu-brand);
+}
+.crwu-audit-page-head {
+  display: flex; align-items: center; gap: var(--crwu-space-4);
+  min-height: 64px; padding: var(--crwu-space-4) var(--crwu-space-5) 0;
+}
+.crwu-audit-page-title { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 32px; color: var(--crwu-text-1); }
+.crwu-audit-page-meta { margin-left: auto; display: flex; align-items: center; gap: var(--crwu-space-2); }
+/* 文字型 Workspace Tabs：容器透明（不是灰胶囊），选中靠 600 + 品牌色滑动指示条。 */
+.crwu-audit-tabs {
+  position: relative; display: inline-flex; gap: var(--crwu-space-5);
+  padding: 0; margin: var(--crwu-space-3) 0; background: transparent; border: none;
+}
+.crwu-audit-tab {
+  border: none; border-radius: 0; padding: 6px 0 8px; margin: 0;
+  background: transparent; color: var(--crwu-text-2);
+  font-size: 13px; font-weight: 500; line-height: 18px;
+  transition: color var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-tab:hover { color: var(--crwu-text-1); background: transparent; }
+.crwu-audit-tab:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-tab-on { background: transparent; color: var(--crwu-text-1); font-weight: 600; box-shadow: none; }
+.crwu-audit-tab-count { margin-left: 6px; color: var(--crwu-text-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+.crwu-audit-tab-ind {
+  position: absolute; left: 0; bottom: 0; height: 2px; border-radius: 999px;
+  background: var(--crwu-brand);
+  transition: transform var(--crwu-dur) var(--crwu-ease), width var(--crwu-dur) var(--crwu-ease);
+}
+/* Spotlight 式搜索 + 列表工具条（刷新与输入框同高）。 */
+.crwu-audit-search { position: relative; display: inline-flex; align-items: center; }
+.crwu-audit-search .crwu-audit-input { padding-right: 32px; width: 340px; }
+.crwu-audit-search-clear {
+  position: absolute; right: 8px; width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 999px; background: var(--crwu-surface-selected);
+  color: var(--crwu-text-2); font-size: 13px; line-height: 1; cursor: pointer;
+  transition: background var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-search-clear:hover { background: var(--crwu-surface-hover); color: var(--crwu-text-1); }
+.crwu-audit-search-action .crwu-audit-btn {
+  height: 40px; padding: 0 var(--crwu-space-4); border-radius: var(--crwu-radius-md); font-size: 13px;
+}
+.crwu-audit-input {
+  box-sizing: border-box; height: 40px; min-width: 240px;
+  padding: 0 var(--crwu-space-3); border-radius: var(--crwu-radius-md);
+  border: 1px solid transparent; background: var(--crwu-surface-2);
+  color: var(--crwu-text-1); font-size: 13px;
+  transition: background var(--crwu-dur) var(--crwu-ease), border-color var(--crwu-dur) var(--crwu-ease), box-shadow var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-input::placeholder { color: var(--crwu-text-3); }
+.crwu-audit-input:focus-visible { outline: none; background: var(--crwu-surface-hover); border-color: var(--crwu-border-strong); box-shadow: var(--crwu-shadow-1); }
+/* 现代 Data List：发丝线分隔、hover 只在行上、主行 14/550。 */
+.crwu-audit-surface .crwu-audit-pane-main .crwu-audit-card-title {
+  padding: var(--crwu-space-4) 0 var(--crwu-space-3); border-bottom: 1px solid var(--crwu-border);
+  font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+}
+.crwu-audit-th {
+  padding: var(--crwu-space-3); border-bottom: 1px solid var(--crwu-border);
+  color: var(--crwu-text-3); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.crwu-audit-td { padding: var(--crwu-space-4) var(--crwu-space-3); border-bottom: 1px solid var(--crwu-border); }
+.crwu-audit-tbody-row:last-child .crwu-audit-td { border-bottom: none; }
+.crwu-audit-cell-title { font-size: 14px; font-weight: 550; line-height: 20px; letter-spacing: -0.01em; }
+.crwu-audit-cell-sub { margin-top: var(--crwu-space-1); font-size: 12px; color: var(--crwu-text-2); }
+.crwu-audit-cell-mono { margin-top: var(--crwu-space-1); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--crwu-text-3); }
+.crwu-audit-review-main { font-size: 13px; color: var(--crwu-text-1); white-space: nowrap; }
+/* 分页：页码 + 跳页（非法输入 clamp 后提示，不发请求）。 */
+.crwu-audit-pager { display: flex; align-items: center; gap: var(--crwu-space-2); flex-wrap: wrap; padding: var(--crwu-space-4) 0 var(--crwu-space-2); font-size: 12px; color: var(--crwu-text-2); }
+.crwu-audit-pager-page {
+  min-width: 28px; height: 28px; padding: 0 6px; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--crwu-radius-sm);
+  background: transparent; color: var(--crwu-text-2);
+  font-family: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums;
+  transition: background var(--crwu-dur) var(--crwu-ease), color var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-pager-page:hover { background: var(--crwu-surface-hover); color: var(--crwu-text-1); }
+.crwu-audit-pager-page-on { background: var(--crwu-surface-selected); color: var(--crwu-text-1); font-weight: 600; border-color: var(--crwu-border); }
+.crwu-audit-pager-gap { padding: 0 2px; color: var(--crwu-text-3); }
+.crwu-audit-pager-jump { display: inline-flex; align-items: center; gap: var(--crwu-space-2); }
+.crwu-audit-pager-jump-input {
+  box-sizing: border-box; width: 64px; height: 28px; padding: 0 var(--crwu-space-2);
+  border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-sm);
+  background: var(--crwu-surface-2); color: var(--crwu-text-1);
+  font-family: inherit; font-size: 12.5px; text-align: center;
+}
+.crwu-audit-pager-jump-input:focus-visible { outline: none; background: var(--crwu-surface-hover); box-shadow: var(--crwu-shadow-1); }
+/* 按钮：中性面；主操作是反色实心（主字色 + 配对前景色，深浅自动对调）。 */
+.crwu-audit-btn {
+  box-sizing: border-box; height: 30px; padding: 0 var(--crwu-space-3);
+  border-radius: var(--crwu-radius-sm); border: 1px solid var(--crwu-border);
+  background: var(--crwu-surface-2); color: var(--crwu-text-1);
+  font-size: 12.5px; font-weight: 500;
+  transition: background var(--crwu-dur) var(--crwu-ease), transform 120ms var(--crwu-ease), border-color var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-btn:hover { background: var(--crwu-surface-hover); }
+.crwu-audit-btn:active { transform: scale(0.98); }
+/* 变体一律用「双类」选择器（.crwu-audit-btn.crwu-audit-btn-primary = (0,2,0)）：
+   基础按钮 .crwu-audit-btn 只有 (0,1,0)，只要它出现在样式表更靠后的位置（§20 迁移层就是如此），
+   单类变体就会被它的 background/color 吃掉 —— 表现是主按钮退化成普通按钮，而 hover 那条变体
+   规则特异性更高、反而生效，于是深底 + 深字、整个按钮全黑（用户报的 bug）。双类不依赖顺序。
+   注意：基础按钮的 hover 也有一条 :hover:not(:disabled)（(0,2,0)），所以变体 hover 必须带上它。 */
+.crwu-audit-btn.crwu-audit-btn-primary {
+  border-color: transparent; background: var(--crwu-text-1); color: var(--crwu-surface-1);
+}
+.crwu-audit-btn.crwu-audit-btn-primary:hover,
+.crwu-audit-btn.crwu-audit-btn-primary:hover:not(:disabled) {
+  /* 只换底色，不碰 opacity：禁用态靠 .crwu-audit-btn:disabled 的 0.45 表达，
+     这里写 opacity: 1 会让禁用的主按钮悬停时看起来可点（相对活性由不透明度承担）。 */
+  background: color-mix(in srgb, var(--crwu-text-1) 86%, transparent);
+}
+.crwu-audit-btn.crwu-audit-btn-primary:active {
+  background: color-mix(in srgb, var(--crwu-text-1) 78%, transparent);
+}
+/* 警示变体（行内的「确认重新审核」）：原来那条单类规则同样被迁移层吃掉，确认键与旁边的
+   「取消」长得一模一样。这里用 §19 的中风险琥珀 token 恢复警示色。 */
+.crwu-audit-btn.crwu-audit-btn-warn {
+  border-color: var(--crwu-risk-b); color: var(--crwu-risk-b); background: var(--crwu-surface-2);
+}
+.crwu-audit-btn.crwu-audit-btn-warn:hover { background: var(--crwu-surface-hover); }
+.crwu-audit-btn-small { height: 28px; font-size: 12px; }
+.crwu-audit-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; padding: 1px 7px; border-radius: 6px;
+  border: 1px solid var(--crwu-border); background: var(--crwu-surface-2);
+  color: var(--crwu-text-2); font-size: 11.5px; font-weight: 600; line-height: 17px;
+}
+.crwu-audit-badge-ok { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 32%, transparent); }
+.crwu-audit-badge-medium { color: var(--dsw-alias-state-warn-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 32%, transparent); }
+.crwu-audit-badge-high { color: var(--dsw-alias-state-error-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 32%, transparent); }
+.crwu-audit-badge-low { color: var(--crwu-text-3); }
+/* 「报告评估」Coming Soon 页：无卡片、无边框、无假进度。 */
+.crwu-audit-eval {
+  display: flex; flex-direction: column; align-items: center; min-height: 100%; box-sizing: border-box;
+  padding: 18vh var(--crwu-space-6) 14vh; animation: crwu-audit-eval-in 240ms var(--crwu-ease) both;
+}
+.crwu-audit-eval-inner { display: flex; flex-direction: column; align-items: center; max-width: 480px; text-align: center; }
+@keyframes crwu-audit-eval-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.crwu-audit-eval-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 52px; height: 52px; border-radius: var(--crwu-radius-xl);
+  background: var(--crwu-surface-2); border: 1px solid var(--crwu-border); color: var(--crwu-text-2);
+  animation: crwu-audit-eval-breathe 3.6s var(--crwu-ease) infinite;
+}
+@keyframes crwu-audit-eval-breathe { 0%, 100% { opacity: 0.82; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
+.crwu-audit-eval-title { margin: var(--crwu-space-5) 0 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 32px; color: var(--crwu-text-1); }
+.crwu-audit-eval-subtitle { margin-top: 10px; font-size: 14px; line-height: 20px; color: var(--crwu-text-2); }
+.crwu-audit-eval-desc { margin: var(--crwu-space-3) 0 0; max-width: 420px; font-size: 13px; line-height: 20px; color: var(--crwu-text-2); }
+.crwu-audit-eval-status { display: inline-flex; align-items: center; gap: 6px; margin-top: var(--crwu-space-5); font-size: 13px; line-height: 18px; color: var(--crwu-text-2); }
+.crwu-audit-eval-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; background: var(--crwu-brand); }
+.crwu-audit-eval-next { margin-top: 28px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.crwu-audit-eval-next-lead { font-size: 12px; line-height: 18px; color: var(--crwu-text-3); }
+.crwu-audit-eval-link {
+  display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; padding: 0; cursor: pointer;
+  color: var(--crwu-text-2); font-family: inherit; font-size: 14px; font-weight: 500; line-height: 20px;
+  transition: color var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-eval-link:hover { color: var(--crwu-text-1); }
+.crwu-audit-eval-link:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 4px; border-radius: 4px; }
+.crwu-audit-eval-arrow { transition: transform var(--crwu-dur) var(--crwu-ease); }
+.crwu-audit-eval-link:hover .crwu-audit-eval-arrow { transform: translateX(2px); }
+@media (prefers-reduced-motion: reduce) {
+  .crwu-audit-eval, .crwu-audit-eval-icon { animation: none; }
+  .crwu-audit-eval-arrow { transition: none; }
+}
+/* 遮罩 + 「已有报告会话」Dialog。 */
+.crwu-audit-ai-mask {
+  position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--crwu-page-bg) 82%, transparent);
+}
+.crwu-audit-ai-mask .crwu-audit-loading-pane { min-height: 320px; padding: 24px 12px; }
+.crwu-audit-ai-dialog-backdrop { position: fixed; inset: 0; z-index: 10; background: color-mix(in srgb, var(--crwu-shadow-ink) 30%, transparent); }
+.crwu-audit-ai-dialog {
+  position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 420px; max-width: calc(100vw - 48px); box-sizing: border-box;
+  padding: var(--crwu-space-5); border-radius: var(--crwu-radius-lg);
+  border: 1px solid var(--crwu-border-strong); background: var(--crwu-surface-2); box-shadow: var(--crwu-shadow-2);
+}
+.crwu-audit-ai-dialog-title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--crwu-text-1); }
+.crwu-audit-ai-dialog-body { margin-top: var(--crwu-space-2); font-size: 13px; line-height: 20px; color: var(--crwu-text-2); }
+.crwu-audit-ai-dialog-option {
+  box-sizing: border-box; width: 100%; margin-top: var(--crwu-space-3); padding: var(--crwu-space-3);
+  text-align: left; cursor: pointer; border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-md);
+  background: var(--crwu-surface-1); font-family: inherit;
+  transition: background var(--crwu-dur) var(--crwu-ease), border-color var(--crwu-dur) var(--crwu-ease);
+}
+.crwu-audit-ai-dialog-option:hover { background: var(--crwu-surface-hover); border-color: var(--crwu-border-strong); }
+.crwu-audit-ai-dialog-option:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
+.crwu-audit-ai-dialog-option-on { border-color: color-mix(in srgb, var(--crwu-brand) 40%, transparent); }
+.crwu-audit-ai-dialog-option-title { display: block; font-size: 13px; font-weight: 600; color: var(--crwu-text-1); }
+.crwu-audit-ai-dialog-option-hint { display: block; margin-top: 2px; font-size: 12px; color: var(--crwu-text-2); }
+.crwu-audit-ai-dialog-actions { display: flex; justify-content: flex-end; margin-top: var(--crwu-space-4); }
+
+/* ════════════════════════════════════════════════════════════════════
+   18. 统一 Floating Layer（DeepSeek Tooltip + 操作列 Dropdown）
+   ────────────────────────────────────────────────────────────────────
+   两个浮层共用一套视觉与动画；都渲染在**表格之外**、position: fixed + 触发元素 rect 定位
+   —— 客户端产物只允许 require react（没有 react-dom），所以这是 Portal 的等价实现，
+   同时解决"被表格横向滚动容器裁掉"与"撑高行"两个问题。
+   ──────────────────────────────────────────────────────────────────── */
+.crwu-audit-float {
+  position: fixed; z-index: 40; box-sizing: border-box;
+  background: var(--crwu-surface-2); border: 1px solid var(--crwu-border-strong); border-radius: 10px;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--crwu-shadow-ink) 34%, transparent);
+  color: var(--crwu-text-1);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  animation: crwu-audit-float-in 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: left 170ms cubic-bezier(0.16, 1, 0.3, 1), top 170ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes crwu-audit-float-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.crwu-audit-float-tip {
+  padding: 7px 10px; border-radius: 8px;
+  font-size: 12px; font-weight: 500; line-height: 16px; white-space: nowrap; pointer-events: none;
+}
+.crwu-audit-float-menu { min-width: 152px; padding: 5px; }
+/* 箭头：与浮层同底同边、只留朝外两条边、贴边 4px（与浮层之间没有断层）。 */
+.crwu-audit-float-arrow { position: absolute; width: 8px; height: 8px; background: var(--crwu-surface-2); border: 1px solid var(--crwu-border-strong); }
+.crwu-audit-float-tip .crwu-audit-float-arrow,
+.crwu-audit-float-menu[data-flip="top"] .crwu-audit-float-arrow {
+  left: 50%; bottom: -4px; transform: translateX(-50%) rotate(45deg); border-top: none; border-left: none;
+}
+.crwu-audit-float-menu[data-flip="bottom"] .crwu-audit-float-arrow {
+  right: 12px; top: -4px; transform: rotate(225deg); border-top: none; border-left: none;
+}
+.crwu-audit-float-item {
+  display: flex; align-items: center; width: 100%; height: 34px; padding: 0 10px;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--crwu-text-1); font-family: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  transition: background 110ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.crwu-audit-float-item:hover { background: var(--crwu-surface-hover); }
+.crwu-audit-float-item:active { background: var(--crwu-surface-selected); }
+.crwu-audit-float-item:disabled { color: var(--crwu-text-3); cursor: default; }
+.crwu-audit-float-item:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
+/* ••• 按钮：Icon Button（hover 淡入、active 缩放、打开时保持 selected）。 */
+/* •••：底色/字色/悬停**复用主操作那套变体**（组件里挂 C.btn + C.btnPrimary），
+   这里只负责几何与"菜单属于这一行"的选中环 —— 同一组颜色不写两遍，改一处两边同步。
+   尺寸 28px 与小鲸鱼、行内小按钮一致（原先 32px 比旁边两个高一头）。 */
+.crwu-audit-menu {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border: none; border-radius: 8px;
+  font-size: 15px; line-height: 1; letter-spacing: 1px; cursor: pointer;
+  transition: background 110ms cubic-bezier(0.16, 1, 0.3, 1), color 110ms cubic-bezier(0.16, 1, 0.3, 1), transform 110ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.crwu-audit-menu:active { transform: scale(0.94); }
+.crwu-audit-menu:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+/* 菜单开着：实心按钮上看不出原来的浅底选中态，改用一圈品牌色内环（贴边，不与焦点环撞）。
+   双类是为了压过 .crwu-audit-btn.crwu-audit-btn-primary 的底色（(0,2,0)），顺序无关。 */
+.crwu-audit-btn.crwu-audit-menu.crwu-audit-menu-open { box-shadow: inset 0 0 0 2px var(--crwu-brand); }
+.crwu-audit-tbody-row-on .crwu-audit-td { background: var(--crwu-surface-selected); }
+.crwu-audit-tbody-row:hover .crwu-audit-td { background: var(--crwu-surface-hover); }
+/* 操作列：主操作 + 小鲸鱼 + •••，水平排列，永不纵向堆叠。 */
+.crwu-audit-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.crwu-audit-progress-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border-radius: var(--crwu-radius-sm); border: 1px solid var(--crwu-border);
+  background: var(--crwu-surface-2); color: var(--crwu-text-2); font-size: 13px; font-weight: 500;
+}
+.crwu-audit-progress-chip::before {
+  content: ''; width: 6px; height: 6px; border-radius: 999px;
+  background: var(--crwu-brand); animation: crwu-audit-pulse 1.8s ease-in-out infinite;
+}
+@keyframes crwu-audit-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .crwu-audit-progress-chip::before { animation: none; } }
+/* 风险等级：圆点 + 字母（低饱和，不随主题翻转）。 */
+.crwu-audit-risk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+.crwu-audit-risk-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; background: var(--crwu-risk-c); }
+.crwu-audit-risk-dot-high { background: var(--crwu-risk-a); }
+.crwu-audit-risk-dot-medium { background: var(--crwu-risk-b); }
+.crwu-audit-risk-dot-low { background: var(--crwu-risk-c); }
+.crwu-audit-risk-dot-ok { background: var(--crwu-risk-c); }
+/* 小鲸鱼：实心反色（背景=主字色、字形=配对前景色 → 深浅主题自动对调）。 */
+.crwu-audit-ai-row-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 8px;
+  background: var(--crwu-text-1); color: var(--crwu-surface-1);
+  cursor: pointer; vertical-align: middle;
+  transition: background 110ms cubic-bezier(0.16, 1, 0.3, 1), transform 110ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.crwu-audit-ai-row-btn:hover { background: color-mix(in srgb, var(--crwu-text-1) 86%, transparent); transform: translateY(-1px); }
+.crwu-audit-ai-row-btn:active { transform: scale(0.94); }
+.crwu-audit-ai-row-btn:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-ai-row-btn:disabled { opacity: 0.5; cursor: default; }
+.crwu-audit-ai-row-btn-on { background: var(--crwu-text-1); }
+
+/* ════════════════════════════════════════════════════════════════════
+   19. 工作台 Design Token（跟随 DSH 主题）
+   ────────────────────────────────────────────────────────────────────
+   用户 2026-09-22 口径（这是一条 bug 修复）：「主题色需要跟着我的 DeepSeek Harness 的设置」。
+   第一版把整套色板写成了固定十六进制 —— 结果是**浅色主题下面板仍然是深色**，这就是那个 bug。
+
+   DSH 的主题机制是：主题插件把 token 值投影到根元素（并以 color-scheme 告诉浏览器明暗），
+   所以正确做法就是**结构色全部派生自 DSH 的语义 token**，本层只给它们起工作台的语义名：
+     app/page 底 → bg-base    卡面 → bg-layer-1/2   悬停/选中 → interactive-bg-hover/active
+     描边 → border-l1/l2      文字三级 → label-primary/secondary/caption
+   这样浅色/深色切换、以及用户改 Harness 主题，面板都会自动跟着变，不需要 if-dark 分支。
+
+   只有两类颜色保留字面量（在下面这个唯一允许写死色值的块里）：
+     --crwu-brand（中瑞红，品牌识别，不随主题变）
+     --crwu-risk-a/b/c（风险等级的语义色，也不该随主题翻转）
+   ──────────────────────────────────────────────────────────────────── */
+.crwu-audit-root {
+  --crwu-app-bg: var(--dsw-alias-bg-base);
+  --crwu-sidebar-bg: var(--dsw-alias-bg-base);
+  --crwu-header-bg: var(--dsw-alias-bg-base);
+  --crwu-page-bg: var(--dsw-alias-bg-base);
+  --crwu-surface-1: var(--dsw-alias-bg-layer-1);
+  --crwu-surface-2: var(--dsw-alias-bg-layer-2);
+  --crwu-surface-hover: var(--dsw-alias-interactive-bg-hover);
+  --crwu-surface-selected: var(--dsw-alias-interactive-bg-active);
+  --crwu-border: var(--dsw-alias-border-l1);
+  --crwu-border-strong: var(--dsw-alias-border-l2);
+  --crwu-text-primary: var(--dsw-alias-label-primary);
+  --crwu-text-secondary: var(--dsw-alias-label-secondary);
+  --crwu-text-tertiary: var(--dsw-alias-label-caption);
+  /* 不随主题变的两类：品牌与风险语义色。 */
+  --crwu-brand: #D84A4A;
+  --crwu-brand-hover: #E25757;
+  --crwu-risk-a: #E15A5A;
+  --crwu-risk-b: #D6A348;
+  --crwu-risk-c: #85878D;
+  --crwu-shadow-ink: #000000;
+}
+
+/* ── 滚动条美化（报告审核正文的横向 + 纵向）────────────────────────────
+   两条都走 DSH 自带的滚动条 token（--dsh-scrollbar-thumb 由侧栏那种容器注入，
+   取不到时退回 --dsw-alias-scrollbar-bg-l2），所以一样跟着主题走、深浅都成立。
+   轨道透明、拇指圆角、hover 加深 —— 系统原生滚动条在深色面板里那种亮条最难看。 */
+.crwu-audit-pane-main,
+.crwu-audit-table-wrap,
+.crwu-audit-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsh-scrollbar-thumb, var(--dsw-alias-scrollbar-bg-l2)) transparent;
+}
+.crwu-audit-pane-main::-webkit-scrollbar,
+.crwu-audit-table-wrap::-webkit-scrollbar,
+.crwu-audit-body::-webkit-scrollbar {
+  width: 10px; height: 10px;
+}
+.crwu-audit-pane-main::-webkit-scrollbar-track,
+.crwu-audit-table-wrap::-webkit-scrollbar-track,
+.crwu-audit-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.crwu-audit-pane-main::-webkit-scrollbar-thumb,
+.crwu-audit-table-wrap::-webkit-scrollbar-thumb,
+.crwu-audit-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;           /* 透明边框 + background-clip = 视觉上更细的圆角拇指 */
+  background-clip: content-box;
+  background-color: var(--dsh-scrollbar-thumb, var(--dsw-alias-scrollbar-bg-l2));
+}
+.crwu-audit-pane-main::-webkit-scrollbar-thumb:hover,
+.crwu-audit-table-wrap::-webkit-scrollbar-thumb:hover,
+.crwu-audit-body::-webkit-scrollbar-thumb:hover {
+  background-color: var(--dsh-scrollbar-thumb-hover, var(--dsw-alias-scrollbar-hover-l2));
+}
+.crwu-audit-pane-main::-webkit-scrollbar-corner,
+.crwu-audit-table-wrap::-webkit-scrollbar-corner { background: transparent; }
+
+/* ════════════════════════════════════════════════════════════════════
+   20. 迁移覆盖层：把报告审核页的各个面落到 §19 的明度层级上
+   ────────────────────────────────────────────────────────────────────
+   **别名也要在这里重声明一遍**：§17 里那批 --crwu-text-* / --crwu-surface-* 定义在本块
+   之前，同特异度下会被它们覆盖 —— 实测症状是"背景已经变深、文字还是浅色主题的深灰"，
+   整页像蒙了一层。所以工作台的文字/分隔/填充别名统一以本块为准。
+   ────────────────────────────────────────────────────────────────────
+   为什么放在**样式最末尾**：这些规则与前面各段是同特异度（单类），CSS 里后者胜 ——
+   放前面会被 §0/§17 的旧底色盖掉（实测：放前面时页面底色仍是白的）。
+   放在这里还有一个好处：整个工作台的"面"一眼可见，改色只需改 §19 的 token。
+   ──────────────────────────────────────────────────────────────────── */
+.crwu-audit-root {
+  --crwu-text-1: var(--crwu-text-primary);
+  --crwu-text-2: var(--crwu-text-secondary);
+  --crwu-text-3: var(--crwu-text-tertiary);
+  --crwu-hair: var(--crwu-border);
+  --crwu-line: var(--crwu-border-strong);
+  --crwu-fill-1: var(--crwu-surface-hover);
+  --crwu-fill-2: var(--crwu-surface-selected);
+}
+/* 迁移：正文底色 / 大框 / 表格面 —— 全部落到新的明度层级上。 */
+.crwu-audit-root { background: var(--crwu-page-bg); color: var(--crwu-text-primary); }
+.crwu-audit-surface { background: var(--crwu-surface-1); border-color: var(--crwu-border); }
+.crwu-audit-header { background: var(--crwu-header-bg); border-bottom-color: var(--crwu-border); }
+.crwu-audit-page-head { background: var(--crwu-header-bg); }
+.crwu-audit-tbody-row:hover .crwu-audit-td { background: var(--crwu-surface-hover); }
+.crwu-audit-tbody-row-on .crwu-audit-td { background: var(--crwu-surface-selected); }
+.crwu-audit-float {
+  background: var(--crwu-surface-2); border-color: var(--crwu-border-strong);
+}
+.crwu-audit-ai-dialog { background: var(--crwu-surface-2); border-color: var(--crwu-border-strong); }
+.crwu-audit-ai-mask { background: color-mix(in srgb, var(--crwu-page-bg) 82%, transparent); }
+.crwu-audit-float-item:hover { background: var(--crwu-surface-hover); }
+.crwu-audit-float-item:active { background: var(--crwu-surface-selected); }
+.crwu-audit-card, .crwu-audit-section, .crwu-audit-layer {
+  background: var(--crwu-surface-1); border-color: var(--crwu-border);
+}
+.crwu-audit-input { background: var(--crwu-surface-2); color: var(--crwu-text-primary); }
+.crwu-audit-input:focus-visible { background: var(--crwu-surface-hover); border-color: var(--crwu-border-strong); }
+.crwu-audit-btn { background: var(--crwu-surface-2); border-color: var(--crwu-border); color: var(--crwu-text-primary); }
+.crwu-audit-btn:hover { background: var(--crwu-surface-hover); }
+.crwu-audit-pager-page:hover { background: var(--crwu-surface-hover); color: var(--crwu-text-primary); }
+.crwu-audit-pager-page-on { background: var(--crwu-surface-selected); color: var(--crwu-text-primary); }
+/* 风险等级：只用这三个 token（A 红 / B 琥珀 / C 中性），低饱和、无底无描边。 */
+.crwu-audit-risk-dot-high { background: var(--crwu-risk-a); }
+.crwu-audit-risk-dot-medium { background: var(--crwu-risk-b); }
+.crwu-audit-risk-dot-low { background: var(--crwu-risk-c); }
+.crwu-audit-risk-dot-ok { background: var(--crwu-risk-c); }
+/* 品牌红只当极小量 Accent：Tab 指示条与焦点环。 */
+.crwu-audit-eval-dot { background: var(--crwu-brand); }
+/* 环境信息（四层卡 / hero / 提示条 / 抽屉）与「报告评估」Coming Soon 页同样落到这套层级上。 */
+.crwu-audit-layer, .crwu-audit-hero, .crwu-audit-card, .crwu-audit-section {
+  background: var(--crwu-surface-1); border-color: var(--crwu-border);
+}
+.crwu-audit-notice, .crwu-audit-drawer, .crwu-audit-side-drawer {
+  background: var(--crwu-surface-2); border-color: var(--crwu-border);
+}
+.crwu-audit-layer-head-extra, .crwu-audit-details-head { background: transparent; border-color: var(--crwu-border); }
+.crwu-audit-layer-head:hover, .crwu-audit-details-head:hover, .crwu-audit-tab:hover { background: var(--crwu-surface-hover); }
+.crwu-audit-trust-row, .crwu-audit-auth-card { background: var(--crwu-surface-1); border-color: var(--crwu-border); }
+.crwu-audit-auth-mask { background: color-mix(in srgb, var(--crwu-page-bg) 82%, transparent); }
+.crwu-audit-eval-icon { background: var(--crwu-surface-2); border-color: var(--crwu-border); }
+.crwu-audit-metric, .crwu-audit-blocker, .crwu-audit-input, .crwu-audit-float-input {
+  background: var(--crwu-surface-2); border-color: var(--crwu-border);
+}
 `

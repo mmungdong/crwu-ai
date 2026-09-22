@@ -147,3 +147,11 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 | browser-check 报「Route is already handled」 | 撤路由撤得太早，拖慢的那次请求还没回来 | 先等被拖慢的请求回来再 `unroute` |
 | `getByRole('button', { name })` 取不到侧栏按钮 | 该按钮可访问名拿不到（实测 count=0） | 用 `button:has-text("…")` |
 | 真机少了一块界面，单测全绿 | 证伪/还原时漏还原了新建文件 | 还原清单覆盖改过的每个文件；改完在真机复看截图 |
+| 要在验收脚本里收/放侧栏（量 56px 轨道） | 侧栏不是插件画的，没有自己的类名可用 | 点 DSH 自带的 `button[aria-label="收起侧边栏"]` / `"打开侧边栏"`（来自 DSH 的 zh-CN 语言包），量完必须展开还原 |
+| 验收脚本从整页文本里正则捞流水号，捞到了**氚云待审核**的号 | 讨论会话名是「报告讨论 · <流水号>」，左侧会话列表里就带着流水号 | 按**表格行**取（`tbody tr td:first-child`），不要扫整页；同理，命中断言也要看结果行，否则会被那条同名会话满足 |
+| 想在插件面板里内嵌 DSH 原生对话 | `main` 槽位只有保留键 `conversation` 有会话绑定；客户端产物只能 `require('react')`，装不进 `ui-chat`；右栏是资源标签页、没有对话类型 | 自绘外壳 + 挂**真实会话**：`services.sessions` 的 `create/open/binding/list`（见下条），对话正文按会话事件流自己渲染 |
+| 自绘面板里读会话事件流总是空 | 会话的**事件窗口只对当前会话打开**（stage 语义），而且绑定与历史是**异步**就绪的 | 绑定/发问前调 `sessions.open(id)`（只切会话选中，**不动主面板**）；读一次 + 挂订阅不够 —— 再加一路 1.2s 轮询（引用比较，没变化不重渲染）；`create` 不支持标题，建完要 `rename`，会话名就是复用凭据 |
+| 事件映射一条都匹配不上（面板空着，控制台也不报错） | 会话事件是**信封 + data**：`{type, seq, time, data:{…}}`，字段在 `data` 里，不在顶层 | 先取 `event.data` 再读 `content/source/message/name`；**单测样本抄真实事件**（真机探针打印一条即可），想当然的平铺样本会让单测全绿而真机全空 |
+| 悬停操作列的「AI 审核 / 重新审核」时整个按钮**全黑** | 选择器特异性 + 顺序：基础 `.crwu-audit-btn` 是 (0,1,0)，§20 迁移覆盖层把它写在样式表**最后**；单类变体 `.crwu-audit-btn-primary` 也是 (0,1,0) → 变体底色与字色被基础规则吃掉（主按钮看起来就是普通按钮），而变体那条 `:hover` (0,3,0) 反倒生效 —— 深底 + 深字 | 变体改用**双类** `.crwu-audit-btn.crwu-audit-btn-primary`（(0,2,0)）把顺序依赖去掉；hover 的选择器组里带上基础按钮的 `:hover:not(:disabled)`；hover 里**不要**写 `opacity`（会盖掉 `:disabled` 的 0.45）。分辨"是色值不对还是规则没生效"直接用 CSSOM：遍历 `document.styleSheets` + `element.matches(sel)`，按顺序打印所有命中该元素的 `background/color` 声明（`getComputedStyle` 只看结果，看不出谁赢了） |
+| 改了 `~/.dsh/settings.yaml` 的 `ui-theme.preference` 来验另一套主题，之后文件被改回去/改不回来 | 正在跑的 profile 进程会把内存里的主题偏好**回写**这个文档；两个实例（用户 `web` + 自测 profile）同时活着时更乱 | 验主题时**先停掉会回写的实例**再改文件；验完按备份逐字还原（`diff` 确认），最后重启一个实例读回用户原值。主题是 Host 侧设置（`~/.dsh/settings.yaml` 的 `ui-theme`），**不是**浏览器 localStorage，也不是 `prefers-color-scheme` |
+| 往页面里注入探针按钮量颜色，量出来全是 `rgba(0,0,0,0)` + 继承色 | 探针挂在 `document.body` 上，而 `--crwu-*` token 定义在**面板子树**（`.crwu-audit-root` / `.crwu-audit-surface`）里；token 取不到 → 每条 `var()` 声明都失效、退化成透明/继承（几何类声明照旧生效，所以"看起来像样式没加载"） | 探针必须挂进**真实的面板节点内部**（如 `.crwu-audit-td-action .crwu-audit-row-actions`），要浮在角落再给 `position: fixed`（自定义属性按 DOM 继承，与布局无关）；量颜色时把**邻近的真实按钮一起读**，能立刻发现"三个按钮全透明"这种整体失效 |

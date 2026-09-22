@@ -20,12 +20,17 @@ import { WORKBENCH_CLASSES as C } from './consts.ts'
  *
  * 它是**整块正文**的占位（三个模块都被它挡住）：自检没出结论之前，谈"在哪一页"没有意义 ——
  * 结论一到，`modules.autoEnter()` 会把用户送到该去的那一页（通过 → 报告审核，不通过 → 环境信息）。
+ *
+ * 也复用在右侧讨论面板里（用户 2026-09-22：「crwu 在查询的时候，应该有个中瑞世联的 Loading 页面」）：
+ * 那时是**块内**占位（面板那 30% 宽度里），所以文案可以换、尺寸由 `.crwu-audit-ai-scroll`
+ * 的后代规则收小 —— 同一枚「中瑞世联在干活」的牌子，不要两套观感。
  */
-export function WorkbenchLoading(): React.ReactElement {
+export function WorkbenchLoading(props: { title?: string; hint?: string; size?: number } = {}): React.ReactElement {
+  const size = props.size ?? 76
   return <div className={C.loadingPane} role="status" aria-live="polite">
-    <span className={C.loadingMark} aria-hidden={true}><BrandMark size={76} /></span>
-    <div className={C.loadingTitle}>{zhCN.loadingEnv}</div>
-    <div className={C.loadingHint}>{zhCN.loadingHint}</div>
+    <span className={C.loadingMark} aria-hidden={true}><BrandMark size={size} /></span>
+    <div className={C.loadingTitle}>{props.title ?? zhCN.loadingEnv}</div>
+    <div className={C.loadingHint}>{props.hint ?? zhCN.loadingHint}</div>
     <div className={C.loadBar}><span className={C.loadBarFill} /></div>
   </div>
 }

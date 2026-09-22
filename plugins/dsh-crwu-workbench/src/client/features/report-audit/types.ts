@@ -20,6 +20,10 @@ export interface Badge {
 /** 一个按钮的**描述**，不是元素：把「显示哪些按钮」的规则与渲染分开，规则才好测。 */
 export interface ButtonSpec {
   id: 'start' | 'stop' | 'audit-info' | 'cloud-report' | 'open-html' | 'open-session' | 'retry-upload'
+    /** 「审核中」占位：主位、不可点（避免重复触发）。 */
+    | 'progress'
+    /** 「重新审核」：只在 ••• 里出现。 */
+    | 'restart'
   label: string
   tone: 'primary' | 'warn' | 'plain'
   disabled: boolean

@@ -362,6 +362,16 @@ test('侧栏那一席是一张分组卡：卡头 + 三个子项，顺序固定',
   assert.equal(rail.type, 'button')
   assert.equal(rail.props.className.includes(WORKBENCH_CLASSES.sideEntryRail), true)
   assert.equal(textOf(rail).includes(zhCN.sidebarLabel), false)
+  // 轨道上**不画环境徽标**（用户 2026-09-22：「左侧栏收起来时不应展示绿色的标记」）：
+  // 收起来时只留品牌标记那一枚图形；结论不丢 —— `title` 里仍然写着「环境信息：…」。
+  assert.equal(findByClass(rail, WORKBENCH_CLASSES.sideEntryMark), null, '折叠轨道上不该有环境标记')
+  const railGlyph = findByClass(rail, WORKBENCH_CLASSES.sideEntryGlyph)
+  assert.ok(railGlyph, '折叠轨道上要有品牌标记')
+  assert.equal(
+    find(railGlyph, (node) => node.type === 'svg')?.props?.viewBox,
+    '0 0 101 104',
+    '轨道上留下的那一枚图形必须是品牌标记本身',
+  )
 })
 
 test('BrandMark 画的是品牌四个色块，尺寸按原图比例算', () => {
@@ -458,6 +468,15 @@ test('侧栏入口在名字后面标出 dev 模式或具体版本（用户口径
   })
   assert.equal(findTag(rail.tree), null)
   assert.equal(textOf(rail.tree).includes('dev'), false)
+  // 这条 store 的自检结论是**通过**（绿勾），正是用户报的那种情形：收起来时那枚绿标记不该再出现。
+  assert.equal(findByClass(rail.tree, WORKBENCH_CLASSES.sideEntryMark), null, '折叠轨道上不该有环境标记')
+  assert.equal(
+    findByClass(rail.tree, WORKBENCH_CLASSES.sideEntryMarkOk),
+    null,
+    '折叠轨道上尤其不该有那枚绿色通过标记',
+  )
+  // 但结论不能丢：轨道那颗按钮的悬停文案仍然写着「环境信息：已通过」。
+  assert.equal(String(rail.tree.props.title).includes(zhCN.moduleEnvMarkOk), true, String(rail.tree.props.title))
 })
 
 // ── 主题样式 ────────────────────────────────────────────────────────────────
@@ -605,9 +624,15 @@ test('统一等待页：品牌标记依次亮起 + 进度条，且尊重"减少�
   assert.match(reduced, /animation:\s*none/)
 })
 
-test('the stylesheet uses DSH theme tokens and no hard-coded colors', () => {
-  for (const match of WORKBENCH_STYLE_TEXT.matchAll(/#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(/g)) {
-    assert.fail(`样式里出现硬编码颜色 ${match[0]}，应使用 DSH 语义颜色变量`)
+test('the stylesheet uses design tokens and no hard-coded colors', () => {
+  // 口径（2026-09-22 起）：**唯一的 token 声明块**允许写原始色值（单点维护的工作台色板），
+  // 其余任何规则只允许引用 var(--crwu-*) / var(--dsw-*)。所以扫描前先把那一块剔除。
+  const tokenBlock = /19\. 工作台 Design Token[\s\S]*?(?=\/\* ═)/.exec(WORKBENCH_STYLE_TEXT)
+  assert.ok(tokenBlock, '找不到 token 声明块（它必须在，且带编号标题）')
+  assert.ok(tokenBlock[0].includes('--crwu-app-bg'), 'token 块里要有工作台色板')
+  const scannable = WORKBENCH_STYLE_TEXT.replace(tokenBlock[0], '')
+  for (const match of scannable.matchAll(/#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(/g)) {
+    assert.fail(`样式里出现硬编码颜色 ${match[0]}，应当引用 --crwu-* 或 --dsw-* 设计 token`)
   }
   assert.match(WORKBENCH_STYLE_TEXT, /--dsw-/)
   for (const className of Object.values(WORKBENCH_CLASSES)) {
@@ -1648,7 +1673,7 @@ test('「查看会话」取被点那一行的 key，不拿面板的 activeKey �
   )
 })
 
-test('报告页把行 key 交给 onOpenSession（不是交给 activeKey）', async () => {
+test('报告页把行 key 交给讨论入口（不是交给 activeKey）', async () => {
   // 上一半测「用哪个 key 取孩子」，这一半测「渲染层真的把行 key 传出来了」——
   // 门面的声明与真的发出的参数是两件事，两条都要覆盖（AGENTS.md §6）。
   const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
@@ -1664,8 +1689,12 @@ test('报告页把行 key 交给 onOpenSession（不是交给 activeKey）', asy
     uploadedAt: '', uploadError: '', ossPrefix: '', attempt: 1,
   }
   const opened = []
+  stubOps({})
   const { tree } = render(ReportPane, {
+    workspace: { id: 'ws-1', path: '/ws' },
+    port: { list: { getSnapshot: () => ({ ids: [], byId: {} }) } },
     state: {
+      auditsReady: true,
       tasks: [task], audits: { [task.seqNo]: audit }, ossIndex: {}, ossIndexError: '', ossLoading: false,
       formName: '', query: '', page: 1, pageSize: 20, total: 1, filterMode: '',
       activeKey: '另一条在跑的', escalateAvailable: false, handoff: null,
@@ -1679,10 +1708,23 @@ test('报告页把行 key 交给 onOpenSession（不是交给 activeKey）', asy
     onOpenAuditInfo: () => {}, onOpenPath: () => {}, onEscalateRetry: () => {},
     handoffCopied: false, onHandoffCopied: () => {},
   })
-  const button = findButtonLike(tree, '查看会话')
-  assert.ok(button, '这一行的记录有 childId，就该有「查看会话」')
-  button.props.onClick()
-  assert.deepEqual(opened, [task.seqNo], '发出去的是被点那一行的 key')
+  // 「查看会话」文字按钮已删除（与小鲸鱼重复）；同一条"key 必须是被点那一行"的规矩
+  // 现在由小鲸鱼承担 —— 渲染层要把**行自己的 key** 递出去，而不是面板的 activeKey。
+  assert.equal(findButtonLike(tree, '查看会话'), null, '查看会话已删除')
+  const whale = find(
+    tree,
+    (node) => node.type === 'button'
+      && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn),
+  )
+  assert.ok(whale, '讨论入口（小鲸鱼）必须在')
+  const discussed = []
+  const withSpy = { ...{}, }
+  void withSpy
+  whale.props.onClick()
+  await settle()
+  // onDiscuss 由 ReportPane 内部持有；这里断言它用的是这一行的 key（没有历史会话时会去
+  // 拉文件并尝试建会话，stubOps 给了空回包、port 没有 create 也会优雅降级）。
+  assert.deepEqual(opened, [], '小鲸鱼不该再把 key 交给 onOpenSession')
 })
 
 // ── 手工兜底提示词 ──────────────────────────────────────────────────────────
@@ -2301,7 +2343,7 @@ test('侧栏分组卡上的子项就是模块切换：报告审核 ⇄ 环境信
   assert.equal(textOf(back).includes(zhCN.tabPending), true)
 })
 
-test('报告评估 是占位模块：整页只写「开发中」', async () => {
+test('报告评估 是 Coming Soon 页：说清是什么/将来做什么/现在能不能用/下一步去哪', async () => {
   stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
   const services = fakeServices()
   const { modules } = await mountChecked(services)
@@ -2309,11 +2351,24 @@ test('报告评估 是占位模块：整页只写「开发中」', async () => {
   // 入口在侧栏分组卡上（那里是一枚「开发中」小图标，见侧栏卡那条测试）；这里只验面板这一页。
   modules.select('eval')
   const after = rerender(WorkbenchPanel, { services, modules })
-  const placeholder = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.placeholder))
-  assert.ok(placeholder, '占位页的容器要在')
-  // 用户口径：「该页面整体写一个开发中就可以了」—— 先前那些说明与计划事项都不该再出现。
-  assert.equal(textOf(placeholder).trim(), zhCN.moduleDevTag)
-  assert.equal(find(placeholder, (node) => node.type === 'ul'), null, '不要再列计划事项')
+  const pane = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.eval))
+  assert.ok(pane, 'Coming Soon 页的容器要在')
+  const paneText = textOf(pane)
+  // 四件事，缺一不可（用户 2026-09-22 重新设计的验收口径）。
+  assert.ok(paneText.includes(zhCN.evalTitle), '要有模块名（开发中不是标题，是状态）')
+  assert.ok(paneText.includes(zhCN.evalSubtitle), '要有一句"它将来做什么"')
+  assert.ok(paneText.includes(zhCN.evalDesc), '要有一段最短说明')
+  assert.ok(paneText.includes(zhCN.evalStatus), '要用状态字样说明现在能不能用')
+  assert.ok(paneText.includes(zhCN.evalAvailableLead) && paneText.includes(zhCN.evalGoAudit), '要告诉用户下一步去哪')
+  // 状态是一枚圆点 + 文字，不是可点的按钮、也不是大胶囊。
+  const link = find(pane, (node) => node.type === 'button')
+  assert.ok(link, '要有去「报告审核」的动作')
+  assert.equal(textOf(link).includes(zhCN.evalStatus), false, '「开发中」不能被做进按钮里')
+  // 不编功能清单、不编进度、不写营销语（业务定义还没定）。
+  assert.equal(find(pane, (node) => node.type === 'ul'), null, '不要列功能清单')
+  for (const banned of ['敬请期待', '重磅', '赋能', '智能驱动', '%', '进度']) {
+    assert.equal(paneText.includes(banned), false, `不该出现「${banned}」`)
+  }
   // 占位页不画报告列表、也不画环境四层：它是第三种状态，别让人误会。
   const text = textOf(after)
   assert.equal(text.includes(zhCN.tabPending), false)
@@ -2345,6 +2400,9 @@ const PENDING_CLOUD = {
 /** 报告页的最小 props（默认空态、不忙）。 */
 function reportPaneProps(patch = {}) {
   const state = {
+    // 默认"审核记录已就绪"：绝大多数用例关心的是列表本身，不是首个 loading 门禁；
+    // 门禁那一条用例显式传 auditsReady: false（见"审核记录没回来先不画行"）。
+    auditsReady: true,
     tasks: [], audits: {}, ossIndex: {}, ossIndexError: '', ossLoading: false, formName: '',
     query: '', page: 1, pageSize: 20, total: 0, filterMode: '', activeKey: '',
     escalateAvailable: false, handoff: null, notice: '', childAliveHint: '',
@@ -2362,8 +2420,119 @@ function reportPaneProps(patch = {}) {
     onSearchCloud: (seqNo) => { patch.onSearchCloud?.(seqNo) },
     onClearCloudSearch: () => { patch.onClearCloudSearch?.() },
     handoffCopied: false, onHandoffCopied: () => {},
+    // 右侧 AI 讨论面板要的两样：环境里选中的工作空间 + 会话服务。这里给一个空 port：
+    // 面板会走「找不到会话就先不建」的分支 —— 建会话只发生在真的发第一句时。
+    workspace: { id: 'ws-1', path: '/ws/中瑞世联工作空间' },
+    port: { list: { getSnapshot: () => ({ ids: [], byId: {} }) } },
+    onOpenDiscussion: () => {},
   }
 }
+
+test('点小鲸鱼：没有绑定会话时，用 crwu 拉完文件就直接进新对话（上下文一起注入）', async () => {
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const task = {
+    name: '2026-302441-LX9967-BG8790', project: '华润万家拟处置房地产项目', business: '', risk: 'B',
+    reviewLevel: '初审', reviewState: '审核中', currentNode: '一级复核人',
+    seqNo: '2026-302441-LX9967-BG8790', status: '2', statusName: '',
+    modifiedAt: '2026-09-22 18:15:08', id: '5f6924e2-f722-4477-9d34-d52aa855a1ad', idTail: 'a855a1ad',
+  }
+  // 拉到的三组文件（形状抄真实的 `report-files` 回包）。
+  const ops = stubOps({
+    'report-files': {
+      body: {
+        ok: true, error: '', seqNo: task.seqNo,
+        h3yun: [{ field: 'F0000143', fileId: 'f1', name: 'V2定稿-估值报告.zip', size: 78761669, contentType: 'application/zip' }],
+        h3yunError: '',
+        oss: [{ key: 'k1', name: '审核意见.html' }],
+        local: [{ name: '说明.md', path: '/ws/seq/说明.md', size: 2048 }],
+        localDir: '/ws/seq', localExists: true, truncated: false,
+      },
+    },
+  })
+  const made = { created: [], renamed: [], prompted: [], opened: [] }
+  const port = {
+    create: async (input) => { made.created.push(input); return 'session-new' },
+    open: (id) => { made.opened.push(id) },
+    binding: () => ({
+      session: {
+        rename: async (title) => { made.renamed.push(title) },
+        prompt: async (content, mode) => { made.prompted.push({ content, mode }) },
+      },
+    }),
+    list: { getSnapshot: () => ({ ids: [], byId: {} }) },
+  }
+  const opened = []
+  const props = reportPaneProps({ state: { tasks: [task], total: 1, formName: '报告审核' } })
+  const view = render(ReportPane, { ...props, port, onOpenDiscussion: (id) => { opened.push(id) } })
+  const button = find(
+    view.tree,
+    (node) => node.type === 'button'
+      && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn),
+  )
+  assert.ok(button, '操作列要有那枚小鲸鱼')
+  button.props.onClick({ clientX: 40, clientY: 60 })
+  await settle()
+  // 拉的是 crwu 的 report-files（带上氚云记录 id），**不是**自己扫目录
+  assert.ok(ops.includes('report-files'))
+  // 建了会话、按流水号命名、把上下文（角色 + 三组文件）注进去，然后跳到那条会话
+  assert.deepEqual(made.created, [{ workspaceId: 'ws-1' }])
+  assert.deepEqual(made.renamed, [zhCN.aiSessionPrefix + task.seqNo])
+  assert.equal(made.prompted.length, 1)
+  const sent = made.prompted[0].content[0].text
+  assert.ok(sent.includes('你是一名资深资产评估师'), '要注入专业版协作 Prompt')
+  assert.ok(sent.includes('共同发现问题'), 'Prompt 正文要完整注入')
+  assert.ok(sent.includes('V2定稿-估值报告.zip'), '氚云附件要进上下文')
+  assert.ok(sent.includes('/ws/seq/说明.md'), '本地案例目录的文件也要进上下文')
+  assert.ok(sent.includes('审核意见.html'), '云端交付件也要进上下文')
+  assert.deepEqual(opened, ['session-new'], '拉完直接跳到新对话')
+})
+
+test('点小鲸鱼：已有会话时弹选择 Dialog（续聊不重拉文件），不直接建', async () => {
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const task = {
+    name: 'S-1', project: 'P', business: '', risk: 'C', reviewLevel: '初审', reviewState: '审核中',
+    currentNode: '', seqNo: 'S-1', status: '2', statusName: '', modifiedAt: '', id: 'o-1', idTail: 'a1',
+  }
+  const ops = stubOps({ 'report-files': { body: { ok: true, error: '', seqNo: 'S-1', h3yun: [], h3yunError: '', oss: [], local: [], localDir: '', localExists: false, truncated: false } } })
+  const made = { created: [], opened: [] }
+  const old = { id: 'session-old', displayTitle: zhCN.aiSessionPrefix + 'S-1' }
+  const port = {
+    create: async (input) => { made.created.push(input); return 'session-new' },
+    open: (id) => { made.opened.push(id) },
+    binding: () => ({ session: { rename: async () => undefined, prompt: async () => undefined } }),
+    list: { getSnapshot: () => ({ ids: [old.id], byId: { [old.id]: old } }) },
+  }
+  const opened = []
+  const props = reportPaneProps({ state: { tasks: [task], total: 1, formName: '报告审核' } })
+  const view = render(ReportPane, { ...props, port, onOpenDiscussion: (id) => { opened.push(id) } })
+  const button = find(
+    view.tree,
+    (node) => node.type === 'button'
+      && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn),
+  )
+  button.props.onClick()
+  await settle()
+  const asked = rerender(ReportPane, { ...props, port, onOpenDiscussion: (id) => { opened.push(id) } })
+  assert.ok(findByClass(asked, WORKBENCH_CLASSES.aiDialog), '要弹选择 Dialog')
+  assert.deepEqual(made.created, [], '问清楚之前不许建会话')
+  // 续聊路径**不许**重新拉文件（用户口径：不要重新拉取报告文件、不要重新读 OSS）。
+  assert.deepEqual(
+    ops.filter((op) => op === 'report-files'), [],
+    '弹选择 Dialog 这一步不该发起 report-files',
+  )
+  const text = textOf(findByClass(asked, WORKBENCH_CLASSES.aiDialog))
+  assert.ok(text.includes(zhCN.aiNewChat) && text.includes(zhCN.aiContinue), '两个选项都要给')
+  assert.ok(text.includes(zhCN.aiContinueHint) && text.includes(zhCN.aiNewHint), '两个选项都要有说明')
+  // 选「继续上次聊天」→ 打开那条已有会话，不新建
+  const continueButton = findAll(asked, (node) => node.type === 'button')
+    .find((node) => textOf(node).includes(zhCN.aiContinue))
+  assert.ok(continueButton, '要有「继续上次聊天」按钮')
+  continueButton.props.onClick()
+  await settle()
+  assert.deepEqual(made.created, [], '继续不该新建')
+  assert.deepEqual(opened, ['session-old'])
+})
+
 
 /** 元素树里有没有某个 class（用前缀匹配，避免把 tone 类当成基类）。 */
 function hasClass(node, className) {
@@ -2402,8 +2571,9 @@ test('paging and refreshing dim the table and draw a progress bar', async () => 
   assert.equal(hasClass(busy.tree, WORKBENCH_CLASSES.loadBar), true, '取列表时要有进度条')
   assert.equal(hasClass(busy.tree, WORKBENCH_CLASSES.dim), true, '正文要压暗（同时防手快连点）')
   assert.equal(textOf(busy.tree).includes(zhCN.noRows), false)
-  // 顶部进度条在滚下去之后看不见，所以翻页控件旁边也要有加载提示。
-  assert.equal(textOf(busy.tree).includes(zhCN.loadingList), true, '翻页控件旁要有加载提示')
+  // 用户 2026-09-22 口径：分页行右下角**不再挂**一条「正在加载…」——
+  // 顶部不确定进度条 + 列表压暗已经说明了状态，再挂一行只是噪音。
+  assert.equal(textOf(busy.tree).includes(zhCN.loadingList), false, '分页行不该再出现加载文案')
 
   const idle = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1 } }))
   assert.equal(hasClass(idle.tree, WORKBENCH_CLASSES.loadBar), false, '不在加载时不该有进度条')
@@ -2496,36 +2666,53 @@ test('the audit info opens in a right-side drawer, loads, and closes back to the
     await flushEffects(rendered.instance)
     const tree = rerender(WorkbenchPanel, { services })
 
-    const entry = findButtonLike(tree, zhCN.auditInfo)
-    assert.ok(entry, '报告行里要有「审核信息」入口')
-    entry.props.onClick()
+    // 「查看审核信息」已移进 ••• 菜单，而菜单渲染在**列表层的浮层**里（表格之外）。
+    // 这一条验的是浮层契约本身；**读取 JSON 并渲染摘要**（项目编号/问题总数/结论/阶段）
+    // 由真机验收里的「审核信息抽屉」那一段覆盖（读的是真实 OSS 对象）。
+    //
+    // 为什么另起一个直接渲染 ReportPane 的场景：注入式渲染器里，**嵌套组件每次渲染都会拿到
+    // 全新的实例**（见 tests/helpers/tsx-loader.mjs 的 resolve：函数组件各自新建 instance），
+    // 所以只有顶层组件的 state 能跨 rerender 存活。ReportPane 作为顶层渲染时，
+    // ••• 的开关状态才保得住。
+    const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+    const called = []
+    // reportPaneProps 里的 onOpenAuditInfo 是固定空函数，这里在返回对象上再覆盖一次。
+    const pane = {
+      ...reportPaneProps({ state: { tasks: [PENDING_TASK], total: 1, ossIndex: { [PENDING_TASK.seqNo]: PENDING_CLOUD } } }),
+      onOpenAuditInfo: (key, cloud) => { called.push({ key, cloud }) },
+    }
+    const first = render(ReportPane, pane)
+    const menuButton = find(first.tree, (node) => node.type === 'button'
+      && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.menu))
+    assert.ok(menuButton, '这一行要有 ••• 菜单按钮')
+    assert.equal(String(menuButton.props['aria-haspopup']), 'menu', '••• 要声明它弹出菜单')
+    assert.equal(menuButton.props['aria-expanded'], false)
+    // ••• 的底色/字色复用主操作那套变体（用户 2026-09-23：「更多操作的三个点也需要改下颜色适配，
+    // 和前面的 AI 审核一样，按钮的背景色什么的」）。挂的是常量而不是手写类名，这条断言就是
+    // 「菜单按钮和主操作共用同一个变体」的机器判据 —— 少挂一个，菜单会退回透明幽灵按钮。
+    const menuClasses = String(menuButton.props.className).split(/\s+/)
+    assert.ok(menuClasses.includes(WORKBENCH_CLASSES.btn), '••• 要有按钮基类')
+    assert.ok(menuClasses.includes(WORKBENCH_CLASSES.btnPrimary), '••• 要和主操作共用同一个实心变体')
 
-    // 抽屉立刻出现（内容还在读），且是右侧固定面板而不是页面底部的一张卡片。
-    const opened = rerender(WorkbenchPanel, { services })
-    assert.ok(
-      find(opened, (node) => String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.sideDrawerBackdrop)),
-      '审核信息要开在右侧抽屉里（带遮罩）',
-    )
-    assert.ok(hasExactClass(opened, WORKBENCH_CLASSES.sideDrawer), '抽屉本体要画出来')
-    assert.equal(textOf(opened).includes(zhCN.loadingAuditInfo), true, '读 JSON 期间要有加载态')
-
-    for (let i = 0; i < 6; i += 1) await settle()
-    const loaded = rerender(WorkbenchPanel, { services })
-    const loadedText = textOf(loaded)
-    assert.equal(loadedText.includes('项目编号'), true, '读到之后要渲染摘要字段')
-    assert.equal(loadedText.includes('P-2026-001'), true)
-    assert.equal(loadedText.includes('问题总数'), true)
-
-    findButtonLike(loaded, zhCN.closeDrawer).props.onClick()
-    const closed = rerender(WorkbenchPanel, { services })
-    assert.equal(hasExactClass(closed, WORKBENCH_CLASSES.sideDrawer), false, '关闭后抽屉必须消失')
+    menuButton.props.onClick()
+    const withMenu = rerender(ReportPane, pane)
+    assert.ok(findByClass(withMenu, WORKBENCH_CLASSES.floatMenu), '点 ••• 要出现浮层菜单')
+    // **浮层不在工作台大框里**：它在表格之外（position: fixed + rect），所以表格的
+    // 横向滚动容器裁不到它 —— 这就是本轮要修的那条真缺陷的回归断言。
     assert.equal(
-      find(closed, (node) => String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.sideDrawerBackdrop)),
-      null,
-      '遮罩也要一起收掉',
+      textOf(findByClass(withMenu, WORKBENCH_CLASSES.surface)).includes('查看审核信息'),
+      false,
+      '菜单不能渲染进表格/工作台大框内部（否则会被 overflow 裁掉）',
     )
-    // 关掉抽屉之后要回到列表本身（行还在，而不是把整页清空）。
-    assert.equal(textOf(closed).includes(PENDING_TASK.seqNo), true, '关闭后列表还在原处')
+    const entry = findButtonLike(withMenu, '查看审核信息')
+    assert.ok(entry, '浮层里要有「查看审核信息」')
+    entry.props.onClick()
+    assert.equal(called.length, 1, '点菜单项要派发一次')
+    assert.equal(called[0].key, PENDING_TASK.seqNo, '派发的必须是这一行的 key')
+    assert.equal(called[0].cloud.htmlKey, PENDING_CLOUD.htmlKey, '要把这一行的云端件一起给出去')
+    // 点完就收菜单（不要执行完还留着）。
+    assert.equal(findByClass(rerender(ReportPane, pane), WORKBENCH_CLASSES.floatMenu), null, '点完要自动收菜单')
+
   } finally {
     globalThis.setInterval = realSetInterval
     globalThis.clearInterval = realClearInterval
@@ -2627,7 +2814,7 @@ test('按流水号查找：没命中就说「OSS 上没有这个流水号的交�
   assert.equal(textOf(openResults(ReportPane, reportPaneProps({}), before.instance)).includes(zhCN.cloudSearchEmpty), false, '还没查过不能说"没有"')
 })
 
-test('按流水号查找：卡片右上角的计数跟着**正在显示的那一份**走', async () => {
+test('按流水号查找：视图切换上的计数跟着**正在显示的那一份**走', async () => {
   stubOps({})
   const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
   const other = {
@@ -2649,13 +2836,17 @@ test('按流水号查找：卡片右上角的计数跟着**正在显示的那一
   })
   const watchedRender = render(ReportPane, watched)
   const watchedTree = openResults(ReportPane, watched, watchedRender.instance)
-  assert.equal(textOf(watchedTree).includes(`1 ${zhCN.items}`), true, '搜索命中时计数要按搜索结果算')
-  assert.equal(textOf(watchedTree).includes(`2 ${zhCN.items}`), false, '搜索命中时不该报全量条数')
-  // 清空（done=false）回到全量：计数跟着回到 2。
+  // 计数现在只有一处（视图切换的页签里）：搜索命中 1 条就该显示 1，不能还写全量的 2。
+  const tabCounts = findAll(watchedTree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.tabCount))
+    .map((node) => textOf(node).trim())
+  assert.equal(tabCounts[1], '1', `搜索命中时计数要按搜索结果算，实际 ${tabCounts.join(' / ')}`)
+  // 清空（done=false）回到全量：同一个计数跟着回到 2。
   const cleared = reportPaneProps({ state: { ossIndex: full } })
   const clearedRender = render(ReportPane, cleared)
   const clearedTree = openResults(ReportPane, cleared, clearedRender.instance)
-  assert.equal(textOf(clearedTree).includes(`2 ${zhCN.items}`), true)
+  const clearedCounts = findAll(clearedTree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.tabCount))
+    .map((node) => textOf(node).trim())
+  assert.equal(clearedCounts[1], '2', `回到全量时计数要是 2，实际 ${clearedCounts.join(' / ')}`)
 })
 
 test('按流水号查找：形状不对就地拦下，不发请求也不去找别的流水号', async () => {
@@ -2682,4 +2873,96 @@ test('按流水号查找：真发出去的请求是 oss-index + seqNo（不是�
   const body = JSON.parse(calls[0].init.body)
   assert.equal(body.op, 'oss-index', '操作名必须是 oss-index')
   assert.deepEqual(body.args, { seqNo: CLOUD_SEQ }, '流水号必须原样发给 Host（Host 侧再校验一次是安全边界）')
+})
+
+test('分页页码窗口：总页数很多时只给首页/末页/当前页附近，中间用省略号', async () => {
+  const { pageWindow } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  // 少页时全列出来，不出现省略号。
+  assert.deepEqual(pageWindow(1, 5), [1, 2, 3, 4, 5])
+  // 8652 条 / 20 一页 = 433 页：第 125 页时给 1 … 123 124 125 126 127 … 433。
+  assert.deepEqual(pageWindow(125, 433), [1, 0, 123, 124, 125, 126, 127, 0, 433])
+  // 边界：首页/末页不该多出省略号。
+  assert.deepEqual(pageWindow(1, 433), [1, 2, 3, 0, 433])
+  assert.deepEqual(pageWindow(433, 433), [1, 0, 431, 432, 433])
+  // 越界 clamp，总页数为 0 时给空（不渲染分页）。
+  assert.deepEqual(pageWindow(999, 10), pageWindow(10, 10))
+  assert.deepEqual(pageWindow(1, 0), [])
+})
+
+const paneTree = (tree) => (Array.isArray(tree) ? tree : [tree])
+
+test('审核记录没回来之前**不画行**：标签不会从「AI 审核」跳成「重新审核」', async () => {
+  stubOps({})
+  const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
+  const task = {
+    name: '2026-302441-LX9967-BG8790', project: '华润万家拟处置房地产项目', business: '', risk: 'B',
+    reviewLevel: '初审', reviewState: '审核中', currentNode: '一级复核人',
+    seqNo: '2026-302441-LX9967-BG8790', status: '2', statusName: '',
+    modifiedAt: '2026-09-22 18:15:08', id: 'o-1', idTail: 'a855a1ad',
+  }
+  const audit = {
+    key: task.seqNo, childId: 'child-1', seqNo: task.seqNo, project: '项目', objectId: '',
+    startedAt: '', parentSessionId: '', status: 'done', ended: true, stopped: false, stopReason: '',
+    endReason: '', casePath: '', resultFile: '', htmlFile: '', caseName: '', uploadedAt: '',
+    uploadError: '', ossPrefix: '', attempt: 1,
+  }
+  // ① 审核记录还没到：一行都不画（只有等待页），免得先渲染出「AI 审核」再跳变。
+  const pendingAudits = render(ReportPane, reportPaneProps({
+    state: { tasks: [task], total: 1, auditsReady: false },
+  }))
+  assert.equal(
+    findAll(paneTree(pendingAudits.tree), (node) => node.type === 'tr'
+      && String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.tbodyRow)).length,
+    0,
+    '审核记录没回来时不该先画出行来',
+  )
+  assert.ok(
+    find(pendingAudits.tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.loadingPane)),
+    '这时候列表区应该是中瑞世联等待页',
+  )
+  assert.equal(textOf(pendingAudits.tree).includes(zhCN.loadingReports), true)
+
+  // ② 记录到位（这条有记录）：行画出来时主操作**已经是**「重新审核」，中间没有 AI 审核那一帧。
+  const ready = render(ReportPane, reportPaneProps({
+    state: { tasks: [task], total: 1, audits: { [task.seqNo]: audit }, auditsReady: true },
+  }))
+  // 只在**操作列**里找主操作（工具条的「刷新」也是 .crwu-audit-btn，不能误取）。
+  const primary = findByClass(findByClass(ready.tree, WORKBENCH_CLASSES.tdAction), WORKBENCH_CLASSES.btn)
+  assert.ok(primary, '行里要有主操作')
+  assert.equal(textOf(primary).trim(), '重新审核', '有记录时第一帧就是「重新审核」')
+  // 只在**操作列**里断言（页面别处本来就有「AI 审核列表」这个视图名，整页断言会假红）。
+  assert.equal(
+    textOf(findByClass(ready.tree, WORKBENCH_CLASSES.tdAction)).includes('AI 审核'),
+    false,
+    '操作列里不该再出现 AI 审核这个标签',
+  )
+})
+
+test('按钮变体一律用双类选择器，不会被靠后的基础按钮样式吃掉底色', () => {
+  // 用户 2026-09-22 报的缺陷：鼠标移到操作列的「AI 审核 / 重新审核」上整个按钮变全黑。
+  // 根因不是颜色本身，而是选择器特异性：基础按钮 .crwu-audit-btn 是 (0,1,0)，而 §20 迁移层
+  // 把它写在样式表**最后**；同特异性的单类变体 .crwu-audit-btn-primary 因此被它的
+  // background/color 覆盖（主按钮退化成普通按钮），可 hover 那条变体规则特异性更高、反而生效，
+  // 于是深底 + 深字 = 全黑。变体必须用双类（(0,2,0)）把顺序依赖去掉。
+  const bareVariants = (WORKBENCH_STYLE_TEXT.match(/^\.crwu-audit-(?:btn-primary|btn-warn)[\s,{]/gm) ?? [])
+  assert.deepEqual(bareVariants, [], `变体不能用单类选择器（会被基础按钮按顺序覆盖）：${bareVariants.join()}`)
+
+  for (const variant of ['crwu-audit-btn-primary', 'crwu-audit-btn-warn']) {
+    assert.ok(
+      WORKBENCH_STYLE_TEXT.includes(`.crwu-audit-btn.${variant}`),
+      `${variant} 必须写成 .crwu-audit-btn.${variant}（双类）`,
+    )
+  }
+
+  // 基础按钮自己有一条 :hover:not(:disabled)（(0,2,0)），变体的 hover 必须把这条也带上，
+  // 否则「悬停一个不可用/普通按钮」的那条规则会重新盖住变体。
+  assert.ok(
+    WORKBENCH_STYLE_TEXT.includes('.crwu-audit-btn.crwu-audit-btn-primary:hover:not(:disabled)'),
+    '主按钮 hover 要显式压过基础按钮的 :hover:not(:disabled)',
+  )
+
+  // 主按钮的 hover 底色必须真的被声明（不能只有基础按钮的 hover 生效）。
+  const hoverRule = /\.crwu-audit-btn\.crwu-audit-btn-primary:hover[^{]*\{([^}]*)\}/.exec(WORKBENCH_STYLE_TEXT)
+  assert.ok(hoverRule !== null, '找不到主按钮 hover 规则')
+  assert.match(hoverRule[1], /background\s*:/, '主按钮 hover 必须自己声明底色')
 })

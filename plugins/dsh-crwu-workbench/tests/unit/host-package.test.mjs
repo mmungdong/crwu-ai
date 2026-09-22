@@ -277,7 +277,7 @@ test('the declared ported lists match which operations actually run', async () =
   }
 })
 
-test('the Host half still registers the frozen inventory of 25 operations', async () => {
+test('the Host half still registers the frozen inventory of 26 operations', async () => {
   // 旧形态退休后，原来「从它的源码读 handler 名单来对账」的来源没了。
   // 保留它真正守住的东西：**操作清单不能悄悄变少或改名**。所以这里把它冻成字面量。
   // 这份清单的来历是旧动态形态的 24 个 handler + 包形态新增的 ping（见 PORTING.md）。
@@ -285,10 +285,12 @@ test('the Host half still registers the frozen inventory of 25 operations', asyn
     'ping', 'boot', 'workspace', 'workspace-auto', 'trust', 'bind-session', 'install-prompt', 'env', 'pending',
     'crwu', 'audit-start', 'audit-stop', 'audit-status', 'audit-release', 'oss-index', 'oss-result', 'oss-link',
     'oss-upload', 'oss-cred-save', 'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
+    // 第 26 个：一份报告的全部相关文件（只列举、不下载）—— 面板一打开就查。
+    'report-files',
   ]
   const { operations } = operationsFor()
   assert.deepEqual(Object.keys(operations).sort(), [...FROZEN].sort())
-  assert.equal(FROZEN.length, 25, '旧形态 24 个 handler + 包形态新增 ping')
+  assert.equal(FROZEN.length, 26, '旧形态 24 个 handler + 包形态新增 ping、whoami、report-files')
 })
 
 test('every operation the client facade sends is declared as ported', async () => {

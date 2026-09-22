@@ -21,8 +21,9 @@ import { useModule, useModuleStore, type ModuleStore } from './module-store.ts'
  * 这个本身不应该能选中」）。要打开工作台面板就点子项 —— 点当前子项等于「重新进入它」
  * （store 会推进 selectEpoch，面板据此重置门禁）。
  *
- * 折叠成 56px 轨道时只留品牌标记 + 环境标记：轨道宽度放不下卡头 + 三行子项，
- * 硬塞会把名字截成省略号，比不显示更糟。这时结论都靠 title/aria 传达。
+ * 折叠成 56px 轨道时**只留品牌标记这一颗按钮**：轨道宽度放不下卡头 + 三行子项，
+ * 硬塞会把名字截成省略号，比不显示更糟；环境徽标也一并收掉 —— 轨道是「入口」，不是「状态牌」，
+ * 一枚常亮的绿勾在收起来的侧栏里只是噪音（用户 2026-09-22 口径）。这时结论靠 title 传达。
  */
 
 /** 主面板 key：底部入口与 `main` 席位靠这个字符串对齐。 */
@@ -113,6 +114,9 @@ export function WorkbenchSidebarEntry(props: WorkbenchSidebarEntryProps): React.
   }
 
   if (!wide) {
+    // 轨道态：只有品牌标记，**不画环境徽标**（用户 2026-09-22：左侧栏收起来时不要那枚绿色标记）。
+    // 结论不丢：`title` 里仍然写着「环境信息：已通过 / 未通过 / …」，悬停可读；
+    // 要看徽标就把侧栏展开 —— 它长在分组卡的「环境信息」那一行上。
     return <button
       type="button"
       className={[C.sideEntry, C.sideEntryRail, active ? C.sideEntryOn : ''].filter((item) => item !== '').join(' ')}
@@ -122,7 +126,6 @@ export function WorkbenchSidebarEntry(props: WorkbenchSidebarEntryProps): React.
       onClick={props.onOpen}
     >
       <span className={C.sideEntryGlyph}><BrandMark size={20} /></span>
-      <span className={markClass}>{mark}</span>
     </button>
   }
 
