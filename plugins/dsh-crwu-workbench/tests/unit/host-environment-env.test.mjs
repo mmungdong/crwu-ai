@@ -111,6 +111,8 @@ function depsOf(ctx, patch = {}) {
       ctx, config: { ...CONFIG, ...(patch.config ?? {}) }, state,
       home: patch.home ?? '/Users/x', platform: patch.platform ?? 'darwin-arm64',
       sessionRoot: async () => '/cases/session',
+      // 「我是谁」的来源：只有传了才会有 me（见文件末尾那条用例）。
+      ...(patch.identity === undefined ? {} : { identity: patch.identity }),
     },
     state,
   }
@@ -165,6 +167,45 @@ test('a missing workspace blocks everything and is listed first', async () => {
   const result = await loadEnvironment(deps, {})
   assert.equal(result.allOk, false)
   assert.match(result.blocked[0], /未找到工作空间/)
+})
+
+test('「我是谁」跟着自检一起回来：已授权才问一次，未授权 / 没来源就是空姓名', async () => {
+  // 用户口径（2026-09-22）：「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调，
+  // 本质就是从环境信息把这个人的信息拿到」。所以 identity 只由 env 调用，且**只调一次**。
+  let calls = 0
+  const identity = async () => {
+    calls += 1
+    return { name: '杨凡宾', org: '中瑞世联资产评估集团有限公司', userId: '142227076626112869', reason: '' }
+  }
+
+  // ① 状态文件里 trustCredentials=true（healthyContext 就是这份）→ 姓名进 me。
+  const trusted = depsOf(healthyContext(), { identity })
+  const withMe = await loadEnvironment(trusted.deps, {})
+  assert.deepEqual(withMe.me, { name: '杨凡宾', org: '中瑞世联资产评估集团有限公司', userId: '142227076626112869' })
+  assert.equal(calls, 1, '一次自检只问一次')
+
+  // ② 未授权：**一次都不问**（受限沙箱下 dws 会假报「未登录」，问出来的姓名不可信）。
+  const untrustedState = createWorkbenchState(CONFIG)
+  untrustedState.trustCredentials = false
+  const untrustedCtx = makeCtx({
+    shellLines: { 'dws auth status': { stdout: '{"authenticated":true}' } },
+    dirs: ['/cases/space'],
+    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
+    files: {
+      '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"token-123456"}',
+      // 状态文件里写着未授权：自检会把它读回 state。
+      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":false}',
+    },
+  })
+  const before = calls
+  const untrusted = depsOf(untrustedCtx, { identity })
+  const noMe = await loadEnvironment(untrusted.deps, {})
+  assert.deepEqual(noMe.me, { name: '', org: '', userId: '' })
+  assert.equal(calls, before, '未授权不该去读钥匙串')
+
+  // ③ 没有来源（单测直接调 loadEnvironment）→ 三个空串，而不是崩。
+  const bare = depsOf(healthyContext())
+  assert.deepEqual((await loadEnvironment(bare.deps, {})).me, { name: '', org: '', userId: '' })
 })
 
 test('an unidentified platform is blocked instead of silently picking a wrong package', async () => {

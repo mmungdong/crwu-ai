@@ -9,7 +9,10 @@
  * 行为由本文件的注入式渲染树覆盖。
  */
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
@@ -179,6 +182,25 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
   return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world) }
 }
 
+test('buildKind 靠包根旁边有没有 src/ 判断：源码检出 = dev，装好的包 = installed', async () => {
+  // 这枚标签直接告诉用户「你面对的是开发中的代码还是装好的版本」，判错比不显示更糟，
+  // 所以判据本身要有测试：造两个真实目录（一个带 src/、一个不带），而不是靠 mock。
+  const { hostBuildKindOf } = await import(new URL('src/host/build-info.ts', ROOT).href)
+  const source = mkdtempSync(join(tmpdir(), 'crwu-src-'))
+  mkdirSync(join(source, 'src'))
+  mkdirSync(join(source, 'lib'))
+  assert.equal(hostBuildKindOf(source), 'dev')
+
+  const packed = mkdtempSync(join(tmpdir(), 'crwu-pkg-'))
+  mkdirSync(join(packed, 'lib'))
+  mkdirSync(join(packed, 'config'))
+  assert.equal(hostBuildKindOf(packed), 'installed', '发布包里没有 src/，必须判成装好的包')
+
+  // 本仓就是源码检出：正在跑的这份测试代码必须自报 dev（判据走的是这条包根）。
+  const buildInfo = await import(new URL('src/host/build-info.ts', ROOT).href)
+  assert.equal(buildInfo.HOST_BUILD_KIND, 'dev', '在源码仓里跑，形态必须是 dev')
+})
+
 test('ping and boot answer with the state the panel needs to render', async () => {
   const { operations } = operationsFor({ formName: '报告审核' })
   const pong = operations.ping()
@@ -203,11 +225,20 @@ test('ping and boot answer with the state the panel needs to render', async () =
   assert.equal(bootAnswer.builtAt, pong.builtAt, '构建时间同样要给，悬停时要看得到')
   assert.equal(bootAnswer.rev, `pkg-${pkg.version}`, 'boot.rev 与 package.json 版本必须一致')
 
+  // 面板与侧栏入口那枚小标签要用它：dev（本地源码检出）还是装好的包 + 具体版本。
+  assert.equal(pong.version, pkg.version, 'ping.version 必须等于 package.json 的版本')
+  assert.equal(typeof pong.buildKind, 'string')
+  assert.ok(pong.buildKind === 'dev' || pong.buildKind === 'installed', `buildKind 取值异常：${String(pong.buildKind)}`)
+  assert.equal(bootAnswer.version, pong.version, 'boot 也要回版本号，否则侧栏入口只能显示「未知」')
+  assert.equal(bootAnswer.buildKind, pong.buildKind, '运行形态同样要给，两处必须一致')
+
   // 它必须是**模块加载时算好的常量**，不是每次请求现读文件：现读的话
   // 「重新 build 但没重启」会报出新文件的时间，让人误以为新 build 已生效（第 33 轮实测过）。
   const buildInfo = await import(new URL('src/host/build-info.ts', ROOT).href)
   assert.equal(typeof buildInfo.HOST_BUILD_STAMP, 'string', 'HOST_BUILD_STAMP 必须是常量，不能是函数')
   assert.equal(buildInfo.HOST_BUILD_STAMP, pong.builtAt, 'ping 必须直接报这个常量')
+  assert.equal(typeof buildInfo.HOST_BUILD_KIND, 'string', 'HOST_BUILD_KIND 也必须是常量')
+  assert.equal(buildInfo.HOST_BUILD_KIND, pong.buildKind, 'ping 必须直接报这个常量')
   // boot 顺手恢复注册表并采用工作空间（legacy 行为），所以是异步的。
   const boot = await operations.boot()
   assert.equal(boot.ok, true)

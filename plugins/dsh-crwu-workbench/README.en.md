@@ -45,8 +45,12 @@ employee-side install command.
 
 **Restart that profile afterwards** — plugins load with the profile. Then:
 
-1. Open **中瑞世联工作台** in the sidebar.
-2. If the page only shows the self-check tab, get the environment in place first: use "copy prompt" to
+1. Click the persistent **中瑞世联工作台** entry at the **bottom of the left sidebar** (above Settings).
+   It is one grouped card: the header carries the brand mark plus a small tag saying whether this is `dev`
+   (a source checkout) or the installed version (`v0.0.4`), and the body holds three sub-items —
+   Report Evaluation (marked "in development"), Report Audit, and Environment. Clicking a sub-item
+   switches the panel to that module and opens it; the panel itself no longer has a module bar.
+2. If the panel opens on the Environment module, get the environment in place first: use "copy prompt" to
    hand the install manifest to the agent, then install `crwu` / `dws` / `ossutil`, the iFinD key, and
    the H3Yun + DingTalk logins.
 3. To dispatch an audit, register the parent from a **top-level** session header first. Audits may only
@@ -147,5 +151,6 @@ The package's **Client half is tested directly** in `tests/unit/client-package.t
 That keeps the test run to `node --test` with no vitest, jsdom, or react-dom — while still asserting what the
 panel renders in its loading / loaded / failed / unmounted states, what `apply` registers into which slot
 inside which lifecycle effect, and that the stylesheet uses DSH theme tokens instead of hard-coded colors.
-The panel's *visual* behaviour (does it render, does switching tabs re-list OSS) is checked in a
-real browser by `install/browser-check.mjs` — see the verification checklist in the Chinese README.
+The panel's *visual* behaviour (does it render, does the sidebar grouped card hold its three sub-items
+inside one card, does switching modules re-list OSS) is checked in a real browser by `install/browser-check.mjs` — see the
+verification checklist in the Chinese README.

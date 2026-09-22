@@ -35,6 +35,15 @@ export interface BootResult {
    */
   rev?: string
   builtAt?: string
+  /**
+   * 宿主包版本（`0.0.4` 这种，不带前缀）与它的运行形态。
+   *
+   * `buildKind` 是 `dev`（源码检出 / `link:` 安装）或 `installed`（装好的 TGZ / npm 包）——
+   * 侧栏入口那枚小标签就显示它（dev 显示「dev」，否则显示具体版本）。
+   * 缺这两个字段 = 旧宿主：界面只显示 `rev` 去掉前缀后的兜底值，不谎报形态。
+   */
+  version?: string
+  buildKind?: 'dev' | 'installed'
   caseRoot: string
   home: string
   formName: string
@@ -72,6 +81,11 @@ export interface EnvResult {
   sessionWorkspace: { parentSessionId: string; sessionCwd: string; workspaceId: string; workspacePath: string; workspaceTitle: string }
   oss: Record<string, unknown>
   ossCred: { path: string; exists: boolean; endpoint: string; accessKeyIdMasked: string; hasSecret: boolean; hasSts: boolean; language: string }
+  /**
+   * 「我是谁」：面板头部那句「晚上好，某某某」的姓名，来自**同一次自检**里的钉钉 CLI。
+   * 三个字段都可能是空串（没授权 / 没登录 / 命令没跑起来）→ 界面**整句不展示**。
+   */
+  me: { name: string; org: string; userId: string }
 }
 
 export interface PendingResult {

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
-import { HOST_BUILD_STAMP } from '../build-info.ts'
-import { PLUGIN_REV } from '../consts.ts'
+import { HOST_BUILD_KIND, HOST_BUILD_STAMP } from '../build-info.ts'
+import { PLUGIN_REV, PLUGIN_VERSION } from '../consts.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { workspaceView } from '../state/store.ts'
@@ -18,6 +18,7 @@ import { maybeAutoUpload } from '../oss/auto.ts'
 import { ossCredSave, ossIndex, ossLink, ossResult, ossUpload, type OssDeps } from '../oss/ops.ts'
 import { createUploadWatch } from '../oss/watch.ts'
 import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
+import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { loadEnvironment } from '../environment/ops.ts'
 import { loadPending } from '../h3yun/pending.ts'
@@ -74,13 +75,29 @@ export function createCoreOperations(
   })
   // 上传看门狗：审核跑完不会回调，只能轮询「有结果就传」。句柄挂在插件实例上。
   const watch = createUploadWatch(ctx, state, ossDeps)
+  /**
+   * 「我是谁」的进程内缓存（面板头部那句问候的姓名）。
+   *
+   * 它挂在**环境自检**上（用户口径：「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面
+   * 都去调」），所以这里要挡住的是"反复自检"：姓名在一次登录周期里不会变，缓存住就不再跑
+   * `dws` 冷启动。**只缓存成功的结果** —— 失败（没登录 / 命令没跑起来）不缓存，
+   * 员工登录之后刷一下自检就能拿到，不用重启 profile。
+   */
+  let meCache: WhoamiResult | null = null
+  const identity = async (): Promise<WhoamiResult> => {
+    if (meCache !== null) return meCache
+    const me = await dwsSelf({ ctx, workdir: () => world.workdir() })
+    if (me.name !== '') meCache = me
+    return me
+  }
   // 定时器必须随插件生命周期释放；这里只登记释放动作，启动由 audit-start 触发。
   ctx.effect(() => watch.stop, 'crwu-workbench: upload watch')
   return {
     // `rev` 只反映包版本，同一轮开发里两次 build 完全相同；`builtAt` 是这份产物的写入时间，
     // 用来回答「重启之后生效的是不是我刚 build 的那份」（见 AGENTS.md §7 的本地开发循环）。
     ping: () => ({
-      ok: true, rev: PLUGIN_REV, at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
+      ok: true, rev: PLUGIN_REV, version: PLUGIN_VERSION, buildKind: HOST_BUILD_KIND,
+      at: new Date().toISOString(), builtAt: HOST_BUILD_STAMP,
       // 客户端拿它判断「跑着的宿主是不是同一代」——见 shared/consts.ts 的 WORKBENCH_PROTOCOL。
       protocol: WORKBENCH_PROTOCOL,
     }),
@@ -94,7 +111,10 @@ export function createCoreOperations(
       protocol: WORKBENCH_PROTOCOL,
       // 面板标题旁要显示「现在跑的是哪一版」：客户端刷一下就换新，宿主只有重启才换，
       // 把 rev 与构建时间一起给它，用户报问题时能直接对上号（见 AGENTS.md §7.2）。
+      // `version` / `buildKind` 供侧栏入口那枚小标签用：dev（源码检出）还是装好的包 + 具体版本。
       rev: PLUGIN_REV,
+      version: PLUGIN_VERSION,
+      buildKind: HOST_BUILD_KIND,
       builtAt: HOST_BUILD_STAMP,
       caseRoot: state.caseRoot,
       home: homedir(),
@@ -178,7 +198,8 @@ export function createCoreOperations(
       // 自检要探测平台、主目录、工作空间；三者都按实例缓存，避免每次刷新都跑一串子进程。
       const [platform, home] = [await world.platform(), await world.home()]
       return await loadEnvironment(
-        { ctx, config, state, home, platform, sessionRoot: () => world.workdir() },
+        // 「我是谁」跟着自检一起拿（见 identity 的注释）：自检本来就要问一次钉钉登录态。
+        { ctx, config, state, home, platform, sessionRoot: () => world.workdir(), identity },
         args,
       )
     },

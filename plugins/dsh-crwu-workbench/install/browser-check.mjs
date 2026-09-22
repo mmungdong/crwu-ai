@@ -88,9 +88,12 @@ async function main() {
 
   const checks = new Checks()
   const body = () => page.locator('body').innerText()
-  // 右上角那颗环境指示灯。它在两个槽位各挂一次（会话头 / 面板头），但 `main` 是 keyed 槽位，
-  // 同一时刻只渲染其中一个，所以 first() 拿到的就是「当前看得见的那颗」。
-  const lamp = () => page.getByRole('button', { name: '环境自检' }).first()
+  // 侧栏底部（Settings 上方）常驻的工作台入口。环境结论就写在它右端那枚标记上：
+  // 通过 = 绿勾，不通过 = 红点。它常年可见，所以「环境行不行」随时问得到。
+  const entry = () => page.locator('.crwu-audit-side-card').first()
+  const envMark = () => entry().locator('.crwu-audit-side-entry-mark').first()
+  /** 侧栏分组卡上的一行子项（报告评估 / 报告审核 / 环境信息）。 */
+  const moduleButton = (label) => entry().locator('.crwu-audit-module').filter({ hasText: label }).first()
   const ossListings = () => ops.filter((op) => op === 'oss-index').length
 
   /**
@@ -110,87 +113,348 @@ async function main() {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
 
-    // ── 第 5 条：侧栏入口出现 ──────────────────────────────────────────────
-    const entry = page.getByText('中瑞世联工作台', { exact: false }).first()
-    const hasEntry = await phase('侧栏出现「中瑞世联工作台」入口', async () => {
-      await entry.waitFor({ state: 'visible', timeout: 45_000 })
-      checks.passed.push('侧栏出现「中瑞世联工作台」入口')
+    // ── 第 5 条：侧栏底部入口出现 ──────────────────────────────────────────
+    const hasEntry = await phase('侧栏底部出现「中瑞世联工作台」入口', async () => {
+      await entry().waitFor({ state: 'visible', timeout: 45_000 })
+      const text = await entry().innerText()
+      checks.that('侧栏底部入口写着工作台名字', text.includes('中瑞世联工作台'), text)
+      // 「常驻在侧栏下方」是可观察的几何事实，不是文案：入口必须在左列、且落在下半屏。
+      const box = await entry().boundingBox()
+      const viewport = await page.evaluate(() => window.innerHeight)
+      checks.that('入口在左侧栏（不是中间/右侧）', box !== null && box.x < 240, `x=${String(box?.x)}`)
+      checks.that('入口常驻在侧栏下方', box !== null && box.y > viewport / 2, `y=${String(box?.y)} 视口=${String(viewport)}`)
+      checks.that('入口右端有环境标记', await envMark().count() > 0)
+      // 卡头是纯标题，不是第四个可选项（用户口径：「中瑞世联工作台这个本身不应该能选中」）。
+      const head = await entry().locator('.crwu-audit-side-card-head').evaluate((node) => ({
+        tag: node.tagName,
+        cursor: getComputedStyle(node).cursor,
+      }))
+      checks.that(
+        '卡头不是可点控件（div + 不是手型光标）',
+        head.tag === 'DIV' && head.cursor !== 'pointer',
+        JSON.stringify(head),
+      )
+      checks.passed.push('侧栏底部出现「中瑞世联工作台」入口')
     })
     if (!hasEntry) {
       // 面板都没出现，后面的检查没有意义 —— 但上面的失败已经记录了。
       await page.screenshot({ path: join(out, 'no-panel.png') })
     } else {
-      await entry.click()
-      // 打开面板后**没有**页内「环境自检」标签页了：右上角那颗灯才是入口，
-      // 自检期间显示 loading，出结论后要么直接进报告审核（通过），要么停在这一页（不通过）。
-      let envOk = false
-      const opened = await phase('点进去后工作台渲染出右上角环境指示灯', async () => {
-        await lamp().waitFor({ state: 'visible', timeout: 30_000 })
-        checks.passed.push('点进去后工作台渲染出右上角环境指示灯')
-        // 自检要跑 shell 与网络（探二进制、问氚云/钉钉、列一次 OSS），给足时间。
-        await page.waitForFunction(
-          () => /环境就绪|环境未通过/.test(document.body.innerText),
-          undefined,
-          { timeout: 120_000 },
+      // 第一次进面板要跑一轮环境自检（工具 / 登录态 / 上传配置 / 外部数据），这几秒里正文
+      // 应该只有那一页统一等待页。它是**瞬态**的（真机上几秒），所以把这一次 env 拖慢，
+      // 把「有没有统一等待页」变成确定性断言 —— 与后面「重新自检加载态」同一条手法。
+      await page.route('**/api/crwu-workbench**', async (route) => {
+        const payload = route.request().postData() ?? ''
+        if (payload.includes('"op":"env"')) await new Promise((resolve) => setTimeout(resolve, 3500))
+        await route.continue()
+      })
+      await entry().click()
+      await phase('首次进入是统一的等待页（品牌标记 + 进度条）', async () => {
+        const pane = page.locator('.crwu-audit-loading-pane').first()
+        await pane.waitFor({ state: 'visible', timeout: 20_000 })
+        const text = (await pane.innerText()).replace(/\s+/g, ' ')
+        checks.that('等待页有「正在自检环境」', text.includes('正在自检环境'), text)
+        checks.that('等待页有一句在等什么的说明', text.includes('正在检查'), text)
+        // 「好看的 svg」：等待页里那枚品牌标记（四个色块）在，而且真的挂着动画。
+        const mark = await pane.evaluate((node) => {
+          const svg = node.querySelector('svg')
+          if (svg === null) return null
+          const polygons = [...svg.querySelectorAll('polygon')]
+          const animation = getComputedStyle(polygons[0]).animationName
+          const box = svg.getBoundingClientRect()
+          return { polygons: polygons.length, animation, size: `${Math.round(box.width)}x${Math.round(box.height)}` }
+        })
+        checks.that(
+          '等待页用的是品牌标记（4 个色块）且带呼吸动画',
+          mark !== null && mark.polygons === 4 && mark.animation !== 'none',
+          JSON.stringify(mark),
         )
+        checks.that('等待页底部有不确定进度条', await pane.locator('.crwu-audit-load-bar').count() === 1)
+        await page.screenshot({ path: join(out, 'first-loading.png') })
+        // 等它自己收掉（那说明被拖慢的 env 回来了、面板已切到该在的那一页）再撤路由，
+        // 撤早了 handler 里的 continue() 会撞上「Route is already handled」。
+        await page.waitForFunction(
+          () => document.querySelector('.crwu-audit-loading-pane') === null,
+          undefined,
+          { timeout: 90_000 },
+        ).catch(() => undefined)
+        await page.unroute('**/api/crwu-workbench**')
+      })
+      // 打开面板后**没有**页内「环境自检」标签页了：三个模块由侧栏那张分组卡上的子项切换，
+      // 自检期间显示统一等待页，出结论后要么直接进报告审核（通过），要么停在环境信息（不通过）。
+      let envOk = false
+      const opened = await phase('点进去后工作台渲染出面板头，自检结论落到侧栏标记上', async () => {
+        await page.locator('.crwu-audit-version').first().waitFor({ state: 'visible', timeout: 30_000 })
+        // 自检要跑 shell 与网络（探二进制、问氚云/钉钉、列一次 OSS），给足时间；等的是
+        // **侧栏子项上那枚标记的结论色**，不是正文里那句话：自检一旦通过，面板会直接跳到
+        // 「报告审核」，带「环境就绪」字样的环境信息页只是一闪而过（常常根本不出现）——
+        // 靠它等结论是概率性的，之前就在这里假失败过一次。
+        await page.waitForFunction(() => {
+          const mark = document.querySelector('.crwu-audit-side-card .crwu-audit-side-entry-mark')
+          if (mark === null) return false
+          const cls = String(mark.className)
+          return cls.includes('crwu-audit-side-entry-mark-ok') || cls.includes('crwu-audit-side-entry-mark-bad')
+        }, undefined, { timeout: 120_000 })
+        checks.passed.push('点进去后工作台渲染出面板头，自检结论落到侧栏标记上')
       })
       if (opened) {
-        // ── 右上角指示灯：绿=通过、红=不通过，且颜色必须与结论一致 ──────────
-        await phase('右上角环境指示灯', async () => {
-          const classes = String(await lamp().locator('span').first().getAttribute('class') ?? '')
-          const ok = classes.includes('crwu-audit-dot-ok')
-          const bad = classes.includes('crwu-audit-dot-bad')
+        // ── 侧栏入口上的环境标记：绿=通过（对勾）、红=不通过，颜色必须与结论一致 ──
+        await phase('侧栏入口上的环境标记', async () => {
+          const classes = String(await envMark().getAttribute('class') ?? '')
+          const ok = classes.includes('crwu-audit-side-entry-mark-ok')
+          const bad = classes.includes('crwu-audit-side-entry-mark-bad')
           envOk = ok
-          checks.that('指示灯有结论色（绿或红）', ok || bad, `class=${classes}`)
-          checks.that('指示灯颜色与自检结论一致', ok !== bad, `绿=${String(ok)} 红=${String(bad)}`)
-          const title = String(await lamp().getAttribute('title') ?? '')
-          checks.that('指示灯悬停文案给出结论', /环境(就绪|未通过|自检中|未自检)/.test(title))
-          await page.screenshot({ path: join(out, 'lamp.png') })
+          checks.that('环境标记有结论色（绿或红）', ok || bad, `class=${classes}`)
+          checks.that('环境标记颜色与自检结论一致', ok !== bad, `绿=${String(ok)} 红=${String(bad)}`)
+          // 用户要的是「环境通过时后面有个正常工作的标志」，2026-09-22 又要求重新设计观感：
+          // 现在是 iOS 设置风的小圆徽标 = 实心状态色圆底 + 白字形。这里量真实计算样式。
+          if (ok) {
+            const badge = await envMark().evaluate((node) => {
+              const style = getComputedStyle(node)
+              return {
+                radius: style.borderRadius,
+                bg: style.backgroundColor,
+                ink: style.color,
+                glyph: node.querySelector('svg') !== null,
+              }
+            })
+            checks.that(
+              '通过时是实心绿圆徽标 + 白勾',
+              badge.radius === '50%' && badge.bg !== 'rgba(0, 0, 0, 0)'
+                && badge.ink === 'rgb(255, 255, 255)' && badge.glyph,
+              JSON.stringify(badge),
+            )
+          }
+          const title = String(await entry().getAttribute('title') ?? '')
+          checks.that('入口悬停文案给出环境结论', /环境信息：(已通过|未通过|自检中|尚未自检)/.test(title), title)
+          await page.screenshot({ path: join(out, 'sidebar-entry.png') })
         })
 
-        // ── 标题旁的版本号：用户靠它定位「现在跑的是哪一版」 ──────────────────
-        await phase('标题旁的版本号', async () => {
+        // ── 侧栏那张分组卡：一个模块 + 三个子项（报告评估 / 报告审核 / 环境信息） ──
+        await phase('侧栏分组卡', async () => {
+          const rows = entry().locator('.crwu-audit-module')
+          const count = await rows.count()
+          checks.that('分组卡上三个子项都在', count === 3, `找到 ${String(count)} 行`)
+          const cardText = await entry().innerText()
+          checks.that(
+            '三个子项就是报告评估 / 报告审核 / 环境信息，且顺序固定',
+            /报告评估[\s\S]*报告审核[\s\S]*环境信息/.test(cardText),
+            cardText.replace(/\s+/g, ' '),
+          )
+          // 「开发中」是一枚**灰色小 tag**（用户 2026-09-22 先要图标、看过之后又改回文字标签：
+          // 「那个 svg 不要了，太难看了，加一个灰色的小 tag【开发中】」）。
+          const devTag = moduleButton('报告评估').locator('.crwu-audit-module-tag')
+          checks.that(
+            '还没开发的子项挂着一枚「开发中」小标签',
+            await devTag.count() === 1 && (await devTag.innerText()).trim() === '开发中',
+            (await devTag.innerText().catch(() => '')).trim(),
+          )
+          checks.that('那枚标签里没有图标（只要文字）', await devTag.locator('svg').count() === 0)
+          // 「看起来是一个模块」的可观察判据：三行子项都落在**同一张卡**的几何范围内，
+          // 而且是上下叠着排的 —— 不是三个各占一行的独立入口。
+          const cardBox = await entry().boundingBox()
+          const rowBoxes = await rows.evaluateAll((nodes) => nodes.map((node) => {
+            const rect = node.getBoundingClientRect()
+            return { x: rect.x, y: rect.y, w: rect.width, h: rect.height }
+          }))
+          checks.that(
+            '三行子项都在同一张卡里（像一个模块，不是三个入口）',
+            cardBox !== null && rowBoxes.length === 3
+              && rowBoxes.every((row) => row.x >= cardBox.x - 1 && row.x + row.w <= cardBox.x + cardBox.width + 1),
+            JSON.stringify({ card: cardBox, rows: rowBoxes }),
+          )
+          checks.that(
+            '三行子项自上而下排列',
+            rowBoxes.length === 3 && rowBoxes[0].y < rowBoxes[1].y && rowBoxes[1].y < rowBoxes[2].y,
+            JSON.stringify(rowBoxes),
+          )
+          // 入口只有这一处：面板里不再有自己的模块条（`.crwu-audit-module` 总数 = 卡上这三行）。
+          const all = await page.locator('.crwu-audit-module').count()
+          checks.that('模块入口只在侧栏那一处（面板里不再有模块条）', all === count, `全页 ${String(all)} 处 / 卡上 ${String(count)} 行`)
+          // 报告评估：点得开，但整页只写「开发中」；同时那一行要变成选中态。
+          await moduleButton('报告评估').click()
+          await page.waitForTimeout(500)
+          const evalBodyText = await body()
+          // 用户 2026-09-22 口径：「该页面整体写一个开发中就可以了」——
+          // 所以占位页正文**只有这四个字**，先前那些说明与计划事项都不该再出现。
+          const placeholderText = (await page.locator('.crwu-audit-placeholder').innerText()).trim()
+          checks.that('报告评估占位页正文只有「开发中」', placeholderText === '开发中', JSON.stringify(placeholderText))
+          checks.that('报告评估不画报告列表', !evalBodyText.includes('待审核报告'))
+          // 「报告审核」旁边不再标具体报告数（用户 2026-09-22 口径），那一行只有名字。
+          const auditRowText = (await moduleButton('报告审核').innerText()).replace(/\s+/g, '')
+          checks.that('报告审核旁边不标报告数', auditRowText === '报告审核', JSON.stringify(auditRowText))
+          const evalClass = String(await moduleButton('报告评估').getAttribute('class') ?? '')
+          checks.that('点过的子项是选中态', evalClass.includes('crwu-audit-module-on'), evalClass)
+          // 环境标记**只属于「环境信息」那一行**（用户 2026-09-22：其余子项右侧的绿勾去掉）。
+          const marksPerRow = await rows.evaluateAll((nodes) => nodes.map(
+            (node) => node.querySelector('.crwu-audit-side-entry-mark') !== null,
+          ))
+          checks.that(
+            '环境标记只长在「环境信息」那一行',
+            JSON.stringify(marksPerRow) === JSON.stringify([false, false, true]),
+            JSON.stringify(marksPerRow),
+          )
+          checks.that(
+            '整页只有那一枚环境标记（别的子项右侧留空）',
+            await page.locator('.crwu-audit-side-card .crwu-audit-side-entry-mark').count() === 1,
+          )
+          // 悬停与选中的底色必须一眼分得开（用户报过「悬停别的子项时和激活那条一样」）：
+          // 这里量的是**真实计算样式**，不是文案或类名。
+          const readBg = (locator) => locator.evaluate((node) => getComputedStyle(node).backgroundColor)
+          const evalRow = moduleButton('报告评估')
+          const auditRow = moduleButton('报告审核')
+          const onBg = await readBg(evalRow)
+          await auditRow.hover()
+          const hoverBg = await readBg(auditRow)
+          await evalRow.hover()
+          const onHoverBg = await readBg(evalRow)
+          await page.mouse.move(4, 4)
+          checks.that(
+            '悬停别的子项时底色与选中那条不同',
+            hoverBg !== onBg,
+            `悬停=${hoverBg} 选中=${onBg}`,
+          )
+          checks.that(
+            '悬停选中那条不会把它的选中底色换掉',
+            onHoverBg === onBg,
+            `悬停选中=${onHoverBg} 选中=${onBg}`,
+          )
+          await page.screenshot({ path: join(out, 'sidebar-modules.png') })
+        })
+
+        // ── 自检只跑一次：切页、关掉再打开都不重跑 ────────────────────────
+        // 用户 2026-09-22 口径：「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调，
+        // 本质就是从环境信息把这个人的信息拿到」。所以这里量的是**真实请求次数**。
+        await phase('自检只跑一次（切页 / 关掉再打开都不重跑）', async () => {
+          const envCalls = () => ops.filter((op) => op === 'env').length
+          const before = envCalls()
+          checks.that('进面板只跑过一次自检', before === 1, `env ${String(before)} 次`)
+          for (const label of ['报告审核', '环境信息', '报告评估']) {
+            await moduleButton(label).click()
+            await page.waitForTimeout(400)
+          }
+          checks.that('切模块不重跑自检', envCalls() === before, `env ${String(before)} → ${String(envCalls())}`)
+          // 关掉面板（点侧栏「新会话」把主面板切走）再点回工作台：面板会重新挂载。
+          await page.locator('button:has-text("新会话")').first().click()
+          await page.waitForTimeout(800)
+          await moduleButton('报告评估').click()
+          await page.waitForTimeout(800)
+          checks.that(
+            '关掉再打开面板也不重跑自检',
+            envCalls() === before,
+            `env ${String(before)} → ${String(envCalls())}`,
+          )
+          checks.that('全程没有 whoami 这个操作（身份跟着自检走）', !ops.includes('whoami'), ops.join(','))
+        })
+
+        // ── 选中会话之后，工作台不许还高亮着 ──────────────────────────────
+        // 用户 2026-09-22 报的 bug：在左侧栏点开自己的会话之后，工作台那张卡里上一次那个子项
+        // 还亮着，看起来像工作台还在前台。选中态只认「工作台面板正开着」。
+        await phase('选中会话时工作台不再高亮', async () => {
+          const selected = () => page.locator('.crwu-audit-side-card .crwu-audit-module-on').count()
+          checks.that('前置条件：工作台面板开着时有一行选中', await selected() === 1, `选中 ${String(await selected())} 行`)
+          // 用 `button:has-text` 而不是 `getByRole('button', { name: /新会话/ })`：实测后者在
+          // 这个侧栏按钮上匹配不到（可访问名取不到），而前者稳。
+          const newChat = page.locator('button:has-text("新会话")').first()
+          if (await newChat.count() === 0) {
+            checks.that('侧栏里有「新会话」入口', false, '没找到新会话按钮，无法验证')
+            return
+          }
+          await newChat.click()
+          await page.waitForFunction(
+            () => document.querySelector('.crwu-audit-side-card .crwu-audit-module-on') === null,
+            undefined,
+            { timeout: 20_000 },
+          ).catch(() => undefined)
+          checks.that('选中会话之后那一行不再高亮', await selected() === 0, `还有 ${String(await selected())} 行亮着`)
+          checks.that(
+            '选中会话之后整张卡也不再是选中态',
+            await page.locator('.crwu-audit-side-card.crwu-audit-side-card-on').count() === 0,
+          )
+          await page.screenshot({ path: join(out, 'session-selected.png') })
+          // 点回工作台：记忆还在（先前停在报告评估），而且重新亮起来。
+          await moduleButton('报告评估').click()
+          await page.waitForTimeout(800)
+          checks.that('点回工作台后重新高亮', await selected() === 1, `选中 ${String(await selected())} 行`)
+        })
+
+        // ── 品牌标记 + 「dev 还是具体版本」标签 ───────────────────────────────
+        await phase('品牌标记与版本标签', async () => {
+          // 侧栏入口与面板头部那枚图形必须是品牌标记（四个色块），不是通用图标。
+          checks.that('侧栏入口画的是品牌标记（4 个色块）', await entry().locator('svg polygon').count() === 4)
+          checks.that('面板头部也画了品牌标记', await page.locator('.crwu-audit-header svg polygon').count() === 4)
+          // 头部右侧那一格：永远是「问候，姓名」，姓名来自宿主的钉钉 CLI（`whoami`）。
+          // 等一下 whoami（一次 dws 冷启动），别用固定等待当结论。
+          await page.waitForFunction(
+            () => /(凌晨好|早上好|上午好|中午好|下午好|晚上好)，\S+/.test(document.querySelector('.crwu-audit-header')?.textContent ?? ''),
+            undefined,
+            { timeout: 60_000 },
+          ).catch(() => undefined)
+          const headerText = (await page.locator('.crwu-audit-header').innerText()).replace(/\s+/g, ' ')
+          checks.that(
+            '头部右侧是「问候，姓名」（姓名来自钉钉 CLI）',
+            /(凌晨好|早上好|上午好|中午好|下午好|晚上好)，\S+/.test(headerText),
+            headerText,
+          )
+          // 模块名从头部去掉了：在哪一页由侧栏那张分组卡的高亮说了算。
+          checks.that(
+            '头部不再显示模块名',
+            !/报告评估|报告审核|环境信息/.test(headerText),
+            headerText,
+          )
+          // 背景水印试过一版（超大单色 logo + 「中瑞世联」字样），用户看过之后决定不要：
+          // 「算了不要背景色这个标记了」。这里钉住它不许回来。
+          checks.that(
+            '页面背景不再画水印',
+            await page.locator('.crwu-audit-watermark').count() === 0
+              && await page.locator('.crwu-audit-watermark-text').count() === 0,
+          )
           const chip = page.locator('.crwu-audit-version').first()
-          checks.that('面板标题旁有版本徽章', await chip.count() > 0)
+          checks.that('名字/标题旁有版本标签', await chip.count() > 0)
           const text = (await chip.innerText().catch(() => '')).trim()
-          checks.that('版本徽章显示宿主的 pkg- 版本号', /^pkg-\d+\.\d+\.\d+/.test(text), text)
+          // 用户口径：要么写 dev（本地源码检出），要么写他直接安装的那个具体版本。
+          checks.that('标签写的是 dev 或具体版本号', /^(dev|v\d+\.\d+\.\d+|未知)$/.test(text), text)
           const title = String(await chip.getAttribute('title') ?? '')
-          checks.that('悬停能看到构建时间', /当前运行的宿主插件版本/.test(title), title)
+          checks.that('悬停说清运行形态', /本地源码检出|已安装的插件包|还没问过宿主/.test(title), title)
+          await page.screenshot({ path: join(out, 'brand.png') })
         })
 
-        // ── 门禁：通过就直接进报告审核；不通过必须停在环境自检页 ────────────
+        // ── 门禁：通过就直接进报告审核；不通过必须停在环境信息 ────────────
         await phase('自检门禁', async () => {
+          // 上一步把模块切到了「报告评估」，这里按结论回到该在的那一页再断言。
+          await moduleButton(envOk ? '报告审核' : '环境信息').click()
+          await page.waitForTimeout(1200)
           const text = await body()
           if (envOk) {
             checks.that('自检通过就直接进报告审核', text.includes('待审核报告'))
           } else {
-            checks.that('自检不通过时停在环境自检页', text.includes('环境未通过'))
+            checks.that('自检不通过时停在环境信息', text.includes('环境未通过'))
             checks.that('自检不通过时报告审核不出现', !text.includes('待审核报告'))
           }
         })
 
-        // ── 第 6 条：环境自检页按四层画真实探测结果（同时证明 Host→Client 链路） ──
+        // ── 第 6 条：环境信息按四层画真实探测结果（同时证明 Host→Client 链路） ──
         //
         // 页面的读者是普通员工：四层结论（工具 / 登录认证 / 上传配置 / 外部数据）+ 每层
         // `x/y 已就绪`；**就绪的层收成一行、没就绪的层默认展开**；维护者信息（清单来源、
         // sha256、会话 id）收在页脚「排查详情」里，默认不展开；
         // 但**授权开关不在那里** —— 它是员工必须点一次的东西，常驻在「③ 登录认证」层头（下面单独断言）。
-        await phase('环境自检页', async () => {
-          await lamp().click()
+        await phase('环境信息页', async () => {
+          await moduleButton('环境信息').click()
           await page.waitForTimeout(1500)
           const envText = await body()
-          checks.that('环境自检显示真实平台', /darwin|linux|win32/.test(envText))
+          checks.that('环境信息显示真实平台', /darwin|linux|win32/.test(envText))
           // 四层结论必须在（分层是这一版的全部意义）。
           checks.that(
-            '环境自检按四层给结论',
+            '环境信息按四层给结论',
             envText.includes('② 工具') && envText.includes('③ 登录认证')
               && envText.includes('④ 上传配置') && envText.includes('⑤ 外部数据'),
           )
           checks.that('每层给出「x/y 已就绪」计数', /\d+\/\d+ 已就绪/.test(envText))
-          checks.that('环境自检显示氚云与钉钉', envText.includes('氚云') && envText.includes('钉钉'))
-          checks.that('环境自检显示 iFinD 密钥状态', envText.includes('iFinD'))
-          checks.that('环境自检显示 OSS 上传配置', envText.includes('OSS'))
-          checks.that('环境自检显示通过率与阻塞计数', envText.includes('已通过') && envText.includes('未通过'))
+          checks.that('环境信息显示氚云与钉钉', envText.includes('氚云') && envText.includes('钉钉'))
+          checks.that('环境信息显示 iFinD 密钥状态', envText.includes('iFinD'))
+          checks.that('环境信息显示 OSS 上传配置', envText.includes('OSS'))
+          checks.that('环境信息显示通过率与阻塞计数', envText.includes('已通过') && envText.includes('未通过'))
           // 复制入口全页只留一处（用户反馈：环境页上的「复制提示词 / 复制」按钮太多且没用）。
           // 授权弹框挡在前面时整页不可达，这时跳过（弹框本身由「授权弹框」那段单独断言）。
           if (!envText.includes('需要一项授权')) {
@@ -264,7 +528,7 @@ async function main() {
         await phase('重新自检加载态', async () => {
           const recheck = page.getByRole('button', { name: '重新自检' }).first()
           if (await recheck.count() === 0) {
-            checks.that('环境自检页有「重新自检」按钮', false)
+            checks.that('环境信息页有「重新自检」按钮', false)
             return
           }
           // 同翻页那条：把这一次 env 拖慢，让瞬态加载态变成确定性断言。
@@ -302,11 +566,11 @@ async function main() {
               checks.that('拦住时给出明确说明', blockedText.includes('环境自检未通过'))
               await page.screenshot({ path: join(out, 'gate.png') })
             } else {
-              checks.that('环境自检页存在「进入报告审核」入口', false, '按钮都没渲染出来')
+              checks.that('环境信息页存在「进入报告审核」入口', false, '按钮都没渲染出来')
             }
             return
           }
-          // 从环境自检页回到报告审核（通过时这个按钮就是放行的）。
+          // 从环境信息页回到报告审核（通过时这个按钮就是放行的）。
           const back = page.getByRole('button', { name: '进入报告审核' }).first()
           if (await back.count() > 0) {
             await back.click()
@@ -602,18 +866,18 @@ async function main() {
           await page.screenshot({ path: join(out, 'open-session.png') })
           // 打开会话会把主面板切到会话，后面的检查还要用工作台，所以从侧栏再进一次。
           if (leftWorkbench) {
-            await entry.click()
-            await lamp().waitFor({ state: 'visible', timeout: 30_000 })
+            await entry().click()
+            await page.locator('.crwu-audit-version').first().waitFor({ state: 'visible', timeout: 30_000 })
             await page.waitForTimeout(1500)
           }
         })
 
-        // ── 切回环境自检仍然正常（状态没被弄坏） ──────────────────────────
-        await phase('切回环境自检', async () => {
+        // ── 切回环境信息仍然正常（状态没被弄坏） ──────────────────────────
+        await phase('切回环境信息', async () => {
           if (!envOk) return
-          await lamp().click()
+          await moduleButton('环境信息').click()
           await page.waitForTimeout(3000)
-          checks.that('切回环境自检仍然正常渲染', (await body()).includes('② 工具'))
+          checks.that('切回环境信息仍然正常渲染', (await body()).includes('② 工具'))
         })
       }
     }

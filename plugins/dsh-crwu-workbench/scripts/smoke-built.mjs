@@ -217,26 +217,23 @@ export async function smokeClient() {
   // 四个槽位缺一不可：少了 session.header 那个，界面上就没有办法登记审核父级，
   // 而 audit-start 要求父级已登记 —— 等于整个审核流程无法从界面发起。
   assert.deepEqual(injections.map((entry) => entry.name), [
-    'sidebar.panellist', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
+    'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ], '必须注入这四个槽位')
   for (const entry of injections) {
     assert.equal(entry.insideEffect, false, 'slots.inject 不得包在 ctx.effect 里')
   }
-  // 会话头那个 list 槽位挂了两个条目：环境指示灯（页面右上角）+ 子会话父级按钮。
   assert.deepEqual(registered.map((meta) => meta.name), [
-    'sidebar.panellist', 'main', 'tool.view.cordis',
-    'conversation.session.header.utilities', 'conversation.session.header.utilities',
+    'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ])
+  // 工作台常驻在左侧栏底部（Settings 上方），主面板 key 与它对齐。
   assert.equal(registered[0].id, 'crwu-workbench')
   // 侧栏读的是 options.label（resolveSlotLabel 对字符串原样返回），给中文字符串即可。
   assert.equal(typeof registered[0].label, 'string')
   assert.ok(registered[0].label.length > 0, '侧栏标签不能是空的，否则退回显示内部 id')
   assert.equal(registered[1].key, 'crwu-workbench')
-  assert.equal(registered[3].id, 'crwu-env-status', '右上角环境指示灯必须注册（绿/红那盏）')
-  assert.equal(registered[3].order, 6, '指示灯要在最右边')
-  assert.equal(registered[4].id, 'crwu-audit-parent', '会话头按钮必须注册（登记父级的唯一入口）')
+  assert.equal(registered[3].id, 'crwu-audit-parent', '会话头按钮必须注册（登记父级的唯一入口）')
   assert.equal(styleElements.length, 1, '样式应当随 apply 插入一次')
-  assert.equal(registered.length, 5, '注册的槽位数量变了')
+  assert.equal(registered.length, 4, '注册的槽位数量变了')
 
   delete globalThis.window
   delete globalThis.document
@@ -253,7 +250,7 @@ await check('Host 半：apply() 注册同源路由并真的应答 RPC', async ()
   routeCount = result.routes
   return `路由 ${result.routes} 条`
 })
-await check('Client 半：经 __ModuleLoader__ 加载并注册五个槽位条目', async () => {
+await check('Client 半：经 __ModuleLoader__ 加载并注册四个槽位条目', async () => {
   const result = await smokeClient()
   slotCount = result.slots
   moduleId = result.loaded

@@ -9,16 +9,50 @@ export const zhCN = {
   hostStaleHint: '客户端产物刷新页面就会换新，宿主产物只有重启 profile 才会换。现在跑着的宿主代码比你看到的界面旧，'
     + '审核会按旧逻辑挂到「当前会话」下（而不是建在工作空间里的审核根会话），所以先不要发起审核。',
   hostStaleGate: '宿主插件是旧构建：请先重启 web profile',
-  loadingEnv: '正在自检环境…',
+  loadingEnv: '正在自检环境',
+  // 统一等待页里的第二行：说清"等的是什么、等完会发生什么"。
+  // 说清"等的是什么、等完会怎样"；刻意不提任何模块名（等待页不该出现"报告审核"这类字眼，
+  // 那会让"我在哪一页"这件事在结论出来之前就被提起）。
+  loadingHint: '正在检查工具、登录态、上传配置与外部数据，通过后会自动继续',
   loadingList: '正在拉取氚云待办…',
   loadingGate: '正在自检环境，通过后自动进入报告审核…',
+
+  // 面板头部右侧那句问候（姓名来自钉钉 CLI；拿不到姓名时整句不展示）
+  greetingNight: '凌晨好',
+  greetingMorning: '早上好',
+  greetingForenoon: '上午好',
+  greetingNoon: '中午好',
+  greetingAfternoon: '下午好',
+  greetingEvening: '晚上好',
+
+  // 三个模块（侧栏分组卡上的三个子项；顺序固定，不要按条件重排）
+  moduleEval: '报告评估',
+  moduleAudit: '报告审核',
+  moduleEnv: '环境信息',
+  moduleDevTag: '开发中',
+  // 侧栏底部入口右侧那枚环境标记（悬停文案）
+  moduleEnvMarkOk: '环境信息：已通过',
+  moduleEnvMarkBad: '环境信息：未通过',
+  moduleEnvMarkBusy: '环境信息：自检中',
+  moduleEnvMarkIdle: '环境信息：尚未自检',
+
+  // 「现在跑的是哪一份插件」小标签（dev 模式 / 已安装的具体版本）
+  buildTagDev: 'dev',
+  buildTagUnknown: '未知',
+  buildTagVersionUnknown: '版本未知',
+  buildTagDevTitle: '本地源码检出（{version}）：改完要重新 build 并重启 profile 才生效',
+  buildTagInstalledTitle: '已安装的插件包 {version}',
+  buildTagUnknownTitle: '还没问过宿主跑的是哪一版',
+  buildTagBuiltAt: '构建时间：',
+
+  // 「报告评估」占位页只有一行字：开发中（moduleDevTag）；模块名由面板头部常驻显示，不重复。
 
   // 页内标签
   tabEnv: '环境自检',
   tabPending: '待审核报告',
   tabResults: 'AI审核结果',
 
-  // 右上角环境状态灯（会话头与面板头共用）
+  // 环境状态（侧栏入口与面板共用同一份结论）
   envLampLabel: '环境自检',
   envLampOk: '环境就绪',
   envLampBad: '环境未通过',

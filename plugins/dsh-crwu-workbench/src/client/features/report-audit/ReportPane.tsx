@@ -157,7 +157,7 @@ function PendingTable(props: ReportPaneProps & { rows: RowView[] }): React.React
         const view = props.rows[index]
         if (view === undefined) return null
         const risk = riskBadge(task.risk)
-        return <tr key={view.key}>
+        return <tr key={view.key} className={C.tbodyRow}>
           <td className={`${C.td} ${C.tdName}`}>
             {/* 这份表单里 name 常常就等于流水号，重复显示既没用又占宽度：
                 主行一律给项目名，名字与流水号不同（别的表单）时才补一行。 */}
@@ -219,7 +219,7 @@ function ResultsTable(props: ReportPaneProps & { items: CloudItem[] }): React.Re
       {props.items.map((item) => {
         // 结果页只列**规范交付件**：辅助文件不该出现在「AI审核结果」里。
         const files = [item.htmlKey, item.jsonKey].filter((key) => key !== '')
-        return <tr key={item.seqNo}>
+        return <tr key={item.seqNo} className={C.tbodyRow}>
           <td className={C.td}><div className={C.mono}>{item.seqNo}</div></td>
           <td className={C.td}>
             {files.map((key) => <div key={key} className={C.mono}>{key}</div>)}

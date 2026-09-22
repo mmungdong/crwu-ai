@@ -24,6 +24,7 @@ const { WORKBENCH_CLASSES, WORKBENCH_STYLE_ID, WORKBENCH_STYLE_TEXT } = await im
 )
 const { zhCN } = await import(new URL('src/client/locales/zh-CN.ts', ROOT).href)
 const { installWorkbenchStyles } = await import(new URL('src/client/features/workbench/styles.ts', ROOT).href)
+const { createModuleStore } = await import(new URL('src/client/features/workbench/module-store.ts', ROOT).href)
 const { WORKBENCH_PROTOCOL } = await import(new URL('src/shared/consts.ts', ROOT).href)
 
 const React = fakeReact
@@ -70,9 +71,37 @@ function resolve(node) {
 const { rpc } = await import(new URL('src/client/api/client.ts', ROOT).href)
 const { apply } = await import(new URL('src/client/apply.ts', ROOT).href)
 const { WorkbenchPanel } = await import(new URL('src/client/features/workbench/WorkbenchPanel.tsx', ROOT).href)
-const { PanelIcon } = await import(new URL('src/client/components/PanelIcon.tsx', ROOT).href)
+const { BrandMark } = await import(new URL('src/client/components/BrandMark.tsx', ROOT).href)
+const { buildTagOf, createBuildStore } = await import(
+  new URL('src/client/features/workbench/build-store.ts', ROOT).href
+)
+
+/** 一个不联网的 build store 替身：只把快照喂给组件读（刷新由 store 自己的用例覆盖）。 */
+function fakeBuildStore(patch = {}) {
+  const snapshot = {
+    ok: true, error: '', rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'installed',
+    builtAt: '', protocol: WORKBENCH_PROTOCOL, parentSessionId: '', ...patch,
+  }
+  return { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot }
+}
 
 /** 深度查找第一个满足条件的宿主元素。 */
+/** 收集所有命中的节点（前序），用来钉「恰好三行、顺序固定」这种结构断言。 */
+function findAll(node, predicate) {
+  const hits = []
+  const walk = (current) => {
+    if (current === null || current === undefined || typeof current !== 'object') return
+    if (Array.isArray(current)) {
+      for (const child of current) walk(child)
+      return
+    }
+    if (predicate(current)) hits.push(current)
+    walk(current.props.children)
+  }
+  walk(node)
+  return hits
+}
+
 function find(node, predicate) {
   if (node === null || node === undefined || typeof node !== 'object') return null
   if (Array.isArray(node)) {
@@ -226,27 +255,42 @@ test('apply registers every slot through slots.inject', () => {
   // 只有样式走 effect；槽位注入直接调用（与 DSH 自带的客户端插件一致）。
   assert.equal(effects.length, 1)
   assert.deepEqual(injections.map((entry) => entry.name), [
-    'sidebar.panellist', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
+    'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ], '四个槽位缺一不可：少了会话头那个，界面上就没有办法登记审核父级')
   for (const entry of injections) {
     assert.equal(entry.insideEffect, false, 'slots.inject 不得包在 ctx.effect 里')
   }
-  // 会话头那个 list 槽位挂了**两个**条目（环境指示灯 + 子会话父级），所以注册数比注入数多一个。
   assert.deepEqual(registrations.map((entry) => entry.meta.name), [
-    'sidebar.panellist', 'main', 'tool.view.cordis',
-    'conversation.session.header.utilities', 'conversation.session.header.utilities',
+    'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ])
+  // 工作台常驻在左侧栏底部（Settings 上方），主面板 key 与它对齐。
   assert.equal(registrations[0].meta.id, 'crwu-workbench')
   assert.equal(registrations[0].meta.label, zhCN.sidebarLabel)
   assert.equal(typeof registrations[0].meta.order, 'number')
   assert.equal(registrations[1].meta.key, 'crwu-workbench')
-  // 环境指示灯必须在最右边（order 比子会话父级大）：它是「环境行不行」唯一常驻的可见结论。
-  assert.equal(registrations[3].meta.id, 'crwu-env-status')
-  assert.equal(registrations[3].meta.order, 6)
-  assert.equal(registrations[3].meta.label, zhCN.envLampLabel)
-  assert.equal(registrations[4].meta.id, 'crwu-audit-parent')
-  assert.equal(registrations[4].meta.order, 5)
+  // 会话头只留「登记为子会话父级」：环境结论已经由侧栏底部入口那枚标记常驻表达，
+  // 再在会话头挂一颗指示灯就是同一件事说两遍（2026-09-22 用户口径）。
+  assert.equal(registrations[3].meta.id, 'crwu-audit-parent')
+  assert.equal(registrations[3].meta.order, 5)
   for (const entry of registrations) assert.equal(typeof entry.component, 'function')
+})
+
+test('the old top-of-sidebar entry and the header lamp are gone for good', async () => {
+  installDoc()
+  const { ctx, registrations } = fakeClientContext()
+  apply(ctx)
+  const names = registrations.map((entry) => entry.meta.name)
+  assert.equal(names.includes('sidebar.panellist'), false, '顶部图标入口要撤掉')
+  assert.equal(
+    registrations.some((entry) => entry.meta.id === 'crwu-env-status'),
+    false,
+    '会话头那颗环境指示灯要撤掉',
+  )
+  // 撤掉的组件不能只是「没人引用」——它必须真的不在源码里了，否则下次又会被接回去。
+  await assert.rejects(
+    import(new URL('src/client/features/environment/EnvironmentStatusIcon.tsx', ROOT).href),
+    /Cannot find module|ERR_MODULE_NOT_FOUND/,
+  )
 })
 
 test('every effect callback returns a callable or nothing (Cordis rejects the rest)', () => {
@@ -264,20 +308,156 @@ test('every effect callback returns a callable or nothing (Cordis rejects the re
   }
 })
 
-test('the sidebar component renders the DSH panel icon with the slot props', () => {
+test('侧栏那一席是一张分组卡：卡头 + 三个子项，顺序固定', async () => {
   installDoc()
   const { ctx, registrations } = fakeClientContext()
   apply(ctx)
-  const tree = resolve(registrations[0].component({ size: 20, active: true }))
-  assert.equal(tree.type, 'svg')
-  assert.equal(tree.props.width, 20)
-  assert.equal(tree.props.stroke, 'var(--dsw-alias-brand-primary)')
+  const tree = resolve(registrations[0].component({ wide: true }))
+  // 用户要的是「看起来像一个模块」：外框是一张卡，不是三个挨着的入口。
+  assert.equal(tree.type, 'div')
+  assert.equal(tree.props.className.includes(WORKBENCH_CLASSES.sideCard), true)
+  // 侧栏卡与面板必须拿到**同一个** store 对象：各自一份就是「侧栏高亮 A、面板显示 B」的根因。
+  assert.equal(
+    registrations[0].component({ wide: true }).props.modules,
+    registrations[1].component().props.modules,
+    '侧栏分组卡与面板要共用同一份模块状态',
+  )
+  // 卡头：模块名 + 版本标签。**它是纯标题，不是第四个可选项**（用户口径：
+  // 「中瑞世联工作台这个本身不应该能选中」）—— 所以它既不是 button，也没有 onClick。
+  const head = find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.sideCardHead))
+  assert.equal(head.type, 'div', '卡头不是可点的控件')
+  assert.equal(head.props.onClick, undefined, '卡头上不该有任何点击行为')
+  assert.equal(textOf(head).includes(zhCN.sidebarLabel), true)
+  assert.ok(find(tree, (node) => String(node.props?.className ?? '').includes(`${WORKBENCH_CLASSES.version} `)))
+  // 卡身：三行子项，顺序固定为 报告评估 / 报告审核 / 环境信息 —— 不按条件重排。
+  const rows = findAll(tree, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.module))
+  // 环境那一行的悬停文案顺带给出自检结论（颜色对色觉障碍用户不可读），所以它带结论后缀。
+  assert.deepEqual(rows.map((row) => row.props.title), [zhCN.moduleEval, zhCN.moduleAudit, zhCN.moduleEnvMarkIdle])
+  const evalRow = rows[0]
+  // 还没开发的子项跟一枚**灰色小 tag**「开发中」（用户 2026-09-22 口径：图标难看，换回文字标签）。
+  const devTag = find(evalRow, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.moduleTag))
+  assert.ok(devTag, '还没开发的子项旁边要有「开发中」标签')
+  assert.equal(devTag.props.children, zhCN.moduleDevTag)
+  assert.equal(find(devTag, (node) => node.type === 'svg'), null, '不要图标，只要文字标签')
+  // 报告审核旁边不再标报告数（用户 2026-09-22 口径）：那一行只有图标 + 名字。
+  assert.equal(
+    find(rows[1], (node) => typeof node.props?.children === 'string' && /\d/.test(node.props.children)),
+    null,
+    '报告审核旁边不该再出现数字',
+  )
+  // 环境结论标记**只属于「环境信息」那一行**：挂在报告审核后面会被读成「那条审核通过了」，
+  // 用户 2026-09-22 要求去掉那些、只留环境那一栏。
+  assert.equal(
+    find(rows[1], (node) => String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.sideEntryMark)),
+    null,
+    '报告审核那一行右侧不该有环境标记',
+  )
+  assert.ok(
+    find(rows[2], (node) => String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.sideEntryMark)),
+    '环境信息那一行右侧必须有环境标记',
+  )
+  // 折叠成 56px 轨道：只留一颗图标按钮（轨道放不下卡头 + 三行，硬塞会截成省略号）。
+  const rail = resolve(registrations[0].component({ wide: false }))
+  assert.equal(rail.type, 'button')
+  assert.equal(rail.props.className.includes(WORKBENCH_CLASSES.sideEntryRail), true)
+  assert.equal(textOf(rail).includes(zhCN.sidebarLabel), false)
 })
 
-test('PanelIcon falls back to an inactive 16px icon', () => {
-  const tree = resolve(PanelIcon({}))
+test('BrandMark 画的是品牌四个色块，尺寸按原图比例算', () => {
+  // 用户给的是一张位图；矢量版必须**形状对得上**，不是"看着差不多"。
+  // 形状本身的正确性由描图时的逐像素比对保证（见 BrandMark 的注释），这里钉住外部契约：
+  // 四个多边形、三红一金、按 101:104 的比例缩放、默认不参与朗读。
+  const tree = resolve(BrandMark({}))
+  assert.equal(tree.type, 'svg')
   assert.equal(tree.props.width, 16)
-  assert.equal(tree.props.stroke, 'var(--dsw-alias-label-secondary)')
+  assert.equal(tree.props.viewBox, '0 0 101 104')
+  assert.equal(tree.props['aria-hidden'], true, '默认不朗读：旁边紧跟的就是品牌名')
+
+  const shapes = tree.props.children
+  assert.equal(shapes.length, 4, '四个色块缺一不可')
+  assert.equal(shapes.filter((shape) => shape.props.fill === '#b50120').length, 3, '三块品牌红')
+  assert.equal(shapes.filter((shape) => shape.props.fill === '#cf9950').length, 1, '一块品牌金（右上那格）')
+  for (const shape of shapes) assert.equal(shape.type, 'polygon')
+
+  const sized = resolve(BrandMark({ size: 20, label: '中瑞世联' }))
+  assert.equal(sized.props['aria-label'], '中瑞世联')
+  assert.equal(sized.props.height, Math.round((20 * 104) / 101 * 100) / 100)
+})
+
+test('buildTagOf：dev 显示 dev，装好的包显示具体版本，旧宿主退回 rev', async () => {
+  const base = { ok: true, error: '', rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'installed', builtAt: '', protocol: 6, parentSessionId: '' }
+  const dev = buildTagOf({ ...base, buildKind: 'dev' })
+  assert.equal(dev.text, 'dev', 'dev 模式不显示版本号（对开发没意义）')
+  assert.equal(dev.tone, 'dev')
+  assert.match(dev.title, /本地源码检出/, '悬停要说清这是源码检出、改了要重新 build')
+
+  const installed = buildTagOf(base)
+  assert.equal(installed.text, 'v9.9.9')
+  assert.equal(installed.tone, 'installed')
+  assert.match(installed.title, /已安装的插件包 v9\.9\.9/)
+
+  // 旧宿主没有 version / buildKind：退回 rev 去掉 pkg- 前缀，绝不显示空白标签。
+  const legacy = buildTagOf({ ...base, version: '', buildKind: '' })
+  assert.equal(legacy.text, 'v9.9.9')
+  // 什么都没有时才说「未知」。
+  const unknown = buildTagOf({ ...base, version: '', buildKind: '', rev: '' })
+  assert.equal(unknown.text, '未知')
+  assert.equal(unknown.tone, 'unknown')
+})
+
+test('build store 的并发去重：入口与面板同时挂载只打一次 boot', async () => {
+  // 侧栏入口与面板都要「跑的是哪一份插件」，各自 boot() 会白打一次请求，
+  // 还会出现「标签是新的、门禁说旧的」这种自相矛盾的画面。
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls += 1
+    return { ok: true, status: 200, async json() { return { ok: true, rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'installed', protocol: 6, parentSessionId: 'session-1' } } }
+  }
+  const store = createBuildStore()
+  const [first, second] = await Promise.all([store.refresh(), store.refresh()])
+  assert.equal(calls, 1, '并发调用必须共享同一次 boot')
+  assert.equal(first.buildKind, 'installed')
+  assert.equal(second.parentSessionId, 'session-1')
+  assert.equal(store.get().version, '9.9.9')
+})
+
+test('侧栏入口在名字后面标出 dev 模式或具体版本（用户口径）', async () => {
+  const { createEnvStatusStore } = await import(new URL('src/client/features/environment/status.ts', ROOT).href)
+  const { WorkbenchSidebarEntry } = await import(
+    new URL('src/client/features/workbench/WorkbenchSidebarEntry.tsx', ROOT).href
+  )
+  const store = createEnvStatusStore()
+  stubOps({ env: { body: okEnvBody() } })
+  await store.refresh()
+
+  const findTag = (tree) => find(tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
+
+  // 本地源码检出：显示 dev，并用琥珀色提醒「这不是装好的包」。
+  const dev = render(WorkbenchSidebarEntry, {
+    store, build: fakeBuildStore({ buildKind: 'dev' }), wide: true, onOpen: () => {},
+  })
+  const devTag = findTag(dev.tree)
+  assert.ok(devTag, '名字后面必须有一枚小标签')
+  assert.equal(textOf(devTag), 'dev')
+  assert.equal(devTag.props.className.includes(WORKBENCH_CLASSES.versionDev), true)
+  assert.match(String(devTag.props.title), /本地源码检出/)
+
+  // 装好的包：显示具体版本（用户要的就是这个号）。
+  const installed = render(WorkbenchSidebarEntry, {
+    store, build: fakeBuildStore({ version: '0.0.4' }), wide: true, onOpen: () => {},
+  })
+  const installedTag = findTag(installed.tree)
+  assert.equal(textOf(installedTag), 'v0.0.4')
+  assert.equal(installedTag.props.className.includes(WORKBENCH_CLASSES.versionInstalled), true)
+
+  // 折叠成轨道：标记、名字、标签都不画（只留品牌图形）。
+  const rail = render(WorkbenchSidebarEntry, {
+    store, build: fakeBuildStore(), wide: false, onOpen: () => {},
+  })
+  assert.equal(findTag(rail.tree), null)
+  assert.equal(textOf(rail.tree).includes('dev'), false)
 })
 
 // ── 主题样式 ────────────────────────────────────────────────────────────────
@@ -320,6 +500,109 @@ test('installWorkbenchStyles is idempotent when the style is already installed',
   const dispose = installWorkbenchStyles()
   assert.equal(fake.head.appended.length, 0, '重复安装会插出第二份样式')
   assert.equal(typeof dispose, 'function')
+})
+
+test('选中行的底色与悬停底色分得开，卡头不可点、卡激活只换描边', () => {
+  // 用户 2026-09-22 报的三件事：① 悬停别的子项时底色和激活那条一样，看不出自己在哪一页；
+  // ② 「中瑞世联工作台」那一行本身不应该能选中；③ 卡整块换底色不好看。
+  // 三条都盯在**真实规则文本**上，而不是 `includes` 一句就算。
+  const rule = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hit = new RegExp(`${escaped}(?:\\s*,\\s*[^{}]*)?\\s*\\{([^}]*)\\}`).exec(WORKBENCH_STYLE_TEXT)
+    assert.ok(hit !== null, `样式里找不到 ${selector} 规则`)
+    return hit[1]
+  }
+  const declaration = (body, prop) => {
+    const hit = new RegExp(`(?:^|;)\\s*${prop}\\s*:([^;]*)`).exec(body)
+    assert.ok(hit !== null, `规则里找不到 ${prop}`)
+    return hit[1].trim()
+  }
+
+  const hover = rule('.crwu-audit-module:hover')
+  const on = rule('.crwu-audit-module-on')
+  assert.notEqual(
+    declaration(hover, 'background'),
+    declaration(on, 'background'),
+    '悬停与选中的底色不能是同一档（这正是用户报的那个缺陷）',
+  )
+  // 选中用品牌色低浓度底 + 左侧强调条；悬停只是一层中性极浅底。
+  assert.match(declaration(on, 'background'), /color-mix/)
+  assert.match(declaration(on, 'box-shadow'), /inset 3px 0 0/)
+  assert.doesNotMatch(declaration(hover, 'background'), /color-mix/)
+  // 悬停自己那条选中行时不许被降级成悬停底色：两条同特异度，必须显式钉住。
+  assert.match(rule('.crwu-audit-module-on:hover'), /color-mix/)
+
+  // 卡头是纯标题：没有手型光标，也没有悬停规则。
+  assert.doesNotMatch(rule('.crwu-audit-side-card-head'), /cursor\s*:\s*pointer/)
+  assert.equal(/\.crwu-audit-side-card-head:hover/.test(WORKBENCH_STYLE_TEXT), false, '卡头不该有悬停态')
+
+  // 卡激活（面板开着）只换描边，不整块换底色。
+  const cardOn = rule('.crwu-audit-side-card-on')
+  assert.match(cardOn, /border-color/)
+  assert.doesNotMatch(cardOn, /background\s*:/)
+})
+
+test('环境标记是实心圆徽标（圆底 + 白字形），四态各有形状', () => {
+  // 用户 2026-09-22：「环境信息检测通过的标记与否还是可以再设计一下，现在并不好看」
+  // —— 选定 iOS 设置风：实心状态色圆底 + 白字形；四态各有形状，不只靠颜色区分。
+  const rule = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hit = new RegExp(`${escaped}(?:\\s*,\\s*[^{}]*)?\\s*\\{([^}]*)\\}`).exec(WORKBENCH_STYLE_TEXT)
+    assert.ok(hit !== null, `样式里找不到 ${selector} 规则`)
+    return hit[1]
+  }
+  const badge = rule('.crwu-audit-side-entry-mark')
+  assert.match(badge, /border-radius:\s*50%/, '圆徽标必须是圆的')
+  assert.match(badge, /width:\s*16px/, '尺寸固定，四态之间不许因为形状不同而跳动')
+  // 白字形：色块上的字形必须恒为白，所以用 static 白而不是会在深色主题翻黑的那几个 alias。
+  assert.match(badge, /color:\s*var\(--dsw-static-neutral-bluish-00\)/)
+  // 通过 / 不通过 / 自检中都是**实心**圆底（各自的状态色），尚未自检才是空心圈。
+  for (const [tone, token] of [
+    ['ok', '--dsw-alias-state-success-primary'],
+    ['bad', '--dsw-alias-state-error-primary'],
+    ['busy', '--dsw-alias-state-warn-primary'],
+  ]) {
+    assert.match(rule(`.crwu-audit-side-entry-mark-${tone}`), new RegExp(`background:\\s*var\\(${token}\\)`), `${tone} 要有实心圆底`)
+  }
+  const idle = rule('.crwu-audit-side-entry-mark-idle')
+  assert.match(idle, /background:\s*transparent/)
+  assert.match(idle, /border:/, '尚未自检是空心圈，靠描边成形')
+  // 自检中：圆里那段旋转白弧（动画 + 白顶边），不额外增加图形资产。
+  const busyArc = rule('.crwu-audit-side-entry-mark-busy::after')
+  assert.match(busyArc, /animation:\s*crwu-audit-spin/)
+  assert.match(busyArc, /border-top-color:\s*var\(--dsw-static-neutral-bluish-00\)/)
+})
+
+test('统一等待页：品牌标记依次亮起 + 进度条，且尊重"减少动态效果"', () => {
+  // 用户 2026-09-22 口径：「需要一个统一的 loading 页面…这个注意有个好看的 svg」。
+  // 那条 svg 就是品牌标记本身 —— 四个色块按顺序呼吸，不再额外引入图形资产。
+  const rule = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hit = new RegExp(`${escaped}(?:\\s*,\\s*[^{}]*)?\\s*\\{([^}]*)\\}`).exec(WORKBENCH_STYLE_TEXT)
+    assert.ok(hit !== null, `样式里找不到 ${selector} 规则`)
+    return hit[1]
+  }
+  assert.match(rule('.crwu-audit-loading-pane'), /display:\s*flex/)
+  assert.match(rule('.crwu-audit-loading-title'), /font-size:/)
+  assert.match(rule('.crwu-audit-loading-hint'), /max-width:/, '说明文案要限宽，别横贯整页')
+  // 品牌标记：整体呼吸 + 每个色块按顺序亮起（四个延迟必须互不相同，否则四个块一起闪，看不出"依次"）。
+  assert.match(rule('.crwu-audit-loading-mark'), /animation:\s*crwu-audit-breathe/)
+  assert.match(rule('.crwu-audit-loading-mark svg polygon'), /animation:\s*crwu-audit-brand-wave/)
+  const delays = new Set([2, 3, 4].map((n) => {
+    const hit = rule(`.crwu-audit-loading-mark svg polygon:nth-child(${String(n)})`)
+    return /animation-delay:\s*([0-9.]+s)/.exec(hit)?.[1] ?? ''
+  }))
+  assert.equal(delays.size, 3, '三个后置色块的延迟要各不相同')
+  assert.equal([...delays].includes(''), false)
+  assert.match(WORKBENCH_STYLE_TEXT, /@keyframes crwu-audit-brand-wave/)
+  assert.match(WORKBENCH_STYLE_TEXT, /@keyframes crwu-audit-breathe/)
+  // 进度条限宽（等待页里它是一条"心跳"，不该横贯整个正文）。
+  assert.match(rule('.crwu-audit-loading-pane .crwu-audit-load-bar'), /width:/)
+  // 系统开了"减少动态效果"就关掉动画：会动的东西必须让路。
+  assert.match(WORKBENCH_STYLE_TEXT, /@media \(prefers-reduced-motion: reduce\)/)
+  const reduced = WORKBENCH_STYLE_TEXT.slice(WORKBENCH_STYLE_TEXT.indexOf('@media (prefers-reduced-motion: reduce)'))
+  assert.match(reduced, /\.crwu-audit-loading-mark svg polygon/)
+  assert.match(reduced, /animation:\s*none/)
 })
 
 test('the stylesheet uses DSH theme tokens and no hard-coded colors', () => {
@@ -371,16 +654,76 @@ async function mount(services = fakeServices()) {
   return { tree: rerender(WorkbenchPanel, { services }), instance: rendered.instance }
 }
 
-test('before the Host answers the shell shows the top-right lamp and the self-check loading copy', () => {
-  // 环境自检的入口是右上角那颗指示灯（不是页内标签页），所以标题必须一直在，
+test('头部右侧永远是那句问候：姓名来自自检结果，拿不到就整句不展示', async () => {
+  const { zhCN: copy } = await import(new URL('src/client/locales/zh-CN.ts', ROOT).href)
+  const { createEnvStatusStore } = await import(new URL('src/client/features/environment/status.ts', ROOT).href)
+  // 姓名跟着**环境自检**一起回来（`env.me`），不再单独发一次请求 —— 用户口径：
+  // 「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调」。
+  const ops = stubOps({
+    boot: { body: { ok: true } },
+    env: { body: okEnvBody({ me: { name: '杨凡宾', org: '中瑞世联资产评估集团有限公司', userId: '1' } }) },
+  })
+  const services = fakeServices()
+  const envStatus = createEnvStatusStore()
+  await envStatus.refresh()
+  const { tree } = render(WorkbenchPanel, { services, envStatus })
+  const header = find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.header))
+  const headerText = textOf(header)
+  // 分档取的是本地时钟，所以断言"是某一档问候 + 逗号 + 姓名"，而不是钉死某一个时段。
+  const greeting = headerText.match(/(凌晨好|早上好|上午好|中午好|下午好|晚上好)，([^\s]+)/)
+  assert.ok(greeting, `头部要有「某档问候，姓名」，实际是 ${JSON.stringify(headerText)}`)
+  assert.equal(greeting[2], '杨凡宾', '姓名必须来自自检结果里的 me.name')
+  // 只发过一次自检，没有额外的 whoami 请求。
+  assert.deepEqual(ops.filter((op) => op === 'env').length, 1)
+  // 头部**不再**出现模块名（用户 2026-09-22 要求去掉：在哪一页由侧栏那张卡的高亮说了算）。
+  for (const label of [copy.moduleEval, copy.moduleAudit, copy.moduleEnv]) {
+    assert.equal(headerText.includes(label), false, `头部不该再出现「${label}」`)
+  }
+
+  // 钉钉 CLI 没有登录信息 / 没授权：`me.name` 是空串 → **整句都不展示**（连问候语也不留）。
+  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  const blankStatus = createEnvStatusStore()
+  await blankStatus.refresh()
+  const empty = render(WorkbenchPanel, { services, envStatus: blankStatus })
+  const emptyHeader = textOf(find(empty.tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.header)))
+  assert.equal(
+    /(凌晨好|早上好|上午好|中午好|下午好|晚上好)/.test(emptyHeader),
+    false,
+    `拿不到姓名时什么也不展示，实际是 ${JSON.stringify(emptyHeader)}`,
+  )
+  assert.equal(
+    find(empty.tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.greeting)),
+    null,
+  )
+})
+
+test('before the Host answers the shell shows the title and the self-check loading copy', () => {
+  // 三个模块的入口搬到了左侧栏那张分组卡上，面板里**不再有自己的模块条**；
   // 而「待审核报告」在自检出结论之前不该出现 —— 没通过就不能进报告审核。
   stubOps({})
   const { tree } = render(WorkbenchPanel, { services: fakeServices() })
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.title), true)
-  assert.equal(text.includes(zhCN.tabEnv), true, '右上角要有环境自检入口')
+  // 头部**不再**显示当前模块名（用户 2026-09-22 要求去掉）：在哪一页由侧栏那张卡的高亮说了算，
+  // 头部右侧那一格留给问候语。这里只查头部，正文里出现模块名是另一回事。
+  const headerText = textOf(find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.header)))
+  for (const label of [zhCN.moduleEnv, zhCN.moduleAudit, zhCN.moduleEval]) {
+    assert.equal(headerText.includes(label), false, `头部不该再出现「${label}」`)
+  }
+  // 还没出结论 → 整块正文是那一页统一等待页（有文案、有品牌标记、有进度条）。
+  const pane = find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.loadingPane))
+  assert.ok(pane, '自检期间正文要是统一等待页')
+  assert.equal(text.includes(zhCN.loadingEnv), true)
+  assert.equal(text.includes(zhCN.loadingHint), true)
+  assert.equal(find(pane, (node) => node.type === 'svg' && node.props.children.length === 4) !== null, true, '等待页要有品牌标记')
+  assert.ok(find(pane, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.loadBar)))
   assert.equal(text.includes(zhCN.tabPending), false, '自检没出结论前不给进报告审核')
   assert.equal(text.includes(zhCN.tabResults), false)
+  assert.equal(
+    find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.module)),
+    null,
+    '面板里不该再有模块条（入口只剩侧栏那一处）',
+  )
 })
 
 test('before the environment answers the shell shows the self-check loading copy', () => {
@@ -1502,6 +1845,8 @@ function okEnvBody(patch = {}) {
       path: '/Users/x/.ossutilconfig', exists: true, endpoint: 'oss-cn-x.aliyuncs.com',
       accessKeyIdMasked: 'AKID****7890', hasSecret: true, hasSts: false, language: 'CH',
     },
+    // 「我是谁」跟着自检一起回来；默认空姓名 = 头部那句问候整句不展示。
+    me: { name: '', org: '', userId: '' },
     ...patch,
   }
 }
@@ -1530,11 +1875,12 @@ async function flushEffects(instance) {
  * 自动跳转必须在第二轮显式跑一遍；真实 React 里它由依赖变化自己触发。
  */
 async function mountChecked(services = fakeServices()) {
-  const rendered = render(WorkbenchPanel, { services })
+  const modules = createModuleStore()
+  const rendered = render(WorkbenchPanel, { services, modules })
   await flushEffects(rendered.instance)
-  rerender(WorkbenchPanel, { services })
+  rerender(WorkbenchPanel, { services, modules })
   await flushEffects(rendered.instance)
-  return { tree: rerender(WorkbenchPanel, { services }), instance: rendered.instance }
+  return { tree: rerender(WorkbenchPanel, { services, modules }), instance: rendered.instance, modules }
 }
 
 test('a passing self-check goes straight into the report page', async () => {
@@ -1546,26 +1892,56 @@ test('a passing self-check goes straight into the report page', async () => {
   assert.equal(text.includes(zhCN.enterReport), false, '已经进来了就不该还停在环境自检页')
 })
 
-test('标题旁显示当前运行的宿主版本（悬停看构建时间）', async () => {
-  // 用户要求：面板标题旁要有「现在跑的是哪一版」，报问题时先看这个号。
-  // 客户端刷新就换新、宿主只有重启才换，所以这个号是判断「我到底在跑哪一版」的唯一凭据。
+test('标题旁的小标签：装好的包显示具体版本（悬停看形态与构建时间）', async () => {
+  // 用户要求：标题旁要有「现在跑的是哪一版」，报问题时先看这个号。
+  // 客户端刷新就换新、宿主只有重启才换，所以这枚标签是判断「我到底在跑哪一版」的唯一凭据。
   stubOps({
-    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, rev: 'pkg-9.9.9', builtAt: '2026-09-20T10:00:00.000Z' } },
+    boot: {
+      body: {
+        ok: true, protocol: WORKBENCH_PROTOCOL, rev: 'pkg-9.9.9', version: '9.9.9',
+        buildKind: 'installed', builtAt: '2026-09-20T10:00:00.000Z',
+      },
+    },
     env: { body: okEnvBody() },
   })
   const { tree } = await mountChecked()
-  const chip = find(tree, (node) => node.props?.className === WORKBENCH_CLASSES.version)
-  assert.ok(chip, '标题旁要有版本徽章')
-  assert.equal(textOf(chip), 'pkg-9.9.9', '要显示宿主给的 rev 原文')
+  const chip = find(tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
+  assert.ok(chip, '标题旁要有版本标签')
+  assert.equal(textOf(chip), 'v9.9.9', '装好的包显示具体版本（不是 pkg- 前缀的 rev）')
+  assert.equal(chip.props.className.includes(WORKBENCH_CLASSES.versionInstalled), true)
+  assert.match(String(chip.props.title), /已安装的插件包 v9\.9\.9/)
   assert.match(String(chip.props.title), /2026-09-20T10:00:00\.000Z/, '悬停要看得到构建时间（同版本两次 build 只能靠它区分）')
 })
 
-test('旧宿主不报版本时显示「版本未知」，而不是留空', async () => {
+test('dev 形态在标题旁标 dev（琥珀色），而不是假装成某个版本', async () => {
+  stubOps({
+    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'dev' } },
+    env: { body: okEnvBody() },
+  })
+  const { tree } = await mountChecked()
+  const chip = find(tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
+  assert.equal(textOf(chip), 'dev')
+  assert.equal(chip.props.className.includes(WORKBENCH_CLASSES.versionDev), true)
+  assert.match(String(chip.props.title), /本地源码检出/)
+})
+
+test('旧宿主不报版本时退回 rev，仍有标签而不是留空', async () => {
+  stubOps({ boot: { body: { ok: true, rev: 'pkg-1.2.3' } }, env: { body: okEnvBody() } })
+  const { tree } = await mountChecked()
+  const chip = find(tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
+  assert.ok(chip, '旧宿主也要有标签（否则用户以为界面坏了）')
+  assert.equal(textOf(chip), 'v1.2.3')
+})
+
+test('旧宿主什么都不报时显示「未知」，而不是空标签', async () => {
   stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
   const { tree } = await mountChecked()
-  const chip = find(tree, (node) => node.props?.className === WORKBENCH_CLASSES.version)
-  assert.ok(chip, '旧宿主也要有徽章（否则用户以为界面坏了）')
-  assert.equal(textOf(chip), zhCN.versionUnknown)
+  const chip = find(tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
+  assert.equal(textOf(chip), zhCN.buildTagUnknown)
 })
 
 test('a failing self-check blocks the report page behind a loading state', async () => {
@@ -1589,13 +1965,14 @@ test('a failing self-check blocks the report page behind a loading state', async
 })
 
 test('after the environment is fixed the blocked entry lets the user through', async () => {
-  // 前两次自检（挂载时两轮 effect）不通过，用户修好之后再点一次应当放行。
+  // 挂载时那次自检不通过（面板现在**只在还没有结论时**补跑一次，见 WorkbenchPanel 的挂载 effect），
+  // 用户修好之后再点「进入报告审核」应当现场重检并放行。
   let calls = 0
   stubOps({
     boot: { body: { ok: true } },
     env: () => {
       calls += 1
-      return { body: calls <= 2 ? blockedEnvBody() : okEnvBody() }
+      return { body: calls <= 1 ? blockedEnvBody() : okEnvBody() }
     },
   })
   const services = fakeServices()
@@ -1606,6 +1983,32 @@ test('after the environment is fixed the blocked entry lets the user through', a
   for (let i = 0; i < 6; i += 1) await settle()
   const after = rerender(WorkbenchPanel, { services })
   assert.equal(textOf(after).includes(zhCN.tabPending), true, '修好后再点一次就直接进报告审核')
+})
+
+test('自检只跑一次：面板重新挂载不重跑，显式重检仍然要跑', async () => {
+  // 用户口径（2026-09-22）：「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调，
+  // 本质就是从环境信息把这个人的信息拿到」。面板会被关掉再打开（切会话、切模块），
+  // 而一次自检要探二进制、问氚云与钉钉、列一次 OSS —— 所以重新挂载必须复用已有结论。
+  const { createEnvStatusStore } = await import(new URL('src/client/features/environment/status.ts', ROOT).href)
+  let calls = 0
+  stubOps({ boot: { body: { ok: true } }, env: () => { calls += 1; return { body: okEnvBody() } } })
+  const services = fakeServices()
+  const envStatus = createEnvStatusStore()
+
+  const first = render(WorkbenchPanel, { services, envStatus })
+  for (const effect of first.instance.effects) await effect.callback()
+  await settle()
+  assert.equal(calls, 1, '首次挂载跑一次自检')
+
+  // 关掉面板再打开 = 组件重新挂载，但 store 还是那一份（apply() 创建、随 props 下发）。
+  const second = render(WorkbenchPanel, { services, envStatus })
+  for (const effect of second.instance.effects) await effect.callback()
+  await settle()
+  assert.equal(calls, 1, '重新挂载不许再跑一次自检')
+
+  // 页面上的「重新自检」按钮、登录成功后的刷新都直接调 store.refresh()，那条路必须仍然能真跑。
+  await envStatus.refresh()
+  assert.equal(calls, 2, '显式重检必须真的再跑一次')
 })
 
 test('the environment store shares one in-flight self-check and keeps the last good result', async () => {
@@ -1629,34 +2032,130 @@ test('the environment store shares one in-flight self-check and keeps the last g
   assert.match(store.get().error, /offline/)
 })
 
-test('the lamp is red on failure, green on success, and its tooltip names the blockers', async () => {
+test('the sidebar entry mark is a red dot when the env fails and a green check when it passes', async () => {
   const { createEnvStatusStore } = await import(new URL('src/client/features/environment/status.ts', ROOT).href)
-  const { EnvironmentStatusIcon } = await import(
-    new URL('src/client/features/environment/EnvironmentStatusIcon.tsx', ROOT).href
+  const { WorkbenchSidebarEntry } = await import(
+    new URL('src/client/features/workbench/WorkbenchSidebarEntry.tsx', ROOT).href
   )
   const store = createEnvStatusStore()
   stubOps({ env: { body: blockedEnvBody() } })
   await store.refresh()
 
-  let selected = ''
-  const { tree } = render(EnvironmentStatusIcon, { store, compact: true, selectPanel: (panel) => { selected = panel } })
-  const dot = find(tree, (node) => typeof node.props?.className === 'string'
-    && node.props.className.includes(`${WORKBENCH_CLASSES.dot}-`))
-  assert.ok(dot, '右上角那颗灯必须真的画出来')
-  assert.equal(dot.props.className.includes(WORKBENCH_CLASSES.dotBad), true, '不通过要亮红灯')
-  assert.equal(textOf(tree), '', 'compact 模式只画灯（会话头位置窄）')
-  assert.equal(tree.props.title.includes(zhCN.envLampBad), true)
-  assert.equal(tree.props.title.includes('运行平台未识别'), true, '悬停就要说清还差什么')
-  tree.props.onClick()
-  assert.equal(selected, 'crwu-workbench', '点它要能把工作台面板叫出来')
+  let opened = 0
+  const build = fakeBuildStore()
+  const modules = createModuleStore()
+  const { tree } = render(WorkbenchSidebarEntry, {
+    store, build, modules, wide: true, onOpen: () => { opened += 1 },
+  })
+  const marks = findAll(tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.split(/\s+/).includes(WORKBENCH_CLASSES.sideEntryMark))
+  assert.equal(marks.length, 1, '整张卡上只有一枚环境标记（其余子项右侧留空）')
+  const mark = marks[0]
+  const envRow = find(tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleEnvMarkBad)
+  assert.ok(find(envRow, (node) => node === mark), '那枚标记必须长在「环境信息」那一行里')
+  assert.equal(mark.props.className.includes(WORKBENCH_CLASSES.sideEntryMarkBad), true, '不通过要亮红灯')
+  assert.equal(mark.props.children.type, 'svg', '不通过画的是白叹号（圆底由 CSS 画）')
+  assert.equal(mark.props.children.props.strokeWidth, 3, '实心圆里的字形要加粗，1.6px 会糊成灰边')
+  assert.equal(tree.props.title.includes(zhCN.moduleEnvMarkBad), true)
+  // 卡头不可点（它是纯标题），所以「打开面板」只能靠子项 —— 点当前子项也算一次重新进入。
+  const head = find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.sideCardHead))
+  assert.equal(head.props.onClick, undefined)
+  assert.equal(opened, 0, '渲染本身不该打开任何东西')
+  const auditRow = find(tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleAudit)
+  auditRow.props.onClick()
+  assert.equal(opened, 1, '点子项要能打开面板')
+  assert.equal(modules.get().active, 'audit', '点子项必须真的把模块切过去（侧栏与面板同一份状态）')
+  // 再点一次同一个子项：仍然要打开面板（用户从别的页面回到工作台就靠这一下）。
+  const auditRowAgain = find(tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleAudit)
+  auditRowAgain.props.onClick()
+  assert.equal(opened, 2, '点当前子项也要把面板叫出来')
 
-  // 换成通过的结果：同一颗灯变绿。
+  // 换成通过的结果：同一枚标记变成绿勾（用户要的就是「通过就在后面打个绿色的 check」）。
   stubOps({ env: { body: okEnvBody() } })
   await store.refresh()
-  const green = render(EnvironmentStatusIcon, { store, compact: true })
-  const greenDot = find(green.tree, (node) => typeof node.props?.className === 'string'
-    && node.props.className.includes(`${WORKBENCH_CLASSES.dot}-`))
-  assert.equal(greenDot.props.className.includes(WORKBENCH_CLASSES.dotOk), true)
+  const green = render(WorkbenchSidebarEntry, { store, build, modules, wide: true, onOpen: () => {} })
+  const greenMarks = findAll(green.tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.split(/\s+/).includes(WORKBENCH_CLASSES.sideEntryMark))
+  assert.equal(greenMarks.length, 1, '通过之后仍然只有环境那一行带标记')
+  assert.equal(greenMarks[0].props.className.includes(WORKBENCH_CLASSES.sideEntryMarkOk), true)
+  assert.equal(greenMarks[0].props.children.type, 'svg', '通过画的是白勾（圆底由 CSS 画）')
+  assert.equal(greenMarks[0].props.children.props.strokeWidth, 3)
+  assert.equal(green.tree.props.title.includes(zhCN.moduleEnvMarkOk), true)
+  // 尚未自检 / 自检中都不画字形：前者是空心圈（不给结论），后者是 CSS 里那段旋转白弧。
+  stubOps({ env: { body: blockedEnvBody() } })
+  const busyStore = createEnvStatusStore()
+  let resolveEnv = null
+  globalThis.fetch = () => new Promise((done) => { resolveEnv = done })
+  const pendingRefresh = busyStore.refresh()
+  const busy = render(WorkbenchSidebarEntry, { store: busyStore, build, modules, wide: true, onOpen: () => {} })
+  const busyMark = find(busy.tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.split(/\s+/).includes(WORKBENCH_CLASSES.sideEntryMark))
+  assert.equal(busyMark.props.className.includes(WORKBENCH_CLASSES.sideEntryMarkBusy), true, '自检中亮琥珀')
+  assert.equal(busyMark.props.children, null, '自检中不画字形（旋转弧在 CSS 的 ::after 上）')
+  resolveEnv({ ok: true, status: 200, async json() { return okEnvBody() } })
+  await pendingRefresh
+  stubOps({})
+  // 全新实例、没自检过 = idle：空心圈，不画字形。
+  const idle = render(WorkbenchSidebarEntry, {
+    store: createEnvStatusStore(), build, modules, wide: true, onOpen: () => {},
+  })
+  const idleMark = find(idle.tree, (node) => typeof node.props?.className === 'string'
+    && node.props.className.split(/\s+/).includes(WORKBENCH_CLASSES.sideEntryMark))
+  assert.equal(idleMark.props.className.includes(WORKBENCH_CLASSES.sideEntryMarkIdle), true)
+  assert.equal(idleMark.props.children, null, '尚未自检是空心圈，不画字形')
+  // 选中的入口要有选中态。卡用**卡自己的**类（只压实描边），不用导航项那套底色 ——
+  // 整块换底色在侧栏里就是一块突兀的色块（用户说「背景色不好看」）。
+  const on = render(WorkbenchSidebarEntry, {
+    store, build, modules, wide: true, onOpen: () => {}, usePanelInfo: () => true,
+  })
+  assert.equal(on.tree.props.className.includes(WORKBENCH_CLASSES.sideCardOn), true)
+  assert.equal(
+    on.tree.props.className.includes(WORKBENCH_CLASSES.sideEntryOn),
+    false,
+    '展开态的卡不该套用侧栏导航项的选中底色',
+  )
+  // 面板正开着 → 当前那一页才是选中行。
+  assert.ok(
+    find(on.tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.moduleOn)),
+    '面板开着时当前模块那一行要选中',
+  )
+})
+
+test('工作台面板切走之后不许再高亮：选中态只属于"面板正开着"', async () => {
+  // 用户 2026-09-22 报的 bug：在左侧栏点开自己的会话之后，工作台那张卡里上一次那个子项
+  // 还亮着 —— 看起来像工作台还在前台。所以选中态必须**同时**满足：面板是当前主面板 + 是当前模块。
+  const { createEnvStatusStore } = await import(new URL('src/client/features/environment/status.ts', ROOT).href)
+  const { WorkbenchSidebarEntry } = await import(
+    new URL('src/client/features/workbench/WorkbenchSidebarEntry.tsx', ROOT).href
+  )
+  stubOps({ env: { body: okEnvBody() } })
+  const store = createEnvStatusStore()
+  await store.refresh()
+  const modules = createModuleStore()
+  const build = fakeBuildStore()
+  const className = (node) => String(node.props?.className ?? '').split(/\s+/)
+  const rows = (tree) => findAll(tree, (node) => node.type === 'button' && className(node).includes(WORKBENCH_CLASSES.module))
+
+  modules.select('audit')
+  // 面板切到别处（选中会话）：整张卡不选中，三行也不许有一行是选中态。
+  const away = render(WorkbenchSidebarEntry, {
+    store, build, modules, wide: true, onOpen: () => {}, usePanelInfo: () => false,
+  })
+  assert.equal(away.tree.props.className.includes(WORKBENCH_CLASSES.sideCardOn), false, '面板切走就不该是选中态')
+  for (const [index, row] of rows(away.tree).entries()) {
+    assert.equal(
+      className(row).includes(WORKBENCH_CLASSES.moduleOn),
+      false,
+      `面板切走后第 ${String(index + 1)} 行不许还是选中态`,
+    )
+    assert.equal(row.props['aria-pressed'], false)
+  }
+  // 回到工作台：记忆还在（还是报告审核那一页），而且重新亮起来。
+  const back = render(WorkbenchSidebarEntry, {
+    store, build, modules, wide: true, onOpen: () => {}, usePanelInfo: () => true,
+  })
+  assert.equal(back.tree.props.className.includes(WORKBENCH_CLASSES.sideCardOn), true)
+  assert.equal(className(rows(back.tree)[1]).includes(WORKBENCH_CLASSES.moduleOn), true, '回到工作台要回到原来那一页')
 })
 
 test('envLampOf and envTally derive the light and the pass rate from the snapshot', async () => {
@@ -1783,18 +2282,42 @@ test('a blocked self-check lists the blockers and still offers the install promp
   assert.equal(text.includes(zhCN.promptTitle), true, '不通过时最需要安装提示词')
 })
 
-test('the lamp in the panel header switches back to the self-check page', async () => {
+test('侧栏分组卡上的子项就是模块切换：报告审核 ⇄ 环境信息', async () => {
   stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
   const services = fakeServices()
-  const { tree } = await mountChecked(services)
+  const { tree, modules } = await mountChecked(services)
   assert.equal(textOf(tree).includes(zhCN.tabPending), true, '通过之后面板停在报告审核页')
 
-  const lamp = find(tree, (node) => node.type === 'button' && node.props?.['aria-label'] === zhCN.envLampLabel)
-  assert.ok(lamp, '面板头部要有环境指示灯')
-  lamp.props.onClick()
-  const after = rerender(WorkbenchPanel, { services })
-  assert.equal(textOf(after).includes(zhCN.envLayerTools), true, '点灯要能回到环境自检页')
+  // 侧栏子项点下去写的就是这个 store（那条断言在上面的侧栏卡测试里），
+  // 这里验另一半：store 一改，面板就停在对应的那一页。
+  modules.select('env')
+  const after = rerender(WorkbenchPanel, { services, modules })
+  assert.equal(textOf(after).includes(zhCN.envLayerTools), true, '切到环境信息要看到四层')
   assert.equal(textOf(after).includes(zhCN.tabPending), false)
+
+  // 再切回报告审核：双向的，不是一次性跳转。
+  modules.select('audit')
+  const back = rerender(WorkbenchPanel, { services, modules })
+  assert.equal(textOf(back).includes(zhCN.tabPending), true)
+})
+
+test('报告评估 是占位模块：整页只写「开发中」', async () => {
+  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  const services = fakeServices()
+  const { modules } = await mountChecked(services)
+
+  // 入口在侧栏分组卡上（那里是一枚「开发中」小图标，见侧栏卡那条测试）；这里只验面板这一页。
+  modules.select('eval')
+  const after = rerender(WorkbenchPanel, { services, modules })
+  const placeholder = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.placeholder))
+  assert.ok(placeholder, '占位页的容器要在')
+  // 用户口径：「该页面整体写一个开发中就可以了」—— 先前那些说明与计划事项都不该再出现。
+  assert.equal(textOf(placeholder).trim(), zhCN.moduleDevTag)
+  assert.equal(find(placeholder, (node) => node.type === 'ul'), null, '不要再列计划事项')
+  // 占位页不画报告列表、也不画环境四层：它是第三种状态，别让人误会。
+  const text = textOf(after)
+  assert.equal(text.includes(zhCN.tabPending), false)
+  assert.equal(text.includes(zhCN.envLayerTools), false)
 })
 
 // ── 加载态与右侧抽屉（审核信息）─────────────────────────────────────────────

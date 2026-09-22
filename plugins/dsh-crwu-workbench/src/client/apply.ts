@@ -3,11 +3,12 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import { PanelIcon, type PanelIconProps } from './components/PanelIcon.tsx'
 import { AuditParentButton } from './features/workbench/AuditParentButton.tsx'
 import { RunCardAction } from './features/workbench/RunCardAction.tsx'
 import { WorkbenchPanel } from './features/workbench/WorkbenchPanel.tsx'
-import { EnvironmentStatusIcon } from './features/environment/EnvironmentStatusIcon.tsx'
+import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './features/workbench/WorkbenchSidebarEntry.tsx'
+import { createBuildStore } from './features/workbench/build-store.ts'
+import { createModuleStore } from './features/workbench/module-store.ts'
 import { createEnvStatusStore } from './features/environment/status.ts'
 import { readClientServices } from './features/workbench/services.ts'
 import { installWorkbenchStyles } from './features/workbench/styles.ts'
@@ -30,9 +31,18 @@ import { zhCN } from './locales/zh-CN.ts'
  *
  * 样式不同：它是插件自己往 `document.head` 插的元素，必须由 `effect` 负责移除。
  *
- * 同一个槽位注册多个条目时，`inject` 的回调返回**解除函数数组**（`inject` 的签名显式支持
- * `Iterable<() => void>`，它会按逆序释放）—— 会话头那个槽位就同时挂了环境指示灯与
- * 「子会话父级」按钮。
+ * ## 入口位置（2026-09-22 用户当面确认的口径）
+ *
+ * 工作台**常驻在左侧栏底部、Settings 上方**（`sidebar.footer.action`），工作区（会话列表）
+ * 留在它上方。原来的两处入口都撤掉了：
+ *
+ * - `sidebar.panellist`（侧栏顶部的图标入口）—— 与底部入口重复，且顶部那排是全局面板导航，
+ *   工作台不是「另一个全局页」而是常驻工具；
+ * - `conversation.session.header.utilities` 里的环境指示灯 —— 环境结论已经由底部入口右侧
+ *   那枚标记（通过 = 绿勾）常驻表达，再在会话头挂一颗就是同一件事说两遍。
+ *
+ * 会话头里**保留**「登记为子会话父级」按钮：它是发起审核的必要条件（只有它能把手上的会话 id
+ * 交给我们），和入口位置无关。
  */
 export function apply(ctx: ClientContext): void {
   // 样式元素是插件自己的副作用，寿命必须由 effect 管。
@@ -41,27 +51,48 @@ export function apply(ctx: ClientContext): void {
   // 浏览器侧的可选服务（目录选择器 / 工作空间注册表）：在 apply 里读一次、随 props 传下去，
   // 不放在模块顶层（那是「与插件实例相关的可变状态」，仓规不允许）。
   const services = readClientServices(ctx)
-  // 环境状态 store 同理：会话头的指示灯与面板必须看到**同一份**自检结论，所以在这里创建、
+  // 环境状态 store 同理：侧栏底部入口与面板必须看到**同一份**自检结论，所以在这里创建、
   // 由 props 下发；模块级单例会在插件卸载后残留。
   const envStatus = createEnvStatusStore()
+  // 「现在跑的是哪一份插件」（dev / 装好的包 + 版本）同理：侧栏入口与面板头部必须显示同一枚标签，
+  // 也共用一个 store —— 各自 `boot()` 会同时打两次请求，还会出现「标签是新的、门禁说旧的」这种画面。
+  const buildStore = createBuildStore()
+  // 模块状态（报告评估 / 报告审核 / 环境信息）同理必须**只有一份**：侧栏那张分组卡上
+  // 的三个子项与面板里的三页是同一件事，各存一份就会出现「侧栏高亮报告审核、面板显示环境信息」。
+  const modules = createModuleStore()
 
-  // 侧栏入口：`label` 给字符串即可 —— 侧栏读的是 options.label，
-  // 且 resolveSlotLabel 对字符串原样返回（对函数才调用）。
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register(
-    { name: 'sidebar.panellist', id: 'crwu-workbench', order: 20, label: zhCN.sidebarLabel },
-    (props: PanelIconProps) => React.createElement(PanelIcon, props),
+  // 打开工作台面板。`services.layout` **在点击时现读**，不在 apply() 里快照：客户端服务的
+  // 注册有先后，我们的插件可能比提供 layout 的插件先激活 —— 快照下来就是「永远拿不到
+  // selectPanel」，表现为「点了跳转没反应」（`sessions` 就是这么丢过一次的）。
+  const openPanel = (): void => {
+    const target = services.layout
+    if (target?.selectPanel !== undefined) target.selectPanel(WORKBENCH_PANEL_KEY)
+  }
+
+  // 侧栏底部入口（Settings 行上方）。`wide` 与标准席位 hook `usePanelInfo` 由侧栏席位注入；
+  // store 与跳转动作由这里闭包下发 —— 入口自己不认识 cordis。
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
+    { name: 'sidebar.footer.action', id: 'crwu-workbench', order: 20, label: zhCN.sidebarLabel },
+    (props: { wide?: boolean; usePanelInfo?: (sel: (info: { activePanelId: string | null }) => boolean) => boolean }) => {
+      return React.createElement(WorkbenchSidebarEntry, {
+        store: envStatus,
+        build: buildStore,
+        modules,
+        wide: props.wide !== false,
+        ...(props.usePanelInfo === undefined ? {} : { usePanelInfo: props.usePanelInfo }),
+        // 点卡头 = 打开面板（回到当前子项）；点子项 = 切模块 + 打开面板，两件事一起做
+        // （切换动作在入口内部完成：它自己就是那个 store 的读者，不需要外面再接一手）。
+        onOpen: openPanel,
+      })
+    },
   ))
 
   ctx.slots.inject('main', () => ctx.slots.register(
-    { name: 'main', key: 'crwu-workbench' },
-    () => React.createElement(WorkbenchPanel, { services, envStatus }),
+    { name: 'main', key: WORKBENCH_PANEL_KEY },
+    () => React.createElement(WorkbenchPanel, { services, envStatus, build: buildStore, modules }),
   ))
 
   // Cordis 运行卡片里的动作区：顺带登记父级 + 跳转到面板。
-  //
-  // `services.layout` **在渲染时现读**，不在 apply() 里快照：客户端服务的注册有先后，
-  // 我们的插件可能比提供 layout 的插件先激活 —— 快照下来就是「永远拿不到 selectPanel」，
-  // 表现为「点了跳转没反应」（`sessions` 就是这么丢过一次的）。
   ctx.slots.inject('tool.view.cordis', () => ctx.slots.register(
     { name: 'tool.view.cordis', key: 'self' },
     (props: { sessionId?: string }) => {
@@ -73,26 +104,11 @@ export function apply(ctx: ClientContext): void {
     },
   ))
 
-  // 页面右上角：环境自检指示灯（绿=通过 / 红=不通过 / 黄=自检中）。
-  // 它和会话头按钮挤在同一个 list 槽位里，所以两条注册由**一次 inject** 返回的解除函数数组
-  // 一起管理 —— 顺序上 order 6 排在 order 5 的「子会话父级」右侧，正好落在最右边。
-  ctx.slots.inject('conversation.session.header.utilities', () => [
-    ctx.slots.register(
-      { name: 'conversation.session.header.utilities', id: 'crwu-env-status', order: 6, label: zhCN.envLampLabel },
-      () => {
-        const layout = services.layout
-        return React.createElement(EnvironmentStatusIcon, {
-          store: envStatus,
-          compact: true,
-          ...(layout?.selectPanel === undefined ? {} : { selectPanel: layout.selectPanel.bind(layout) }),
-        })
-      },
-    ),
-    // **会话头按钮是发起审核的必要条件**：只有它能把当前会话 id 交给我们，而
-    // `audit-start` 要求父级已登记。少了这个注册，界面上没有任何办法开始审核。
-    ctx.slots.register(
-      { name: 'conversation.session.header.utilities', id: 'crwu-audit-parent', order: 5, label: zhCN.bindParent },
-      (props: { sessionId?: string }) => React.createElement(AuditParentButton, props),
-    ),
-  ])
+  // 会话头：**只留**「登记为子会话父级」按钮。
+  // 它是发起审核的必要条件 —— 只有它能把当前会话 id 交给我们，而 `audit-start` 要求父级已登记。
+  // 少了这个注册，界面上没有任何办法开始审核。
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
+    { name: 'conversation.session.header.utilities', id: 'crwu-audit-parent', order: 5, label: zhCN.bindParent },
+    (props: { sessionId?: string }) => React.createElement(AuditParentButton, props),
+  ))
 }
