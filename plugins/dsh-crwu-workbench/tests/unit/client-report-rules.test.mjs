@@ -21,6 +21,8 @@ const {
   childIsLive,
   startLabel,
   deriveRowView,
+  primaryActionOf,
+  menuActionsOf,
   formatTime,
   resultItems,
   buildRows,
@@ -49,8 +51,12 @@ function cloud(patch = {}) {
   return { seqNo: SEQ, files: [], htmlKey: `${SEQ}/审核意见.html`, jsonKey: `${SEQ}/审核结果.json`, ...patch }
 }
 
-const idsOf = (view) => view.buttons.map((button) => button.id)
-const button = (view, id) => view.buttons.find((entry) => entry.id === id)
+// 用户 2026-09-22 的操作列口径：主操作只留一个，其余动作进 ••• 菜单。
+// 这些回归用例关心的是"这个动作还在不在、要不要确认"，所以按**主位 + 菜单**合并查，
+// 位置变化由专门的结构用例盯着（见下面那条"操作列结构"用例）。
+const allActions = (view) => [primaryActionOf(view), ...menuActionsOf(view)].filter((entry) => entry !== null)
+const idsOf = (view) => allActions(view).map((button) => button.id)
+const button = (view, id) => allActions(view).find((entry) => entry.id === id)
 
 // ── 基础工具 ────────────────────────────────────────────────────────────────
 
@@ -110,14 +116,17 @@ test('a report never audited offers AI 审核, without confirmation', () => {
   assert.deepEqual(view.notes, [])
 })
 
-test('a report already audited in the cloud offers 重新审核 WITH confirmation', () => {
+test('已有线上报告：主位是查看报告，••• 里给带确认的重新审核', () => {
   // 否则用户会以为从来没审过。
   const view = deriveRowView(TASK, null, cloud(), GATING)
-  assert.equal(button(view, 'start').label, '重新审核')
-  assert.equal(button(view, 'start').confirm, true)
-  assert.equal(button(view, 'start').retry, true)
+  // 有线上报告 → 主位就是「查看报告」；「重新审核」在 ••• 里（不会随数据加载跳变）。
+  assert.equal(primaryActionOf(view).id, 'cloud-report')
+  assert.equal(button(view, 'restart').label, '重新审核')
+  assert.equal(button(view, 'restart').confirm, true)
+  assert.equal(button(view, 'restart').retry, true)
   assert.equal(button(view, 'cloud-report').label, '查看报告')
-  assert.equal(button(view, 'audit-info').label, '审核信息')
+  assert.equal(button(view, 'audit-info').label, '查看审核信息')
+  assert.equal(primaryActionOf(view).id, 'cloud-report', '主位只留一个：查看报告')
 })
 
 test('the cloud info entry needs both artifacts', () => {
@@ -146,15 +155,28 @@ test('creating a child shows 创建中… and disables every start button', () =
 test('a live child offers stop and NOT a restart', () => {
   // 破这条 = 同一份报告能跑两条子会话，它们往同一个案例目录对写。
   const view = deriveRowView(TASK, audit({ status: 'running', childAlive: true }), null, GATING)
-  assert.deepEqual(idsOf(view), ['stop', 'open-session'])
+  // 用户 2026-09-22 口径：正在审核时主位是「审核中」（不可点，避免重复触发），
+  // 停止进 ••• 菜单；「查看会话」已删（与小鲸鱼重复）。
+  assert.equal(primaryActionOf(view).id, 'progress')
+  assert.equal(primaryActionOf(view).disabled, true)
+  assert.deepEqual(menuActionsOf(view).map((entry) => entry.id), ['stop'])
   assert.equal(idsOf(view).includes('start'), false)
+  assert.equal(idsOf(view).includes('open-session'), false, '查看会话已删除')
 })
 
-test('a finished child offers restart and NOT a stop', () => {
+test('跑完的记录：主操作就是重新审核（菜单里不再重复一个），且没有停止', () => {
   const view = deriveRowView(TASK, audit({ status: 'idle', ended: true, childAlive: false }), null, GATING)
   assert.equal(idsOf(view).includes('stop'), false)
-  assert.equal(button(view, 'start').label, '重新审核')
-  assert.equal(button(view, 'start').confirm, true, '重新审核一律二次确认')
+  // 用户 2026-09-22 口径：有记录就是「重新审核」，不要再同时出现「AI 审核」。
+  assert.equal(primaryActionOf(view).label, '重新审核', '主位是重新审核')
+  assert.equal(primaryActionOf(view).confirm, true, '重新审核一律二次确认（会覆盖结果）')
+  assert.equal(menuActionsOf(view).some((entry) => entry.id === 'restart'), false, '菜单里不许重复')
+  // 启动类动作**全局只出现一次**（主位那个 start 的 label 已经是「重新审核」）。
+  assert.equal(
+    idsOf(view).filter((id) => id === 'start' || id === 'restart').length,
+    1,
+    '启动 / 重新审核只允许出现一个',
+  )
 })
 
 test('a child that is alive but not running still shows the stop button', () => {
@@ -162,7 +184,8 @@ test('a child that is alive but not running still shows the stop button', () => 
   const view = deriveRowView(TASK, audit({ status: 'idle', childAlive: true }), null, GATING)
   assert.equal(idsOf(view).includes('stop'), true)
   assert.equal(idsOf(view).includes('start'), false)
-  assert.deepEqual(view.badges.map((badge) => badge.text), ['未出结果', '会话仍存活'])
+  // 「未出结果 / 已出结果 / 已上云 / 第 N 次」这类状态噪音已从列表移除（进详情）。
+  assert.deepEqual(view.badges.map((badge) => badge.text), ['会话仍存活'])
 })
 
 test('a stopped or ended record never offers another stop', () => {
@@ -187,7 +210,7 @@ test('retry-upload appears only for a delivered result that is not uploaded yet'
 
   const uploaded = deriveRowView(TASK, audit({ status: 'done', ended: true, uploadedAt: '2026-09-20T03:00:00Z' }), null, GATING)
   assert.equal(idsOf(uploaded).includes('retry-upload'), false)
-  assert.deepEqual(uploaded.badges.map((badge) => badge.text).includes('已上云'), true)
+  assert.equal(uploaded.badges.map((badge) => badge.text).includes('已上云'), false, '已上云不再占列表')
 
   const running = deriveRowView(TASK, audit({ status: 'running', childAlive: true }), null, GATING)
   assert.equal(idsOf(running).includes('retry-upload'), false, '还没出结果就没有可重传的东西')
@@ -196,28 +219,30 @@ test('retry-upload appears only for a delivered result that is not uploaded yet'
 test('upload failure is surfaced as a badge and a note', () => {
   const view = deriveRowView(TASK, audit({ status: 'done', ended: true, uploadError: 'AccessDenied' }), null, GATING)
   assert.equal(view.badges.map((badge) => badge.text).includes('上云失败'), true)
-  assert.ok(view.notes.includes('AccessDenied'), '错误原文必须显示出来，否则用户不知道哪里错了')
+  // 错误原文不再挤在列表里（进 ••• → 查看审核信息），但"失败"这件事必须一眼看得见。
+  assert.equal(view.notes.includes('AccessDenied'), false, '错误原文进详情，不占列表')
 })
 
-test('a retry attempt is labelled with its attempt number', () => {
+test('重试次数与启动时间不再占列表（进详情）', () => {
   const view = deriveRowView(TASK, audit({ status: 'running', childAlive: true, attempt: 3 }), null, GATING)
-  assert.equal(view.badges.map((badge) => badge.text).includes('第 3 次'), true)
-  assert.match(view.notes[0], /^启动 \d{2}:\d{2}:\d{2}（第 3 次）$/)
+  assert.equal(view.badges.map((badge) => badge.text).includes('第 3 次'), false)
+  assert.equal(view.notes.some((note) => /^启动/.test(note)), false)
+  // 但数据本身仍在审核记录里（详情面板/审核信息从 AuditView 读，不从这一行读）。
+  assert.equal(view.key, rowKeyOf(TASK))
 })
 
-test('the stop reason is hidden while the audit is still running', () => {
-  // 运行中的记录可能带着上一次的残留原因，显示出来会误导。
+test('停止原因不再占列表（进详情）', () => {
+  // 状态说明不是操作：列表只留操作，原因/时间这类进 ••• → 查看审核信息。
   const running = deriveRowView(TASK, audit({ status: 'running', childAlive: true, stopReason: '旧原因' }), null, GATING)
   assert.equal(running.notes.some((note) => note.includes('旧原因')), false)
-
   const stopped = deriveRowView(TASK, audit({ status: 'stopped', stopped: true, stopReason: '已被用户手动停止' }), null, GATING)
-  assert.ok(stopped.notes.includes('已被用户手动停止'))
+  assert.equal(stopped.notes.some((note) => note.includes('已被用户手动停止')), false)
 })
 
 test('local HTML and session buttons follow the artifacts that exist', () => {
   const view = deriveRowView(TASK, audit({ status: 'idle', ended: true, htmlFile: '审核意见.html', childId: 'c9' }), null, GATING)
   assert.equal(idsOf(view).includes('open-html'), true)
-  assert.equal(idsOf(view).includes('open-session'), true)
+  assert.equal(idsOf(view).includes('open-session'), false, '查看会话已删除（与小鲸鱼重复）')
 
   const none = deriveRowView(TASK, audit({ status: 'idle', ended: true, htmlFile: '', childId: '' }), null, GATING)
   assert.equal(idsOf(none).includes('open-html'), false)
@@ -260,7 +285,10 @@ test('buildRows joins tasks with their audit record and cloud item', () => {
     GATING,
   )
   assert.equal(rows.length, 2)
-  assert.equal(rows[0].badges.some((badge) => badge.text === '已出结果'), true)
+  // 「已出结果」这类状态噪音已从列表移除：有线上报告时主位就是「查看报告」，
+  // 用户点得动它本身已经证明结果存在。
+  assert.equal(rows[0].badges.some((badge) => badge.text === '已出结果'), false)
+  assert.equal(primaryActionOf(rows[0]).id, 'cloud-report')
   assert.equal(rows[0].buttons.some((entry) => entry.id === 'audit-info'), false, '只有 HTML 时没有审核信息入口')
   // 第二条既没有记录也没有云端结果 → 只能发起。
   assert.deepEqual(idsOf(rows[1]), ['start'])

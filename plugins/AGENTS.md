@@ -1,198 +1,297 @@
-# 插件与插件内技能维护规范
+# DeepSeek Harness 插件与 Skill 开发规范
 
-## 适用范围与规则优先级
+本文件约束 `plugins/` 下的 DeepSeek Harness（DSH）插件源码、配置、打包、分发和插件内 Skill。
+先遵守仓库根目录 `AGENTS.md`，再遵守本文件；更深目录存在 `AGENTS.md` 时，以更具体的规则为准。
 
-- 本文件适用于 `plugins/` 下的插件配置、打包与分发，以及 `plugins/*/skills/`（插件专属技能）与 `plugins/common/skills/`（公共技能）下所有 Skill、reference、配套文档与测试的维护。技能部分重点约束 `crwu-audit-asset-*` 和 `crwu-audit-biz-*` 两类审核 Skill；`crwu-audit-business-*` 仅视为待迁移的遗留前缀。
-- 仓库根目录 `AGENTS.md` 的要求继续适用。本文件是 `plugins/` 范围内技能维护的补充规则；若将来某个更深子目录存在更具体的 `AGENTS.md`，以更深层规则为准。
+## 1. 范围与基本原则
+
 - 只修改并提交 source repo 中获授权的文件。不得直接写入、复制、链接或删除任何运行时 Skill 目录。
+- 插件源码、构建产物、部署配置和运行时数据必须保持边界清楚，不得为了省事相互替代。
+- 插件专属 Skill 位于 `plugins/*/skills/`，公共 Skill 位于 `plugins/common/skills/`。后文的审核 Skill
+  规则重点约束 `crwu-audit-asset-*` 和 `crwu-audit-biz-*`；`crwu-audit-business-*` 仅是待迁移的遗留前缀。
+- 先保持开发形态可读、可测试，再由构建工具生成 DSH 可加载的单包产物。打包要求不得反向破坏源码结构。
 
-## 命名：一个名字 `dsh-crwu-workbench`
+## 2. DSH 插件源码开发规范
 
-目录名、npm 包名、`cordis.patch.yml` 里的行 `name:`、`npm pack` 出的 tarball 文件名、员工侧
-`dsh.profile.bundles` 的条目，**全都是 `dsh-crwu-workbench`**（2026-09-21 统一；此前目录叫
-`dsh-crwu-audit-workbench`，那种"目录一个名、安装另一个名"的写法已废弃）。
+### 2.1 开发源码与打包产物
 
-- 单一事实源是 `plugins/dsh-crwu-workbench/package.json` 的 `name`；Makefile 里 `PLUGIN` 是目录名、
-  `PLUGIN_PKG_NAME` 从 `package.json` 读 —— tarball 名跟着包名走，不要手写其中一个去代替另一个。
-- 改这个名要同批动：目录、`package.json.name`、patch 行 `name:`、CI 的 `working-directory` /
-  `cache-dependency-path`、接收方测试，以及每台员工机器上已登记的 bundle 名（否则升级时留下两个包）。
+- `plugins/<插件>/src/` 是开发源码。源码必须保持模块化；即使最终需要输出一个或少数几个插件文件，也只能在
+  `build`、`pack` 或发布阶段由构建工具合并。
+- 禁止为了生成 TGZ、npm 包或 DSH bundle，手工把 `src/` 中已经分离的功能重新合并到一个源码文件。
+- `lib/`、`dist/`、打包后的 JS、source map 和 TGZ 都是派生产物，不得作为日常开发入口，也不得手工修改。
+  构建产物需要变化时，修改对应源码或构建配置后重新生成。
+- 源码拆分不得改变 DSH 对外加载契约。入口、导出、bundle 名和 Client 模块 ID 等仍由插件自己的
+  `package.json`、构建配置和更深层 `AGENTS.md` 约束。
 
-## 工作台统一 YAML 配置
+### 2.2 目录与职责边界
 
-`plugins/dsh-crwu-workbench/config/crwu-workbench.yml` 是工作台**唯一部署配置源**。开发运行、TGZ
-打包、员工安装后的运行时和 OSS 分发都必须从这一份 YAML 解析；不得在 `Makefile`、
-`cordis.patch.yml`、TypeScript 默认常量或发布脚本里再维护一套相同地址或行为参数。
+- 按运行边界和业务领域组织代码，优先采用 `host/`、`client/`、`shared/`，再在其中按 feature 或 domain
+  分目录。不要按“所有 hooks”“所有 helpers”这类无业务边界的技术类别堆放。
+- 入口文件只负责命名导出、依赖声明和装配。不得在 `src/index.ts`、`src/client/index.ts` 或同类入口中实现
+  路由、服务、数据转换、状态机、复杂 UI 或其它业务逻辑。
+- 一个模块只承担一个可清晰命名的职责。路由、服务、外部适配、状态、类型、常量、纯函数和 UI 组件应按职责
+  拆分；禁止把所有功能、类型和常量持续堆进一个文件。
+- 同一 feature 内部使用的代码留在该 feature；只有真正被多个 Host/Client 领域共同使用的协议类型、常量或
+  无运行环境依赖的纯函数，才能进入 `shared/`。
+- 不建立无边界的全局 `utils.ts`、`helpers.ts`、`types.ts` 或 `constants.ts`。使用能表达用途的目录和文件名，
+  例如 `json.ts`、`fingerprint.ts`、`audit/types.ts`。
+- 不为拆分而拆分：紧密相关且能一次读懂的实现可以共处，但当文件混合多个职责、需要跨越很长距离理解，或修改
+  一个功能频繁影响无关功能时，必须拆开。
+- 修改已有大文件时，至少把本次触及且能够独立命名、测试的职责提取出来；不得借机进行与需求无关的全仓重构。
 
-### 两个 OSS 的边界
+### 2.3 可读性、命名与注释
 
-- `oss.readonly`：匿名只读 Bucket，保存环境清单、安装说明和员工下载的插件 TGZ；
-  `manifestKey`、`installDocKey`、`pluginPrefix` 都相对它的 `baseUrl`/`bucket` 解析。
-- `oss.protected`：审核交付件私有 Bucket，匿名访问应返回 403；保存 `auditPrefix`、签名模式与
-  TTL。插件使用员工机器上的 OSS 凭据上传，并默认生成签名 URL。
-- YAML 与 TGZ **不得包含 AK、SK、STS Token、签名 URL 或其他临时凭据**。这些只能保存在员工
-  机器的凭据存储中；配置只保存 Bucket、Endpoint、Base URL、对象前缀和行为参数。
-- `publicBaseUrl` 这个旧名字不得用于描述私有 Bucket；新增字段使用 `baseUrl`/`objectBaseUrl`，
-  是否公开由 Bucket 权限与 `linkMode` 决定。
+- 代码应让后来维护者不依赖打包产物或提交历史就能理解：使用清晰命名、短小函数、提前返回和明确的数据流。
+- 保留必要注释，重点解释“为什么”：DSH/Cordis 生命周期限制、安全边界、并发条件、失败恢复、兼容原因、
+  外部协议陷阱和看似多余但不能删除的处理。
+- 注释不得机械复述代码，不记录讨论过程，不保留已经失效的方案，也不得用大段注释掩盖过度复杂的实现。
+- 外部输入应在边界处解析、校验和收窄；内部代码使用明确类型。禁止以无说明的 `any` 或松散对象跨模块传递。
+- 函数或文件一旦难以用一句话描述职责，应优先重新划分边界，而不是继续追加分支和共享可变状态。
 
-### 开发与 TGZ 加载契约
+### 2.4 变更与验证
 
-- 源码开发默认直接读取上述 YAML；临时验证另一份配置时，只能通过
-  `CRWU_CONFIG_FILE=/绝对路径/config.yml` 或开发 Cordis 配置的 `configFile` 显式选择。
-- `configFile` 留空时，源码形态寻找插件根的 `config/crwu-workbench.yml`；安装形态寻找 TGZ 内
-  同一路径。找不到、YAML 无法解析或 Schema 不合法时必须拒绝激活，不得静默使用作者地址。
+- 功能变更应配套测试。纯函数、Host 边界、Client 状态和交付形状分别在适合的层级验证，避免只测打包后的偶然表现。
+- 源码拆分后至少验证类型检查、相关测试和真实构建；涉及发布形状时还要验证 tarball 内容和安装后的加载入口。
+- 提交前执行 `git diff --check`，并确认没有手改构建产物、凭据、缓存、下载正文或无关文件。
+- 更深层 `AGENTS.md` 定义了插件专属目录、命令或加载契约时，按其要求执行完整门禁。
+
+## 3. `dsh-crwu-workbench` 配置与分发
+
+### 3.1 命名只有一个事实源
+
+目录名、npm 包名、`cordis.patch.yml` 的 `name:`、`npm pack` 生成的 tarball 文件名和员工侧
+`dsh.profile.bundles` 条目都必须是 `dsh-crwu-workbench`。旧名 `dsh-crwu-audit-workbench` 已废弃。
+
+- 单一事实源是 `plugins/dsh-crwu-workbench/package.json` 的 `name`。Makefile 的 `PLUGIN` 表示目录名，
+  `PLUGIN_PKG_NAME` 从 `package.json` 读取；不得分别手写两个名字。
+- 改名必须同批更新目录、`package.json.name`、patch 的 `name:`、CI 的 `working-directory` 和
+  `cache-dependency-path`、接收方测试，以及员工机器上已登记的 bundle 名，避免升级后残留两个包。
+
+### 3.2 统一 YAML 配置
+
+`plugins/dsh-crwu-workbench/config/crwu-workbench.yml` 是工作台唯一部署配置源。开发运行、TGZ、员工安装后的
+运行时和 OSS 分发都从这一份 YAML 解析；不得在 Makefile、`cordis.patch.yml`、TypeScript 默认常量或发布脚本
+中再维护一套相同地址或行为参数。
+
+#### OSS 边界
+
+- `oss.readonly` 是匿名只读 Bucket，保存环境清单、安装说明和员工下载的插件 TGZ；`manifestKey`、
+  `installDocKey`、`pluginPrefix` 都相对它的 `baseUrl`/`bucket` 解析。
+- `oss.protected` 是审核交付件私有 Bucket，匿名访问应返回 403；保存 `auditPrefix`、签名模式与 TTL。
+  插件使用员工机器上的 OSS 凭据上传，并默认生成签名 URL。
+- YAML 与 TGZ 不得包含 AK、SK、STS Token、签名 URL 或其它临时凭据。配置只保存 Bucket、Endpoint、
+  Base URL、对象前缀和行为参数；凭据只能保存在员工机器的凭据存储中。
+- 不得用旧字段名 `publicBaseUrl` 描述私有 Bucket。新增字段使用 `baseUrl`/`objectBaseUrl`，公开性由 Bucket
+  权限与 `linkMode` 决定。
+
+#### 开发与 TGZ 加载契约
+
+- 源码开发默认读取上述 YAML。临时验证其它配置时，只能通过 `CRWU_CONFIG_FILE=/绝对路径/config.yml`
+  或开发 Cordis 配置的 `configFile` 显式选择。
+- `configFile` 留空时，源码形态寻找插件根的 `config/crwu-workbench.yml`，安装形态寻找 TGZ 内同一路径。
+  文件缺失、YAML 无法解析或 Schema 不合法时必须拒绝激活，不得静默使用作者地址。
 - `npm pack` / `make plugin-pack` 前必须运行 `npm run config:check`；`package.json.files` 与
   `scripts/assert-pack.mjs` 必须共同保证 YAML 真正进入 TGZ。
-- 真实打包回归必须覆盖 `npm pack → npm install → apply()`，证明安装后的 Host 是从包内 YAML
-  激活，而不只是 tarball 文件列表里“看起来存在”。
+- 真实打包回归必须覆盖 `npm pack → npm install → apply()`，证明安装后的 Host 从包内 YAML 激活，
+  而不是只检查 tarball 文件列表。
 
-### 运行与分发解释权
+#### 运行与分发解释权
 
-- 远程环境清单只提供二进制与服务目录；私有 OSS 的 bucket、endpoint、prefix、链接模式、TTL
-  与自动上传策略以 YAML 为最终解释权。
-- `env` RPC 不得接受请求级 `source` 来替换 YAML 确定的清单地址；远程清单不得向宿主注入
-  `probeCommand` 或其他自由格式 Shell。
-- `make plugin-dist` / `scripts/dist-plugin.mjs` 必须从 `oss.readonly` 计算 `oss://` 上传目标与员工
-  HTTPS 安装地址，继续遵守“同版本对象不可覆盖”的发布纪律。
-- 修改 YAML 结构或字段时，必须同批更新解析类型、Schema 校验、`config:check`、Host 映射、分发
-  推导、TGZ 断言、README、CHANGELOG 和版本号；最低测试为 `host-yaml-config.test.mjs`、
+- 远程环境清单只提供二进制与服务目录；私有 OSS 的 bucket、endpoint、prefix、链接模式、TTL 和自动上传
+  策略以 YAML 为最终解释权。
+- `env` RPC 不得接受请求级 `source` 替换 YAML 确定的清单地址；远程清单不得向宿主注入 `probeCommand`
+  或其它自由格式 Shell。
+- `make plugin-dist` / `scripts/dist-plugin.mjs` 必须从 `oss.readonly` 计算 `oss://` 上传目标与员工 HTTPS
+  安装地址，并遵守“同版本对象不可覆盖”。
+- 修改 YAML 结构或字段时，必须同批更新解析类型、Schema 校验、`config:check`、Host 映射、分发推导、
+  TGZ 断言、README、CHANGELOG 和版本号；最低测试为 `host-yaml-config.test.mjs`、
   `dist-config.test.mjs` 与 `host-package.test.mjs`。
 
-## 资产轴与业务轴边界
+### 3.3 开发要点与设计规范放在插件的 `docs/` 下
+
+`plugins/dsh-crwu-workbench/docs/` 是这个插件的**延伸阅读**：规则判据仍以
+`plugins/dsh-crwu-workbench/AGENTS.md` 为准（它是门禁口径），但"为什么这么设计、具体怎么写、
+踩过什么坑"整理在 `docs/` 里，改代码前按需读：
+
+| 文档 | 什么时候读 | 内容要点 |
+| --- | --- | --- |
+| [`docs/ui-design-guidelines.md`](../dsh-crwu-workbench/docs/ui-design-guidelines.md) | 动界面、样式、交互 | 视觉语言（办公 + Apple）、DSH token 白名单与踩过的假 token、样式交付与模板字符串禁反引号、类名与选择器纪律、布局硬规则（滚动 / 表格 / 浮层）、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
+| [`docs/development-notes.md`](../dsh-crwu-workbench/docs/development-notes.md) | 动交付形态、Cordis 生命周期、Host 操作、协议号、沙箱与授权、测试与发版 | 三条加载契约、生命周期归属表、bundle patch 的 `baseUrl` 陷阱、Host/Client 分开加载与协议号、沙箱与授权口径、「我是谁」的来源、增删 Host 操作的最小清单、本地开发循环与两道人工关卡、测试与证伪纪律、发版与同版本不可覆盖、常见坑速查表 |
+| [`docs/PRD-workbench-sidebar-modules.md`](../dsh-crwu-workbench/docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块、面板壳的形态与口径 | 需求与取舍、历次返工记录、真机几何证据与证伪清单 |
+
+三条维护要求：
+
+1. **新踩的坑写回对应文档**，不要只留在提交信息或对话里；不确定放哪就放
+   `development-notes.md` 的「常见坑速查」。
+2. 文档与插件自己的 `AGENTS.md` 冲突时，**以插件 `AGENTS.md` 为准**，并在同一批修正文档 ——
+   不许出现两套互相矛盾的口径。
+3. 这两份文档是**给维护者读的**（写为什么、写取舍、写复现步骤），不是运行时读物：
+   技能自洽性 lint 只扫技能根，`docs/` 不属于技能根，也不得把"必须某文档在手边才能干活"
+   这类依赖写进 `SKILL.md` 或技能脚本。
+
+## 4. 审核 Skill 的领域与维护流程
+
+### 4.1 资产轴与业务轴
 
 - 资产 Skill 只负责对象或资产类型的专业规则，例如权属、物理和经济特征、资产特有方法前提及对象特有风险。
-- 业务 Skill 只负责评估目的、经济行为和场景规则，例如出租、处置、拍卖、抵押担保、减值测试等对口径、材料和判断的影响。
-- **业务标签只取一级业务**：`business_types[]` 的取值域 = `01-业务路线/` 下的一级业务标签（现行 8 个：资产经营、交易与处置、财务报告、融资与债务、投资与资本运作、税务与历史确认、司法清算与补偿、咨询复核与其他，以 `04-business-classification.md` 为准）。租赁、清算、破产、拍卖、抵押质押、减值测试、计税、追溯评估、复核等历史行为词**降级为命中信号**，不是标签、不占 registry 行、不建 Skill。
-- 同一报告同时命中资产与业务标签时，由 `crwu-audit` router 对各轴 Skill 做稳定并集加载；任何一轴都不得替代另一轴。
-- 禁止创建 `asset × business` 组合 Skill。交叉场景的共同结果来自 router 装配，而不是复制两轴内容或新增组合目录。
-- 新建或扩展资产 Skill 前，先在 `crwu-audit/references/03-asset-classification.md` 确认 canonical label；业务 Skill 对应检查 `crwu-audit/references/04-business-classification.md`。标签、状态或 Skill 映射发生变化时，同步更新 `crwu-audit/references/07-skill-registry.md`。
+- 业务 Skill 只负责评估目的、经济行为和场景规则，例如出租、处置、拍卖、抵押担保、减值测试对口径、材料和
+  判断的影响。
+- `business_types[]` 只使用 `01-业务路线/` 下的一级业务标签：资产经营、交易与处置、财务报告、融资与债务、
+  投资与资本运作、税务与历史确认、司法清算与补偿、咨询复核与其他，以 `04-business-classification.md` 为准。
+  租赁、清算、破产、拍卖、抵押质押、减值测试、计税、追溯评估、复核等历史行为词只作为命中信号，不作为
+  标签、不占 registry 行、不单独建 Skill。
+- 同一报告命中两个轴时，由 `crwu-audit` router 对各轴 Skill 做稳定并集加载；任何一轴不得替代另一轴。
+- 禁止创建 `asset × business` 组合 Skill。交叉场景由 router 装配，不复制两轴内容或新增组合目录。
+- 新建或扩展资产 Skill 前检查 `crwu-audit/references/03-asset-classification.md`；业务 Skill 检查
+  `04-business-classification.md`。标签、状态或映射变化时同步更新 `07-skill-registry.md`。
 
-## 一级 Skill 与知识库目录粒度
+### 4.2 一级 Skill 与知识库粒度
 
 - 资产 Skill 只映射 `02-资产类型/` 下一个一级资产目录；业务 Skill 只映射 `01-业务路线/` 下一个一级业务目录。
-- `01-kb-assembly.md` 对该轴只登记一个精确一级根，`request_kind=directory`、`recursive=true`、`required=true`，并用 `expected_structure` 断言根内应有的结构。正式审核命中后由 `crwu-dws` 递归下载该根内全部支持正文；不得退回逐文件挑选模式。
-- **一级根逐字使用库内精确路径**（含 `01-` 等数字排序前缀）；带前缀与省略前缀是两条不同路径，不得按显示名简写，也不得按另一个库的目录名推断。
-- **寻址键写法**：逐字使用库内节点名（`crwu-dws` 的 `by_path` 键 = 原样精确名，不折叠大小写/全半角）。单文件项**不得带 `.md`**——`.md` 只是导出后的本地文件名（`<节点名>.md`），写进寻址键会与 `by_path` 不匹配而在 M2 记 failure；目录项必须以 `/` 结尾。旧库（节点名自带 `.md`）留下的带后缀写法属历史残留，禁止沿用。
-- 资产目录中的细分对象与业务目录中的子业务只作为父 Skill 的二级选择索引，不各建 Skill、不各占 registry 行。
-- 资产 Skill 始终读取命中一级根的 `01-共性参考/` 全部正文，再叠加命中细分对象的 `评估审核条目`。业务 Skill 根据评估目的等原始证据识别子业务，**先执行一级根直接文档 `共同审核点`（若存在）**，再执行命中子业务的 `01-业务通用审核要点` 和关联文件。
-- `共同审核点` 是该一级业务的**共用层**：命中任一子业务都执行，不因命中集合变化而增删，也不得记成某个子业务的专属条目；它是条件性约定，**库内不存在时不记缺口**。
-- 缺少资产 `01-共性参考/`、细分对象 `评估审核条目` 或子业务 `01-业务通用审核要点` 属于知识内容 gap；**必检项写「待补」、文档为空或为 `TODO` 占位同样记 gap**，并声明该处覆盖不完整。以上一律不得用新建空 Skill、凭标题或历史摘录编造规则来掩盖。
+- `01-kb-assembly.md` 对该轴只登记一个精确一级根，设置 `request_kind=directory`、`recursive=true`、
+  `required=true`，并用 `expected_structure` 断言根内结构。正式审核命中后由 `crwu-dws` 递归下载该根内
+  全部支持正文，不得退回逐文件挑选。
+- 一级根逐字使用库内精确路径，包括 `01-` 等排序前缀；不得按显示名简写或从其它库推断。
+- 寻址键逐字使用库内节点名：`crwu-dws` 的 `by_path` 不折叠大小写或全半角。单文件项不得带 `.md`，目录项
+  必须以 `/` 结尾。`.md` 只是导出后的本地文件后缀，写入寻址键会与 `by_path` 不匹配并在 M2 记 failure；
+  旧库中节点名自带 `.md` 的历史残留不得沿用。
+- 细分对象与子业务只作为父 Skill 的二级选择索引，不各建 Skill、不各占 registry 行。
+- 资产 Skill 先读取一级根的 `01-共性参考/` 全部正文，再叠加命中对象的 `评估审核条目`。业务 Skill 先执行
+  一级根直接文档 `共同审核点`（若存在），再执行命中子业务的 `01-业务通用审核要点` 和关联文件。
+- `共同审核点` 是一级业务共用层，命中任一子业务都执行；不存在时不记缺口，也不得归入某个子业务。
+- 缺少资产 `01-共性参考/`、细分对象 `评估审核条目` 或子业务 `01-业务通用审核要点` 属于知识内容 gap。
+  必检项写“待补”、正文为空或只有 `TODO` 同样记 gap，并声明覆盖不完整；不得创建空 Skill 或凭标题、历史摘录补造规则。
 
-## 知识库驱动的维护流程
+### 4.3 知识库驱动流程
 
-对每个命中的 `axis + label`，按以下顺序维护：
+对每个命中的 `axis + label` 按顺序执行：
 
-1. **先经 `crwu-dws` 拉取最新目录**（只读），记录 `fetchedAt`/`complete`/`failures`，再定位与该标签对应的业务路线、资产类型、规则库、审核清单及其他必要目录或文件。目录缓存只用于定位加速，不得当作"最新"；离线或刷新失败时只能输出候选并显式标注"非本次在线结果"。
-2. 形成“本次来源清单”，至少列出库内层级路径、文件或目录类型、预期读取的 RULE/CHK 范围和读取状态。目录快照只能用于定位，不能作为正文证据。
-3. 使用 `crwu-dws` 按库内层级路径实时读取清单内正文；不得仅凭经验、旧缓存、历史摘录或文件名编写审核要点。
-4. 逐文件提取并核对：RULE/CHK 编号、适用条件、必备材料、检查步骤、判断标准、冲突或例外、输出证据要求。
-5. 基于本次真实读取的材料梳理审核要点，并把装配寻址与审核要点分别维护到对应 reference。不得把知识库正文复制到 Skill。
+1. 经 `crwu-dws` 只读拉取最新目录，记录 `fetchedAt`、`complete`、`failures`，再定位业务路线、资产类型、
+   规则库、审核清单和必要文件。缓存只用于定位；刷新失败时只能输出候选并标注“非本次在线结果”。
+2. 形成“本次来源清单”，列出库内层级路径、文件或目录类型、预期 RULE/CHK 范围和读取状态。目录快照不是正文证据。
+3. 按库内路径实时读取正文，不得仅凭经验、旧缓存、历史摘录或文件名编写审核要点。
+4. 逐文件核对 RULE/CHK 编号、适用条件、必备材料、检查步骤、判断标准、冲突或例外、输出证据要求。
+5. 基于真实读取材料归纳审核要点，分别维护装配寻址与审核要点；不得把知识库正文复制进 Skill。
 
-知识库资料缺失、实时下载失败、文件之间冲突，或现有资料不足以定义审核要点时，不得补写或猜测。分两种处置：
+资料缺失、实时下载失败、来源冲突或内容不足时不得猜测：
 
-- **完全无法定义**（所需文件不存在、下载失败、来源冲突未决）→ 对应 `axis + label` 保持 `pending`，或记录 capability gap 与人工确认项，不得标 `available`。
-- **部分内容待补但其余可真实归纳**（例：审核要点文件存在且「历史高频复核问题」有真实数据，仅「必检项要点」写「待补」）→ 可以标 `available`，但必须在该叶子对应位置明确声明覆盖不完整并记 gap；**不得用"已 available"掩盖内容缺口，也不得补造缺失部分**。
+- 完全无法定义：保持 `pending`，或记录 capability gap 与人工确认项，不得标 `available`。
+- 部分可真实归纳：可以标 `available`，但必须在对应叶子明确声明覆盖不完整并登记 gap，不得补造缺失部分。
+- 其它 `available` Skill 仍按 router 规则继续并集加载，不因单点 gap 停止整轴能力。
 
-无论哪种，其他状态为 `available` 的 Skill 均按 router 规则继续并集加载，不因某一处 gap 停止整轴能力。
+### 4.4 变更归口
 
-## 变更归口（两个元技能，均不经 crwu-audit 路由、不产审核判断）
+两个元技能都不经 `crwu-audit` 路由，也不产出审核判断：
 
-| 想改什么 | 归口 | 说明 |
+| 变更类型 | 归口 | 说明 |
 | --- | --- | --- |
-| 规则/清单**内容**（库里 `06-规则库/` 条目写错、漏项）、词表取值、叶子**算法与流程** | `crwu-dev-audit-optimize` | 从漏检/误检/复核反馈诊断根因；知识库项只生成 `manual_only` 人工修复单，Skill 项逐项确认后执行 |
-| **结构/映射**：一级 Skill 的新增改名、一级根、registry、classification、遗留命名迁移 | `crwu-dev-audit-skill-maintainer` | 四模式 `audit`/`create`/`repair`/`remap`；`audit` 只读并同步校准表 |
+| 规则/清单内容、词表取值、叶子算法与流程 | `crwu-dev-audit-optimize` | 从漏检、误检和复核反馈诊断根因；知识库项只生成 `manual_only` 修复单，Skill 项逐项确认后执行 |
+| 一级 Skill 新增改名、一级根、registry、classification、遗留命名迁移 | `crwu-dev-audit-skill-maintainer` | 使用 `audit`/`create`/`repair`/`remap`；`audit` 只读并同步校准表 |
 
-- 两者都遵守**先逐文件方案、用户确认后才动文件**；门禁与校验口径只在 `crwu-dev-audit-skill-maintainer/references/04`、`05` 定义一次，`crwu-dev-audit-optimize` 不重复定义。
-- 审核后同时存在 AI 结果与人工复核文件时，由 `crwu-dev-audit-optimize` 输出 `L-* → 根因 → FIX-*` 差距报告；
-  知识库对 AI/CLI 永远只读，即使用户接受方案也必须由用户人工修改。
-- 结构/映射类诊断（覆盖缺失、路径漂移）由 `crwu-dev-audit-optimize` 只给根因与最低改动集，**交接** `crwu-dev-audit-skill-maintainer` 执行；交接不继承修改授权。
-- 现状速查：读 `crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md`（知识库↔Skill 映射校准表，每次校准后刷新）。
+- 两者都先给逐文件方案，用户确认后才改文件。门禁与校验口径只在 maintainer 的 `references/04`、`05`
+  定义一次，optimize 不重复定义。
+- 同时存在 AI 结果与人工复核文件时，由 optimize 输出 `L-* → 根因 → FIX-*` 差距报告。知识库对 AI/CLI
+  永远只读，即使方案获批也只能由用户人工修改。
+- 结构或映射问题由 optimize 给出根因和最低改动集，再交接 maintainer；交接不继承修改授权。
+- 现状速查读取 maintainer 的 `references/07-kb-skill-map.md`，每次校准后刷新。
 
-### 审核族前缀（两组，门禁都覆盖）
+#### 审核族前缀
 
-- `crwu-audit-*`：审核族（router、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、`crwu-audit-external-data`、`crwu-audit-output-filter`、`crwu-audit-public-general-standards`）。
-- `crwu-dev-audit-*`：开发/维护侧成员（`crwu-dev-audit-optimize`、`crwu-dev-audit-skill-maintainer`；2026-09-19 归组调整：public 轴通用准则能力回到 `crwu-audit-*`，维护器由 `crwu-audit-*` 移入本组）。
-- **两组前缀都必须被门禁扫描**：`crwu-dev-audit-skill-maintainer` 的 `scripts/kb_tool.py`（"三不写"实时协议 lint）与 `scripts/check_audit_skill_mappings.py`（装配路径键、frontmatter、真实目录解析、R4 技能名解析）都按两组前缀收目录。**新增或迁移前缀时两处常量必须同批更新**，否则该前缀下的技能会静默掉出校验范围。
-- 前缀改名的最低同步面：技能自名、`07-skill-registry.md`、`08-union-dispatch-rules.md`、router `SKILL.md`、叶子引用、两个门禁脚本的常量/名单、三个契约测试、`docs/skills.md` 与现行设计文档、变更纪要；带日期的历史记录不回改。
+- `crwu-audit-*`：router、`crwu-audit-asset-*`、`crwu-audit-biz-*`、`crwu-audit-datacheck`、
+  `crwu-audit-external-data`、`crwu-audit-output-filter`、`crwu-audit-public-general-standards`。
+- `crwu-dev-audit-*`：`crwu-dev-audit-optimize`、`crwu-dev-audit-skill-maintainer`。
+- `kb_tool.py` 和 `check_audit_skill_mappings.py` 必须扫描两组前缀。新增或迁移前缀时同批更新两处常量，
+  否则技能会静默掉出门禁。
+- 前缀改名至少同步：技能自名、registry、classification、`08-union-dispatch-rules.md`、router `SKILL.md`、
+  叶子引用、两个门禁脚本、三个契约测试、`docs/skills.md`、现行设计文档和变更纪要。带日期的历史记录不回改。
 
-## 技能自洽性：不得引用代码仓库（硬规则）
+## 5. Skill 自洽性与目录内聚
 
-**每个技能必须以副本独立安装后可用。凡技能运行时要用到的内容，都必须在技能目录内；技能目录之外的一切（仓库目录、仓根文件、其他仓库路径）在安装后都不存在。**
+每个 Skill 必须在作为副本独立安装后可用。运行时所需内容必须位于该 Skill 目录内；仓库目录、仓根文件和其它
+仓库路径在安装后都视为不存在。
 
-### 1 不得引用的对象
+### 5.1 禁止引用
 
-技能目录（`plugins/<插件>/skills/<skill>/`，含 `SKILL.md`、`references/*`、`scripts/*`）内**不得出现**下列引用：
+`plugins/<插件>/skills/<skill>/` 内的 `SKILL.md`、`references/`、`scripts/` 不得引用：
 
-- 仓库目录路径：`docs/`、`tools/`、`cmd/`、`internal/`、`bin/`（含 `./bin/darwin/crwu` 之类的构建产物写法）；
-- 仓根文件：`Makefile`、`go.mod` 等；
-- 逃出技能目录的相对链接：`[x](../../docs/…)`、`../docs/…` 等；
-- 以仓库根为前缀的跨技能路径写法：`skills/<技能>/…` 或 `plugins/<插件>/skills/<技能>/…`（技能之间是"同级安装"，不是仓库子树）。
+- 仓库目录 `docs/`、`tools/`、`cmd/`、`internal/`、`bin/` 或仓根文件 `Makefile`、`go.mod`；
+- 逃出 Skill 目录的相对路径，例如 `../../docs/`；
+- 以仓库根为前缀的跨 Skill 路径，例如 `skills/<技能>/` 或 `plugins/<插件>/skills/<技能>/`。
 
-### 2 正确写法
+### 5.2 正确写法
 
-| 想表达 | 写法 |
+| 需求 | 写法 |
 | --- | --- |
-| 需要解释、口径、设计依据 | 写进**本技能 `references/`**；不要把 `docs/design-*.md` 当运行时读物 |
-| 需要运行脚本 | 放**本技能 `scripts/`**，命令写作技能内相对路径 `python3 scripts/<file>`（并说明在技能目录内执行） |
-| 调用别的技能的脚本 | 写「`<技能名>` 技能的 `scripts/<file>`」，命令用 `python3 "$SKILLS_ROOT/<技能名>/scripts/<file>"`（`SKILLS_ROOT` = 本技能所安装到的 skills 根） |
-| CLI 用法与字段 | 以 `crwu scheme`（运行时命令目录）为准，用 PATH 中的 `crwu` 命令；不要指向仓库里的手册文件 |
-| 脚本内定位 skills 根 | 只能由 `__file__` 上溯推导（`Path(__file__).resolve().parents[N]`），不得硬编码仓库布局 |
-| 变更登记（源仓维护动作） | 用功能性表述（源仓的设计文档、技能清单、变更纪要），不写仓库路径 |
+| 解释、口径、设计依据 | 写入本 Skill 的 `references/`，不把源仓设计文档作为运行时读物 |
+| 运行脚本 | 放入本 Skill 的 `scripts/`，在 Skill 目录执行 `python3 scripts/<file>` |
+| 调用其它 Skill 的脚本 | 写明目标 Skill 和 `scripts/<file>`，命令使用 `python3 "$SKILLS_ROOT/<技能名>/scripts/<file>"` |
+| CLI 用法与字段 | 以 `crwu scheme` 和 PATH 中的 `crwu` 为准，不引用仓库手册路径 |
+| 脚本定位 skills 根 | 由 `Path(__file__).resolve().parents[N]` 上溯推导，禁止硬编码仓库布局 |
+| 源仓变更登记 | 使用功能性表述，不写运行时依赖的仓库路径 |
 
-### 3 脚本归属与目录内聚
+### 5.3 脚本归属与例外
 
-- 脚本归口到**唯一**负责它的技能，随技能安装；当前实现：`audit_delivery.py`（+schema/examples）归口 `crwu-audit`；`kb_tool.py` 归口 `crwu-dev-audit-skill-maintainer`；三个契约测试归被测技能的 `scripts/`。
-- 脚本与其 `README.md`、schema、`examples/`、`test_*.py` 同目录安置，测试随脚本同批移动。
-- 不得把脚本写成"由部署环境注入可执行路径"。
+- 脚本只归属一个负责它的 Skill，并随 Skill 安装。`audit_delivery.py` 及其 schema/examples 归 `crwu-audit`；
+  `kb_tool.py` 归 maintainer；三个契约测试归各自被测 Skill 的 `scripts/`。
+- 脚本和对应 `README.md`、schema、`examples/`、`test_*.py` 同目录安置；不得依赖部署环境注入可执行路径。
+- 外部工具确由第三方提供时，必须写明“本仓不提供、不随 Skill 安装”，不得描述成 Skill 资产。
+- 仅在源仓运行的契约测试或维护工具，可以在文件头 30 行内声明“源仓契约测试”或“源仓维护工具”后定位源仓，
+  但不得被 `SKILL.md` 当作运行时步骤。源仓文档缺失时必须显式 skip；`_REQUIRED_SIBLINGS` 中任一技能不存在、
+  即只安装了技能族的子集时也必须显式 skip。单独安装 Skill 后，其自带测试只能通过或 skip，不得失败。
 
-### 4 例外（仅此两类）
+### 5.4 迁移与机器门禁
 
-- **外部工具**：确由部署方/第三方提供、本仓不持有的工具（如 `pull_全量画像.py`），技能内必须写明"本仓不提供、不随技能安装"，不得描述成技能资产。
-- **源仓契约测试/源仓维护工具**：只在源仓维护时运行、运行时不需要的 `.py`，可在文件头 30 行内声明「源仓契约测试」或「源仓维护工具」后定位源仓。此类文件必须满足两条纪律：① 不得被 `SKILL.md` 当作运行时步骤引用；② 对仓库内容的所有断言在内容缺失时**必须显式 skip** —— 源仓文档（`docs/…`）缺失时 skip，完整技能族缺失时（`_REQUIRED_SIBLINGS` 任一不在，即"只装了单个技能"的副本）也 skip。判据：任一技能被单独安装后，其自带测试**只能通过或 skip，不得失败**。
+本节与仓库根 `AGENTS.md` 的 Skill Self-Containment 是同一规则；改动任一处必须同步另一处。
 
-### 5 迁移与校验
+- 搬迁或改写时同批更新脚本路径常量（包括由 `__file__` 推导的 `REPO_ROOT`/`SKILLS_ROOT`）、所有现行引用、
+  `docs/skills.md`、源仓设计文档和 CHANGELOG。
+  带日期的历史变更、评审记录以及 `docs/superpowers/plans|specs/*` 不回改。
+- 两个技能根都必须通过 `kb_tool.py validate` 且 error=0：插件专属根
+  `plugins/dsh-crwu-workbench/skills` 与公共根 `plugins/common/skills`。
+- `plugins/AGENTS.md`、`docs/skills.md` 等源仓文档不在技能根内，不属于 Skill 自洽性 lint 的扫描对象。
 
-> 本节规则与仓库根 `AGENTS.md` §Skill Self-Containment 是同一件事的两处表述：根文件是会话级常驻规范（先读它），本文件是技能维护时的完整清单。改动其一必须同步另一处。
+## 6. 审核叶子的 `SKILL.md` 与 references
 
-- 搬迁或改写时同批完成：① 脚本内路径常量（如测试的 `REPO_ROOT`/`SKILLS_ROOT` 由 `__file__` 上溯推导）；② 所有**现行**引用点（技能正文、`references`、本文件、`docs/skills.md`、源仓设计文档）；③ 新 CHANGELOG 条目。带日期的**历史记录**（变更纪要旧条目、评审记录、`docs/superpowers/plans|specs/*`）**不回改**。
-- **机器门禁**：`python3 <技能根>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <技能根>` 必须 error=0 —— 其中的"技能自洽性 lint"会按上表拦截仓库目录引用（技能正文与技能内脚本都在扫描范围）。**本仓有两个技能根，两个都要过**：`plugins/dsh-crwu-workbench/skills`（插件专属技能）与 `plugins/common/skills`（公共技能）。源仓文档（`plugins/AGENTS.md`、`docs/skills.md`）不在技能根内，不算技能。
+本节只适用于 `crwu-audit-asset-*` 与 `crwu-audit-biz-*` 的知识装配内容，不扩大为其它 Skill 的全局禁令。
 
-## Skill 与 references 分工
+- 不得保存或硬编码知识库名称、个人绝对路径、本地正文路径、`nodeId` 常量值，也不得逐字复制知识库正文。
+  只保存 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取归纳的审核要点。
+- 可以定义 `nodeId` 协议字段。运行时 manifest 和输出也可以携带本次 `crwu-dws` 返回的值，但不得把值写回源码。
+- `SKILL.md` 保持入口化，只包含职责边界、输入、必读 reference、执行步骤和输出门禁；资产和业务叶子必须声明
+  “仅经 `crwu-audit` 编排调用、禁止单独调用”。
+- 推荐最小结构：
+  - `00-applicability.md`：canonical label 的适用、排除、边界及二级对象识别规则；
+  - `01-kb-assembly.md`：只记录 RULE/CHK 与库内路径键；先写一级根映射
+    `source_key`/`owner_axis`/`canonical_label`/`kb_root`/`request_kind`/`recursive`/`required`，再写
+    `expected_structure`、二级选择索引和其它轴共享依赖。目录或文件名变化时必须同步更新；
+  - `02-review-focus.md`：基于真实资料归纳的审核要点，每项回指 RULE/CHK 和库内路径。
+- 公共规则只写一份，统一放在 `crwu-audit/references/12-leaf-common-contract.md`。叶子只引用它并保留
+  本轴、本标签的特有内容；新建叶子以任一 `crwu-audit-biz-*` 四件套为版式基线。
+- 可以增加其它 reference，但每个文件只承担一个职责，且不得成为知识库正文副本。
+- 实际审核仍须通过 `crwu-dws` 重新下载正文。最终出处至少包含本次下载文件、实际行号、库内路径、运行时
+  `nodeId` 和 `exportedAt`；reference 映射不能替代本次下载证据。
 
-以下总则仅适用于 `crwu-audit-asset-*` 与 `crwu-audit-biz-*` 审核叶子的 `SKILL.md` 和所有 references 中的知识装配内容，不扩大为对其它 Skill 的全局禁令：不得保存或硬编码知识库名称、个人绝对路径、本地正文路径、`nodeId` 常量值；不得逐字复制任何知识库正文。知识装配只允许保存 RULE/CHK 编号、库内层级路径寻址键，以及基于本次真实读取后归纳的审核要点。
+## 7. `available` 能力完成门禁
 
-上述限制不禁止使用 `nodeId` 协议字段名。`crwu-dws` 的操作、协议与 schema 文档可以定义该字段，运行时 manifest 和输出也可以携带其值，但该值必须来自本次 `crwu-dws` 实际返回，且不得写回任何 Skill source。
+新增或扩展 `axis + label`，以及将 `pending` 改为 `available`，必须同批满足：
 
-`SKILL.md` 保持入口化，只包含职责边界、输入、必读 reference、执行步骤和输出门禁；资产或业务叶子 `SKILL.md` 必须明确“仅经 `crwu-audit` 编排调用、禁止单独调用”。详细分类、装配映射和审核要点放入本 Skill 的 `references/`，推荐最小结构如下：
+- 分类、`07-skill-registry.md`、`SKILL.md`、`00-applicability.md`、`01-kb-assembly.md`、
+  `02-review-focus.md` 边界一致；设计文档、`docs/skills.md`、变更记录和测试已同步。
+- 受影响 Skill 通过 skill-creator 的 `quick_validate.py`，router contract 与 DWS source contract 通过。
+- 两个技能根都通过 `kb_tool.py validate`。经批准的分阶段迁移若暂不能通过，必须记录实际命令、失败项和待同步
+  内容，不得宣称完整可用。
+- 映射检查器基于本次最新目录运行且 error=0，覆盖一级根精确匹配、轴前缀、registry/classification 一致性、
+  遗留命名和库内路径键存在性（包括公共轴）；warning 必须逐条判断并注明理由。
+- 使用 `--emit-map` 刷新 `references/07-kb-skill-map.md`，并如实填写内容级核对结论与 gap；未下载正文时写“未核”。
+- 新叶子引用 `12-leaf-common-contract.md` 且未复述公共规则。
+- `git diff --check` 通过，提交范围仅包含获授权改动。
 
-- `00-applicability.md`：canonical label 的适用、排除和边界条件，以及细分对象或子业务的识别规则。
-- `01-kb-assembly.md`：只记录 RULE/CHK 编号与钉钉库内层级路径寻址键。先写一行一级根映射（`source_key`/`owner_axis`/`canonical_label`/`kb_root`/`request_kind`/`recursive`/`required`），再以 `expected_structure` 断言根内结构，最后才是二级选择索引与其他轴共享依赖。禁止保存或硬编码知识库名称、个人绝对路径、本地正文路径或 `nodeId` 常量值，也不得逐字复制知识库正文；目录或文件名变更时必须同步更新。
-- `02-review-focus.md`：基于本次真实读取资料整理的结构化审核要点与映射。不得逐字复制知识库正文；每个要点必须回指 RULE/CHK 编号和库内层级路径。
+不得为了占位创建空的 pending Skill。凭据、知识库下载正文、临时清单、缓存和运行时文件不得提交；Skill 与
+reference 资产只能提交到 source repo。
 
-**公共规则只写一份**：轴边界、输入、一级根装配、二级选择返回、执行顺序（一级共用层→命中二级条目）、必检项/历史问题状态字段、来源优先级、证据出处与 capability gap，统一落在 `crwu-audit/references/12-leaf-common-contract.md`。叶子 `SKILL.md` 用相对路径引用它，**只写本轴/本标签特有内容，不得复述共同规则**。新建叶子时以任一 `crwu-audit-biz-*` 的四件套为版式基线。
+### 常用契约命令
 
-可按需增加其他 reference，但每个文件必须有单一职责，且不得成为知识库正文副本。实际运行审核时仍须通过 `crwu-dws` 重新下载正文；最终出处至少包含本次下载文件、实际行号、库内路径、本次运行返回的 `nodeId` 和 `exportedAt`。reference 中的映射不能替代本次下载证据，运行时 `nodeId` 值也不得写回 Skill source。
-
-## available 能力完成门禁
-
-任何新增或扩展的资产或业务 `axis + label` 能力，以及既有能力从 `pending` 改为 `available`，只有在以下内容同批完成后，才可在 registry 标记为 `available`：
-
-- 对应的资产或业务分类、`07-skill-registry.md` 已同步；
-- `SKILL.md`、`00-applicability.md`、`01-kb-assembly.md`、`02-review-focus.md` 已完成且边界一致；
-- 受影响的设计文档、`docs/skills.md`、变更记录和测试已同步；
-- 受影响 Skill 通过 skill-creator 的 `quick_validate.py`；
-- router contract 与 DWS source contract 通过；
-- `python3 plugins/dsh-crwu-workbench/skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root plugins/dsh-crwu-workbench/skills` 与 `--skill-root plugins/common/skills` 都通过。若处于经批准的分阶段迁移，因已知后续同步暂不能通过，必须记录实际命令、失败项和待同步内容，不得把该状态宣称为完整可用；
-- **映射检查器对本次最新目录 error=0**：`python3 plugins/dsh-crwu-workbench/skills/crwu-dev-audit-skill-maintainer/scripts/check_audit_skill_mappings.py --repo-root . --catalog <本次 crwu-dws 快照> --max-age-hours <H>` —— 覆盖一级根精确匹配、轴前缀、registry/classification 一致性、遗留命名、**库内路径键存在性（含公共轴）**；warning 需逐条判断并注明理由；
-- **校准表已刷新**：`--emit-map plugins/dsh-crwu-workbench/skills/crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md`，并在其「内容级校准备注」区写明本次正文核对结论与缺口（未下载正文时如实写"未核"，不得留空冒充合格）；
-- 新增叶子已引用 `crwu-audit/references/12-leaf-common-contract.md` 且未复述共同规则；
-- `git diff --check` 通过，并复核提交范围只包含本次授权改动。
-
-禁止为了占位创建空的 pending Skill 目录。凭据、下载的知识库正文、临时清单产物和本地缓存不得提交；Skill 与 reference 资产只能提交到 source repo。
-
-常用契约命令：
-
-在仓库根执行。技能分两个根：插件专属 `plugins/dsh-crwu-workbench/skills/`（下面的 `$S`）与
-公共 `plugins/common/skills/`；`crwu-dws` 属于后者。
+在仓库根执行：
 
 ```bash
 S=plugins/dsh-crwu-workbench/skills
@@ -201,25 +300,24 @@ python3 "$S/crwu-audit/scripts/test_audit_multiaxis_router.py"
 python3 plugins/common/skills/crwu-dws/scripts/test_dws_source_contract.py
 python3 "$S/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py" validate --skill-root "$S"
 python3 "$S/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py" validate --skill-root plugins/common/skills
-# 映射与路径键一致性（需本次 crwu-dws 快照；--emit-map 同步校准表）
 python3 "$S/crwu-dev-audit-skill-maintainer/scripts/check_audit_skill_mappings.py" \
-  --repo-root . --catalog <快照> --max-age-hours 2 \
+  --repo-root . --catalog <本次快照> --max-age-hours 2 \
   --emit-map "$S/crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md"
 git diff --check
 ```
 
-## 资产 / 业务能力新增、扩展或转 available 检查单
+## 8. 资产或业务能力检查单
 
 - [ ] 已确认轴和 canonical label，未创建组合 Skill。
 - [ ] 已核对目录树并形成“本次来源清单”。
-- [ ] 已通过 `crwu-dws` 逐文件实时读取，未使用旧缓存代替正文。
+- [ ] 已通过 `crwu-dws` 逐文件实时读取，未用旧缓存代替正文。
 - [ ] 每个审核要点均可回指 RULE/CHK 和库内层级路径。
-- [ ] 运行审核的最终出处包含本次下载文件、实际行号、库内路径、本次运行返回的 `nodeId` 和 `exportedAt`，且 `nodeId` 值未写回 Skill source。
-- [ ] 一级根逐字等于库内节点名（含数字前缀），`directory`/`recursive`/`required` 三键齐全。
-- [ ] 所有寻址键逐字等于库内节点名：单文件不带 `.md`、目录以 `/` 结尾。
-- [ ] 业务叶子已处理一级根 `共同审核点`（存在则回指；不存在则如实记"未发现"且不记缺口）。
-- [ ] 内容为「待补」/空文档/`TODO` 占位的位置已登记为 gap，未补造任何要求。
-- [ ] 新增叶子引用了 `12-leaf-common-contract.md` 且未复述共同规则。
-- [ ] 分类、registry、Skill、references、文档与测试已同步；校准表已刷新且内容级备注如实。
-- [ ] 所有完成门禁已运行并保留结果；缺失或冲突已记录为 pending、gap 或人工确认项。
+- [ ] 最终出处包含本次下载文件、实际行号、库内路径、运行时 `nodeId` 和 `exportedAt`，且未回写 `nodeId` 值。
+- [ ] 一级根逐字等于库内节点名，`directory`/`recursive`/`required` 三键齐全。
+- [ ] 单文件寻址键不带 `.md`，目录键以 `/` 结尾，所有键与库内节点名逐字一致。
+- [ ] 业务叶子已处理 `共同审核点`：存在则回指，不存在则如实记“未发现”且不记 gap。
+- [ ] “待补”、空正文和 `TODO` 已登记为 gap，未补造要求。
+- [ ] 新叶子引用公共合同且未复述共同规则。
+- [ ] 分类、registry、Skill、references、文档、测试和校准表已同步。
+- [ ] 所有门禁已运行并保留结果；缺失或冲突已记录为 pending、gap 或人工确认项。
 - [ ] 提交中不含凭据、下载正文、运行时文件或无关改动。

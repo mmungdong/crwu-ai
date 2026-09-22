@@ -1,7 +1,9 @@
 import * as React from 'react'
+import { BrandMark } from '../../components/BrandMark.tsx'
 import { Notice } from '../../components/primitives.tsx'
+import { Button } from '../../components/primitives.tsx'
 import { SideDrawer } from '../../components/SideDrawer.tsx'
-import { WORKBENCH_CLASSES as C } from './consts.ts'
+import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { gatingOf, workbenchApi } from '../report-audit/api.ts'
 import type { PendingResult } from '../report-audit/api.ts'
@@ -9,39 +11,49 @@ import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
 import { openChildSession } from './open-session.ts'
 import type { ClientServices } from './services.ts'
 import { EnvironmentPane } from '../environment/EnvironmentPane.tsx'
-import { EnvironmentStatusIcon } from '../environment/EnvironmentStatusIcon.tsx'
 import { createEnvStatusStore, useEnvStatus, type EnvStatusStore } from '../environment/status.ts'
-import { WORKBENCH_PROTOCOL } from '../../../shared/consts.ts'
 import { AuditInfoDrawer } from '../report-audit/AuditInfoDrawer.tsx'
 import { ReportPane } from '../report-audit/ReportPane.tsx'
 import { openReportNotice, openSessionTarget, pendingArgs } from '../report-audit/row.ts'
+import { ReportEvalPane } from '../report-eval/ReportEvalPane.tsx'
+import { WorkbenchLoading } from './LoadingPane.tsx'
+import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
+import { buildTagOf, createBuildStore, hostIsStale, useBuild, type BuildStore } from './build-store.ts'
+import { greetingLine } from './greeting.ts'
+import { AuthorizationGate } from './AuthorizationGate.tsx'
 
 /**
  * 工作台外壳。
  *
- * 职责只有三件：拉数据、把状态分发给下面两页、把用户操作翻译成 RPC。
- * **所有业务规则都不在这里** —— 它们在 `report-audit/row.ts`（可独立测试）与 Host 侧。
+ * 职责只有三件：拉数据、把状态分发给下面三个模块、把用户操作翻译成 RPC。
+ * **所有业务规则都不在这** —— 它们在 `report-audit/row.ts`（可独立测试）与 Host 侧。
+ *
+ * 结构（2026-09-22 重构）：
+ * - 头部：标题 + 宿主版本徽章（吸顶不再需要，滚动已经交给正文区）；
+ * - 正文：当前模块的内容（环境信息 / 报告审核 / 报告评估占位）；
+ * - 底部：**常驻**的模块切换条 —— 无论正文滚到哪，三个模块都点得到。
  *
  * 视图与门禁（用户要求的行为，别改回去）：
- * - 进入工作台先跑一次环境自检，自检期间显示 loading；
+ * - 进入工作台先跑一次环境自检，自检期间停在加载态；
  * - **自检通过就直接进报告审核**；
- * - 不通过就停在环境自检页；点「进入报告审核」会用 loading 状态拦住（当场重新自检一次，
- *   通过才放行），**不通过不给进报告页**；
- * - 环境结论来自 `envStatus` store：会话头那颗指示灯与这里看到的是同一个。
+ * - 不通过就停在环境信息页；在报告审核页里则被门禁挡住（说明 + 重新自检 + 回环境信息）；
+ * - 环境结论来自 `envStatus` store：侧栏底部那枚入口与这里看到的是同一个。
  *
- * 轮询策略：只在报告页处于激活状态时按 10 秒轮询 `audit-status`，卸载时清掉定时器。
+ * 轮询策略：只在报告审核模块处于激活状态时按 10 秒轮询 `audit-status`，卸载时清掉定时器。
  * 轮询本身不是新鲜事，但**必须可释放**：否则切走面板后请求还在跑。
  */
 
 const POLL_INTERVAL_MS = 10_000
 
-import { AuthorizationGate } from './AuthorizationGate.tsx'
-
 export interface WorkbenchPanelProps {
   /** 由 apply 注入的浏览器侧可选服务（目录选择器 / 工作空间注册表 / layout）。 */
   services: ClientServices
-  /** 由 apply 创建的环境状态 store；会话头的指示灯与这里共用同一份。 */
+  /** 由 apply 创建的环境状态 store；侧栏入口与这里共用同一份。 */
   envStatus?: EnvStatusStore
+  /** 由 apply 创建的「跑的是哪一份插件」store；侧栏入口与这里共用同一份。 */
+  build?: BuildStore
+  /** 由 apply 创建的模块状态；侧栏那张分组卡上的三个子项与这里的三页是同一个模块。 */
+  modules?: ModuleStore
 }
 
 export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
@@ -49,26 +61,31 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const fallback = React.useRef<EnvStatusStore | null>(null)
   if (fallback.current === null) fallback.current = createEnvStatusStore()
   const envStatus = props.envStatus ?? fallback.current
-
   const snapshot = useEnvStatus(envStatus)
   const env = snapshot.env
   const envOk = env !== null && env.allOk === true
+  // 问候的姓名来自**环境自检**（`env.me`，钉钉 CLI 在同一次自检里取回），所以这里不额外发请求 ——
+  // 用户口径（2026-09-22）：「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调」。
+  // 按**本地时钟**的小时分档；姓名拿不到时 greetingLine 返回空串 → 整句不渲染。
+  const greeting = greetingLine(new Date().getHours(), env?.me?.name ?? '')
 
-  const [view, setView] = React.useState<'env' | 'report'>('env')
+  // 「现在跑的是哪一份插件」与侧栏入口共用同一份结论：dev（本地源码检出）还是装好的包 + 版本号。
+  // 单测直接渲染组件时没有 props.build，就地建一个（属于组件实例，不是模块级单例）。
+  // 模块状态与侧栏那张分组卡共用同一份；单测直接渲染组件时就地造一份（不是模块级单例）。
+  const moduleFallback = React.useRef<ModuleStore | null>(null)
+  if (moduleFallback.current === null) moduleFallback.current = createModuleStore()
+  const modules = props.modules ?? moduleFallback.current
+  const mod = useModule(modules)
+  const module = mod.active
+
+  const buildFallback = React.useRef<BuildStore | null>(null)
+  if (buildFallback.current === null) buildFallback.current = createBuildStore()
+  const buildStore = props.build ?? buildFallback.current
+  const build = useBuild(buildStore)
+  const tag = buildTagOf(build)
+
   /** 被门禁拦住的界面状态：running = 正在重新自检，blocked = 自检没过。 */
   const [gate, setGate] = React.useState<'idle' | 'running' | 'blocked'>('idle')
-  const [bootError, setBootError] = React.useState('')
-  /**
-   * 宿主报回来的协议代数；null = 还没答（或答失败）。
-   *
-   * 客户端产物随页面刷新就换新，宿主产物只有重启 profile 才换 —— 不同代时**必须拦住发起审核**，
-   * 否则界面是新的、逻辑是旧的，会按旧规则把审核挂到「当前会话」下（实测踩过）。
-   */
-  const [hostProtocol, setHostProtocol] = React.useState<number | null>(null)
-  // 宿主版本指纹：显示在标题旁，用户一眼看到「现在跑的是哪一版」，报问题时直接对上号。
-  const [hostRev, setHostRev] = React.useState('')
-  const [hostBuiltAt, setHostBuiltAt] = React.useState('')
-  const [boundParentId, setBoundParentId] = React.useState('')
   const [copied, setCopied] = React.useState(false)
   // 授权门槛：拒绝**不落盘**（下次打开页面还会再问）；同意落盘在 Host 的 trustCredentials 里。
   const [authDeclined, setAuthDeclined] = React.useState(false)
@@ -94,6 +111,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [query, setQuery] = React.useState('')
   const [page, setPage] = React.useState(1)
   const [drawer, setDrawer] = React.useState<{ key: string; info: Record<string, unknown> | null; error: string } | null>(null)
+  /** Drawer 正在播关闭动画（150ms 后再卸载）。 */
+  const [drawerClosing, setDrawerClosing] = React.useState(false)
+  const drawerTimer = React.useRef<number | null>(null)
   const [wsBusy, setWsBusy] = React.useState(false)
   const [wsMessage, setWsMessage] = React.useState('')
   const [escalateAvailable, setEscalateAvailable] = React.useState(false)
@@ -109,10 +129,13 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 卸载标记：面板切走之后到达的应答**不得**再写状态。
   // 没有这个守卫时，React 会对已卸载组件设置状态，而且旧数据可能覆盖下一次挂载的结果。
   const mounted = React.useRef(true)
-  // 「已经自动进过报告页」：用户手动回环境自检页之后不许再把他弹走。
-  const autoEntered = React.useRef(false)
 
   const describe = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause))
+
+  // 卸载时清掉关闭动画的计时器（面板关掉之后不许再 setState）。
+  React.useEffect(() => () => {
+    if (drawerTimer.current !== null) window.clearTimeout(drawerTimer.current)
+  }, [])
 
   const loadPrompt = React.useCallback(async () => {
     setPromptBusy(true)
@@ -129,7 +152,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   }, [])
 
   const loadCloud = React.useCallback(async (force: boolean) => {
-    // **只在首次进入、显式刷新或上传成功后列举 OSS**：切标签、翻页、检索都不得重复列举。
+    // **只在首次进入、显式刷新或上传成功后列举 OSS**：切模块、翻页、检索都不得重复列举。
     if (!force && ossLoaded) return
     setOssLoading(true)
     try {
@@ -189,10 +212,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
   }, [])
 
+  // 「本地的审核记录 / 子会话是否已经查过一次」。报告行的主操作标签（AI 审核 / 重新审核）
+  // 取决于这份数据，所以**必须先有它再画行**：否则用户会看到「AI 审核」先出现、
+  // 过一会儿跳成「重新审核」（用户 2026-09-22 报的一致性问题）。
+  const [auditsReady, setAuditsReady] = React.useState(false)
+
   const refreshAudits = React.useCallback(async () => {
     try {
       const result = await workbenchApi.auditStatus({})
       if (!mounted.current || !result.ok) return
+      setAuditsReady(true)
       const next: Record<string, AuditView> = {}
       for (const record of result.audits) next[record.key] = record
       setAudits(next)
@@ -204,44 +233,47 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
   }, [])
 
-  // 首次进入：boot → 环境自检（报告页按需拉列表与云端清单）。
+  // 首次进入：boot（宿主版本 / 协议代数 / 已登记父级）+ 环境自检 + 安装提示词。
+  // 侧栏入口也会 refresh 这两个 store，store 内部做并发去重，所以整页只发一次真实请求。
   React.useEffect(() => {
-    let alive = true
-    workbenchApi.boot()
-      .then((result) => {
-        if (!alive) return
-        if (!result.ok) setBootError('Host 未就绪')
-        setHostProtocol(result.protocol ?? null)
-        setHostRev(typeof result.rev === 'string' ? result.rev : '')
-        setHostBuiltAt(typeof result.builtAt === 'string' ? result.builtAt : '')
-        setBoundParentId(result.parentSessionId ?? '')
-      })
-      .catch((cause: unknown) => { if (alive) setBootError(describe(cause)) })
-    void envStatus.refresh()
+    void buildStore.refresh()
+    // 自检**一次就够**：用户口径（2026-09-22）「这个钉钉 cli 环境监测一遍就可以了，不需要每次
+    // 切换页面都去调，本质就是从环境信息把这个人的信息拿到」。面板会被关掉再打开（切会话、
+    // 切模块），而一次自检要探二进制、问氚云与钉钉、列一次 OSS —— 所以只在**还没有结论**时补一次；
+    // 要重跑有页面上的「重新自检」按钮，以及登录 / 授权成功后的那几次显式刷新。
+    const current = envStatus.get()
+    if (current.env === null && !current.busy) void envStatus.refresh()
     void loadPrompt()
     return () => {
-      alive = false
       mounted.current = false
     }
-  }, [envStatus, loadPrompt])
+  }, [envStatus, loadPrompt, buildStore])
 
-  // 自检直接通过 → 直接进报告审核。只自动进一次，用户手动回环境页后不再弹走。
+  // 自检直接通过 → 直接进报告审核。只自动进一次，用户手动切过模块之后不再弹走。
+  // 「自动进过没有」记在 store 里（不再是组件内的 ref）：面板关掉再打开也不该把用户弹走第二次。
   React.useEffect(() => {
-    if (!envOk || autoEntered.current) return
-    autoEntered.current = true
+    if (!envOk) return
+    if (modules.get().autoEntered) return
+    modules.autoEnter(true)
     setGate('idle')
-    setView('report')
-  }, [envOk])
+  }, [envOk, modules])
 
-  // 报告页激活时才轮询状态；离开时清掉定时器。
+  // 从侧栏子项切模块时清掉上一次的拦截态：用户已经补好环境、再点回「报告审核」，
+  // 不能还看到那张过期的「自检没过」拦截屏（以前由底部模块条的 onSelect 负责）。
   React.useEffect(() => {
-    if (view !== 'report') return undefined
+    if (mod.selectEpoch === 0) return
+    setGate('idle')
+  }, [mod.selectEpoch])
+
+  // 报告审核模块激活时才轮询状态；离开时清掉定时器。
+  React.useEffect(() => {
+    if (module !== 'audit' || !envOk) return undefined
     void refreshAudits()
     void loadReport()
     void loadCloud(false)
     const timer = setInterval(() => { void refreshAudits() }, POLL_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [view, refreshAudits, loadReport, loadCloud])
+  }, [module, envOk, refreshAudits, loadReport, loadCloud])
 
   /**
    * 「进入报告审核」。
@@ -251,25 +283,56 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    */
   const enterReport = (): void => {
     if (envOk) {
-      autoEntered.current = true
+      modules.select('audit')
       setGate('idle')
-      setView('report')
       return
     }
     setGate('running')
     void envStatus.refresh().then((result) => {
       if (!mounted.current) return
       if (result !== null && result.allOk) {
-        autoEntered.current = true
+        modules.select('audit')
         setGate('idle')
-        setView('report')
         return
       }
       setGate('blocked')
     })
   }
 
+  /** 抽屉里「查看更多审核依据」的动作：打开这一行的交付件 HTML（没有就不给入口）。 */
+  const reportOpenerOf = (key: string): (() => void) | undefined => {
+    const cloud = ossIndex[key]
+    if (cloud === undefined || cloud.htmlKey === '') return undefined
+    const htmlKey = cloud.htmlKey
+    return () => {
+      void workbenchApi.ossLink({ key: htmlKey })
+        // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
+        // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
+        .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
+        .catch((cause: unknown) => { setNotice(describe(cause)) })
+    }
+  }
+
+  /**
+   * 关闭 Drawer：**先播 150ms 关闭动画，再卸载**。
+   *
+   * `onClose` 依旧被立刻调用（Esc / 遮罩 / × 的行为不变），只是把"从 DOM 上消失"
+   * 推迟到动画之后；重新打开会取消上一次的计时器，避免"关到一半又打开"时被中途卸载。
+   */
+  const closeDrawer = React.useCallback((): void => {
+    setDrawerClosing(true)
+    if (drawerTimer.current !== null) window.clearTimeout(drawerTimer.current)
+    drawerTimer.current = window.setTimeout(() => {
+      drawerTimer.current = null
+      setDrawer(null)
+      setDrawerClosing(false)
+    }, 150)
+  }, [])
+
   const openAuditInfo = async (key: string, cloud: CloudItem): Promise<void> => {
+    // 上一次的关闭动画还没跑完就又打开了：取消卸载，直接换成新的内容。
+    if (drawerTimer.current !== null) { window.clearTimeout(drawerTimer.current); drawerTimer.current = null }
+    setDrawerClosing(false)
     setDrawer({ key, info: null, error: '' })
     if (cloud.jsonKey === '') {
       setDrawer({ key, info: null, error: '这条报告没有审核结果 JSON' })
@@ -302,7 +365,20 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   }
 
   // 宿主与客户端不同代：明说 + 停发起审核（其余只读功能照常）。
-  const hostStale = hostProtocol !== null && hostProtocol !== WORKBENCH_PROTOCOL
+  // 客户端产物随页面刷新就换新，宿主产物只有重启 profile 才换 —— 不同代时必须拦住，
+  // 否则界面是新的、逻辑是旧的，会按旧规则把审核挂到「当前会话」下（实测踩过）。
+  const hostStale = hostIsStale(build)
+  /**
+   * 是不是"第一次进来、还没拿到自检结论"。
+   *
+   * 三种情况下**不**显示等待页：
+   * - 已经有结论（那当然直接渲染对应模块）；
+   * - 宿主是旧构建（那是配置问题，要看到「请重启 profile」那句话，转圈会把它藏起来）；
+   * - 请求已经失败（`snapshot.error` 非空）—— 失败要看到真实原因，不能一直转圈。
+   */
+  const awaitingEnv = env === null && !hostStale && snapshot.error === ''
+  const bootError = build.error
+  const boundParentId = build.parentSessionId
   const gating = gatingOf(env, activeKey, {
     busy,
     ...(auditBusy === '' ? {} : { auditBusy }),
@@ -318,6 +394,8 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const reportState = {
     tasks: (pending?.rows ?? []) as TaskRow[],
     audits,
+    /** 审核记录查过没有 —— 报告页据此决定"现在能不能画行"（见 ReportPaneState 注释）。 */
+    auditsReady,
     ossIndex,
     ossIndexError: ossError,
     ossLoading,
@@ -339,7 +417,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     childAliveHint,
   }
 
-  // 环境页的公共 props：env===null（正在自检/失败）与已有结论时只差 env 本身。
+  // 环境信息页的公共 props：env===null（正在自检/失败）与已有结论时只差 env 本身。
   const envPane = <EnvironmentPane
     env={env}
     error={snapshot.error !== '' ? snapshot.error : bootError}
@@ -363,22 +441,45 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     promptMessage={promptMessage}
   />
 
+  /**
+   * 报告审核模块被门禁挡住时的正文。
+   *
+   * 它和「环境信息」页不是一回事：这里只回答两件事 —— 为什么进不去、以及下一步点哪。
+   * 详细的分层排查留在环境信息模块里（那是它唯一的职责）。
+   */
+  const auditGate = <div className={C.gate}>
+    <div className={C.gateTitle}>
+      {gate === 'running' ? zhCN.gateRunningTitle : zhCN.gateBlockedTitle}
+    </div>
+    <div className={C.muted}>{gate === 'running' ? zhCN.gateRunningHint : zhCN.gateBlockedHint}</div>
+    <div className={C.row} style={{ marginTop: '12px' }}>
+      <Button label={zhCN.recheck} tone="primary" disabled={gate === 'running'} onClick={enterReport} />
+      <Button label={zhCN.moduleEnv} onClick={() => { modules.select('env') }} />
+    </div>
+    {env !== null && env.blocked.length > 0
+      ? <ul className={C.blockers}>
+          {env.blocked.map((item, index) => <li key={item} className={C.blocker}>
+            <span className={C.blockerIndex}>{String(index + 1)}</span>
+            <span>{item}</span>
+          </li>)}
+        </ul>
+      : null}
+  </div>
+
   return <div className={C.root}>
     <div className={C.header}>
+      {/* 品牌标记：与侧栏入口同一个图形（用户给的原图描成的矢量版）。 */}
+      <BrandMark size={22} />
       <span className={C.title}>{zhCN.title}</span>
-      {/* 当前运行的宿主版本：客户端刷新就换新、宿主只有重启才换，所以这个号是
-          「我到底在跑哪一版」的唯一凭据（悬停看构建时间）。 */}
-      <span
-        className={C.version}
-        title={hostBuiltAt === '' ? zhCN.versionHint : `${zhCN.versionHint}：${hostBuiltAt}`}
-      >{hostRev === '' ? zhCN.versionUnknown : hostRev}</span>
+      {/* 同一枚小标签：dev（本地源码检出）或 v<版本>（装好的包）。
+          客户端刷新就换新、宿主只有重启才换，所以这枚标签是「我到底在跑哪一版」的唯一凭据
+          （悬停看形态说明与构建时间）。 */}
+      <span className={[C.version, BUILD_TAG_CLASSES[tag.tone]].join(' ')} title={tag.title}>{tag.text}</span>
       <span className={C.grow} />
-      {/* 面板自己的右上角指示灯：兼作「回到环境自检」的入口（与环境页的门禁是同一份结论）。 */}
-      <EnvironmentStatusIcon
-        store={envStatus}
-        active={view === 'env'}
-        onOpen={() => { setView('env') }}
-      />
+      {/* 头部右侧只放一句问候：`下午好，杨凡宾`。姓名来自宿主的钉钉 CLI（`whoami`），
+          **拿不到就整句不渲染**（用户 2026-09-22 口径：钉钉 CLI 没有登录信息就什么也不展示）。
+          这里原先写的是当前模块名，用户要求去掉 —— 模块在哪一页由侧栏那张分组卡的高亮说了算。 */}
+      {greeting === '' ? null : <span className={C.greeting}>{greeting}</span>}
     </div>
 
     {/* 未授权：整块面板被门槛盖住（Host 侧另有 blocked 兜底，绕过 UI 调操作也进不去）。
@@ -394,123 +495,168 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
         />
       : null}
 
-    {bootError === '' ? null : <Notice tone="warn">{bootError}</Notice>}
+    <div className={C.body}>
+      {bootError === '' ? null : <Notice tone="warn">{bootError}</Notice>}
 
-    {hostStale
-      ? <Notice tone="warn">
-          <div className={C.itemName}>{zhCN.hostStaleTitle}</div>
-          <div>{zhCN.hostStaleHint}</div>
-        </Notice>
-      : null}
+      {hostStale
+        ? <Notice tone="warn">
+            <div className={C.itemName}>{zhCN.hostStaleTitle}</div>
+            <div>{zhCN.hostStaleHint}</div>
+          </Notice>
+        : null}
 
-    {view === 'env' || env === null
-      ? envPane
-      : <ReportPane
-          state={reportState}
-          gating={gating}
-          onSearch={(next) => { setQuery(next); setPage(1); void loadReport(pendingArgs(next, 1)) }}
-          onGoPage={(next) => { setPage(next); void loadReport(pendingArgs(query, next)) }}
-          onRefreshPending={() => { void loadReport(pendingArgs(query, page)) }}
-          onRefreshCloud={() => { void loadCloud(true) }}
-          onSearchCloud={(seqNo) => { void searchCloud(seqNo) }}
-          onClearCloudSearch={() => { setCloudSearch({ seqNo: '', items: [], error: '', busy: false, done: false }) }}
-          onStart={(task, retry) => {
-            const key = task.seqNo !== '' ? task.seqNo : task.name
-            setAuditBusy(key)
-            void workbenchApi.auditStart({
-              key,
-              seqNo: task.seqNo,
-              objectId: task.id,
-              project: task.project,
-              ...(retry ? { retry: true } : {}),
-            }).then((result) => {
-              setNotice(result.ok ? '' : result.error)
-              // 失败时留下手工兜底：审核本身可以在普通会话里做，不该让用户干等。
-              setHandoff(result.ok ? null : task)
-              setHandoffCopied(false)
-              if (result.ok) {
-                setActiveKey(key)
-                setActiveChildId(result.childId)
-                // 上传成功后才会重新列举 OSS；这里只是启动审核，不动云端清单。
-                void refreshAudits()
-              }
-            }).catch((cause: unknown) => { setNotice(describe(cause)) })
-              .finally(() => { setAuditBusy('') })
-          }}
-          onStop={(childId) => {
-            setStopBusy(true)
-            void workbenchApi.auditStop(childId === '' ? {} : { childId })
-              .then((result) => { setNotice(result.ok ? '' : result.error); return refreshAudits() })
-              .catch((cause: unknown) => { setNotice(describe(cause)) })
-              .finally(() => { setStopBusy(false) })
-          }}
-          onRetryUpload={(key) => {
-            setRetryBusy(true)
-            void workbenchApi.ossUpload({ key })
-              .then((result) => {
-                setNotice(result.ok ? '' : result.error)
-                // 上传成功才重新列举云端清单。
-                if (result.ok) void loadCloud(true)
-                return refreshAudits()
-              })
-              .catch((cause: unknown) => { setNotice(describe(cause)) })
-              .finally(() => { setRetryBusy(false) })
-          }}
-          onOpenCloud={(key) => {
-            void workbenchApi.ossLink({ key })
-              // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
-              // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
-              .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
-              .catch((cause: unknown) => { setNotice(describe(cause)) })
-          }}
-          onOpenLocalHtml={(key) => {
-            const record = audits[key]
-            if (record === undefined || record.casePath === '' || record.htmlFile === '') {
-              setNotice('这条记录还没有本地 HTML')
-              return
-            }
-            void workbenchApi.openPath({ path: `${record.casePath.replace(/\/+$/, '')}/${record.htmlFile}` })
-              .then((result) => { if (!result.ok) setNotice(result.error) })
-          }}
-          onOpenSession={(key) => {
-            // 用**被点那一行**的 key，不要拿 activeKey 顶替：那是「当前在跑的那条」，
-            // 点别的行会开到错的孩子，activeKey 为空时报「该记录没有子会话 id。」（实测踩到）。
-            const { childId, parentSessionId } = openSessionTarget(key, audits, boundParentId)
-            void openChildSession(props.services, { childId, parentSessionId })
-              .then((result) => {
-                setNotice(result.ok ? `${zhCN.openSessionOpened}${childId.slice(0, 8)}…` : result.error)
-              })
-          }}
-          onOpenAuditInfo={(key, cloud) => { void openAuditInfo(key, cloud) }}
-          handoffCopied={handoffCopied}
-          onHandoffCopied={setHandoffCopied}
-          onEscalateRetry={() => {
-            setEscalateAvailable(false)
-            setBusy(true)
-            void workbenchApi.pending({
-              ...(query === '' ? {} : { query }),
-              page: reportState.page,
-              size: reportState.pageSize,
-              escalate: true,
-            }).then((result) => {
-              setPending(result)
-              setEscalateAvailable(result.escalateAvailable === true)
-              setNotice(result.ok ? '' : result.error)
-            }).catch((cause: unknown) => { setNotice(describe(cause)) })
-              .finally(() => { setBusy(false) })
-          }}
-          onOpenPath={(path) => {
-            void workbenchApi.openPath({ path })
-              .then((result) => { if (!result.ok) setNotice(result.error) })
-          }}
-        />}
+      {/* 自检没出结论之前，正文只放这一页统一等待页 —— 这时候谈"在哪一页"没有意义：
+          结论一到，autoEnter() 会把用户送到该去的那一页（通过 → 报告审核，不通过 → 环境信息）。 */}
+      {awaitingEnv ? <WorkbenchLoading /> : null}
+
+      {/* 「报告评估」还没开放：这一页是 Coming Soon，页内给一条去「报告审核」的路。 */}
+      {!awaitingEnv && module === 'eval'
+        ? <ReportEvalPane onGoAudit={() => { modules.select('audit') }} />
+        : null}
+
+      {!awaitingEnv && (module === 'env' || env === null) ? envPane : null}
+
+      {module === 'audit' && env !== null
+        ? (envOk
+            ? <ReportPane
+                state={reportState}
+                gating={gating}
+                workspace={{ id: env?.workspace.id ?? '', path: env?.workspace.path ?? '' }}
+                // 讨论面板要的是**会话服务本身**（create/open/binding/list 四个动词）。
+                // 服务可能缺席（别的部署/旧宿主），面板会自己降级成一句「请用会话中打开」。
+                port={props.services.sessions ?? {}}
+                onOpenDiscussion={(sessionId) => {
+                  // 「在会话中打开」= 把这条讨论会话设为当前会话 + 主面板切回原生对话
+                  // （工具调用、审批、完整渲染都在那边）。
+                  props.services.sessions?.open?.(sessionId)
+                  props.services.layout?.selectPanel?.(null)
+                }}
+                onSearch={(next) => { setQuery(next); setPage(1); void loadReport(pendingArgs(next, 1)) }}
+                onGoPage={(next) => { setPage(next); void loadReport(pendingArgs(query, next)) }}
+                onRefreshPending={() => { void loadReport(pendingArgs(query, page)) }}
+                onRefreshCloud={() => { void loadCloud(true) }}
+                onSearchCloud={(seqNo) => { void searchCloud(seqNo) }}
+                onClearCloudSearch={() => { setCloudSearch({ seqNo: '', items: [], error: '', busy: false, done: false }) }}
+                onStart={(task, retry) => {
+                  const key = task.seqNo !== '' ? task.seqNo : task.name
+                  setAuditBusy(key)
+                  void workbenchApi.auditStart({
+                    key,
+                    seqNo: task.seqNo,
+                    objectId: task.id,
+                    project: task.project,
+                    ...(retry ? { retry: true } : {}),
+                  }).then((result) => {
+                    setNotice(result.ok ? '' : result.error)
+                    // 失败时留下手工兜底：审核本身可以在普通会话里做，不该让用户干等。
+                    setHandoff(result.ok ? null : task)
+                    setHandoffCopied(false)
+                    if (result.ok) {
+                      setActiveKey(key)
+                      setActiveChildId(result.childId)
+                      // 上传成功后才会重新列举 OSS；这里只是启动审核，不动云端清单。
+                      void refreshAudits()
+                    }
+                  }).catch((cause: unknown) => { setNotice(describe(cause)) })
+                    .finally(() => { setAuditBusy('') })
+                }}
+                onStop={(childId) => {
+                  setStopBusy(true)
+                  void workbenchApi.auditStop(childId === '' ? {} : { childId })
+                    .then((result) => { setNotice(result.ok ? '' : result.error); return refreshAudits() })
+                    .catch((cause: unknown) => { setNotice(describe(cause)) })
+                    .finally(() => { setStopBusy(false) })
+                }}
+                onRetryUpload={(key) => {
+                  setRetryBusy(true)
+                  void workbenchApi.ossUpload({ key })
+                    .then((result) => {
+                      setNotice(result.ok ? '' : result.error)
+                      // 上传成功才重新列举云端清单。
+                      if (result.ok) void loadCloud(true)
+                      return refreshAudits()
+                    })
+                    .catch((cause: unknown) => { setNotice(describe(cause)) })
+                    .finally(() => { setRetryBusy(false) })
+                }}
+                onOpenCloud={(key) => {
+                  void workbenchApi.ossLink({ key })
+                    // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
+                    // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
+                    .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
+                    .catch((cause: unknown) => { setNotice(describe(cause)) })
+                }}
+                onOpenLocalHtml={(key) => {
+                  const record = audits[key]
+                  if (record === undefined || record.casePath === '' || record.htmlFile === '') {
+                    setNotice('这条记录还没有本地 HTML')
+                    return
+                  }
+                  void workbenchApi.openPath({ path: `${record.casePath.replace(/\/+$/, '')}/${record.htmlFile}` })
+                    .then((result) => { if (!result.ok) setNotice(result.error) })
+                }}
+                onOpenSession={(key) => {
+                  // 用**被点那一行**的 key，不要拿 activeKey 顶替：那是「当前在跑的那条」，
+                  // 点别的行会开到错的孩子，activeKey 为空时报「该记录没有子会话 id。」（实测踩到）。
+                  const { childId, parentSessionId } = openSessionTarget(key, audits, boundParentId)
+                  void openChildSession(props.services, { childId, parentSessionId })
+                    .then((result) => {
+                      setNotice(result.ok ? `${zhCN.openSessionOpened}${childId.slice(0, 8)}…` : result.error)
+                    })
+                }}
+                onOpenAuditInfo={(key, cloud) => { void openAuditInfo(key, cloud) }}
+                // 「AI 审核结果分析会话」要的是**数据**（不是抽屉界面）：同一个 `oss-result`
+                // 操作，把裁剪过的审核摘要直接交回去；失败如实返回原因，由页内降级处理。
+                onLoadAuditInfo={async (key, cloud) => {
+                  if (cloud.jsonKey === '') return { info: null, error: '' }
+                  try {
+                    const result = await workbenchApi.ossResult({ key: cloud.jsonKey })
+                    return { info: result.ok ? result.info : null, error: result.ok ? '' : result.error }
+                  } catch (cause: unknown) {
+                    return { info: null, error: describe(cause) }
+                  }
+                }}
+                handoffCopied={handoffCopied}
+                onHandoffCopied={setHandoffCopied}
+                onEscalateRetry={() => {
+                  setEscalateAvailable(false)
+                  setBusy(true)
+                  void workbenchApi.pending({
+                    ...(query === '' ? {} : { query }),
+                    page: reportState.page,
+                    size: reportState.pageSize,
+                    escalate: true,
+                  }).then((result) => {
+                    setPending(result)
+                    setEscalateAvailable(result.escalateAvailable === true)
+                    setNotice(result.ok ? '' : result.error)
+                  }).catch((cause: unknown) => { setNotice(describe(cause)) })
+                    .finally(() => { setBusy(false) })
+                }}
+                onOpenPath={(path) => {
+                  void workbenchApi.openPath({ path })
+                    .then((result) => { if (!result.ok) setNotice(result.error) })
+                }}
+              />
+            : auditGate)
+        : null}
+    </div>
 
     {/* 审核信息走**右侧抽屉**：不离开当前列表就能看明细，关掉之后列表还在原来的位置。 */}
     {drawer === null ? null : <SideDrawer
-      title={`${zhCN.auditInfo} · ${drawer.key}`}
-      onClose={() => setDrawer(null)}
+      title={zhCN.auditInfo}
+      subtitle={drawer.key}
+      closing={drawerClosing}
+      onClose={closeDrawer}
     >
-      <AuditInfoDrawer seqNo={drawer.key} info={drawer.info} error={drawer.error} />
+      <AuditInfoDrawer
+        seqNo={drawer.key}
+        info={drawer.info}
+        error={drawer.error}
+        // 「查看更多审核依据」回到完整审核报告（交付件 HTML）——抽屉里不放规则证据链。
+        // 这一行**没有**交付件时不给入口（给了就是假功能）。
+        onOpenReport={reportOpenerOf(drawer.key)}
+      />
     </SideDrawer>}
   </div>
 }

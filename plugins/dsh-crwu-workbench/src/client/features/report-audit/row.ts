@@ -171,53 +171,72 @@ export function deriveRowView(
   const buttons: ButtonSpec[] = []
   const notes: string[] = []
 
-  // 云端按钮在两种情况下都要出现：还没发起过（给「查看报告」），或已有记录。
-  if (hasCloudResult(cloud)) {
+  // ── 操作列只回答一个问题："我现在最应该做什么？"（用户 2026-09-22 口径）──────────
+  // 每行最多：1 个主操作 + 1 个 DeepSeek 小鲸鱼（在 JSX 里）+ 1 个 ••• 菜单。
+  // 规则：有线上报告 → 查看报告；正在审核 → 「审核中」（**不可点**，避免重复触发）；
+  // 其余 → 启动审核（AI 审核 / 重新审核按有无历史决定）。
+  // 其余动作一律进 •••：「查看审核信息」「打开本地 HTML」「停止审核」「重传 OSS」「重新审核」。
+  // 启动时间 / 停止原因 / 已上云 / 未出结果 / 第 N 次 全部是**详情**，列表不再展示。
+  const hasReport = hasCloudResult(cloud)
+  const live = audit !== null && audit !== undefined && childIsLive(audit)
+
+  // 有没有"本地审核记录"决定了启动动作的措辞与确认：没记录过是「AI 审核」，
+  // 审过一次再动就是「重新审核」（会覆盖结果，必须二次确认）。
+  const everStarted = audit !== null && audit !== undefined
+  if (hasReport) {
     buttons.push({ id: 'cloud-report', label: '查看报告', tone: 'primary', disabled: false })
-  }
-  if (hasAuditInfo(cloud)) {
-    buttons.push({ id: 'audit-info', label: '审核信息', tone: 'plain', disabled: false })
+    // 已有线上报告但本地没有记录：仍然要留一条「重新审核」在 ••• 里。
+    if (!everStarted) {
+      // 云端有审核信息（JSON 摘要）时，它同样进 •••：这一条不依赖本地审核记录。
+      if (hasAuditInfo(cloud)) {
+        buttons.push({ id: 'audit-info', label: '查看审核信息', tone: 'plain', disabled: false })
+      }
+      buttons.push(restartButton(gating))
+      const note = gatingNote(gating)
+      if (note !== '') notes.push(note)
+      return { key, badges, buttons, notes }
+    }
+  } else if (live) {
+    // 正在审核：主位是不可点的「审核中」（避免重复触发），停止进 •••。
+    buttons.push({ id: 'progress', label: '审核中', tone: 'plain', disabled: true })
+  } else {
+    // 主操作只有**一个**，而且**不许两个同时出现**（用户 2026-09-22 口径：
+    // 「有了重新审核就不要再有 AI 审核了，因为它的优先级相对高一点，强制 AI 去重新审核」）：
+    //   没有任何审核记录 → AI 审核（首次发起，不需要二次确认）
+    //   已经有记录（本地记录或云端交付件）→ 重新审核（会覆盖结果，一律二次确认）
+    // 相应地，••• 里也**不再**重复放一个「重新审核」（同一个动作只出现一次）。
+    buttons.push(startButton(gating, key, everStarted || hasReport ? '重新审核' : 'AI 审核', {
+      confirm: everStarted || hasReport,
+      retry: everStarted || hasReport,
+    }))
   }
 
-  if (audit === null || audit === undefined) {
-    const fromCloud = hasCloudResult(cloud)
-    buttons.unshift(startButton(gating, key, startLabel(cloud), { confirm: fromCloud, retry: fromCloud }))
+  if (!everStarted) {
     const note = gatingNote(gating)
     if (note !== '') notes.push(note)
     return { key, badges, buttons, notes }
   }
 
-  badges.push(statusBadge(audit.status))
-  // 「活着但不是 running」单独提示：这两种判据不一致时用户最需要知道。
+  // 只留**会改变下一步操作**的两类异常；其余状态不再占列表空间。
   if (audit.childAlive === true && audit.status !== 'running') {
     badges.push({ text: '会话仍存活', tone: 'medium' })
   }
-  if (audit.attempt > 1) badges.push({ text: `第 ${audit.attempt} 次`, tone: 'low' })
-  if (audit.uploadedAt !== '') badges.push({ text: '已上云', tone: 'ok' })
   if (audit.uploadError !== '') badges.push({ text: '上云失败', tone: 'high' })
 
-  if (audit.startedAt !== '') {
-    const suffix = audit.attempt > 1 ? `（第 ${audit.attempt} 次）` : ''
-    notes.push(`启动 ${formatTime(audit.startedAt)}${suffix}`)
+  // 次级动作 → ••• 菜单（顺序即菜单顺序）。
+  if (hasAuditInfo(cloud)) {
+    buttons.push({ id: 'audit-info', label: '查看审核信息', tone: 'plain', disabled: false })
   }
-  // 停止原因只在不是运行中时显示：运行中的记录可能带着上一次的残留原因。
-  if (audit.status !== 'running' && audit.stopReason !== '') notes.push(audit.stopReason)
-  if (audit.uploadError !== '') notes.push(audit.uploadError)
-
-  const live = childIsLive(audit)
+  if (audit.htmlFile !== '') {
+    buttons.push({ id: 'open-html', label: '打开本地 HTML', tone: 'plain', disabled: false })
+  }
   if (live && audit.childId !== '') {
     buttons.push({
       id: 'stop',
-      label: gating.stopBusy === true ? '停止中…' : '停止',
-      tone: 'warn',
+      label: gating.stopBusy === true ? '停止中…' : '停止审核',
+      tone: 'plain',
       disabled: gating.stopBusy === true,
     })
-  }
-  if (audit.htmlFile !== '') {
-    buttons.push({ id: 'open-html', label: '本地 HTML', tone: 'plain', disabled: false })
-  }
-  if (audit.childId !== '') {
-    buttons.push({ id: 'open-session', label: '查看会话', tone: 'plain', disabled: false })
   }
   if (audit.status === 'done' && audit.uploadedAt === '') {
     buttons.push({
@@ -227,10 +246,32 @@ export function deriveRowView(
       disabled: gating.retryBusy === true,
     })
   }
-  // 运行中不给「另起一条」：必须先停止。这条就是「两条子会话对写同一案例目录」的闸门。
-  if (!live) buttons.push(startButton(gating, key, '重新审核', { confirm: true, retry: true }))
+  // 重新审核是低频且**会覆盖结果**的动作：如果有线上报告（主位被「查看报告」占着）
+  // 或正在审核，它就待在 ••• 里；只有"没有线上报告且不在跑"时它才是主位。
+  // 运行中一律不给「另起一条」：必须先停止（「两条子会话对写同一案例目录」的闸门）。
+  // 主位已经是「重新审核」时不重复；只有主位被「查看报告」占着（有线上报告）才把重新审核放进 •••。
+  if (hasReport && !live) buttons.push(restartButton(gating))
 
+  // 「查看会话」已删除：它和小鲸鱼（DeepSeek 讨论入口）是同一个去处，重复入口只会让用户犹豫。
   return { key, badges, buttons, notes }
+}
+
+/** 「重新审核」：次级动作，永远是 ••• 里的一项，且一律二次确认（会覆盖已有结果）。 */
+function restartButton(gating: Gating): ButtonSpec {
+  return { id: 'restart', label: '重新审核', tone: 'plain', disabled: gating.busy === true, confirm: true, retry: true }
+}
+
+/** 这一行的**主操作**：第一个可点的主色按钮；「审核中」那种不可点的占位也算主位。 */
+export function primaryActionOf(view: RowView): ButtonSpec | null {
+  return view.buttons[0] ?? null
+}
+
+/** 进 ••• 菜单的次级动作（主操作之后的所有按钮）。 */
+export function menuActionsOf(view: RowView): ButtonSpec[] {
+  return view.buttons.slice(1)
+}
+
+/** 时间显示  return { key, badges, buttons, notes }
 }
 
 /** 时间显示：只到秒（`HH:MM:SS`）；解析不出就原样返回。 */

@@ -54,6 +54,67 @@ export function parseLsObjects(output: unknown, bucket: string): string[] {
   return keys
 }
 
+/**
+ * `ossutil ls` **长格式**的一行：`LastModifiedTime / Size(B) / StorageClass / ETAG / ObjectName`。
+ *
+ * 用户口径（2026-09-23）：「oss 一次可以查询一个目录下有多少个文件」——
+ * ossutil 的 `ls` **默认就是长格式**（只有 `--short-format` 才只剩 key），
+ * 也就是说**一次列举**就能同时拿到：对象个数、每个对象的大小、最后写入时间、**ETag**。
+ * 这三样正是"审核结果有没有重新生成过"的客观依据，所以这里按长格式解析，
+ * 不再给自己加 `--short-format` 把信息丢掉。
+ *
+ * 时区段在不同版本/语言下可能是 `+0800`、`+0000 CST` 或 `Z`，所以这里不逐字匹配它，
+ * 只用"时间 → 一堆非空字段 → 数字大小 → 存储类型 → ETag → 对象名"这个骨架。
+ */
+export interface OssEntry {
+  key: string
+  /** 字节数；读不出为 0。 */
+  size: number
+  /** `YYYY-MM-DD HH:MM:SS`（**取字面量，不做时区换算**，与业务时间口径一致）。 */
+  lastModified: string
+  /** 对象 ETag（单段上传即内容 MD5；分片上传带 `-N` 后缀）。 */
+  etag: string
+}
+
+const LS_LINE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+.*?\s+(\d+)\s+(\S+)\s+([0-9A-Fa-f-]{8,})\s+(\S+)\s*$/
+
+/** 从长格式输出里解析出带元数据的对象清单；认不出的行**跳过**（表头、汇总、告警都不算对象）。 */
+export function parseLsEntries(output: unknown, bucket: string): OssEntry[] {
+  const entries: OssEntry[] = []
+  for (const line of text(output).split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    const matched = LS_LINE.exec(trimmed)
+    if (matched === null) continue
+    const [, lastModified, size, , etag, name] = matched
+    const key = keyOfObjectToken(name, bucket)
+    if (key === '') continue
+    const bytes = Number.parseInt(size, 10)
+    entries.push({
+      key,
+      size: Number.isFinite(bytes) ? bytes : 0,
+      lastModified,
+      etag: etag.toLowerCase(),
+    })
+  }
+  return entries
+}
+
+/** 对象名那一列 → key（既认 `oss://bucket/key` 也认裸 key；越出该 bucket 的丢掉）。 */
+function keyOfObjectToken(token: unknown, bucket: string): string {
+  const raw = text(token)
+  if (raw === '') return ''
+  const prefix = `oss://${bucket}/`
+  if (raw.startsWith(prefix)) return raw.slice(prefix.length)
+  if (raw.startsWith('oss://')) return ''
+  return raw
+}
+
+/** 保留老的"只要 key"接口：签名/校验等只需要 key 的地方继续用它。 */
+export function keysOfEntries(entries: readonly OssEntry[]): string[] {
+  return entries.map((entry) => entry.key)
+}
+
 /** 从 `ossutil sign` 的输出里挑出 URL；挑不到返回空串。 */
 export function parseSignUrl(output: unknown): string {
   for (const line of text(output).split(/\r?\n/)) {
@@ -71,9 +132,20 @@ export function joinUrl(base: unknown, key: unknown): string {
   return `${clean}/${encoded}`
 }
 
+export interface OssFile {
+  key: string
+  name: string
+  /** 长格式才有：字节数。 */
+  size?: number
+  /** 长格式才有：`YYYY-MM-DD HH:MM:SS`（字面量，不做时区换算）。 */
+  lastModified?: string
+  /** 长格式才有：对象 ETag（单段上传即内容 MD5）。 */
+  etag?: string
+}
+
 export interface OssItem {
   seqNo: string
-  files: Array<{ key: string; name: string }>
+  files: OssFile[]
   htmlKey: string
   jsonKey: string
 }
@@ -84,15 +156,21 @@ export interface OssItem {
  * 只认**规范交付件名**（`审核意见.<流水号>.html` / `审核结果.<流水号>.json`）填 htmlKey/jsonKey，
  * 其它文件只作为附件列出 —— 否则辅助文件（`.before-` 备份、中间产物）会被当成正式结果。
  */
-export function groupObjects(keys: string[], prefix: string): Record<string, OssItem> {
+export function groupObjects(
+  entries: ReadonlyArray<string | OssEntry>,
+  prefix: string,
+): Record<string, OssItem> {
   const items: Record<string, OssItem> = {}
-  for (const key of keys) {
+  for (const entry of entries) {
+    const key = typeof entry === 'string' ? entry : entry.key
     const seq = seqNoFromObjectKey(key, prefix)
     if (seq === '') continue
     const item = items[seq] ?? { seqNo: seq, files: [], htmlKey: '', jsonKey: '' }
     items[seq] = item
     const name = fileNameOf(key)
-    item.files.push({ key, name })
+    // 长格式下把"大小 / 最后写入时间 / ETag"一起带上：上层据此判"审核结果是否重新生成过"。
+    if (typeof entry === 'string') item.files.push({ key, name })
+    else item.files.push({ key, name, size: entry.size, lastModified: entry.lastModified, etag: entry.etag })
     if (name === `审核意见.${seq}.html`) item.htmlKey = key
     else if (name === `审核结果.${seq}.json`) item.jsonKey = key
   }

@@ -58,7 +58,12 @@ export interface AuditView {
 /** 云端一个流水号下的交付件。 */
 export interface CloudItem {
   seqNo: string
-  files: Array<{ key: string; name: string }>
+  /**
+   * 该流水号下的**全部**云端对象。`size` / `lastModified` / `etag` 来自 `ossutil ls` 的
+   * 长格式（一次列举就有；旧宿主不传这三个字段时客户端按缺失处理）。
+   * ETag 是"审核结果有没有重新生成过"的客观依据，所以别再用 `--short-format` 把它丢掉。
+   */
+  files: Array<{ key: string; name: string; size?: number; lastModified?: string; etag?: string }>
   htmlKey: string
   jsonKey: string
 }

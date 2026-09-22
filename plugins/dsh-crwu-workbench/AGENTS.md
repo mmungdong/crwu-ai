@@ -2,6 +2,17 @@
 
 本仓库是一个 **DeepSeek Harness（DSH）插件**。所有代码、目录、测试和发布改动都必须遵守 DSH 的插件装配、Host/Client 分层、Cordis 生命周期与浏览器模块规范。不能把它当作普通 Node.js 网站或独立 React 应用处理。
 
+**延伸阅读（`docs/`，给维护者读的"为什么"）**：本文件是**门禁口径**；写代码前按需读下面三份，
+它们与本文件冲突时以本文件为准，并在同一批把文档改回来。
+
+| 文档 | 什么时候读 |
+| --- | --- |
+| [`docs/ui-design-guidelines.md`](docs/ui-design-guidelines.md) | 动界面 / 样式 / 交互：视觉语言、DSH token 白名单、样式交付与模板字符串禁反引号、类名纪律、布局硬规则、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
+| [`docs/development-notes.md`](docs/development-notes.md) | 动交付形态 / Cordis 生命周期 / Host 操作 / 协议号 / 沙箱与授权 / 测试与发版：加载契约、`baseUrl` 陷阱、协议号规则、增删操作清单、开发循环与证伪纪律、常见坑速查 |
+| [`docs/PRD-workbench-sidebar-modules.md`](docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块或面板壳的形态与口径：需求、取舍、历次返工与证伪记录 |
+
+`plugins/AGENTS.md` §3.3 也指向这三份文档；新踩的坑**写回对应文档**，不要只留在提交信息或对话里。
+
 ## 1. 形态与修改原则
 
 仓库只有**一条形态**：`src/` 是唯一源码，由 tsdown 打包成 `lib/index.js` 与 `lib/client.js`，
@@ -142,6 +153,18 @@ tests/
 `resolveSlotLabel(options.label) ?? options.id`，而 `resolveSlotLabel` 对字符串**原样返回**
 （对函数则调用）。所以 `label` 直接给中文字符串是正确的，不需要 locale 键。
 
+工作台的入口席位是 `sidebar.footer.action`（左侧栏底部、Settings 上方），只注入 `wide` 与标准席位
+hook `usePanelInfo`；**跳转动作要在点击时现读 `services.layout`**，别在 `apply()` 里快照。
+`tests/unit/client-package.test.mjs` 会断言顶部 `sidebar.panellist` 入口与会话头指示灯**都不再注册**。
+
+入口内容 = **品牌标记（`components/BrandMark.tsx`，用户给的原图描出来的矢量版）+ 名字 + 版本小标签 +
+环境标记**。版本小标签（`dev` / `v0.0.4`）来自 `features/workbench/build-store.ts`，它包着 `boot`，
+和 `envStatus` 一样由 `apply()` 创建、随 props 下发 —— 侧栏入口与面板头部必须显示同一枚标签，各自
+`boot()` 既费一次请求，又会出现「标签是新的、门禁说旧的」这种自相矛盾的画面。宿主侧对应的两个常量在
+`src/host/build-info.ts`（`HOST_BUILD_KIND`：包根旁边有没有 `src/`）与 `src/host/consts.ts`
+（`PLUGIN_VERSION` / `PLUGIN_REV`），`ping` / `boot` 都会带上；**改这两个字段就等于改跨进程契约，要 +1
+`WORKBENCH_PROTOCOL`**。
+
 ### 4.1.3 bundle patch 里的 `baseUrl` 是 **profile 目录**（2026-09-22 踩过）
 
 profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以 `cordis.patch.yml` 里 `!!js` 表达式拿到
@@ -210,8 +233,10 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
    - 早先用的 `--dsw-alias-bg-secondary` / `-border-secondary` / `-state-warning-primary` 都不存在；
    - 有一条测试扫描硬编码色值（`#hex` / `rgb(` / `hsl(`），改样式前先核对 theme 表。
 4. **布局三条**（各自对应一次真实故障）：
-   - 面板自身必须是滚动容器：`.crwu-audit-root { height:100%; overflow:auto }` —— DSH 的主内容列
-     是 `display:flex; overflow:hidden`，它不滚动、把滚动交给面板；少这两条长页面会被裁一半；
+   - 面板自身必须拥有滚动：`.crwu-audit-root { height:100%; min-height:0; overflow:hidden }` +
+     **正文区** `.crwu-audit-body { overflow:auto; min-height:0 }` —— DSH 的主内容列
+     是 `display:flex; overflow:hidden`，它不滚动、把滚动交给面板；少这两条长页面会被裁一半。
+     滚动**不能放在 root 上**：头部（标题 + 版本标签）必须常驻，root 一滚它就跟着滚出视口；
    - 表格用**固定布局 + `colgroup` 百分比列宽**（`.crwu-audit-table` + `.crwu-audit-col-*`）：
      `table-layout: auto` 会把多出来的宽度全给最宽的那一列（实测 1920px 时报告名涨到 696px，
      而操作列几乎不变，右侧一直很挤）；表格另设 `min-width`，**外面必须套
@@ -447,7 +472,9 @@ node <repo>/install/browser-check.mjs --url 'http://127.0.0.1:3099/?token=<token
      --playwright /tmp/pw/node_modules --out /tmp/pw/shots
 ```
 
-76 条断言：侧栏入口、**右上角环境指示灯**（颜色与结论一致、悬停文案）、**自检通过就直接进报告审核**、
+断言覆盖：**侧栏分组卡**（几何位置 + 卡内三行子项、三行都在同一张卡的范围内且自上而下、
+报告评估占位、点过的子项是选中态、全页只有这三行 —— 面板里不再有模块条 + 子项右侧环境标记：
+通过 = 绿勾）、**自检通过就直接进报告审核**、
 **未授权时的授权弹框**（挡住整页 + 「同意并继续」/「拒绝」）或已授权时 ③ 层头那一行、
 环境自检页的真实数据（四层结论、④ 里的 AK 表单**只要 ID 与 Secret**）、
 **重新自检与翻页的加载态**（进度条 + 正文压暗）、待审核报告页

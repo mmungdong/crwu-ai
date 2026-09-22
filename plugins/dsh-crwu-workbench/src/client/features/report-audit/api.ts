@@ -35,6 +35,15 @@ export interface BootResult {
    */
   rev?: string
   builtAt?: string
+  /**
+   * 宿主包版本（`0.0.4` 这种，不带前缀）与它的运行形态。
+   *
+   * `buildKind` 是 `dev`（源码检出 / `link:` 安装）或 `installed`（装好的 TGZ / npm 包）——
+   * 侧栏入口那枚小标签就显示它（dev 显示「dev」，否则显示具体版本）。
+   * 缺这两个字段 = 旧宿主：界面只显示 `rev` 去掉前缀后的兜底值，不谎报形态。
+   */
+  version?: string
+  buildKind?: 'dev' | 'installed'
   caseRoot: string
   home: string
   formName: string
@@ -72,6 +81,11 @@ export interface EnvResult {
   sessionWorkspace: { parentSessionId: string; sessionCwd: string; workspaceId: string; workspacePath: string; workspaceTitle: string }
   oss: Record<string, unknown>
   ossCred: { path: string; exists: boolean; endpoint: string; accessKeyIdMasked: string; hasSecret: boolean; hasSts: boolean; language: string }
+  /**
+   * 「我是谁」：面板头部那句「晚上好，某某某」的姓名，来自**同一次自检**里的钉钉 CLI。
+   * 三个字段都可能是空串（没授权 / 没登录 / 命令没跑起来）→ 界面**整句不展示**。
+   */
+  me: { name: string; org: string; userId: string }
 }
 
 export interface PendingResult {
@@ -102,6 +116,25 @@ export interface OssIndexResult {
   prefix: string
   count: number
   items: Record<string, CloudItem>
+  truncated: boolean
+}
+
+export interface ReportFilesResult {
+  ok: boolean
+  error: string
+  seqNo: string
+  /** 氚云附件（权威来源：这份报告该有哪些文件；只元数据、不下载）。 */
+  h3yun: Array<{ field: string; fileId: string; name: string; size: number; contentType: string }>
+  /** 氚云那一路失败的原因（不影响本地/云端两组照常显示）。 */
+  h3yunError: string
+  /** 云端对象（只列举，不下载）；长格式下带 size / lastModified / etag。 */
+  oss: Array<{ key: string; name: string; size?: number; lastModified?: string; etag?: string }>
+  /** 本地案例目录里的文件（名字 + 绝对路径 + 字节数 + DSH fs 版本令牌）。 */
+  local: Array<{ name: string; path: string; size: number; version?: string }>
+  /** 本地案例目录的绝对路径；空串 = 还没选定工作空间。 */
+  localDir: string
+  /** 本地是否真的存在这个案例目录（"不存在"与"存在但空"要分开说）。 */
+  localExists: boolean
   truncated: boolean
 }
 
@@ -155,6 +188,8 @@ export interface WorkbenchApi {
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
   auditStop: (args?: { childId?: string }) => Promise<StopResult>
+  /** 一份报告的全部相关文件（只列举、不下载）：面板一打开就查，见 AssistantPanel。 */
+  reportFiles: (args: { seqNo: string; objectId?: string }) => Promise<ReportFilesResult>
   ossIndex: (args?: { seqNo?: string }) => Promise<OssIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
   ossLink: (args: { key: string }) => Promise<OssLinkResult>
@@ -186,6 +221,7 @@ export const workbenchApi: WorkbenchApi = {
   auditStatus: (args) => call('audit-status', args),
   auditStart: (args) => call('audit-start', args),
   auditStop: (args) => call('audit-stop', args),
+  reportFiles: (args) => call('report-files', args),
   ossIndex: (args) => call('oss-index', args ?? {}),
   ossResult: (args) => call('oss-result', args),
   ossLink: (args) => call('oss-link', args),
@@ -218,6 +254,7 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   auditStatus: 'audit-status',
   auditStart: 'audit-start',
   auditStop: 'audit-stop',
+  reportFiles: 'report-files',
   ossIndex: 'oss-index',
   ossResult: 'oss-result',
   ossLink: 'oss-link',

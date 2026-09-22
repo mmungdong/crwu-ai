@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Badge, Button, Chip, LoadingBar, Meter, Notice, Section, Spinner, StatusDot, type Tone } from '../../components/primitives.tsx'
+import { CheckIcon, WarnIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { text } from '../../../shared/utils/value.ts'
@@ -185,10 +186,11 @@ function Hero(props: {
 }): React.ReactElement {
   const { env } = props
   const tally = envTally(env)
-  const tone: Tone = env.allOk ? 'ok' : 'bad'
   const blocked = env.blocked.length > 0
   return <div className={`${C.hero} ${env.allOk ? C.heroOk : C.heroBad}`}>
-    <span className={`${C.lamp} ${env.allOk ? C.lampOk : C.lampBad}`}><StatusDot tone={tone} /></span>
+    <span className={`${C.heroMark} ${env.allOk ? C.heroMarkOk : C.heroMarkBad}`}>
+      {env.allOk ? <CheckIcon size={20} /> : <WarnIcon size={20} />}
+    </span>
     <div className={C.heroMain}>
       <div className={C.heroTitle}>
         {env.allOk ? zhCN.envHeroOk : zhCN.envHeroBad}

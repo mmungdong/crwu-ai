@@ -20,11 +20,20 @@ export const PLUGIN_NAME = 'crwu-workbench'
 export const PLUGIN_INJECT = ['webServer', 'shell']
 
 /**
- * `ping` / `boot` 应答里的版本指纹，形如 `pkg-0.0.1`。
+ * 包版本（与 `package.json` / `VERSION` 三处一致）。
+ *
+ * 为什么在代码里再放一份而不是现读 `package.json`：它是模块加载时就要定下来的常量
+ * （理由同下面的 `PLUGIN_REV`），而 `import ... with { type: 'json' }` 会把整份清单塞进产物、
+ * 还会让打包器的 JSON 插件成为隐式依赖。代价是升版本时要同时改这里 ——
+ * `tests/unit/host-package.test.mjs` 有一条断言盯着它必须等于 `package.json` 的 version。
+ */
+export const PLUGIN_VERSION = '0.0.4'
+
+/**
+ * `ping` / `boot` 应答里的版本指纹，形如 `pkg-0.0.4`。
  *
  * 为什么是常量而不是现读 `package.json`：它是「我装到的是哪一版」的唯一口头依据，
  * 必须在**模块加载时**就定下来（现读文件会让「重新 build 但没重启」看起来已生效，
- * 见 AGENTS.md §7.2）。改版本号时 `version:set` 不会碰这里 ——
- * `tests/unit/host-package.test.mjs` 有一条断言盯着它必须等于 `pkg-<package.json 版本>`。
+ * 见 AGENTS.md §7.2）。它由 `PLUGIN_VERSION` 推导，所以两处不会漂移。
  */
-export const PLUGIN_REV = 'pkg-0.0.2'
+export const PLUGIN_REV = `pkg-${PLUGIN_VERSION}`

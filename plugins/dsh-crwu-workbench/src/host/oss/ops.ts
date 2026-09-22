@@ -6,7 +6,9 @@ import { ossutilMissingMessage, probeOss, resolveOssutil, shellQuote } from '../
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { runShell } from '../shell/run.ts'
 import { readOssCred, type OssCredView } from './cred.ts'
-import { groupObjects, isResultJson, joinUrl, parseLsObjects, parseSignUrl, stripPrefix } from './parse.ts'
+import {
+  groupObjects, isResultJson, joinUrl, parseLsEntries, parseLsObjects, parseSignUrl, stripPrefix,
+} from './parse.ts'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { inspectCase } from '../audit/case.ts'
 import { auditInfoFromResult } from '../audit/summary.ts'
@@ -94,7 +96,10 @@ export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}
     return { ok: false, error: '流水号越出配置的 OSS 前缀', ...empty }
   }
 
-  const argv = [ossutil, 'ls', `oss://${oss.bucket}/${listedPrefix}/`, '--short-format']
+  // **不加 `--short-format`**：`ls` 默认的长格式一次就能给出每个对象的
+  // 大小 / 最后写入时间 / ETag，以及总数（`Object Number is: N`）。
+  // 那些元数据是"审核结果有没有重新生成过"的客观依据 —— 加 `--short-format` 等于把它们丢掉。
+  const argv = [ossutil, 'ls', `oss://${oss.bucket}/${listedPrefix}/`]
   if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
   const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
     workdir: await shellWorkdir(deps),
@@ -105,14 +110,17 @@ export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}
     const raw = (text(run.stderr) || text(run.error) || text(run.stdout) || '列举失败').trim()
     return { ok: false, error: raw.slice(0, 400), ...empty }
   }
-  const keys = parseLsObjects(run.stdout, oss.bucket)
+  const entries = parseLsEntries(run.stdout, oss.bucket)
+  // 兜底：某些 ossutil 版本 / 语言下长格式的表头与列宽可能认不出来 —— 这时退回"只要 key"的解析，
+  // 保证清单本身不丢（只是少了元数据），而不是把整次列举判成失败。
+  const list = entries.length > 0 ? entries : parseLsObjects(run.stdout, oss.bucket)
   return {
     ok: true,
     error: '',
     bucket: oss.bucket,
     prefix: oss.prefix,
-    count: keys.length,
-    items: groupObjects(keys, oss.prefix),
+    count: list.length,
+    items: groupObjects(list, oss.prefix),
     truncated: run.truncated,
   }
 }

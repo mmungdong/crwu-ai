@@ -1,4 +1,5 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { DiscussionPort } from '../report-audit/assistant-session.ts'
 
 /**
  * 工作台用到的**可选 Client 服务**。
@@ -38,11 +39,17 @@ export interface WorkspacesService {
 }
 
 export interface LayoutService {
-  /** 切换主面板（跳回会话用）。 */
-  selectPanel?: (panel: string) => void
+  /** 切换主面板（跳回会话用）；`null` = 回到当前会话的原生对话。 */
+  selectPanel?: (panel: string | null) => void
 }
 
-export interface SessionsService {
+/**
+ * 会话服务：既有的两条「查看会话」路径 + 讨论面板要的四个动词。
+ *
+ * 讨论面板那四个（`create` / `open` / `binding` / `list`）直接沿用 `DiscussionPort`
+ * 的形状 —— 一处定义，面板与这里不会各写一份而对不上。
+ */
+export interface SessionsService extends DiscussionPort {
   /** 在会话控制器里选中某个子会话（不会切主面板，所以要配合 layout.selectPanel）。 */
   openSubagent?: (input: { parentSessionId: string; childSessionId: string; mode: string }) => unknown
   /** 先把子会话拉进清单再 openSubagent，否则可能「清单里没有这个孩子」。 */

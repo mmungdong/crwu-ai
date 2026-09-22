@@ -4,6 +4,7 @@ import { text } from '../../shared/utils/value.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { applyDeploymentConfig } from '../config/deployment.ts'
 import { runCrwu } from '../crwu/run.ts'
+import type { WhoamiResult } from '../system/identity.ts'
 import { loadManifest } from '../environment/manifest.ts'
 import type { EnvManifest } from '../environment/manifest-default.ts'
 import { probeEnv, probeIfindKey, probeOss, type EnvCheck, type IfindCheck, type ServiceCheck } from '../environment/probe.ts'
@@ -56,6 +57,11 @@ export interface EnvResult {
   sessionWorkspace: ReturnType<typeof sessionWorkspaceInfo>
   oss: Record<string, unknown>
   ossCred: OssCredView
+  /**
+   * 「我是谁」：面板头部那句「晚上好，某某某」的姓名，来自**同一次自检**里的钉钉 CLI。
+   * 三个字段都可能是空串 —— 没授权 / 没登录 / 命令没跑起来时，界面整句不展示。
+   */
+  me: { name: string; org: string; userId: string }
 }
 
 /** 从已探测的 checks 里找出服务是否可用（氚云/钉钉的登录态各由 CLI 决定）。 */
@@ -71,6 +77,17 @@ export interface EnvDeps {
   home: string
   platform: string
   sessionRoot: () => Promise<string>
+  /**
+   * 「我是谁」的来源（面板头部那句问候的姓名）。
+   *
+   * 为什么挂在**环境自检**上而不是单独开一个操作（用户 2026-09-22 口径：「这个钉钉 cli 环境监测
+   * 一遍就可以了，不需要每次切换页面都去调，本质就是从环境信息把这个人的信息拿到」）：
+   * 自检本来就要问一次钉钉登录态，姓名是同一条链路上的副产品；做成独立操作就会出现
+   * 「每切一次页面问一次 dws」的浪费。宿主侧把它**只缓存成功结果**，所以反复自检也只跑一次 dws。
+   *
+   * 缺省（单测直接调 `loadEnvironment`）= 没有这个来源，`me` 就是三个空串。
+   */
+  identity?: () => Promise<WhoamiResult>
 }
 
 export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unknown>): Promise<EnvResult> {
@@ -203,6 +220,10 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
 
   const ossutilCheck = checks.find((check) => check.name === oss.ossutil)
 
+  // 「我是谁」：**只有员工已授权**才去读（受限沙箱下 dws 会假报「未登录」，问出来的姓名不可信）。
+  // 它是钉钉那条链路的副产品，所以直接跟在服务探测之后，失败就是三个空串。
+  const me = trustedCredentials ? await (deps.identity?.() ?? Promise.resolve(null)) : null
+
   return {
     ok: true,
     manifestSource: loaded.source,
@@ -228,6 +249,11 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
       probe: ossProbe,
     },
     ossCred: await readOssCred(ctx, home),
+    me: {
+      name: me?.name ?? '',
+      org: me?.org ?? '',
+      userId: me?.userId ?? '',
+    },
   }
 }
 
