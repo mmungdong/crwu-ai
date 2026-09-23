@@ -7,7 +7,11 @@
 
 - 只修改并提交 source repo 中获授权的文件。不得直接写入、复制、链接或删除任何运行时 Skill 目录。
 - 插件源码、构建产物、部署配置和运行时数据必须保持边界清楚，不得为了省事相互替代。
-- 插件专属 Skill 位于 `plugins/*/skills/`，公共 Skill 位于 `plugins/common/skills/`。后文的审核 Skill
+- 插件 Skill 按**层**组织，一层一个技能根（DSH 的 `dsh-skill-filesystem` 对每个根只扫一层、不递归，
+  所以分层目录本身不能当根，否则整层静默消失）：自研层 `plugins/<插件>/skills/<层>/`（审核能力族在
+  `plugins/dsh-crwu-workbench/skills/crwu/`）、上游 vendored 层
+  `plugins/dsh-crwu-workbench/skills/dws/`（`dingtalk-workspace-cli` 的钉钉技能，只由 `npm run dws:sync`
+  改写、不受本仓自洽性 lint 约束）、公共层 `plugins/common/skills/`。后文的审核 Skill
   规则重点约束 `crwu-audit-asset-*` 和 `crwu-audit-biz-*`；`crwu-audit-business-*` 仅是待迁移的遗留前缀。
 - 先保持开发形态可读、可测试，再由构建工具生成 DSH 可加载的单包产物。打包要求不得反向破坏源码结构。
 
@@ -115,9 +119,9 @@
 
 | 文档 | 什么时候读 | 内容要点 |
 | --- | --- | --- |
-| [`docs/ui-design-guidelines.md`](../dsh-crwu-workbench/docs/ui-design-guidelines.md) | 动界面、样式、交互 | 视觉语言（办公 + Apple）、DSH token 白名单与踩过的假 token、样式交付与模板字符串禁反引号、类名与选择器纪律、布局硬规则（滚动 / 表格 / 浮层）、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
-| [`docs/development-notes.md`](../dsh-crwu-workbench/docs/development-notes.md) | 动交付形态、Cordis 生命周期、Host 操作、协议号、沙箱与授权、测试与发版 | 三条加载契约、生命周期归属表、bundle patch 的 `baseUrl` 陷阱、Host/Client 分开加载与协议号、沙箱与授权口径、「我是谁」的来源、增删 Host 操作的最小清单、本地开发循环与两道人工关卡、测试与证伪纪律、发版与同版本不可覆盖、常见坑速查表 |
-| [`docs/PRD-workbench-sidebar-modules.md`](../dsh-crwu-workbench/docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块、面板壳的形态与口径 | 需求与取舍、历次返工记录、真机几何证据与证伪清单 |
+| [`docs/ui-design-guidelines.md`](dsh-crwu-workbench/docs/ui-design-guidelines.md) | 动界面、样式、交互 | 视觉语言（办公 + Apple）、DSH token 白名单与踩过的假 token、样式交付与模板字符串禁反引号、类名与选择器纪律、布局硬规则（滚动 / 表格 / 浮层）、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
+| [`docs/development-notes.md`](dsh-crwu-workbench/docs/development-notes.md) | 动交付形态、Cordis 生命周期、Host 操作、协议号、沙箱与授权、测试与发版 | 三条加载契约、生命周期归属表、bundle patch 的 `baseUrl` 陷阱、Host/Client 分开加载与协议号、沙箱与授权口径、「我是谁」的来源、增删 Host 操作的最小清单、本地开发循环与两道人工关卡、测试与证伪纪律、发版与同版本不可覆盖、常见坑速查表 |
+| [`docs/PRD-workbench-sidebar-modules.md`](dsh-crwu-workbench/docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块、面板壳的形态与口径 | 需求与取舍、历次返工记录、真机几何证据与证伪清单 |
 
 三条维护要求：
 
@@ -212,7 +216,7 @@
 
 ### 5.1 禁止引用
 
-`plugins/<插件>/skills/<skill>/` 内的 `SKILL.md`、`references/`、`scripts/` 不得引用：
+`plugins/<插件>/skills/<层>/<技能>/` 内的 `SKILL.md`、`references/`、`scripts/` 不得引用：
 
 - 仓库目录 `docs/`、`tools/`、`cmd/`、`internal/`、`bin/` 或仓根文件 `Makefile`、`go.mod`；
 - 逃出 Skill 目录的相对路径，例如 `../../docs/`；
@@ -246,9 +250,61 @@
 - 搬迁或改写时同批更新脚本路径常量（包括由 `__file__` 推导的 `REPO_ROOT`/`SKILLS_ROOT`）、所有现行引用、
   `docs/skills.md`、源仓设计文档和 CHANGELOG。
   带日期的历史变更、评审记录以及 `docs/superpowers/plans|specs/*` 不回改。
-- 两个技能根都必须通过 `kb_tool.py validate` 且 error=0：插件专属根
-  `plugins/dsh-crwu-workbench/skills` 与公共根 `plugins/common/skills`。
-- `plugins/AGENTS.md`、`docs/skills.md` 等源仓文档不在技能根内，不属于 Skill 自洽性 lint 的扫描对象。
+- 受本 lint 约束的两个技能根都必须通过 `kb_tool.py validate` 且 error=0：自研根
+  `plugins/dsh-crwu-workbench/skills/crwu` 与公共根 `plugins/common/skills`。**逐层各给一次
+  `--skill-root`** —— lint 只把根的一级子目录当技能，传上层 `skills/` 会静默扫 0 个技能。
+  上游 vendored 根 `plugins/dsh-crwu-workbench/skills/dws` 是 `dingtalk-workspace-cli` 的原样正文，
+  按 `skills/README.md` 的口径豁免本 lint，其内容一致性由 `npm run dws:check` 用 provenance 摘要守住。
+- `plugins/AGENTS.md`、`docs/skills.md` 等源仓文档，以及技能层的容器目录
+  `plugins/dsh-crwu-workbench/skills/` 自身，都不在技能根内，不属于 Skill 自洽性 lint 的扫描对象。
+
+### 5.5 新增技能层或技能时的改动清单
+
+**一条规则：一个层 = 一个 DSH 技能根。** 加层 = 加一行技能根 + 一行打包 + 一条护栏断言，其余靠目录布局
+自动发现。下表是 2026-09-23 分层改造时逐项踩出来的；前 5 项漏了会**静默失效**或**只有接收方才炸**。
+
+新增一个层目录（`plugins/<插件>/skills/<层>/`）：
+
+| # | 位置 | 改什么 | 漏了会怎样 |
+| --- | --- | --- | --- |
+| 1 | `cordis.patch.yml` | `customSkillDirs` 加 `path.join(root, 'skills/<层>')` | 该层静默 0 技能，日志干净（最难查） |
+| 2 | `package.json` → `files` | 加 `"skills/<层>/"` | link 开发正常，员工 tarball **整层缺失** |
+| 3 | `scripts/assert-pack.mjs` → `REQUIRED` | 加一个代表文件 `skills/<层>/<技能>/SKILL.md`（vendored 层再加 `provenance.json`） | 打漏了没人拦 |
+| 4 | `tests/unit/host-skills-patch.test.mjs` | `assert.deepEqual(dirs, […])` 加一行 + `assert.equal(<层>Count, N)` | 该测试红（它就是这条的护栏） |
+| 5 | `tests/unit/host-package.test.mjs` | `files` 断言数组加一行；真 `npm pack`/`install` 回归加一条 `stat` | 该测试红 |
+| 6 | `skills/README.md` | 层表加一行 | 分层口径只留在提交信息里 |
+| 7 | 文档 | `docs/skills.md`（层表 + 技能目录）、`docs/agent-skill-dirs.md`、根 `README.md`/`README.zh-CN.md`（目录树 + 包内容 + 技能总数）、插件 `README.md`/`README.en.md`、三处 `AGENTS.md` 的层清单、插件 `AGENTS.md` §8.2 的 `total files` 与体积 | 下一个人按旧口径改 |
+| 8 | 版本与纪要 | `npm run version:set x.y.z`（连带改 `src/host/consts.ts` 的 `PLUGIN_VERSION`）+ 插件 `CHANGELOG.md` + `docs/v0.0.1/CHANGELOG.md` | `version:check` 红；违反「同版本只发一次」 |
+
+再按层的性质二选一：
+
+- **自研层**（本仓维护、要过自洽性 lint）：`Makefile` 的 `plugin-check` 与 `.github/workflows/ci.yml` 的
+  `skill gates` 各加一行 `--skill-root skills/<层>`；若层内是 crwu-audit 族，`check_audit_skill_mappings.py`
+  的 `_SKILLS_ROOT_CANDIDATES` 加 `plugins/<插件>/skills/<层>`（这个列表是硬编码的，不自动收）。
+- **vendored 层**（上游正文、豁免 lint）：**不要**加 lint 行，改为新增 `scripts/sync-<层>-skills.mjs` +
+  `skills/<层>/provenance.json`（版本/集合/逐技能 sha256，`--check` 只比 provenance、不碰上游）、把
+  `<层>:sync`/`<层>:check` 接进 `check` 与 `prepack`、在 `skills/README.md` 写豁免口径；同步生成的层
+  还要 `.gitignore` 与 `Makefile`/CI 的同步步骤（照包内 `common/skills/`）。
+
+只在一个已有层里**加技能**：只需改 #4 的计数、文档里的技能数量，以及有 provenance 的层跑一次 `<层>:sync`。
+
+**不用改**（目录布局即名单，改多了反而两套口径）：`Makefile` 的 `SKILL_DIRS` / `skills-install`
+（已是 `find plugins -name SKILL.md`，自动收全部层）、`kb_tool.py` 的扫描逻辑、三个源仓契约测试的
+`_skill_roots()`（按「根里直接放着技能」自动识别所有层并跨层查找）、`smoke-built.mjs` 与
+`host-audit-prompt.test.mjs`（只与自研层的回传脚本路径有关）。
+
+**四个会咬人的坑**：
+
+1. 层根目录下**不放任何 `.md`**（含 `README.md`）—— DSH 会把根下的 `.md` 当候选技能，没有 frontmatter
+   就每次加载打 warning；分层说明写在上一层 `skills/README.md`。`LICENSE`/`NOTICE`/`provenance.json`
+   这类非 `.md` 文件放层根是安全的。
+2. 只改 `cordis.patch.yml` 不改 `files`：link 形态永远看不出来，员工 tarball 整层没有。
+3. 未清洗的上游副本不要放进**受 lint 的**层：`kb_tool validate` 以 UTF-8 读 `.md`，遇到非 UTF-8 会直接
+   `UnicodeDecodeError` 崩掉整个门禁。
+4. 层名不要与技能名前缀互相包含（例如把 `crwu-audit` 提到 `skills/crwu-audit/`），否则它同时是「层」和
+   「技能名」，`_REPO_REF_PATTERNS` 的 `skills/crwu-*/` 规则与人的目录直觉都会打架。
+
+兜底：改完跑 `make plugin-check` —— 它同时覆盖上表 1–6 的自动护栏与 `pack:assert` 的真实 tarball 清单。
 
 ## 6. 审核叶子的 `SKILL.md` 与 references
 
@@ -278,7 +334,7 @@
 - 分类、`07-skill-registry.md`、`SKILL.md`、`00-applicability.md`、`01-kb-assembly.md`、
   `02-review-focus.md` 边界一致；设计文档、`docs/skills.md`、变更记录和测试已同步。
 - 受影响 Skill 通过 skill-creator 的 `quick_validate.py`，router contract 与 DWS source contract 通过。
-- 两个技能根都通过 `kb_tool.py validate`。经批准的分阶段迁移若暂不能通过，必须记录实际命令、失败项和待同步
+- 自研层与公共层两个技能根都通过 `kb_tool.py validate`。经批准的分阶段迁移若暂不能通过，必须记录实际命令、失败项和待同步
   内容，不得宣称完整可用。
 - 映射检查器基于本次最新目录运行且 error=0，覆盖一级根精确匹配、轴前缀、registry/classification 一致性、
   遗留命名和库内路径键存在性（包括公共轴）；warning 必须逐条判断并注明理由。
@@ -294,7 +350,7 @@ reference 资产只能提交到 source repo。
 在仓库根执行：
 
 ```bash
-S=plugins/dsh-crwu-workbench/skills
+S=plugins/dsh-crwu-workbench/skills/crwu
 python3 "$S/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py"
 python3 "$S/crwu-audit/scripts/test_audit_multiaxis_router.py"
 python3 plugins/common/skills/crwu-dws/scripts/test_dws_source_contract.py
@@ -303,6 +359,7 @@ python3 "$S/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py" validate --skill
 python3 "$S/crwu-dev-audit-skill-maintainer/scripts/check_audit_skill_mappings.py" \
   --repo-root . --catalog <本次快照> --max-age-hours 2 \
   --emit-map "$S/crwu-dev-audit-skill-maintainer/references/07-kb-skill-map.md"
+npm --prefix plugins/dsh-crwu-workbench run dws:check   # vendored 上游层：只比 provenance 摘要
 git diff --check
 ```
 

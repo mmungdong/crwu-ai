@@ -21,7 +21,8 @@ import { packageSkillPath } from './skill-paths.ts'
 
 /**
  * 钉钉结果回传脚本的绝对路径（脚本随本插件包发布，见 `packageSkillPath`）。
- * 解析不到时退回 `$SKILLS_ROOT` 占位：指令文本不该因为路径解析失败而少掉一整段交付动作。
+ * 解析不到时退回 `$SKILLS_ROOT` 占位（`$SKILLS_ROOT` 指 `crwu` 层技能根，见 `cordis.patch.yml`）：
+ * 指令文本不该因为路径解析失败而少掉一整段交付动作。
  */
 const DINGTALK_UPLOAD_SCRIPT =
   packageSkillPath('crwu-audit/scripts/upload_audit_result.py') || '$SKILLS_ROOT/crwu-audit/scripts/upload_audit_result.py'

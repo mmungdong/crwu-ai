@@ -24,9 +24,9 @@ export interface BuildSnapshot {
   ok: boolean
   /** 最近一次失败的原因（成功后被清空）。 */
   error: string
-  /** 版本指纹 `pkg-0.0.4`；空串 = 还不知道。 */
+  /** 版本指纹 `pkg-0.0.5`；空串 = 还不知道。 */
   rev: string
-  /** 包版本 `0.0.4`；空串 = 旧宿主没给这个字段。 */
+  /** 包版本 `0.0.5`；空串 = 旧宿主没给这个字段。 */
   version: string
   /** `dev`（源码检出 / link 安装）/ `installed`（装好的包）；空串 = 旧宿主没给。 */
   buildKind: 'dev' | 'installed' | ''

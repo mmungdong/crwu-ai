@@ -158,7 +158,7 @@ hook `usePanelInfo`；**跳转动作要在点击时现读 `services.layout`**，
 `tests/unit/client-package.test.mjs` 会断言顶部 `sidebar.panellist` 入口与会话头指示灯**都不再注册**。
 
 入口内容 = **品牌标记（`components/BrandMark.tsx`，用户给的原图描出来的矢量版）+ 名字 + 版本小标签 +
-环境标记**。版本小标签（`dev` / `v0.0.4`）来自 `features/workbench/build-store.ts`，它包着 `boot`，
+环境标记**。版本小标签（`dev` / `v0.0.5`）来自 `features/workbench/build-store.ts`，它包着 `boot`，
 和 `envStatus` 一样由 `apply()` 创建、随 props 下发 —— 侧栏入口与面板头部必须显示同一枚标签，各自
 `boot()` 既费一次请求，又会出现「标签是新的、门禁说旧的」这种自相矛盾的画面。宿主侧对应的两个常量在
 `src/host/build-info.ts`（`HOST_BUILD_KIND`：包根旁边有没有 `src/`）与 `src/host/consts.ts`
@@ -175,12 +175,20 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 后果很隐蔽：`new URL('skills/', baseUrl)` 指向 `<profile>/skills/`（不存在），skill provider 照样
 "装配成功"，只是**静默贡献 0 个技能**（症状：技能表里 crwu-* 一个都没有，而启动日志干干净净）。
 
+**同一类"静默 0 个技能"还有第二种触发方式：技能根少注册一层。** `dsh-skill-filesystem` 的
+`discoverRoot()` 对每个根只扫一层（`readdir(root)` → `<子目录>/SKILL.md`），不递归；技能按层组织后
+如果只注册 `skills/`，`skills/crwu/` 会被当成"一个没有 `SKILL.md` 的技能"直接跳过，整层消失而日志无痕。
+所以**一层一个根**。
+
 - 本包内的路径一律**按包名解析**：
   `createRequire(baseUrl + 'package.json').resolve('dsh-crwu-workbench/package.json')` → 包目录 →
-  再拼 `skills/` / `common/skills/`。link 开发、员工 tarball、装到别的布局都对。
+  再拼 `skills/crwu`、`skills/dws`、`common/skills`。link 开发、员工 tarball、装到别的布局都对。
+- **新增一个技能层**（或只加技能）的完整改动清单 —— 技能根 / `files` / 打包断言 / 单测计数 / 文档 /
+  版本，以及"哪些不用改"与四个会咬人的坑 —— 见 `plugins/AGENTS.md` §5.5。
 - `>-` 折叠标量会把换行**折成空格**：多语句必须写分号，漏了就是求值期的 `SyntaxError`。
 - 回归测试 `tests/unit/host-skills-patch.test.mjs` 会造一个 profile 形态的临时目录、把补丁里的表达式
-  **真的求值一次**并断言两个技能根存在；改回 `new URL('skills/', baseUrl)` 立刻变红。
+  **真的求值一次**并断言三个技能根存在、每层都有技能且都有 `SKILL.md`；改回 `new URL('skills/', baseUrl)`
+  或只注册 `skills/` 都会立刻变红。
 
 ### 4.2 Cordis 生命周期
 
@@ -613,8 +621,9 @@ npm publish --dry-run
 ```
 
 `npm publish --dry-run` 会真的跑完 `prepublishOnly`（= `pack:assert` + `check`）并打印将要发布的清单，
-但**不上传**。期望看到 `Publishing to https://registry.npmjs.org …(dry-run)` 与 `total files: 172`
-（`lib/` + 补丁 + 文档 + `skills/` + `common/skills/`；技能正文是体积大头，解包约 2.9MB）。
+但**不上传**。期望看到 `Publishing to https://registry.npmjs.org …(dry-run)` 与 `total files: 450`
+（`lib/` + 补丁 + 文档 + 三层技能 `skills/crwu/`、`skills/dws/`、`common/skills/`；技能正文是体积大头，
+解包约 5.5MB），以及 `PASS …：450 个文件 / 解包 5664KB`。层数或体积大幅变化时先怀疑有东西误进包。
 
 ### 8.3 走 tag 发布，不要手工 publish
 
@@ -667,10 +676,10 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
    发布前由 `prepack` → `build:lib --force` 保证真的构建过。改这条链时，
    `tests/unit/host-package.test.mjs` 里那条真跑 `npm pack` + `npm install` 的回归测试必须继续通过 ——
    本地门禁看不出这类失败，只有接收方装包才会炸。
-3. `files` 带 `lib/` + 补丁 + 文档 + **技能**（`skills/` 插件专属、`common/skills/` 打包前由
-   `scripts/sync-common-skills.mjs` 从源仓 `plugins/common/skills/` 拷进来）；`src/`、`tests/`、
-   `install/`、`AGENTS.md`、`PORTING.md`、`scripts/`（除 `prepare.mjs`）都不进包。
-   改完必须跑 `pack:assert` 核对（它会断言两个技能目录各有一个代表文件在包里）。
+3. `files` 带 `lib/` + 补丁 + 文档 + **三层技能**（`skills/crwu/` 自研层、`skills/dws/` vendored 上游层、
+   `common/skills/` 打包前由 `scripts/sync-common-skills.mjs` 从源仓 `plugins/common/skills/` 拷进来）；
+   `src/`、`tests/`、`install/`、`AGENTS.md`、`PORTING.md`、`scripts/`（除 `prepare.mjs`）都不进包。
+   改完必须跑 `pack:assert` 核对（它会断言每一层都有一个代表文件在包里，vendored 层还钉 `provenance.json`）。
 
 ### 8.6 与 DSH 版本对齐
 

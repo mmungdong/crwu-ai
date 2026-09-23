@@ -1,6 +1,6 @@
 {
   "name": "dsh-crwu-workbench",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "中瑞世联工作台 / CRWU audit workbench for DeepSeek Harness: pick a pending audit report, dispatch one AI audit subagent, watch and stop/restart it, auto-upload deliverables to Aliyun OSS.",
   "keywords": [
     "deepseek-harness",
@@ -39,7 +39,9 @@
     "CHANGELOG.md",
     "SECURITY.md",
     "LICENSE",
-    "skills/",
+    "skills/README.md",
+    "skills/crwu/",
+    "skills/dws/",
     "common/skills/"
   ],
   "engines": {
@@ -54,18 +56,20 @@
     "build": "npm run skills:sync && tsdown",
     "build:lib": "node scripts/prepare.mjs --force",
     "prepare": "node scripts/prepare.mjs",
-    "prepack": "npm run config:check && npm run skills:sync && npm run build:lib",
+    "prepack": "npm run config:check && npm run skills:sync && npm run dws:check && npm run build:lib",
     "test": "node --test \"tests/*.test.mjs\" \"tests/**/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
     "version:check": "node scripts/sync-version.mjs --check",
     "version:set": "node scripts/sync-version.mjs",
-    "check": "npm run version:check && npm run config:check && npm run skills:check && npm run typecheck && npm test && npm run build && npm run smoke:built",
+    "check": "npm run version:check && npm run config:check && npm run skills:check && npm run dws:check && npm run typecheck && npm test && npm run build && npm run smoke:built",
     "config:check": "node scripts/check-config.mjs",
     "pack:assert": "node scripts/assert-pack.mjs",
     "prepublishOnly": "npm run pack:assert && npm run check",
     "smoke:built": "node scripts/smoke-built.mjs",
     "skills:sync": "node scripts/sync-common-skills.mjs",
-    "skills:check": "node scripts/sync-common-skills.mjs --check"
+    "skills:check": "node scripts/sync-common-skills.mjs --check",
+    "dws:sync": "node scripts/sync-dws-skills.mjs",
+    "dws:check": "node scripts/sync-dws-skills.mjs --check"
   },
   "dsh": {
     "bundle": {

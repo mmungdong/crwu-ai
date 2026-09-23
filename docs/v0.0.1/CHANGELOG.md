@@ -9,6 +9,43 @@
 
 ---
 
+## 2026-09-23 · refactor(skills) · 技能分层：自研层 `skills/crwu/` + 上游 vendored 层 `skills/dws/` + 公共层
+
+- **目录分层（`git mv` 保历史）**：`plugins/dsh-crwu-workbench/skills/<技能>/` →
+  `plugins/dsh-crwu-workbench/skills/crwu/<技能>/`（27 个审核/维护技能原样搬迁）；
+  新增 `plugins/dsh-crwu-workbench/skills/dws/`（vendored 的上游钉钉技能 14 个，集合 `multi`）；
+  `plugins/common/skills/`（公共层）位置不变。
+- **为什么必须一层一个技能根**：`@deepseek-ai/dsh-skill-filesystem` 的 `discoverRoot()` 对每个技能根
+  **只扫一层**、不递归。`cordis.patch.yml` 因此从 2 个根改为 3 个（`skills/crwu`、`skills/dws`、
+  `common/skills`）—— 只注册上层 `skills/` 会把 `skills/crwu/` 当成"没有 `SKILL.md` 的技能"跳过，
+  整层**静默消失**（与 2026-09-22 的 `baseUrl` 陷阱同症状：装配成功、技能表 0 个、日志干净）。
+  包内技能总数 30 → 44（自研 27 + vendored 14 + 公共 3）。
+- **`dws` 层的可复现内容治理**：新增 `scripts/sync-dws-skills.mjs`（`npm run dws:sync`）从本机 `dws`
+  的上游副本同步，并写 `skills/dws/provenance.json`（上游包名 / 版本 `1.0.61` / 集合 / 逐技能 sha256 /
+  LICENSE、NOTICE 摘要）；`npm run dws:check` 只对照 provenance 逐文件比对（不需要上游），已接入
+  `npm run check` 与 `prepack`；版本或集合变化必须显式 `--allow-version-change` / `--allow-set-change`。
+  上游 Apache-2.0 的 `LICENSE` / `NOTICE` 随技能保留。该层是上游正文，按 `skills/README.md` 的口径
+  **豁免**本仓 Skill 自洽性 lint（门禁只跑自研层与公共层）。
+- **影响门禁/命令（路径随分层改变，漏改会静默失效）**：
+  - `make plugin-check` / CI：`kb_tool.py validate --skill-root skills/crwu` 与
+    `--skill-root plugins/common/skills`（**逐层各一次**；传上层会静默扫 0 个技能）；新增 `make plugin-dws`；
+  - `make skills-install`：改为 `find plugins -name SKILL.md` 收技能（任何层都收到，层目录本身不会被误认）；
+  - `check_audit_skill_mappings.py`：技能根候选改为 `skills/crwu` + `common/skills`，硬编码的
+    `skills/crwu-audit/...`、`skills/crwu-dws` 等改为按根解析；
+  - 三个源仓契约测试：`_skill_roots()` 改为按"根里直接放着技能"识别所有层并**跨层**查找
+    （自研层与公共层不再同级；不修会让整组断言静默 skip）；
+  - `kb_tool.py` 的仓库引用规则新增 `skills/<层>/` 形态；
+  - `scripts/assert-pack.mjs`（三层各钉代表文件）、`scripts/smoke-built.mjs`、`host-package` /
+    `host-audit-prompt` / `host-skills-patch` 单测同批同步。
+- **运行时**：`src/host/audit/skill-paths.ts` 的包内解析改到 `skills/crwu/`（`$SKILLS_ROOT` 占位语义不变）；
+  `crwu-audit-external-data` 的 `connector_probe.py` 改为在"本技能所在层 + 同级层 + 公共层 + 常见位置"
+  找 `ifind-finance-data`。
+- **同步面**：`skills/README.md`（新增）、根 / `plugins/` / 插件三处 `AGENTS.md`、`docs/skills.md`、
+  `docs/agent-skill-dirs.md`、根 `README.md` + `README.zh-CN.md`、插件 `README.md` + `README.en.md`、
+  `docs/development-notes.md`、插件 `CHANGELOG.md` 与包版本 `0.0.5`。带日期的历史记录不回改。
+- **验证**：`make plugin-check` 全过（`npm run check` 548 项测试、`pack:assert` 450 文件 / 解包 5664KB、
+  两层 `kb_tool validate` error=0、三个契约测试 66/21/12 全过、分发守卫自检 4 条）；`git diff --check` 干净。
+
 ## 2026-09-19 · refactor(skills) · 审核族前缀归组：维护器移入 `crwu-dev-audit-*`，通用准则回到 `crwu-audit-*`
 
 - **改名（`git mv` 保历史）**：`skills/crwu-audit-skill-maintainer/` → `skills/crwu-dev-audit-skill-maintainer/`；

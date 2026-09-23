@@ -57,11 +57,14 @@ employee-side install command.
    be parented by a top-level session; nesting them is what used to make status tracking lose track of
    a running child.
 
-> **The Skills ship with the package**: the tarball carries `skills/` (27 plugin-owned Skills) and
-> `common/skills/` (shared Skills `crwu-dws` / `crwu-h3yun-*`), and the `crwu-workbench-skills` row in
-> `cordis.patch.yml` registers both directories as skill roots — installing the plugin is all it takes.
-> Do **not** copy Skills into `~/.dsh/skills/` any more; the package root outranks the user root, so a
-> stale copy only creates drift (`make skills-install AGENT_DIR=…` is for non-DSH hosts).
+> **The Skills ship with the package, organized in layers**: the tarball carries `skills/crwu/`
+> (27 in-repo Skills), `skills/dws/` (14 vendored `dingtalk-workspace-cli` Skills) and `common/skills/`
+> (shared Skills `crwu-dws` / `crwu-h3yun-*`). The `crwu-workbench-skills` row in `cordis.patch.yml`
+> registers **each layer as its own skill root** (DSH scans exactly one level per root), so installing
+> the plugin is all it takes. Do **not** copy Skills into `~/.dsh/skills/` any more; the package root
+> outranks the user root, so a stale copy only creates drift (`make skills-install AGENT_DIR=…` is for
+> non-DSH hosts). See [`skills/README.md`](skills/README.md) for the layer contract and how the `dws`
+> layer is upgraded.
 
 > **Permissions**: no startup parameters are needed (`DSH_PERMISSION_MODE` stays untouched), but the
 > **first run requires one authorization** — the "trust this plugin to read local credentials" switch in

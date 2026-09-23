@@ -59,11 +59,11 @@ test('审核指令给出钉钉结果回传（技能脚本绝对路径 + 成功�
   const text = auditPrompt(task())
   assert.equal(text.includes('## 交付后的两件钉钉回传（都要做，不许跳过）'), true, '这两件必须写成显式步骤')
   assert.equal(text.includes('### 1. 钉钉结果回传（团队空间归档）'), true)
-  // 脚本随插件包发布，所以路径必须解析到**包内**技能目录：员工机器上是
-  // `<profile>/node_modules/dsh-crwu-workbench/skills/…`，开发机上是仓库里的 `skills/…`。
+  // 脚本随插件包发布，所以路径必须解析到**包内自研层**技能目录：员工机器上是
+  // `<profile>/node_modules/dsh-crwu-workbench/skills/crwu/…`，开发机上是仓库里的同一层。
   // 写死 `~/.dsh/skills/…`（插件化之前的写法）在员工机器上不存在，那一步会直接跑不起来。
-  const upload = fileURLToPath(new URL('skills/crwu-audit/scripts/upload_audit_result.py', ROOT))
-  assert.equal(existsSync(upload), true, '技能脚本必须真的随包发布（package.json 的 files 要有 skills/）')
+  const upload = fileURLToPath(new URL('skills/crwu/crwu-audit/scripts/upload_audit_result.py', ROOT))
+  assert.equal(existsSync(upload), true, '技能脚本必须真的随包发布（package.json 的 files 要有 skills/crwu/）')
   assert.equal(
     text.includes(`python3 "${upload}" "${WORKSPACE}/${SEQ}/审核结果.${SEQ}.json"`),
     true,

@@ -38,12 +38,15 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 
 - 后果很隐蔽：`new URL('skills/', baseUrl)` 指向 `<profile>/skills/`（不存在），skill provider 照样
   "装配成功"，只是**静默贡献 0 个技能**；
+- **第二种同类失效**：`dsh-skill-filesystem` 对每个技能根只扫一层（不递归）。技能按层组织后
+  （`skills/crwu/`、`skills/dws/`、`common/skills/`）必须**一层一个根**；只注册 `skills/` 会让
+  `skills/crwu/` 被当成"没有 `SKILL.md` 的技能"跳过，整层静默消失；
 - 本包内的路径一律**按包名解析**：
   `createRequire(baseUrl + 'package.json').resolve('dsh-crwu-workbench/package.json')` → 包目录 →
-  再拼 `skills/` / `common/skills/`。link 开发、员工 tarball、别的布局都对；
+  再拼 `skills/crwu`、`skills/dws`、`common/skills`。link 开发、员工 tarball、别的布局都对；
 - `>-` 折叠标量会把换行**折成空格**：多语句必须写分号，漏了就是求值期的 `SyntaxError`；
 - 回归测试 `tests/unit/host-skills-patch.test.mjs` 会造一个 profile 形态的目录、把补丁里的表达式
-  **真的求值一次**；改回 `new URL('skills/', baseUrl)` 立刻变红。
+  **真的求值一次**并断言三层都在；改回 `new URL('skills/', baseUrl)` 或漏注册一层都会立刻变红。
 
 ## 4. Host 与 Client 是**分开加载**的 → 协议号
 
@@ -137,6 +140,7 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 |---|---|---|
 | 插件装上了、面板不出现 | `slots.inject` 被包进 `ctx.effect` → 激活期 `TypeError` | 直接调用 `slots.inject`，把 `effect` 留给自有副作用 |
 | 技能表里一个 crwu-* 都没有，日志干净 | 补丁里 `new URL('skills/', baseUrl)` 指向 profile 目录 | 按包名解析包目录（§3） |
+| 只有某一层技能全不见（如 `dws` 层），日志干净 | 补丁只注册了上层 `skills/`，而 DSH 对每个根只扫一层 | 一层一个 `customSkillDirs` 条目（§3）；`host-skills-patch.test.mjs` 会红 |
 | 某个 skill 静默消失 | `SKILL.md` frontmatter 有一行没缩进 | 修缩进；`skills:check` / 契约测试盯着数量 |
 | 样式被截断且不报错 | `WORKBENCH_STYLE_TEXT` 注释里出现了反引号 | 模板字符串里不许有反引号（连注释也不行） |
 | 卡片没边框、底色透明 | 用了 DSH 里**不存在**的 token | 到 theme 表核对；扫硬编码色值的测试扫不出这个 |

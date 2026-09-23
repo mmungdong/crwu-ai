@@ -61,15 +61,18 @@ jobs:
 
       # 技能门禁（技能自洽性 lint + 三个源仓契约测试）。技能必须以副本独立安装后可用，
       # 不得引用仓内目录；契约测试覆盖路由/装配/路径键与 crwu-dws 取数契约。
+      # lint 逐层跑：`skills/crwu` 是本仓自研层，`common/skills` 是公共层；`skills/dws`
+      # 是上游 vendored 正文，按 `skills/README.md` 的口径豁免自洽性 lint（其内容一致性由
+      # `npm run check` 里的 `dws:check` 用 provenance 摘要守住）。
       # 只跑一遍：纯内容与 Python 检查，与 OS / Node 版本无关，而 windows runner 上
       # `python3` 不保证在 PATH。
       - name: skill gates
         if: runner.os == 'Linux'
         run: |
-          python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
-          python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
-          python3 skills/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
-          python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
+          python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu
+          python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
+          python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
+          python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
           python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 
       # 分发守卫（同版本只发一次）：判定表自检，不起进程、不联网。

@@ -9,7 +9,11 @@
  *
  * 所以这份测试不核对"写法"，而是**按 loader 的方式真的求值一次**：造一个临时 profile 目录
  * （`package.json` + `node_modules/<包名>` 软链，与 `link:` 安装同形），把 patch 里的 `!!js`
- * 表达式取出来求值，断言它指向的两个目录真实存在且装满了技能。
+ * 表达式取出来求值，断言它指向的每一层目录都真实存在且装满了技能。
+ *
+ * 另一条同样会静默失效的约束：`dsh-skill-filesystem` 对每个技能根**只扫一层**（不递归），
+ * 所以技能分层后必须**一层一个根**；只注册 `skills/` 会让 `skills/crwu/` 被当成一个没有
+ * `SKILL.md` 的技能、整层消失。这条由 ③ 的"每层都有技能且都有 SKILL.md"兜住。
  *
  * 写死 `new URL('skills/', baseUrl)` 会让它变红（第一组断言就是这个陷阱本身）。
  */
@@ -46,7 +50,7 @@ function evaluate(expression, baseUrl) {
   return new Function('baseUrl', `return (${expression})`)(baseUrl)
 }
 
-test('技能根表达式按包名解析：link 形态的 profile 下真的能找到两个技能目录', async () => {
+test('技能根表达式按包名解析：link 形态的 profile 下每一层技能目录都能找到', async () => {
   const expression = readSkillRootsExpression()
   const profile = await mkdtemp(join(tmpdir(), 'crwu-profile-'))
   try {
@@ -63,19 +67,24 @@ test('技能根表达式按包名解析：link 形态的 profile 下真的能找
       '前提：profile 目录下没有 skills/，所以按 baseUrl 拼路径必然指向不存在的目录',
     )
 
-    // ② 真正求值：拿到两个技能根。
+    // ② 真正求值：拿到三个技能根（自研层 + 上游 vendored 层 + 公共层）。
     const dirs = evaluate(expression, baseUrl)
     assert.ok(Array.isArray(dirs), 'customSkillDirs 表达式必须返回数组')
-    assert.equal(dirs.length, 2, '应当是两个技能根：插件专属 + 公共')
+    assert.deepEqual(
+      dirs,
+      [
+        join(PACKAGE_DIR, 'skills', 'crwu'),
+        join(PACKAGE_DIR, 'skills', 'dws'),
+        join(PACKAGE_DIR, 'common', 'skills'),
+      ],
+      '技能根必须一层一个（DSH 只扫一层，只注册 skills/ 会静默丢掉整层）',
+    )
     for (const dir of dirs) {
       assert.equal(existsSync(dir), true, `技能根不存在：${dir}`)
       assert.equal(dir.startsWith(profile), false, '技能根不该落在 profile 目录里')
     }
-    const [own, common] = dirs
-    assert.equal(own, join(PACKAGE_DIR, 'skills'))
-    assert.equal(common, join(PACKAGE_DIR, 'common', 'skills'))
 
-    // ③ 目录里真有技能：随包发布的两个根共 30 个（27 专属 + 3 公共），且每个都有 SKILL.md。
+    // ③ 每一层里真有技能，且每个技能目录都有 SKILL.md（层目录自己不能混进来）。
     const countSkills = async (dir) => {
       const entries = await readdir(dir, { withFileTypes: true })
       const names = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name)
@@ -85,10 +94,10 @@ test('技能根表达式按包名解析：link 形态的 profile 下真的能找
       }
       return names.length
     }
-    const ownCount = await countSkills(own)
-    const commonCount = await countSkills(common)
-    assert.equal(ownCount, 27, '插件专属技能数变了（27 个）')
-    assert.equal(commonCount, 3, '公共技能数变了（crwu-dws / crwu-h3yun-login / crwu-h3yun-query）')
+    const [crwuCount, dwsCount, commonCount] = await Promise.all(dirs.map(countSkills))
+    assert.equal(crwuCount, 27, '自研层技能数变了（27 个）')
+    assert.equal(dwsCount, 14, 'vendored 的上游钉钉技能数变了（14 个）')
+    assert.equal(commonCount, 3, '公共层技能数变了（crwu-dws / crwu-h3yun-login / crwu-h3yun-query）')
   } finally {
     await rm(profile, { recursive: true, force: true })
   }

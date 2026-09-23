@@ -3,29 +3,42 @@ import glob
 import unittest
 
 
-# 源仓契约测试：据本文件位置上溯定位 skills 根与源仓根（不硬编码仓库布局）。
+# 源仓契约测试：据本文件位置上溯定位技能层与源仓根（不硬编码仓库布局）。
 # 运行时不需要本测试；已安装副本内缺少同级技能或源仓文档时显式 skip（不静默通过）。
 #
-# **技能在源仓分成两个根**：插件专属技能（`plugins/<插件>/skills/`）与公共技能
-# （`plugins/common/skills/`）。DSH 运行时把两个根都注册进技能目录，所以"同级技能"
-# 必须跨这两个根查找 —— 只在本技能所在的根里找，会把整个契约测试静默 skip 掉
-# （2026-09 合并仓库时就发生过：8~12 条断言静默消失）。
-SKILLS_ROOT = Path(__file__).resolve().parents[2]  # skills/<skill>/scripts/<file> → 本技能所在的 skills 根
+# **技能在源仓按层组织**：DSH 把每个技能**层**注册成一个技能根 ——
+# `plugins/<插件>/skills/<层>/<技能>/`（本仓是 crwu / dws 两层）与公共层
+# `plugins/common/skills/<技能>/`。所以"同级技能"必须**跨层**查找；只在本技能所在的层里找，
+# 会把整个契约测试静默 skip 掉（2026-09 合并仓库时就发生过：8~12 条断言静默消失）。
+SKILLS_ROOT = Path(__file__).resolve().parents[2]  # skills/<层>/<技能>/scripts/<file> → 本技能所在的层
+
+
+def _has_skill_child(directory: Path) -> bool:
+    """目录里直接放着技能（`<子目录>/SKILL.md`）—— 按内容判定，不靠目录名约定。"""
+    return directory.is_dir() and any(
+        (child / "SKILL.md").is_file() for child in directory.iterdir() if child.is_dir()
+    )
 
 
 def _skill_roots(start: Path) -> tuple[Path, ...]:
-    """本技能所在的根 + 同级的其它技能根（`plugins/<插件>/skills/` 与 `plugins/common/skills/`）。
+    """本技能所在的层 + 源仓里其它所有技能层（跨插件、跨层）。
 
-    DSH 运行时把这些根**都**注册进技能目录，所以"同级技能"必须跨根查找（只在本技能所在的
-    根里找，整个契约测试会被静默 skip 掉）。安装副本里没有 `plugins/`，只剩本技能所在的根
-    —— 那时同级技能本来就不存在，记 skip 是对的。
+    DSH 运行时把每个层都注册成技能根，所以"同级技能"必须跨层查找（只在本技能所在的层里找，
+    整个契约测试会被静默 skip 掉）。安装副本里没有 `plugins/`，只剩本技能所在的层 ——
+    那时同级技能本来就不存在，记 skip 是对的。
     """
     roots = [start]
     for candidate in start.parents:
         plugins = candidate / "plugins"
         if not plugins.is_dir():
             continue
-        roots.extend(sorted(child / "skills" for child in plugins.iterdir() if (child / "skills").is_dir()))
+        for skills in sorted(plugins.glob("*/skills")):
+            if not skills.is_dir():
+                continue
+            if _has_skill_child(skills):
+                roots.append(skills)  # 公共层：技能直接放在 skills/ 下
+            else:
+                roots.extend(sorted(layer for layer in skills.iterdir() if _has_skill_child(layer)))
         break
     return tuple(dict.fromkeys(root for root in roots if root.is_dir()))
 

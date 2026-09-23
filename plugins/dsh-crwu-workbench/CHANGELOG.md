@@ -7,6 +7,71 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.5 · 2026-09-23
+
+- **技能重构为「分层目录 + 一层一个技能根」。** 原来包内只有 `skills/`（自研 27 个）与 `common/skills/`
+  （公共 3 个）两个技能根；现在按归属分层：
+
+  | 层 | 目录 | 内容 |
+  | --- | --- | --- |
+  | 自研层 | `skills/crwu/` | 原有 27 个 crwu-audit / crwu-dev-audit 技能（`git mv` 原样搬迁） |
+  | 上游层（新） | `skills/dws/` | vendored 的 `dingtalk-workspace-cli` 钉钉技能 14 个（集合 `multi`） |
+  | 公共层 | `common/skills/` | `crwu-dws` / `crwu-h3yun-*`（位置不变） |
+
+  **为什么必须一层一个根**：`@deepseek-ai/dsh-skill-filesystem` 的 `discoverRoot()` 对每个技能根
+  **只扫一层**（`readdir(root)` → `<子目录>/SKILL.md`），不递归。只注册 `skills/` 会把 `skills/crwu/`
+  当成"一个没有 `SKILL.md` 的技能"跳过，**整层静默消失**（症状与 2026-09-22 的 `baseUrl` 陷阱完全一样：
+  provider 装配成功、技能表里 0 个技能、日志干净）。所以 `cordis.patch.yml` 的 `customSkillDirs`
+  改成返回 `skills/crwu`、`skills/dws`、`common/skills` 三个根。
+- **`dws` 层只由同步脚本改写，可复现、可审计。** 新增 `scripts/sync-dws-skills.mjs`
+  （`npm run dws:sync`）从本机 `dws` 的上游副本同步，并写 `skills/dws/provenance.json`
+  （上游包名 / 版本 `1.0.61` / 集合 / 逐技能 sha256 / LICENSE、NOTICE 摘要）；
+  `npm run dws:check` 只对照 provenance 逐文件比对（不需要上游，CI 与员工机器都能跑），已接入
+  `npm run check` 与 `prepack`。上游版本或集合变化必须显式 `--allow-version-change` / `--allow-set-change`，
+  否则拒绝写入 —— 上游静默换版不会悄悄改掉随包内容。上游以 Apache-2.0 发布，`LICENSE` / `NOTICE`
+  随技能保留。这一层是上游正文，按 `skills/README.md` 的口径**豁免**本仓 Skill 自洽性 lint
+  （上游按自己的跨技能相对链接组织），门禁只跑自研层与公共层。
+- **共用的摘要/枚举逻辑提取**到 `scripts/lib/skill-digest.mjs`，两个同步脚本不再各写一份
+  （`sync-common-skills.mjs` 改为复用，`--check` 语义不变）。
+- **门禁与源仓工具改为按层寻址**（同一类"静默扫 0 个技能"的坑）：
+  - `Makefile` / CI 的 `kb_tool.py validate` 改为 `--skill-root skills/crwu` 与 `--skill-root common/skills`
+    各一次（传上层 `skills/` 会静默扫 0 个技能）；新增 `make plugin-dws`；
+  - `Makefile` 的 `skills-install` 改为 `find plugins -name SKILL.md` 收集技能 —— 任何层都被收到，
+    层目录自己不会被误当成技能；
+  - `check_audit_skill_mappings.py` 的技能根候选改为 `skills/crwu` + `common/skills`，硬编码的
+    `skills/crwu-audit/...`、`skills/crwu-dws` 等 label 改为按根解析；
+  - 三个源仓契约测试的 `_skill_roots()` 改为按"根里直接放着技能"识别所有层并跨层查找
+    （自研层与公共层不再同级；不修会让整组断言静默 skip）；
+  - `kb_tool.py` 的仓库引用规则新增 `skills/<层>/` 形态（分层后跨层引用同样要拦）。
+- **运行时路径与跨层依赖**：`src/host/audit/skill-paths.ts` 的包内解析改到 `skills/crwu/`
+  （`prompt.ts` 的 `$SKILLS_ROOT` 占位语义不变，指自研层）；
+  `crwu-audit-external-data` 的 `connector_probe.py` 改为在"本技能所在层 + 同级层 + 公共层 +
+  常见位置"里找 `ifind-finance-data`（iFinD 与本技能不再同层）。
+- **交付形状护栏**：`package.json` 的 `files` 显式列出 `skills/README.md`、`skills/crwu/`、
+  `skills/dws/`；`assert-pack.mjs` 三层各钉代表文件 + `provenance.json`；`smoke-built.mjs` /
+  `host-audit-prompt.test.mjs` / `host-package.test.mjs` / `host-skills-patch.test.mjs`
+  （三个根、逐层技能数与 `SKILL.md`）同步。
+- **文档**：新增 `skills/README.md`（分层契约、`dws` 层同步与升级、豁免口径）；
+  同步 `AGENTS.md`（根 / `plugins/` / 插件各一处）、`docs/skills.md`（分层表 + `dws` 层目录）、
+  `docs/agent-skill-dirs.md`、`README.md` + `README.zh-CN.md`、`README.en.md`、
+  `docs/development-notes.md`（`baseUrl` 之外新增"少注册一层"这一同类坑）。
+- **维护规程**：`plugins/AGENTS.md` 新增 §5.5「新增技能层或技能时的改动清单」—— 把本次逐项踩出来的
+  改动面（技能根 / `files` / 打包断言 / 单测计数 / skills/README / 文档 / 版本）、自研层与 vendored 层
+  的两条分叉、"不用改"的自动发现面，以及四个会咬人的坑固化成清单；插件 `AGENTS.md` §4.1.3 加了指针。
+- 顺手修复一处既有缺陷：`crwu-audit/scripts/test_audit_delivery.py` 的 v1.6 目录同步断言读的是
+  早已不存在的旧路径（`skills/README.md`、`docs/CHANGELOG.md`），一直以 `FileNotFoundError` 失败；
+  改为从技能目录上溯定位源仓文档（`docs/skills.md` 与 `docs/v0.0.1/CHANGELOG.md`），
+  安装副本内显式 skip。
+
+### 验证（0.0.5）
+
+- `npm run check`（版本一致 + 配置 + 公共技能同步 + `dws:check` + typecheck + 单测 + build + 产物冒烟）
+  与 `npm run pack:assert`（三方加载契约 + 三层文件清单）在本轮全过。
+- 技能门禁：自研层与公共层 `kb_tool.py validate` 均 `error=0`；
+  `test_audit_skill_maintainer.py`、`test_audit_multiaxis_router.py`、`test_dws_source_contract.py`
+  全过（跨层查找生效，未被静默 skip）。
+- `git diff --check` 干净。
+
 ## package · 0.0.4 · 2026-09-22
 
 - **DeepSeek 会话统一数据边界：报告业务会话只允许用「本次会话注入的远端资料」**（2026-09-23 用户强制口径）。

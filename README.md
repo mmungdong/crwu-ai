@@ -55,7 +55,7 @@ One principle governs the entire system:
 | I want to… | Recommended entry |
 | --- | --- |
 | Install the complete Workbench in DSH | [Workbench installation and usage](plugins/dsh-crwu-workbench/README.md) |
-| Audit an appraisal report | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) |
+| Audit an appraisal report | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu/crwu-audit/SKILL.md) |
 | Explore every audit capability | [Skills catalog](docs/skills.md) |
 | Sign in to H3Yun and query business data | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/v0.0.1/cli-manual.md) |
 | Use live rules from DingTalk knowledge spaces | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) |
@@ -158,8 +158,9 @@ The plugin package includes:
 
 - Host and Client build entries;
 - the plugin deployment YAML;
-- 27 plugin-specific audit and maintenance Skills;
-- 3 common enterprise-access Skills.
+- 27 in-repo audit and maintenance Skills (`skills/crwu/` layer);
+- 14 vendored DingTalk Skills from upstream `dingtalk-workspace-cli` (`skills/dws/` layer);
+- 3 common enterprise-access Skills (`common/skills/` layer).
 
 Maintainers can validate and distribute the plugin with `make plugin-dist`. If a remote tarball already exists with the same version but different contents, the command refuses to overwrite it; bump the version first.
 
@@ -169,10 +170,12 @@ Maintainers can validate and distribute the plugin with `make plugin-dist`. If a
 make skills-install AGENT_DIR=~/.codex/skills
 ```
 
-The directory layout is the source of truth for the Skill catalog—there is no second manifest to keep in sync:
+The directory layout is the source of truth for the Skill catalog—there is no second manifest to keep in sync.
+Skills are organized in **layers**, and DSH registers one skill root per layer (it scans exactly one level per root):
 
+- `plugins/dsh-crwu-workbench/skills/crwu/`: the audit family and maintenance Skills (in-repo);
+- `plugins/dsh-crwu-workbench/skills/dws/`: the DingTalk Skills vendored from `dingtalk-workspace-cli` (upstream Apache-2.0; rewritten only by `npm run dws:sync`, verified by `npm run dws:check`);
 - `plugins/common/skills/`: the three shared H3Yun and DingTalk Skills;
-- `plugins/dsh-crwu-workbench/skills/`: the audit family and maintenance Skills;
 - `plugins/dsh-crwu-workbench/common/skills/`: a generated synchronized copy used during packaging, not a source directory.
 
 See [AI host directory conventions](docs/agent-skill-dirs.md) for supported host layouts.
@@ -325,7 +328,8 @@ crwu-ai/
 │       ├── src/host/                 # Host operations, configuration, state, services
 │       ├── src/client/               # Sidebar, Workbench UI, browser state
 │       ├── src/shared/               # Shared Host/Client protocol
-│       ├── skills/                   # 27 audit and maintenance Skills
+│       ├── skills/crwu/              # 27 audit and maintenance Skills (in-repo layer)
+│       ├── skills/dws/               # 14 vendored DingTalk Skills (upstream layer)
 │       ├── config/                   # Single deployment YAML
 │       ├── tests/                    # Node unit and integration tests
 │       └── scripts/                  # Build, package, and release checks
@@ -391,7 +395,7 @@ The plugin version must match in `package.json`, `VERSION`, and the plugin `CHAN
 | Document | What it covers |
 | --- | --- |
 | [Workbench plugin guide](plugins/dsh-crwu-workbench/README.md) | Installation, configuration, development loop, device acceptance, and release. |
-| [Skills catalog](docs/skills.md) | Responsibilities, triggers, and dependency boundaries for all 30 Skills. |
+| [Skills catalog](docs/skills.md) | Responsibilities, triggers, and dependency boundaries for all 44 Skills (27 in-repo + 14 vendored + 3 shared). |
 | [CLI manual](docs/v0.0.1/cli-manual.md) | Commands, arguments, filter syntax, environment variables, and operating flows. |
 | [Audit system design](docs/v0.0.1/design-crwu-audit-skills.md) | Project profiling, capability tree, multi-axis routing, and delivery model. |
 | [Live-knowledge protocol](docs/v0.0.1/design-audit-live-kb-protocol.md) | How every audit locates and fetches current knowledge text. |

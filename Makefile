@@ -39,12 +39,13 @@ PLUGIN_TGZ    := $(DIST_DIR)/$(PLUGIN_PKG_NAME)-$(PLUGIN_VERSION).tgz
 PLUGIN_CONFIG ?= $(PLUGIN_DIR)/config/crwu-workbench.yml
 
 # 技能装到非 DSH 宿主时用：`make skills-install AGENT_DIR=~/.agents/skills`。
-# 收哪些技能只由目录布局决定 —— `plugins/*/skills/*` 同时覆盖插件专属技能与
-# `plugins/common/skills/` 公共技能，不需要任何名单文件。
-SKILL_DIRS    := $(wildcard plugins/*/skills/*/)
+# 收哪些技能只由目录布局决定：**任何含 SKILL.md 的目录都算一个技能**，不管它在哪一层
+# （插件层 `plugins/<插件>/skills/<层>/<技能>/`、公共层 `plugins/common/skills/<技能>/`）。
+# 层目录自己（`skills/crwu`、`skills/dws`）没有 SKILL.md，因此不会被当成技能；不需要名单文件。
+SKILL_DIRS    := $(shell find plugins -name SKILL.md -type f 2>/dev/null | sed 's|/SKILL.md$$||' | sort)
 
 .PHONY: build build-mac build-win fmt test clean \
-        plugin-deps plugin-skills plugin-check plugin-pack plugin-dist plugin-clean \
+        plugin-deps plugin-skills plugin-dws plugin-check plugin-pack plugin-dist plugin-clean \
         skills-install
 
 build: build-mac build-win
@@ -82,19 +83,27 @@ plugin-deps: $(PLUGIN_DIR)/node_modules
 plugin-skills: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run skills:sync
 
-# 完整门禁 = 版本一致 + 公共技能同步 + 类型 + 测试 + 构建 + 产物冒烟 + tarball 自检
-#            + 技能自洽性 lint + 三个源仓契约测试 + 分发守卫判定自检（与 CI 同一条命令集）。
+# 把上游 `dws`（dingtalk-workspace-cli）自带的钉钉技能同步进 `skills/dws/`（vendored 层）。
+# 只在开发机上有意义（要装过 dws）；普通开发/构建不需要它，`npm run check` 里的 dws:check
+# 只比对已提交的 provenance，不碰上游。升级上游要审 diff：`npm run dws:sync -- --allow-version-change`。
+plugin-dws: plugin-deps
+	cd "$(PLUGIN_DIR)" && npm run dws:sync
+
+# 完整门禁 = 版本一致 + 公共技能同步 + dws 层内容一致 + 类型 + 测试 + 构建 + 产物冒烟 + tarball 自检
+#            + 技能自洽性 lint（crwu 层与公共层各一次）+ 三个源仓契约测试 + 分发守卫判定自检
+#            （与 CI 同一条命令集）。dws 层是上游正文，按 `skills/README.md` 的口径豁免自洽性 lint。
 plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run check
 	cd "$(PLUGIN_DIR)" && npm run pack:assert
-	cd "$(PLUGIN_DIR)" && python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills
-	cd "$(PLUGIN_DIR)" && python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
-	cd "$(PLUGIN_DIR)" && python3 skills/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
-	cd "$(PLUGIN_DIR)" && python3 skills/crwu-audit/scripts/test_audit_multiaxis_router.py
+	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu
+	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
+	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
+	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
 	cd "$(PLUGIN_DIR)" && python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 	node "$(CURDIR)/scripts/dist-plugin.mjs" --self-test
 
-# 打成可直接分发的 tgz。包内已含 skills/ 与 common/skills/，员工装完即得全部技能。
+# 打成可直接分发的 tgz。包内已含全部技能层（skills/crwu、skills/dws、common/skills），
+# 员工装完即得全部技能。
 plugin-pack: plugin-deps
 	mkdir -p "$(DIST_DIR)"
 	cd "$(PLUGIN_DIR)" && npm pack --pack-destination "$(DIST_DIR)"
@@ -119,7 +128,7 @@ plugin-clean:
 # 同名覆盖：先删后拷，保证不带旧文件。
 skills-install:
 	@test -n "$(AGENT_DIR)" || { echo "用法：make skills-install AGENT_DIR=<skills 根目录>"; exit 1; }
-	@test -n "$(SKILL_DIRS)" || { echo "没有找到任何技能目录（plugins/*/skills/*）"; exit 1; }
+	@test -n "$(SKILL_DIRS)" || { echo "没有找到任何技能目录（任何含 SKILL.md 的目录）"; exit 1; }
 	@mkdir -p "$(AGENT_DIR)"
 	@for dir in $(SKILL_DIRS); do \
 		name=$$(basename "$$dir"); \

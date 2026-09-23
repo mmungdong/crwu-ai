@@ -578,9 +578,10 @@ test('package.json entry points, files and exports stay consistent', async () =>
   for (const entry of ['lib/index.js', 'lib/client.js', 'config/crwu-workbench.yml', 'cordis.patch.yml', 'LICENSE', 'SECURITY.md', 'CHANGELOG.md']) {
     assert.ok(pkg.files.includes(entry), `${entry} 不在 files 里，分发会缺件`)
   }
-  // 技能随包发布：`skills/` 是插件专属技能，`common/skills/` 是打包前从 `plugins/common/skills/`
-  // 同步进来的公共技能（npm 的 files 出不了包目录，所以必须是包内的一份真拷贝）。
-  for (const entry of ['skills/', 'common/skills/']) {
+  // 技能随包发布，按层列出：`skills/crwu/` 是本仓自研层、`skills/dws/` 是 vendored 的上游钉钉技能层、
+  // `common/skills/` 是打包前从 `plugins/common/skills/` 同步进来的公共层（npm 的 files 出不了包目录，
+  // 所以必须是包内的一份真拷贝）。一层一个技能根，缺任一层员工就少一层技能。
+  for (const entry of ['skills/README.md', 'skills/crwu/', 'skills/dws/', 'common/skills/']) {
     assert.ok(pkg.files.includes(entry), `${entry} 不在 files 里，员工装完就拿不到技能`)
   }
   for (const entry of ['tests', 'install', 'scripts', 'src']) {
@@ -589,12 +590,15 @@ test('package.json entry points, files and exports stay consistent', async () =>
   // git 安装拉的是源码：没有 prepare 就装不出 lib/；实现必须是随包发布的那个脚本
   // （npm 安装 tarball 时也会跑它，所以它不能依赖 src/ 或 tsconfig）。
   assert.equal(pkg.scripts.prepare, 'node scripts/prepare.mjs')
-  // 打包前先同步公共技能：少了这一步，tarball 里只有插件专属技能。
+  // 打包前先同步公共技能、并核对 vendored 的 dws 层内容：少了前者 tarball 里只有自研层，
+  // 少了后者上游正文被就地改过也不会有任何提示。
   assert.match(pkg.scripts.prepack, /skills:sync/)
+  assert.match(pkg.scripts.prepack, /dws:check/)
   assert.match(pkg.scripts.prepack, /config:check/)
   assert.match(pkg.scripts.prepack, /build:lib/)
   assert.match(pkg.scripts.build, /skills:sync/)
   assert.match(pkg.scripts.check, /skills:check/)
+  assert.match(pkg.scripts.check, /dws:check/)
   assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(pkg.dsh.client.platform, 'web')
 })
@@ -663,8 +667,9 @@ test('an installed tarball can actually be installed and imported', async () => 
     await stat(join(packageDir, 'lib', 'index.js'))
     await stat(join(packageDir, 'lib', 'client.js'))
     await stat(join(packageDir, 'config', 'crwu-workbench.yml'))
-    // 技能是员工侧的唯一来源：专属技能与同步进来的公共技能都必须真的在包里。
-    await stat(join(packageDir, 'skills', 'crwu-audit', 'SKILL.md'))
+    // 技能是员工侧的唯一来源：自研层、vendored 上游层与同步进来的公共层都必须真的在包里。
+    await stat(join(packageDir, 'skills', 'crwu', 'crwu-audit', 'SKILL.md'))
+    await stat(join(packageDir, 'skills', 'dws', 'dingtalk-doc', 'SKILL.md'))
     await stat(join(packageDir, 'common', 'skills', 'crwu-dws', 'SKILL.md'))
 
     const activate = [

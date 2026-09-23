@@ -57,11 +57,14 @@ const REQUIRED = [
   'CHANGELOG.md',
   'SECURITY.md',
   'LICENSE',
-  // 技能随插件发布（`cordis.patch.yml` 的 crwu-workbench-skills 行把这两个目录注册成技能根）：
+  // 技能随插件发布（`cordis.patch.yml` 的 crwu-workbench-skills 行把**每一层**注册成一个技能根）：
   // 员工装完插件就有全部技能，不再靠 skills-manager 往 `~/.dsh/skills` 里拷。
-  // 插件专属技能与公共技能各钉一个代表 —— 公共技能是打包前 `skills:sync` 从
-  // `plugins/common/skills/` 拷进来的，漏了这一步就只有插件专属技能能装上。
-  'skills/crwu-audit/SKILL.md',
+  // 每一层各钉一个代表 —— 公共层是打包前 `skills:sync` 从 `plugins/common/skills/` 拷进来的，
+  // dws 层是 vendored 的上游正文，漏了任一步都只有一层能装上。
+  'skills/README.md',
+  'skills/crwu/crwu-audit/SKILL.md',
+  'skills/dws/dingtalk-doc/SKILL.md',
+  'skills/dws/provenance.json',
   'common/skills/crwu-dws/SKILL.md',
 ]
 
@@ -102,8 +105,9 @@ for (const forbidden of FORBIDDEN) {
   const hit = files.filter((file) => file === forbidden || file.startsWith(forbidden))
   if (hit.length > 0) problems.push(`打进了不该发布的路径：${hit.slice(0, 3).join(', ')}${hit.length > 3 ? ` 等 ${hit.length} 项` : ''}`)
 }
-// 体积上限：技能正文是随包发布的主体（约 2.9MB 解包，其中 `crwu-dev-audit-optimize/template/echarts.min.js`
-// 单独占 1MB），所以这里卡的是「有没有误打 node_modules / 大二进制」这件事，不是「包小不小」。
+// 体积上限：技能正文是随包发布的主体（`crwu` 层约 2.7MB + vendored 的 `dws` 层约 3.0MB，
+// 其中 `crwu-dev-audit-optimize/template/echarts.min.js` 与 `dingtalk-misc` 各自占约 1MB），
+// 所以这里卡的是「有没有误打 node_modules / 大二进制」这件事，不是「包小不小」。
 // 超过就说明有不该进包的东西，看 `npm pack --dry-run --json` 的清单。
 const MAX_UNPACKED_BYTES = 8 * 1024 * 1024
 if (bytes > MAX_UNPACKED_BYTES) {

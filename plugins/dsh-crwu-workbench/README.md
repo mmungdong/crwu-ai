@@ -176,11 +176,13 @@ dsh plugin --profile web add dsh-crwu-workbench   # 从 npm 取预构建产物�
 3. 要发起审核，先在**顶层会话**的会话头点「登记为子会话父级」——审核只允许挂在顶层会话下
    （只挂一层，嵌套会导致状态跟丢）。
 
-> **技能随包发布**：包里带 `skills/`（插件专属 27 个）与 `common/skills/`（公共技能 `crwu-dws` /
-> `crwu-h3yun-*`），`cordis.patch.yml` 的 `crwu-workbench-skills` 行把两个目录注册成技能根 ——
-> 装完插件就有全部技能，**不需要**再往 `~/.dsh/skills/` 里拷。旧的用户目录副本建议删掉：
+> **技能随包发布，按层组织**：包里带三层技能 —— `skills/crwu/`（本仓自研 27 个）、
+> `skills/dws/`（上游 `dingtalk-workspace-cli` vendored 的 14 个钉钉技能）、`common/skills/`
+> （公共技能 `crwu-dws` / `crwu-h3yun-*`）。`cordis.patch.yml` 的 `crwu-workbench-skills` 行把
+> **每一层各注册成一个技能根**（DSH 对每个根只扫一层，一层一个根）—— 装完插件就有全部技能，
+> **不需要**再往 `~/.dsh/skills/` 里拷。旧的用户目录副本建议删掉：
 > 插件目录的 rank 比用户目录高，留着只会造成两处漂移（`make skills-install AGENT_DIR=…` 是给
-> 非 DSH 宿主用的）。
+> 非 DSH 宿主用的）。分层口径与 `dws` 层的升级方式见 [`skills/README.md`](skills/README.md)。
 
 > **权限**：不需要任何启动参数；但**首次必须授权一次**（面板上的授权弹框，点「同意并继续」），
 > 否则插件读不到氚云会话与钉钉登录态、环境自检会拦住它。授权一次长期有效（存在本机状态文件里）。
@@ -192,7 +194,7 @@ dsh plugin --profile web add dsh-crwu-workbench   # 从 npm 取预构建产物�
 dsh plugin --profile web add dsh-crwu-workbench@<version>
 ```
 
-再重启该 profile。安装目录里是预构建产物，更新就是换一份 `lib/` 与 `skills/`。
+再重启该 profile。安装目录里是预构建产物，更新就是换一份 `lib/` 与 `skills/`（含 `skills/dws/` 那一层）。
 
 > **版本号只发一次**：同一个版本的 tarball 不会被覆盖（`make plugin-dist` 会拒绝内容不同的同版本
 > 重发），所以改了内容要**升版本号**再发 —— 否则早装和重装的员工会拿到「同一个版本、两份内容」。
@@ -373,8 +375,9 @@ DSH API 仍是 developer preview，升级 DSH 时**必须**同步核对这几个
 
 ## 六、依赖（不在本仓）
 
-- **技能族**：`crwu-audit` 及其资产/业务/公共子技能、`crwu-dws`、`crwu-h3yun-login`、
-  `dingtalk-*`、`ifind-finance-data`。由安装清单负责安装。
+- **技能族**：`crwu-audit` 及其资产/业务/公共子技能、`crwu-dws`、`crwu-h3yun-login` 随本插件包发布；
+  `dingtalk-*`（`skills/dws/` 层）是随包 vendored 的上游技能；`ifind-finance-data` 不在本仓，
+  由安装清单负责安装。
 - **CLI**：`crwu`（审核编排）、`dws`（钉钉）、`ossutil`（OSS 上传）。
 - **账号**：氚云员工会话（钉钉扫码）、钉钉认证、阿里云 OSS AccessKey、iFinD 密钥。
   凭据分别落在 `~/.dsh/…`、`~/.ossutilconfig`（权限 600）、技能自己的配置里，**都不进本仓**。
@@ -404,8 +407,9 @@ PORTING.md         从旧动态形态迁移过来的逐项记录（含验证账�
 (仓根) .github/workflows/     ci.yml（Go + 插件）· release.yml（plugin-v* tag → 校验 + 发布 npm）
 ```
 
-`npm pack` 带 `lib/` + 补丁 + 文档 + `skills/` + `common/skills/`（172 个文件、解包约 2.9MB，
-技能正文是大头）；`install/`、`tests/`、`scripts/`、`src/` 是仓库内部件，不进包 —— `npm run pack:assert` 会核对这一点。
+`npm pack` 带 `lib/` + 补丁 + 文档 + 三层技能（`skills/crwu/`、`skills/dws/`、`common/skills/`，
+解包约 5.5MB（450 个文件），技能正文是大头）；`install/`、`tests/`、`scripts/`、`src/` 是仓库内部件，
+不进包 —— `npm run pack:assert` 会核对这一点。
 
 DSH 不要求 TypeScript 源码集中在单个文件。`src/` 按领域拆分，构建后只暴露
 `lib/index.js` 与 `lib/client.js` 两个入口。

@@ -258,15 +258,19 @@ await check('Client 半：经 __ModuleLoader__ 加载并注册四个槽位条目
 })
 
 // 审核指令里的钉钉回传脚本路径是**随包发布**的（`src/host/audit/skill-paths.ts`）。
-// 这里能证明的是「产物里没有写死路径 + 脚本真的在包内那份 skills/ 下」；真正跑一次回传
-// 要连真实钉钉，只有用户点「AI 审核」才会发生（见 AGENTS.md §7.2）。
+// 这里能证明的是「产物里没有写死部署路径 + 层名正确 + 脚本真的在包内 `skills/crwu/` 层下」；
+// 真正跑一次回传要连真实钉钉，只有用户点「AI 审核」才会发生（见 AGENTS.md §7.2）。
+//
+// 层名是通过常量拼进候选路径的（`../${CRWU_SKILLS_LAYER}/…`），产物里**不会**出现折叠后的
+// `../skills/crwu/` 字符串 —— 所以断言分两半：常量值对，且候选确实是从产物自身位置起算的相对路径。
 await check('Host 产物：钉钉回传脚本按包内相对路径解析，脚本随包存在', async () => {
   const bundle = await readFile(join(ROOT, 'lib', 'index.js'), 'utf8')
   assert.equal(bundle.includes('~/.dsh/skills'), false, '产物里不许再出现写死的 ~/.dsh/skills（员工机器上不存在）')
-  assert.equal(bundle.includes('../skills/'), true, '产物要按自身所在目录解析包内 skills/')
-  const script = join(ROOT, 'skills', 'crwu-audit', 'scripts', 'upload_audit_result.py')
-  assert.equal(existsSync(script), true, `脚本必须随包发布：${script}（package.json 的 files 要有 skills/）`)
-  return 'lib/index.js → ../skills/…'
+  assert.equal(bundle.includes('"skills/crwu"'), true, '产物里的自研层目录必须是 skills/crwu')
+  assert.equal(bundle.includes('../${CRWU_SKILLS_LAYER}/'), true, '产物要按自身所在目录解析包内技能层')
+  const script = join(ROOT, 'skills', 'crwu', 'crwu-audit', 'scripts', 'upload_audit_result.py')
+  assert.equal(existsSync(script), true, `脚本必须随包发布：${script}（package.json 的 files 要有 skills/crwu/）`)
+  return 'lib/index.js → ../${CRWU_SKILLS_LAYER}/…（skills/crwu）'
 })
 
 if (failures.length > 0) {

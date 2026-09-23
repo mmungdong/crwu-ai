@@ -10,8 +10,16 @@
       config:
         configFile: ''
 
-# CRWU 审核技能随插件发布：本包 `skills/` 是插件专属技能，`common/skills/` 是打包前
-# 从 `plugins/common/skills/` 同步进来的公共技能（crwu-dws / crwu-h3yun-*）。
+# 技能随插件发布，按**层**注册技能根（一层一个根）：
+#   - `skills/crwu/`   —— 本仓自研的审核能力族（27 个）；
+#   - `skills/dws/`    —— 上游 `dingtalk-workspace-cli` 的钉钉技能，随包 vendored；
+#   - `common/skills/` —— 跨插件公共技能（crwu-dws / crwu-h3yun-*），打包前从
+#                         `plugins/common/skills/` 同步进来。
+#
+# 为什么一层一个根：`@deepseek-ai/dsh-skill-filesystem` 的 `discoverRoot()` 对每个技能根
+# **只扫一层**（`readdir(root)` → `<子目录>/SKILL.md`），**不递归**。只注册 `skills/` 会让
+# `skills/crwu/` 被当成"一个没有 SKILL.md 的技能"而**静默丢掉整层** —— 症状与下面那个
+# `baseUrl` 陷阱一模一样：provider 装配成功，技能表里 0 个技能。
 #
 # 路径**不能**写成 `new URL('skills/', baseUrl)`：profile 的整棵树是「补丁层挂在 profile 的空根
 # 配置上」，所以 bundle patch 里的 `baseUrl` 锚在 **profile 目录**（`<profile>/`），不是包目录 ——
@@ -27,12 +35,12 @@
       config:
         # 独立 provider 名：与部署默认那行共存，不覆盖它。
         providerName: crwu-workbench
-        # 只扫本包内的两个目录；用户/项目技能根仍由部署默认那行负责（避免重复扫描）。
+        # 只扫本包内的三个技能根；用户/项目技能根仍由部署默认那行负责（避免重复扫描）。
         includeDefaultRoots: false
         customSkillDirs: !!js >-
           (() => {
             const path = process.getBuiltinModule('node:path');
             const { createRequire } = process.getBuiltinModule('node:module');
             const root = path.dirname(createRequire(baseUrl + 'package.json').resolve('dsh-crwu-workbench/package.json'));
-            return [path.join(root, 'skills'), path.join(root, 'common/skills')];
+            return [path.join(root, 'skills/crwu'), path.join(root, 'skills/dws'), path.join(root, 'common/skills')];
           })()
