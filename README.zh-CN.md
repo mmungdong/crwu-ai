@@ -1,344 +1,412 @@
 <div align="center">
 
-# CRWU AI 工具箱
+# CRWU AI
 
-**企业级 AI 审核、知识访问与员工权限数据工具——集中在一个代码库中。**
+**面向资产评估工作的企业级 AI 审核平台**
 
-把评估材料、企业知识和业务记录转化为有证据支撑的 AI 工作流，同时确保 AI 的权限不会超过正在使用它的员工。
+从员工权限数据、实时专业知识到两阶段审核与可追溯交付，CRWU 把完整工作流连接到一个可信边界内。
 
-[English](README.md) · [浏览 Skills](docs/skills.md) · [CLI 手册](docs/v0.0.1/cli-manual.md) · [变更记录](docs/v0.0.1/CHANGELOG.md)
+[English](README.md) · [Skills 目录](docs/skills.md) · [CLI 手册](docs/v0.0.1/cli-manual.md) · [插件指南](plugins/dsh-crwu-workbench/README.md) · [变更记录](docs/v0.0.1/CHANGELOG.md)
 
 <br>
 
 ![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
+![Plugin](https://img.shields.io/badge/Workbench-0.0.4-D94A4A)
 ![CLI](https://img.shields.io/badge/CLI-0.0.1-2563EB)
 ![AI Skills](https://img.shields.io/badge/AI%20Skills-30-7C3AED)
-![平台](https://img.shields.io/badge/Build-macOS%20%7C%20Windows-334155)
-![审核](https://img.shields.io/badge/Appraisal%20Audit-ready-059669)
+![Node](https://img.shields.io/badge/Node-22.19%2B%20%7C%2024%2B-339933?logo=nodedotjs&logoColor=white)
 
-**CLI 优先 · Skills 原生 · 证据驱动 · 人工复核**
+**员工权限 · 实时知识 · 证据驱动 · 人工复核**
 
 </div>
 
 ---
 
-## 为什么选择 CRWU
+## 一眼看懂 CRWU
 
-CRWU 最初是用于安全访问氚云的稳定命令入口，现在已经发展为面向企业工作的实用 AI 工具箱。当前能力包括：
+CRWU 不是一个只会给出结论的聊天机器人。它由三部分组成：
 
-| | 能力 | 可以交付什么 |
+| 产品层 | 作用 | 当前交付形态 |
 | --- | --- | --- |
-| 🧭 | **AI 资产评估审核** | 按资产、业务、方法、监管、数据和公共准则等维度路由审核，最终生成一份可追溯的 HTML 报告。 |
-| 🔐 | **员工权限企业数据访问** | 员工使用钉钉登录氚云，AI 只能访问该员工本人有权查看的应用、表单、记录和附件。 |
-| 📚 | **实时知识依据** | 每次审核从钉钉知识空间解析并下载所需规则正文，不依赖已经过期的复制内容。 |
-| 🧩 | **可移植 AI Skills** | 提供可独立安装的 Skills，适配 Codex、WorkBuddy、OpenCode、DeepSeek Harness 及其他兼容的智能体宿主。 |
+| **中瑞世联工作台** | 在 DeepSeek Harness 中完成环境自检、报告审核、审核追踪、结果查看与分析会话 | DSH 包插件 `dsh-crwu-workbench` |
+| **资产评估审核 Skills** | 对项目画像、多轴路由、专业检查、两阶段隔离和报告交付进行编排 | 30 个可独立安装的 AI Skills |
+| **CRWU CLI** | 以员工身份安全访问氚云应用、表单、记录和附件，并向 AI 暴露稳定命令目录 | Go 二进制 `crwu` |
 
-项目遵循一个简单原则：**AI 的结论不得超出证据、权限和已经验证的计算边界。**
+核心原则只有一句：
 
-## 能力状态
+> **AI 的判断不得超出它实际取得的证据、员工权限和已经验证的计算边界。**
 
-| 能力领域 | 当前状态 | 说明 |
+## 当前能力
+
+| 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| 资产评估审核编排 | **已可用** | 两阶段独立审核与人工复核对照，交付独立单文件 HTML。 |
-| 资产与业务覆盖 | **已可用** | 12 类资产、8 类业务、公共准则、数据检查及可选外部核验。 |
-| 氚云网页会话读取 | **已可用** | 员工扫码登录，支持应用、表单、记录、筛选和附件下载。 |
-| 钉钉知识库访问 | **配置 DWS 后可用** | 目录元数据可以缓存；规则正文在每次审核时实时下载。 |
-| iFinD 外部数据核验 | **条件可用** | 仅当 AI 宿主提供受支持的 iFinD 连接器或 Skill 时启用。 |
-| 氚云 Agent 网关 | **条件可用** | 命令已经实现，实际可用性取决于员工凭证及氚云数据面是否开通。 |
-| CRWU 独立 MCP 传输 | **架构边界** | 仓库保留 MCP 传输边界，当前正式交付的操作入口仍是 CLI + Skills。 |
+| DSH 中瑞世联工作台 | **可用** | 三模块侧栏、环境硬门禁、报告审核、审核记录、OSS 交付件与 DeepSeek 分析会话。 |
+| 两阶段资产评估审核 | **可用** | 阶段一 AI 独立审核并冻结，阶段二再读取人工复核意见做对照。 |
+| 资产与业务专业覆盖 | **可用** | 12 类资产、8 类业务、公共准则、数据检查和条件式外部核验。 |
+| 氚云员工会话读取 | **可用** | 钉钉扫码登录，支持应用、表单、记录、筛选和附件读取。 |
+| 钉钉实时知识 | **配置 DWS 后可用** | 缓存目录元数据；每次审核重新获取本次适用的规则正文。 |
+| 阿里云 OSS 审核交付 | **配置后可用** | 私有 Bucket、员工侧凭据、自动上传和限时签名链接。 |
+| iFinD 外部数据核验 | **条件可用** | 仅在宿主提供受支持的 iFinD 连接器或 Skill 时启用。 |
+| 报告评估模块 | **开发中** | 工作台入口已保留，当前正式可用模块是“报告审核”。 |
+| 独立 MCP 服务 | **预留边界** | 代码保留 transport 边界；当前正式入口仍是工作台、CLI 与 Skills。 |
 
-## 按你的任务开始
+## 从你的任务开始
 
-| 我想要…… | 从这里开始 |
+| 我想做什么 | 推荐入口 |
 | --- | --- |
-| 审核一个资产评估项目 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [审核设计](docs/v0.0.1/design-crwu-audit-skills.md) |
-| 查看全部 AI Skills | [Skills 目录](docs/skills.md) |
-| 以员工身份登录氚云 | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/v0.0.1/cli-manual.md) |
-| 查询表单、记录和附件 | [`crwu-h3yun-query`](plugins/common/skills/crwu-h3yun-query/SKILL.md) |
-| 使用钉钉知识库作为审核依据 | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [实时知识协议](docs/v0.0.1/design-audit-live-kb-protocol.md) |
-| 为 AI 宿主安装或更新 Skills | `make skills-install AGENT_DIR=…` → [各宿主目录](docs/agent-skill-dirs.md) |
-| 给员工安装 DSH 插件 | `make plugin-dist` → [插件 README](plugins/dsh-crwu-workbench/README.md) |
-| 维护或扩展审核体系 | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
+| 在 DSH 中安装完整工作台 | [工作台安装与使用](plugins/dsh-crwu-workbench/README.md) |
+| 审核一份资产评估报告 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) |
+| 查看全部审核能力 | [Skills 目录](docs/skills.md) |
+| 登录氚云并查询业务数据 | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/v0.0.1/cli-manual.md) |
+| 使用钉钉知识库中的实时规则 | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) |
+| 为 Codex 等宿主安装 Skills | [AI 宿主目录说明](docs/agent-skill-dirs.md) |
+| 扩展或维护审核体系 | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
+
+## 中瑞世联工作台
+
+工作台以一张常驻的侧栏分组卡进入。它跟随 DSH 主题，展开时展示三个固定模块，收起时保留品牌入口。
+
+| 模块 | 当前体验 |
+| --- | --- |
+| **报告评估** | 正式规划中的模块；当前展示克制的开发中页面，并引导进入报告审核。 |
+| **报告审核** | 待审核报告、AI 审核记录、启动/停止/重审、交付件查看、审核信息 Drawer 与 DeepSeek 会话。 |
+| **环境信息** | 检查工具、登录认证、上传配置和外部数据四层前置条件；未通过时阻止发起审核。 |
+
+### 工作台流程
+
+```mermaid
+flowchart LR
+    A[打开中瑞世联工作台] --> B{环境自检}
+    B -->|未通过| C[环境信息<br/>给出原因与配置入口]
+    C --> B
+    B -->|通过| D[报告审核]
+    D --> E[报告列表<br/>氚云待审核记录]
+    D --> F[AI 审核列表<br/>OSS 交付件]
+    E --> G[启动单条 AI 审核]
+    G --> H[审核根会话与子 Agent]
+    H --> I[本地交付 + OSS 自动上传]
+    I --> F
+    E --> J[与 DeepSeek 讨论报告]
+    F --> K[查看报告 / 审核信息]
+    F --> L[与 DeepSeek 分析审核结果]
+```
+
+### 报告审核体验
+
+- **一个统一工作面：** 报告列表与 AI 审核列表共享搜索、刷新、加载、分页和业务时间口径。
+- **单条审核并发：** 同一时间只运行一条审核；支持停止、重启、状态恢复和上传失败重试，避免多个 Agent 对写同一案例。
+- **结果优先的信息层级：** 审核信息 Drawer 先显示复核命中率、AI 检出问题和“已提未改”，技术字段默认折叠。
+- **交付件按业务语义展示：** 用户看到“审核报告”“审核数据”，而不是 OSS 原始路径和内部对象名。
+- **版本感知的分析会话：** 创建审核分析会话前，先比较报告、审核产物和复核意见的远端版本证据；可能过期时明确让用户选择。
+- **开发与安装形态可识别：** 侧栏和面板共享 `dev` / 版本标签，Host 与 Client 协议不一致时停止发起审核并提示重启。
+
+### 远端资料边界
+
+“讨论报告”和“分析审核结果”两类业务会话只接收本次从远端业务系统取得的资料标识与上下文：
+
+- 报告资料来自氚云附件，审核交付件来自 OSS；
+- 上下文记录远端 `fileId`、对象 key、ETag、更新时间、digest 与获取时间；
+- 不把本地案例路径作为报告身份，也不在远端读取失败时偷偷回退到本地旧副本；
+- 远端资料不足时不创建会话，只说明缺失事实并允许重试。
 
 ## 快速开始
 
-### 1. 构建 CLI
+### 1. 构建 CRWU CLI
 
-前置条件：**Go 1.24+**、**GNU Make**。
+前置条件：**Go 1.24+** 与 **GNU Make**。
 
 ```bash
 git clone https://github.com/mmungdong/crwu-ai.git
 cd crwu-ai
-make build
 
+make build
 ./bin/darwin/crwu version
 make test
 ```
 
-`make build` 会在 `bin/darwin/` 和 `bin/windows/` 下分别生成 macOS 与 Windows 二进制文件。只需要单一平台时，可使用 `make build-mac` 或 `make build-win`。
+`make build` 默认生成：
 
-### 2. 绑定员工氚云会话
-
-```bash
-./bin/darwin/crwu h3yun session login
-./bin/darwin/crwu h3yun session status
-./bin/darwin/crwu h3yun apps list
+```text
+bin/darwin/crwu
+bin/windows/crwu.exe
 ```
 
-登录命令会打开浏览器，由员工使用钉钉扫码。生成的会话只存入本机操作系统凭据存储，不会输出到终端或 AI 对话中。
+只构建当前需要的平台时，可使用 `make build-mac` 或 `make build-win`。
 
-### 3. 安装需要的 Skills
+### 2. 登录氚云
 
-这里**没有名单文件**：目录布局本身就是名单。`plugins/common/skills/` 是公共 Skills（钉钉知识库、氚云登录与查询）；每个插件自己的 `plugins/<名字>/skills/` 放随该插件发布的 Skills。
-
-**DeepSeek Harness** —— 装插件包即可，技能随包一起进去（插件把两个技能目录都注册成技能根）：
+以下示例假设 `crwu` 已加入 `PATH`；否则请替换为刚刚构建的二进制路径。
 
 ```bash
-make plugin-pack        # → dist/dsh-crwu-workbench-<版本>.tgz
+crwu h3yun session login
+crwu h3yun session status
+crwu h3yun apps list
+```
+
+登录命令打开独立浏览器窗口，由员工使用钉钉扫码。会话令牌在进程内取得后写入操作系统凭据存储，不输出到终端或 AI 对话。
+
+### 3. 安装 DSH 工作台
+
+插件开发需要 **Node.js `^22.19.0` 或 `>=24.0.0`**。
+
+```bash
+make plugin-pack
 dsh plugin --profile web add ./dist/dsh-crwu-workbench-<版本>.tgz
 ```
 
-**其它 AI 宿主**（Codex、WorkBuddy、OpenCode 等）—— 把全部技能拷进该宿主的 skills 根：
+插件包同时包含：
+
+- Host 与 Client 两个构建入口；
+- 插件部署 YAML；
+- 27 个插件专属的审核与维护 Skills；
+- 3 个公共 Skills。
+
+维护者可以使用 `make plugin-dist` 校验并分发插件。远端已有同版本、但内容不同的 tarball 时，命令会拒绝覆盖，必须先升级版本号。
+
+### 4. 给其它 AI 宿主安装 Skills
 
 ```bash
 make skills-install AGENT_DIR=~/.codex/skills
 ```
 
-`make plugin-dist` 守着**同一个版本号只发一次**：远端已有同版本 tarball 而内容不同时它会拒绝上传，
-所以改了内容要先升版本号。
+目录布局就是 Skill 名单，不维护第二份清单文件：
 
-各宿主的 skills 目录见 [`docs/agent-skill-dirs.md`](docs/agent-skill-dirs.md)。同名技能会被覆盖，所以重跑这条命令就是更新方式。
+- `plugins/common/skills/`：公共的氚云与钉钉能力；
+- `plugins/dsh-crwu-workbench/skills/`：审核能力族与维护能力；
+- `plugins/dsh-crwu-workbench/common/skills/`：打包时生成的公共 Skill 同步副本，不是源文件入口。
 
-## AI 资产评估审核
+支持宿主的目录约定见 [AI 宿主目录说明](docs/agent-skill-dirs.md)。
 
-`crwu-audit` 是资产评估审核能力族的总编排层。它先建立项目画像，再加载适用的规则和领域 Skills，严格保留证据边界，交付可复核的结果，而不是一个无法解释的黑盒分数。
+## 资产评估审核模型
+
+`crwu-audit` 是审核能力族的总编排层。它不把项目压成一个粗糙分类，而是建立多轴项目画像，再合并执行适用能力。
 
 ```mermaid
 flowchart LR
     A[项目材料] --> B[材料盘点与安全预处理]
-    B --> C[项目画像与路由]
-    K[钉钉实时知识] --> D[适用规则与检查清单]
-    C --> D
-    D --> E[资产 + 业务 + 方法 + 覆盖层检查]
-    E --> F[数据检查与外部核验]
-    F --> G[阶段一：AI 独立审核]
-    G --> H[冻结 AI 结果]
-    H --> I[阶段二：人工复核对照]
-    I --> J[独立单文件 HTML 审核报告]
+    B --> C[项目画像]
+    C --> D[资产轴]
+    C --> E[业务轴]
+    C --> F[方法与监管覆盖]
+    K[钉钉实时知识] --> G[适用规则与检查清单]
+    D --> G
+    E --> G
+    F --> G
+    G --> H[阶段一：AI 独立审核]
+    H --> I[冻结 AI 结果]
+    I --> J[阶段二：人工复核对照]
+    J --> L[AuditResult JSON]
+    L --> M[自包含 HTML 审核报告]
 ```
 
-### 审核模型
+审核过程遵守以下约束：
 
-- **先画像、后检查：** 报告形态、交易或业务背景、资产、评估方法和监管覆盖共同决定本次执行集合。
-- **多轴并集，而非单一标签：** 资产、业务、方法、覆盖层、公共准则和数据检查等适用能力会合并执行。
-- **规则实时获取：** 每个项目都从知识来源获取当前规则正文；Skills 保存路由契约，不复制规则正文。
-- **两阶段隔离：** AI 独立审核完成并冻结后，才读取人工复核文件并进行对照。
-- **证据优先于自信：** 无法读取、被隐藏、不受支持或未能重算的内容明确标为“未检查”，不得擅自写成“缺失”或“已核验”。
-- **最终决定仍由人工作出：** 结果用于辅助专业复核，不替代专业人员判断。
-
-### 报告阅读体验
-
-当前独立 HTML 报告采用任务优先的阅读顺序：
-
-1. AI 审核总结与审核范围；
-2. AI 检出的问题项，并在完成对照后明确标出 **AI 独立发现** 及严重程度分布；
-3. 外部数据核验；
-4. 按顺序列出人工复核文件，并逐条展示 AI 对照结果；
-5. 客观的百分比命中率，明确将已修复意见排除在分母之外；
-6. 人工确认项、证据与追溯信息。
-
-问题位置和问题描述始终直接展示。较长的修改意见、规则和证据详情放入带清晰提示的展开控件，打印时会自动展开必要内容。即使复核文件标记为“已修复”，如果被审核材料表明问题仍然存在，报告也会单独指出。
+- **多轴并集：** 资产、业务、方法、监管覆盖、公共准则、数据检查与外部核验共同决定执行集合。
+- **知识实时获取：** Skill 保存路由与装配契约，不复制易过期的规则正文。
+- **两阶段隔离：** AI 独立意见冻结前不得读取人工复核文件。
+- **可见区边界：** 默认跳过人工隐藏的工作表、行、列和隐藏区媒体；“未检查”不得写成“缺失”。
+- **结构化事实源：** 先生成并校验 AuditResult JSON，再由同一事实源生成员工 HTML 与监控结果。
+- **人工最终负责：** CRWU 辅助发现、整理和比较证据，不替代具备资格的专业判断与最终审批。
 
 ## Skills 生态
 
-仓库目前包含 **30 个可以独立安装的 Skills**。
+仓库包含 **30 个可独立安装的 Skills**：
 
 | 分组 | 数量 | 职责 |
 | --- | ---: | --- |
-| 审核编排 | 1 | 项目画像、路由、两阶段执行与报告交付。 |
-| 资产审核 Skills | 12 | 房地产、设备、企业价值、无形资产、矿业权、存货、债权、资产组合、运输设备、含商誉资产组、废旧物资及其他资产。 |
-| 业务审核 Skills | 8 | 资产经营、交易处置、财务报告、融资债务、投资资本、税务历史、司法事项及咨询复核。 |
-| 数据与外部核验 | 2 | 表格/数据一致性检查及按条件启用的公开数据核验。 |
-| 企业数据与知识访问 | 3 | 氚云登录、氚云查询及钉钉 DWS 知识访问。 |
-| 准则、分发与维护 | 4 | 公共准则、环境初始化、审核优化及 Skill 维护。 |
+| 审核总路由 | 1 | 项目画像、多轴装配、两阶段流程和交付编排。 |
+| 资产审核 | 12 | 房地产、设备、企业价值、无形资产、矿业权、存货、债权、资产组合、运输设备、含商誉资产组、废旧物资与其他资产。 |
+| 业务审核 | 8 | 资产经营、交易处置、财务报告、融资债务、投资资本、税务历史、司法清算补偿与咨询复核。 |
+| 数据与外部核验 | 2 | 表格/数据勾稽与按条件启用的 iFinD 外部核验。 |
+| 公共规则与输出 | 2 | 通用准则与审核意见屏蔽规则。 |
+| 企业访问 | 3 | 氚云登录、氚云查询和钉钉 DWS 知识访问。 |
+| 维护能力 | 2 | 审核差距分析与审核 Skill 维护。 |
 
-Skills 必须满足自洽契约：安装后的 Skill 不能依赖自身目录之外的仓库相对路径。完整触发条件、职责和依赖边界请查看 [Skills 目录](docs/skills.md)。
+每个 Skill 必须能在脱离源仓后独立安装和运行，不得依赖自身目录之外的仓库路径。完整清单见 [Skills 目录](docs/skills.md)。
 
-## CLI 与氚云访问
+## CRWU CLI
 
-Go CLI 是操作人员和 AI 客户端共用的稳定命令入口。`crwu scheme` 会输出干净的 JSON 命令目录，其中包含描述、用法和示例。
-
-### 员工使用流程
+Go CLI 是操作人员与 AI 客户端共用的稳定命令面。`crwu scheme` 输出机器可读 JSON，命令描述、用法和示例与真实 Cobra 命令树同步。
 
 ```bash
-# 登录并确认当前身份
+# 发现命令
+crwu scheme
+crwu scheme h3yun records
+
+# 登录并确认员工身份
 crwu h3yun session login
 crwu h3yun session status
 
-# 查找有权访问的数据
+# 查找员工有权访问的数据
 crwu h3yun apps list
 crwu h3yun apps children --app <appCode>
 crwu h3yun forms search --keyword <name>
 
-# 读取记录并下载附件
+# 读取记录和附件
 crwu h3yun records list --schema <schemaCode> --filter "Status = 1"
 crwu h3yun records get --schema <schemaCode> --id <recordId>
-crwu h3yun file download --schema <schemaCode> --id <recordId> --out ./files
+crwu h3yun files list --schema <schemaCode> --id <recordId>
+crwu h3yun file get --id <fileId> --out ./files/report.pdf
 ```
 
-<details>
-<summary><strong>展开完整 CLI 命令目录</strong></summary>
+参数、筛选语法、输出形状与 Agent 网关命令见 [CLI 手册](docs/v0.0.1/cli-manual.md)。
 
-#### 基础命令
-
-| 命令 | 作用 |
-| --- | --- |
-| `crwu scheme [command-path]` | 为 AI 客户端输出机器可读的命令目录。 |
-| `crwu version` | 显示 CLI 版本、提交、构建时间和运行平台。 |
-
-#### 氚云会话
-
-| 命令 | 作用 |
-| --- | --- |
-| `crwu h3yun session login` | 打开浏览器，用钉钉扫码并把员工会话绑定到本机。 |
-| `crwu h3yun session bind --token <jwt>` | 作为回退方式，绑定受信任的员工网页会话令牌。 |
-| `crwu h3yun session status` | 查看绑定身份、引擎和有效期。 |
-| `crwu h3yun session refresh` | 续期已经绑定的会话。 |
-| `crwu h3yun session clear` | 从本机移除已经绑定的会话。 |
-
-#### 应用、表单与记录
-
-| 命令 | 作用 |
-| --- | --- |
-| `crwu h3yun apps list [--keyword <name>]` | 列出员工有权访问的应用。 |
-| `crwu h3yun apps children --app <code>` | 列出某个应用内的表单节点。 |
-| `crwu h3yun apps search --keyword <name>` | 通过 Agent 通道搜索应用。 |
-| `crwu h3yun forms search --keyword <name>` | 通过员工网页会话搜索表单。 |
-| `crwu h3yun records list --schema <code> [--keyword <kw>] [--filter <expr>]` | 分页读取记录，支持关键词与字段条件。 |
-| `crwu h3yun records get --schema <code> --id <id>` | 读取一条记录及其字段。 |
-| `crwu h3yun records query --schema <code> --sql <select>` | 通过 Agent 通道执行只读 SELECT。 |
-
-#### 附件与 Agent 网关
-
-| 命令 | 作用 |
-| --- | --- |
-| `crwu h3yun files list --schema <code> --id <id>` | 列出某条记录的附件。 |
-| `crwu h3yun file download --schema <code> --id <id> --out <dir>` | 下载某条记录的全部附件。 |
-| `crwu h3yun file get --id <fileId> --out <file>` | 按文件 ID 下载单个附件。 |
-| `crwu h3yun ping` | 与氚云 Agent 网关握手。 |
-| `crwu h3yun tools` | 列出当前凭证可见的网关工具。 |
-
-</details>
-
-完整参数、输出契约、筛选条件和示例请查看 [CLI 手册](docs/v0.0.1/cli-manual.md)。修改命令时必须遵循 [CLI 命令契约](docs/v0.0.1/cli-command-contract.md)，并以 `crwu scheme` 为权威目录。
-
-## 架构
+## 系统架构
 
 ```mermaid
 flowchart TB
-    HOSTS[AI 宿主<br/>Codex · WorkBuddy · OpenCode · DSH]
-    USER[员工或操作人员]
+    USER[员工 / 复核人员]
+    DSH[中瑞世联工作台<br/>DSH Host + Client]
+    HOSTS[Codex · WorkBuddy · OpenCode<br/>其它 AI 宿主]
+    SKILLS[30 个可移植 Skills]
+    AUDIT[审核编排与证据边界]
+    CLI[crwu CLI]
+    APP[宿主无关应用服务]
+    H3[氚云网页会话 / Agent 网关]
+    DWS[钉钉 DWS 实时知识]
+    OSS[私有 OSS 交付]
+    IFIND[iFinD · 条件启用]
+    REPORT[AuditResult JSON + 单文件 HTML]
 
-    HOSTS --> SKILLS[可移植 CRWU Skills]
-    USER --> CLI[crwu CLI]
-    SKILLS --> AUDIT[审核编排]
+    USER --> DSH
+    DSH --> SKILLS
+    HOSTS --> SKILLS
+    SKILLS --> AUDIT
     SKILLS --> CLI
-
-    AUDIT --> DWS[钉钉 DWS<br/>实时规则]
-    AUDIT --> CHECKS[数据与外部核验]
-    CHECKS -. 可选 .-> IFIND[iFinD]
-    AUDIT --> REPORT[证据驱动的<br/>HTML 报告]
-
-    CLI --> APP[与宿主无关的应用服务]
-    APP --> H3WEB[氚云网页会话]
-    APP -. 条件可用 .-> H3AGENT[氚云 Agent 网关]
-    H3WEB --> CREDS[操作系统凭据存储]
+    DSH --> CLI
+    DSH --> OSS
+    AUDIT --> DWS
+    AUDIT -.-> IFIND
+    AUDIT --> REPORT
+    CLI --> APP
+    APP --> H3
+    REPORT --> OSS
 ```
 
-- **Skills** 描述工作流、路由、证据规则和宿主侧工具使用方式。
-- **CLI 传输层**负责参数解析与展示，应用服务不依赖具体 AI 宿主。
-- **提供商集成层**分别封装氚云协议，彼此不交叉引用。
-- **审核知识**按库内路径和规则编号解析，并为当前项目实时下载。
-- **交付物**是自包含文件，离开执行环境后仍能正常阅读。
+边界设计：
+
+- **Skills** 描述业务工作流、路由、证据规则和工具使用方式；
+- **应用服务**不依赖具体 AI 宿主，CLI 只是传输层；
+- **氚云网页会话与 Agent 网关**是彼此独立的 provider integration；
+- **DSH 插件 Host**负责文件、Shell、OSS、子 Agent 和凭据相关操作；
+- **DSH 插件 Client**只负责浏览器状态与交互，通过同源 RPC 与 Host 通信。
 
 ## 安全与可信边界
 
 | 边界 | 项目规则 |
 | --- | --- |
-| 员工身份 | 每份氚云凭证必须属于一名明确员工，系统不得回退到管理员或引擎级身份。 |
-| 凭证处理 | 氚云会话只存入操作系统凭据存储，不进入仓库文件、日志、`scheme` 输出或聊天。 |
-| 权限校验 | 员工凭证通过验证后，才允许执行员工权限范围内的操作。 |
-| 数据写入 | 氚云查询工作流和钉钉知识访问按只读方式设计。 |
-| 表格隐藏区域 | 默认审核模式跳过人工隐藏的工作表、行和列；读取更深层内容必须显式改变边界。 |
-| 不受支持的证据 | “未检查”不得改写为“缺失”，未完成重算的数值不得表述为“已核验”。 |
-| 外部数据源 | 只通过明确支持的数据源进行外部核验；连接器不可用时必须如实报告。 |
+| 员工身份 | 每份氚云凭据属于一名明确员工，不回退到管理员或引擎级身份。 |
+| 凭据存储 | 氚云会话进入操作系统凭据存储；OSS 凭据保存在员工机器并收紧文件权限；密钥不进入仓库。 |
+| 最小权限 | 查询在员工本人的可见范围内执行；读取本机凭据的 DSH 命令必须先取得员工授权。 |
+| 数据来源 | 业务分析会话只使用本轮明确取得的远端资料，不用来源不明的本地副本补齐结论。 |
+| 两阶段隔离 | 阶段一冻结前不读取人工复核意见，避免把人工结论伪装成 AI 独立发现。 |
+| 隐藏数据 | 人工隐藏区默认禁读禁报；需要改变边界时必须显式说明。 |
+| 结论强度 | 无法读取、无法重算或不受支持时写“未检查”，不能写成“缺失”或“已核验”。 |
+| 私有交付 | 审核产物进入私有 Bucket，访问链接默认使用限时签名 URL。 |
 
 > [!IMPORTANT]
-> CRWU 帮助复核人员发现、整理和比较证据。专业结论与最终审批仍由具备相应资格的人工复核人员负责。
+> CRWU 是专业复核辅助系统。它不会替代具备相应资格的评估人员、复核人员或审批人员作出最终决定。
 
 ## 仓库结构
 
 ```text
 crwu-ai/
-├── cmd/crwu/                     # CLI 进程入口
+├── cmd/
+│   ├── crwu/                         # 正式 CLI 入口
+│   └── probe/                        # 协议探测工具
 ├── internal/
-│   ├── app/                      # 与 AI 宿主无关的应用服务
-│   ├── integrations/h3yun/       # 氚云网页与 Agent 网关客户端
-│   ├── platform/                 # 凭据存储与扫码登录
-│   └── transport/                # CLI 与 MCP 协议边界
-├── skills/                       # 30 个自包含 AI Skills
-│   ├── crwu-audit/               # 审核路由、契约、脚本和模板
-│   ├── crwu-audit-asset-*/       # 12 类资产审核能力
-│   ├── crwu-audit-biz-*/         # 8 类业务审核能力
-│   ├── crwu-dws/                 # 钉钉知识实时访问
-│   └── crwu-h3yun-*/             # 员工登录与查询工作流
-├── docs/                         # 手册、契约、设计与变更记录
-├── scripts/html/                 # 独立 HTML 工具/示例
-└── tests/                        # 跨包验证
+│   ├── app/                          # 宿主无关的应用服务
+│   ├── integrations/h3yun/           # 氚云 Web 与 Agent 网关客户端
+│   ├── platform/                     # 扫码登录、浏览器发现、系统凭据存储
+│   └── transport/cli/                # Cobra CLI 与 scheme 命令目录
+├── plugins/
+│   ├── common/skills/                # 3 个公共 Skills（源文件）
+│   └── dsh-crwu-workbench/
+│       ├── src/host/                 # Host 操作、配置、状态与领域服务
+│       ├── src/client/               # 侧栏、工作台界面与浏览器状态
+│       ├── src/shared/               # Host / Client 共享协议
+│       ├── skills/                   # 27 个审核与维护 Skills
+│       ├── config/                   # 唯一部署 YAML
+│       ├── tests/                    # Node 单元与集成测试
+│       └── scripts/                  # 构建、打包与发布校验
+├── scripts/                          # 仓库级插件分发工具
+├── docs/                             # 手册、设计、计划与变更记录
+├── .github/workflows/                # Go / 插件 CI 与 npm 发布
+└── Makefile                          # CLI、插件和 Skills 的统一入口
 ```
 
-## 开发
+## 开发与验证
+
+### Go CLI
 
 ```bash
 make fmt
 make test
 make build
-
-# 校验所有 Skill 及其自洽性契约
-python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py \
-  validate --skill-root skills
 ```
 
-参与开发时：
+### DSH 插件完整门禁
 
-1. CLI 核心行为与 AI 宿主适配层保持分离；
-2. 每个可执行命令都必须登记到 `crwu scheme`；
-3. 每个 Skill 都必须能够独立安装；
-4. CLI 功能变更需要同步更新 `docs/v0.0.1/cli-manual.md` 和 `docs/v0.0.1/CHANGELOG.md`；
-5. 本文档必须与 [`README.md`](README.md) 保持同步。
+```bash
+make plugin-check
+```
 
-CLI 默认版本必须在 `internal/buildinfo` 与根目录 `Makefile` 中保持一致。
+这条命令覆盖：
+
+1. 插件版本与 YAML 配置一致性；
+2. 公共 Skills 同步检查；
+3. TypeScript 严格类型检查；
+4. Node 单元/集成测试；
+5. Host 与 Client 双端构建；
+6. 构建产物真实加载冒烟；
+7. npm tarball 文件清单和安装形状；
+8. 两个 Skill 根的自洽性 lint；
+9. 审核路由、维护工具、DWS 数据契约与分发守卫测试。
+
+如只在插件目录开发：
+
+```bash
+cd plugins/dsh-crwu-workbench
+npm ci
+npm run check
+npm run pack:assert
+```
+
+开发约束以 [`AGENTS.md`](AGENTS.md)、[`plugins/AGENTS.md`](plugins/AGENTS.md) 和插件自己的 [`AGENTS.md`](plugins/dsh-crwu-workbench/AGENTS.md) 为准。
+
+## 版本与分发
+
+CLI 与工作台独立发版：
+
+| 交付物 | 当前源码版本 | 分发方式 |
+| --- | --- | --- |
+| `crwu` CLI | `0.0.1` | `make build` 生成 macOS / Windows 二进制 |
+| `dsh-crwu-workbench` | `0.0.4` | npm、TGZ 或 OSS 静态分发 |
+| AI Skills | 随源仓演进 | 随插件包交付，或由 `make skills-install` 安装 |
+
+插件版本必须在 `package.json`、`VERSION` 和插件 `CHANGELOG.md` 三处一致。`plugin-v*` tag 驱动 npm 发布；OSS 分发坚持“同一个版本号只发布一次”。
 
 ## 文档导航
 
-| 文档 | 适合查看什么 |
+| 文档 | 内容 |
 | --- | --- |
-| [CLI 手册](docs/v0.0.1/cli-manual.md) | 命令、参数、环境变量、筛选条件和操作流程。 |
-| [Skills 目录](docs/skills.md) | 完整 Skill 清单、审核轴、触发条件与职责。 |
-| [审核 Skills 设计](docs/v0.0.1/design-crwu-audit-skills.md) | 领域模型、能力树与路由架构。 |
-| [实时知识协议](docs/v0.0.1/design-audit-live-kb-protocol.md) | 审核如何解析并获取当前知识，同时避免复制规则正文。 |
-| [DWS 设计](docs/v0.0.1/design-crwu-dws.md) | 钉钉目录缓存与正文实时获取模型。 |
-| [CLI 命令契约](docs/v0.0.1/cli-command-contract.md) | 命令描述、用法、示例和机器发现要求。 |
-| [变更记录](docs/v0.0.1/CHANGELOG.md) | 最近的功能、审核系统与交付模板变更。 |
-| [智能体开发指南](AGENTS.md) | 仓库级开发约束与安全规则。 |
+| [工作台插件指南](plugins/dsh-crwu-workbench/README.md) | 安装、配置、开发循环、真机验收和发布。 |
+| [Skills 目录](docs/skills.md) | 30 个 Skills 的职责、触发条件与依赖边界。 |
+| [CLI 手册](docs/v0.0.1/cli-manual.md) | 命令、参数、筛选语法、环境变量与操作流程。 |
+| [审核系统设计](docs/v0.0.1/design-crwu-audit-skills.md) | 项目画像、能力树、多轴路由和交付模型。 |
+| [实时知识协议](docs/v0.0.1/design-audit-live-kb-protocol.md) | 每次审核如何定位并获取当前知识正文。 |
+| [CLI 命令契约](docs/v0.0.1/cli-command-contract.md) | `crwu scheme`、命令描述、用法和示例要求。 |
+| [插件 UI 设计规范](plugins/dsh-crwu-workbench/docs/ui-design-guidelines.md) | 视觉语言、主题变量、布局与交互规则。 |
+| [插件开发笔记](plugins/dsh-crwu-workbench/docs/development-notes.md) | Cordis 生命周期、Host/Client 边界、构建与历史踩坑。 |
+| [变更记录](docs/v0.0.1/CHANGELOG.md) | CLI、Skills 和审核系统的历史变更。 |
 | [领域上下文](CONTEXT.md) | 共享术语与系统边界。 |
 
 ---
 
 <div align="center">
 
-**即使证据不完整，也让 AI 工作流保持可信——因为它会准确说明自己检查了什么。**
+**让 AI 说清楚它检查了什么、依据什么，以及什么仍然需要人来判断。**
 
-[English](README.md) · [Skills](docs/skills.md) · [CLI 手册](docs/v0.0.1/cli-manual.md)
+[返回顶部](#crwu-ai) · [English](README.md) · [开始使用](#快速开始)
 
 </div>

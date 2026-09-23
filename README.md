@@ -1,344 +1,412 @@
 <div align="center">
 
-# CRWU AI Toolkit
+# CRWU AI
 
-**Enterprise AI audit, knowledge access, and employee-scoped data tools — in one repository.**
+**Enterprise AI audit platform for appraisal work**
 
-Turn appraisal materials, enterprise knowledge, and business records into evidence-backed AI workflows without giving an agent more authority than the employee using it.
+From employee-scoped data and live professional knowledge to two-phase review and traceable delivery, CRWU connects the full workflow inside one trusted boundary.
 
-[简体中文](README.zh-CN.md) · [Explore Skills](docs/skills.md) · [CLI Manual](docs/v0.0.1/cli-manual.md) · [Change Log](docs/v0.0.1/CHANGELOG.md)
+[简体中文](README.zh-CN.md) · [Skills Catalog](docs/skills.md) · [CLI Manual](docs/v0.0.1/cli-manual.md) · [Workbench Guide](plugins/dsh-crwu-workbench/README.md) · [Changelog](docs/v0.0.1/CHANGELOG.md)
 
 <br>
 
 ![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
+![Plugin](https://img.shields.io/badge/Workbench-0.0.4-D94A4A)
 ![CLI](https://img.shields.io/badge/CLI-0.0.1-2563EB)
 ![AI Skills](https://img.shields.io/badge/AI%20Skills-30-7C3AED)
-![Platforms](https://img.shields.io/badge/Build-macOS%20%7C%20Windows-334155)
-![Audit](https://img.shields.io/badge/Appraisal%20Audit-ready-059669)
+![Node](https://img.shields.io/badge/Node-22.19%2B%20%7C%2024%2B-339933?logo=nodedotjs&logoColor=white)
 
-**CLI-first · Skills-native · Evidence-driven · Human-reviewed**
+**Employee-scoped · Live knowledge · Evidence-driven · Human-reviewed**
 
 </div>
 
 ---
 
-## Why CRWU
+## CRWU at a glance
 
-CRWU started as a secure command surface for H3Yun and has grown into a practical AI toolkit for enterprise work. It now combines:
+CRWU is not a chatbot that simply returns conclusions. It is a system made of three connected products:
 
-| | Capability | What it delivers |
+| Product layer | Purpose | Current delivery |
 | --- | --- | --- |
-| 🧭 | **AI appraisal audit** | Routes each project across asset, business, method, regulatory, data, and public-standard checks, then produces one traceable HTML report. |
-| 🔐 | **Employee-scoped enterprise access** | Lets an employee sign in to H3Yun with DingTalk and gives the AI only the apps, forms, records, and files that employee can access. |
-| 📚 | **Live knowledge grounding** | Resolves the required rules from DingTalk knowledge spaces and downloads the current text for each audit instead of relying on stale copied guidance. |
-| 🧩 | **Portable AI Skills** | Ships self-contained Skills for Codex, WorkBuddy, OpenCode, DeepSeek Harness, and other compatible agent hosts. |
+| **CRWU Workbench** | Environment checks, report audits, audit tracking, result inspection, and analysis sessions inside DeepSeek Harness | DSH package plugin: `dsh-crwu-workbench` |
+| **Appraisal audit Skills** | Project profiling, multi-axis routing, specialist checks, two-phase isolation, and report delivery | 30 independently installable AI Skills |
+| **CRWU CLI** | Employee-scoped access to H3Yun apps, forms, records, and attachments, exposed through a stable command catalog for AI clients | Go binary: `crwu` |
 
-The project is designed around a simple rule: **an AI conclusion must not exceed its evidence, permissions, or verified calculation boundary**.
+One principle governs the entire system:
 
-## Capabilities
+> **An AI conclusion must not exceed the evidence it obtained, the employee permissions it inherited, or the calculation boundary it actually verified.**
 
-| Area | Current status | Notes |
+## Capability status
+
+| Capability | Status | Notes |
 | --- | --- | --- |
-| Appraisal audit orchestration | **Available** | Two-phase independent audit and human-review comparison, with a standalone HTML deliverable. |
-| Asset and business coverage | **Available** | 12 asset families, 8 business families, public standards, data checks, and optional external verification. |
-| H3Yun web-session reads | **Available** | Employee QR login, apps, forms, records, filters, and attachment downloads. |
-| DingTalk knowledge access | **Available with DWS** | Directory metadata may be cached; rule text is downloaded live for each audit. |
-| iFinD external verification | **Conditional** | Enabled only when a supported iFinD connector or Skill is available in the AI host. |
-| H3Yun agent gateway | **Conditional** | Commands are implemented; availability depends on the employee token and H3Yun data-plane enablement. |
-| Standalone CRWU MCP transport | **Architecture boundary** | The repository preserves the transport boundary, while the shipped operator interface remains CLI + Skills. |
+| DSH CRWU Workbench | **Available** | Three-module sidebar, hard environment gate, report audit, audit history, OSS deliverables, and DeepSeek analysis sessions. |
+| Two-phase appraisal audit | **Available** | Phase 1 freezes the AI's independent findings; Phase 2 then reads human-review comments for comparison. |
+| Asset and business coverage | **Available** | 12 asset families, 8 business families, public standards, data checks, and conditional external verification. |
+| Employee-scoped H3Yun reads | **Available** | DingTalk QR sign-in with access to apps, forms, records, filters, and attachments. |
+| Live DingTalk knowledge | **Available after DWS setup** | Directory metadata may be cached; the applicable rule text is fetched again for every audit. |
+| Aliyun OSS delivery | **Available after setup** | Private bucket, employee-side credentials, automatic upload, and time-limited signed URLs. |
+| iFinD external verification | **Conditional** | Enabled only when the host provides a supported iFinD connector or Skill. |
+| Report evaluation module | **In development** | The Workbench entry is reserved; Report Audit is the production-ready module today. |
+| Standalone MCP service | **Reserved boundary** | The code preserves a transport boundary; Workbench, CLI, and Skills remain the supported entry points. |
 
-## Choose your path
+## Start with your task
 
-| I want to… | Start here |
+| I want to… | Recommended entry |
 | --- | --- |
-| Audit an appraisal project | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) → [audit design](docs/v0.0.1/design-crwu-audit-skills.md) |
-| Review all available AI Skills | [Skills catalog](docs/skills.md) |
-| Sign in to H3Yun as an employee | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/v0.0.1/cli-manual.md) |
-| Query forms, records, and attachments | [`crwu-h3yun-query`](plugins/common/skills/crwu-h3yun-query/SKILL.md) |
-| Ground an audit in DingTalk knowledge | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) → [live-knowledge protocol](docs/v0.0.1/design-audit-live-kb-protocol.md) |
-| Install or update Skills for an AI host | `make skills-install AGENT_DIR=…` → [per-host directories](docs/agent-skill-dirs.md) |
-| Install the DSH plugin for employees | `make plugin-dist` → [plugin README](plugins/dsh-crwu-workbench/README.md) |
-| Maintain or extend the audit system | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
+| Install the complete Workbench in DSH | [Workbench installation and usage](plugins/dsh-crwu-workbench/README.md) |
+| Audit an appraisal report | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) |
+| Explore every audit capability | [Skills catalog](docs/skills.md) |
+| Sign in to H3Yun and query business data | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI manual](docs/v0.0.1/cli-manual.md) |
+| Use live rules from DingTalk knowledge spaces | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) |
+| Install Skills for Codex or another host | [AI host directory guide](docs/agent-skill-dirs.md) |
+| Extend or maintain the audit system | [`AGENTS.md`](AGENTS.md) → [`plugins/AGENTS.md`](plugins/AGENTS.md) |
+
+## CRWU Workbench
+
+The Workbench opens from a persistent sidebar group card. It follows the DSH theme, exposes three fixed modules when expanded, and keeps a compact branded entry when collapsed.
+
+| Module | Current experience |
+| --- | --- |
+| **Report Evaluation** | A deliberately restrained in-development page that directs users to Report Audit for production work. |
+| **Report Audit** | Pending reports, AI audit history, start/stop/rerun actions, deliverable viewing, audit-information drawer, and DeepSeek sessions. |
+| **Environment Info** | Four prerequisite layers—tools, authentication, upload configuration, and external data—with audit creation blocked until required checks pass. |
+
+### Workbench flow
+
+```mermaid
+flowchart LR
+    A[Open CRWU Workbench] --> B{Environment check}
+    B -->|Failed| C[Environment Info<br/>Reason and setup entry]
+    C --> B
+    B -->|Passed| D[Report Audit]
+    D --> E[Report list<br/>Pending H3Yun records]
+    D --> F[AI audit list<br/>OSS deliverables]
+    E --> G[Start one AI audit]
+    G --> H[Root audit session<br/>and sub-agents]
+    H --> I[Local delivery<br/>and automatic OSS upload]
+    I --> F
+    E --> J[Discuss report<br/>with DeepSeek]
+    F --> K[View report<br/>or audit information]
+    F --> L[Analyze audit result<br/>with DeepSeek]
+```
+
+### Report-audit experience
+
+- **One consistent workspace:** the report list and AI audit list share search, refresh, loading, pagination, and business-time conventions.
+- **Single-audit concurrency:** only one audit runs at a time; stop, rerun, state recovery, and upload retry keep multiple agents from writing the same case concurrently.
+- **Outcome-first hierarchy:** the audit-information drawer leads with review hit rate, AI findings, and issues raised but not corrected; technical fields remain collapsed by default.
+- **Business-language deliverables:** employees see “Audit Report” and “Audit Data,” not raw OSS paths or internal object names.
+- **Version-aware analysis sessions:** report files, audit artifacts, and review comments are compared using remote version evidence before a session is created; the user chooses explicitly when data may be stale.
+- **Recognizable development and release modes:** sidebar and panel share `dev` or version labels; a Host/Client protocol mismatch blocks new audits and asks the user to restart.
+
+### Remote-data boundary
+
+The “Discuss Report” and “Analyze Audit Result” sessions receive only identifiers and context for materials fetched from remote business systems during the current run:
+
+- report materials come from H3Yun attachments, while audit deliverables come from OSS;
+- context records remote `fileId`, object key, ETag, update time, digest, and fetch time;
+- local case paths are never treated as report identity, and a failed remote read never silently falls back to an old local copy;
+- when remote evidence is incomplete, CRWU does not create the session—it reports the missing facts and allows a retry.
 
 ## Quick start
 
-### 1. Build the CLI
+### 1. Build the CRWU CLI
 
 Prerequisites: **Go 1.24+** and **GNU Make**.
 
 ```bash
 git clone https://github.com/mmungdong/crwu-ai.git
 cd crwu-ai
-make build
 
+make build
 ./bin/darwin/crwu version
 make test
 ```
 
-`make build` produces macOS and Windows binaries under `bin/darwin/` and `bin/windows/`. Use `make build-mac` or `make build-win` when only one target is needed.
+`make build` produces:
 
-### 2. Bind an employee H3Yun session
-
-```bash
-./bin/darwin/crwu h3yun session login
-./bin/darwin/crwu h3yun session status
-./bin/darwin/crwu h3yun apps list
+```text
+bin/darwin/crwu
+bin/windows/crwu.exe
 ```
 
-The login command opens the browser for a DingTalk QR scan. The resulting session is stored in the local OS credential store and is not printed into the terminal or AI conversation.
+Use `make build-mac` or `make build-win` when you only need one target.
 
-### 3. Install the Skills you need
+### 2. Sign in to H3Yun
 
-There is no manifest file: the directory layout **is** the manifest. `plugins/common/skills/` holds the shared Skills (DingTalk knowledge access, H3Yun login and query); each plugin under `plugins/<name>/skills/` holds the Skills that ship with it.
-
-**DeepSeek Harness** — install the plugin bundle; its Skills come with it (the bundle registers both Skills directories as skill roots):
+The examples below assume `crwu` is on your `PATH`; otherwise replace it with the path to the binary you built.
 
 ```bash
-make plugin-pack        # → dist/dsh-crwu-workbench-<version>.tgz
+crwu h3yun session login
+crwu h3yun session status
+crwu h3yun apps list
+```
+
+The login command opens a separate browser window for DingTalk QR sign-in. The session token is captured inside the process and stored in the operating system's credential store; it is not printed to the terminal or AI conversation.
+
+### 3. Install the DSH Workbench
+
+Plugin development requires **Node.js `^22.19.0` or `>=24.0.0`**.
+
+```bash
+make plugin-pack
 dsh plugin --profile web add ./dist/dsh-crwu-workbench-<version>.tgz
 ```
 
-**Any other AI host** (Codex, WorkBuddy, OpenCode, …) — copy every Skill into that host's Skills root:
+The plugin package includes:
+
+- Host and Client build entries;
+- the plugin deployment YAML;
+- 27 plugin-specific audit and maintenance Skills;
+- 3 common enterprise-access Skills.
+
+Maintainers can validate and distribute the plugin with `make plugin-dist`. If a remote tarball already exists with the same version but different contents, the command refuses to overwrite it; bump the version first.
+
+### 4. Install Skills for another AI host
 
 ```bash
 make skills-install AGENT_DIR=~/.codex/skills
 ```
 
-`make plugin-dist` enforces **one publish per version**: it refuses to overwrite an existing tarball of
-the same version whose content differs, so any change means bumping the version first.
+The directory layout is the source of truth for the Skill catalog—there is no second manifest to keep in sync:
 
-Per-host Skills directories are listed in [`docs/agent-skill-dirs.md`](docs/agent-skill-dirs.md). A Skill of the same name is replaced, so re-running the command is also the update path.
+- `plugins/common/skills/`: the three shared H3Yun and DingTalk Skills;
+- `plugins/dsh-crwu-workbench/skills/`: the audit family and maintenance Skills;
+- `plugins/dsh-crwu-workbench/common/skills/`: a generated synchronized copy used during packaging, not a source directory.
 
-## AI appraisal audit
+See [AI host directory conventions](docs/agent-skill-dirs.md) for supported host layouts.
 
-`crwu-audit` is the orchestration layer for the appraisal-audit family. It profiles the project first, loads only the applicable rule and domain Skills, preserves evidence boundaries, and produces a reviewable result rather than a black-box score.
+## Appraisal audit model
+
+`crwu-audit` is the top-level orchestrator for the audit family. It does not compress a project into one crude category; it builds a multi-axis project profile and merges every applicable capability into the execution set.
 
 ```mermaid
 flowchart LR
-    A[Project materials] --> B[Inventory & safe preprocessing]
-    B --> C[Project profile & routing]
-    K[Live DingTalk knowledge] --> D[Applicable rules & checklists]
-    C --> D
-    D --> E[Asset + business + method + overlay checks]
-    E --> F[Data checks & external verification]
-    F --> G[Phase 1: independent AI findings]
-    G --> H[Freeze AI result]
-    H --> I[Phase 2: human-review comparison]
-    I --> J[Standalone HTML audit report]
+    A[Project materials] --> B[Inventory and safe preprocessing]
+    B --> C[Project profile]
+    C --> D[Asset axis]
+    C --> E[Business axis]
+    C --> F[Method and regulatory coverage]
+    K[Live DingTalk knowledge] --> G[Applicable rules and checklist]
+    D --> G
+    E --> G
+    F --> G
+    G --> H[Phase 1: independent AI audit]
+    H --> I[Freeze AI findings]
+    I --> J[Phase 2: human-review comparison]
+    J --> L[AuditResult JSON]
+    L --> M[Self-contained HTML report]
 ```
 
-### Audit model
+Every audit follows these constraints:
 
-- **Profile before checking:** report type, transaction or business context, assets, methods, and regulatory overlays determine the execution set.
-- **Union, not a single label:** applicable asset, business, method, overlay, public-standard, and data-check axes are combined.
-- **Live rules:** rule text is retrieved from the knowledge source for the current engagement; Skills carry routing contracts, not copied rule bodies.
-- **Two-phase isolation:** the AI audit is completed and frozen before human review files are read and compared.
-- **Evidence over confidence:** unreadable, hidden, unsupported, or unrecalculated content is reported as unchecked — never silently converted into “missing” or “verified.”
-- **Human decision remains final:** the output supports professional review; it does not replace it.
-
-### Report experience
-
-The current standalone report is designed for task-first reading:
-
-1. AI audit summary and scope;
-2. AI-detected issues, including a visible **AI-only finding** marker and severity distribution after comparison;
-3. external-data verification;
-4. ordered human-review files and item-by-item AI comparison;
-5. objective percentage-based hit rates with resolved items excluded from the denominator;
-6. manual confirmations, evidence, and traceability.
-
-Issue locations and descriptions remain visible. Long modification suggestions and rule/evidence detail use clearly labelled disclosure controls, while print output expands the necessary content automatically. Items marked “fixed” in a review file can still be flagged when the audited material shows that the issue remains unresolved.
+- **Multi-axis union:** asset, business, method, regulatory coverage, public standards, data checks, and external verification jointly determine the execution set.
+- **Live knowledge retrieval:** Skills store routing and assembly contracts, not copied rule text that can become stale.
+- **Two-phase isolation:** human-review files remain unreadable until the independent AI findings are frozen.
+- **Visible-area boundary:** manually hidden sheets, rows, columns, and media are skipped by default; “not checked” must never be reported as “missing.”
+- **Structured source of truth:** CRWU generates and validates AuditResult JSON first, then builds the employee-facing HTML and monitoring result from that same source.
+- **Human accountability:** CRWU helps discover, organize, and compare evidence; it does not replace qualified professional judgment or final approval.
 
 ## Skills ecosystem
 
-The repository currently contains **30 independently installable Skills**.
+The repository contains **30 independently installable Skills**:
 
 | Group | Count | Responsibility |
 | --- | ---: | --- |
-| Audit orchestration | 1 | Project profiling, routing, two-phase execution, and report delivery. |
-| Asset audit Skills | 12 | Real estate, equipment, enterprise value, intangible assets, mining rights, inventory, debt, portfolios, transport equipment, goodwill asset groups, scrap materials, and other assets. |
-| Business audit Skills | 8 | Asset operation, transactions, financial reporting, financing, investment, tax/history, judicial matters, and consulting/review. |
-| Data and external checks | 2 | Spreadsheet/data consistency and conditional public-data verification. |
-| Enterprise access and knowledge | 3 | H3Yun login, H3Yun query, and DingTalk DWS knowledge access. |
-| Standards, distribution, and maintenance | 4 | Public standards, initialization, audit optimization, and Skill maintenance. |
+| Audit orchestrator | 1 | Project profiling, multi-axis assembly, two-phase execution, and delivery. |
+| Asset audits | 12 | Real estate, machinery, enterprise value, intangible assets, mining rights, inventory, claims, asset portfolios, vehicles, goodwill-related asset groups, scrap materials, and other assets. |
+| Business audits | 8 | Asset operation, transactions and disposal, financial reporting, financing and debt, investment and capital, tax history, judicial liquidation and compensation, and consulting review. |
+| Data and external checks | 2 | Spreadsheet/data reconciliation and conditionally enabled iFinD verification. |
+| Common rules and output | 2 | General standards and audit-opinion redaction rules. |
+| Enterprise access | 3 | H3Yun login, H3Yun queries, and DingTalk DWS knowledge access. |
+| Maintenance | 2 | Audit gap analysis and audit Skill maintenance. |
 
-Skills are self-contained by contract: an installed Skill must not rely on repository-relative files outside its own directory. See the [complete Skills catalog](docs/skills.md) for triggers, responsibilities, and dependency boundaries.
+Each Skill must remain independently installable and runnable after leaving the source repository. It may not depend on repository paths outside its own directory. See the [Skills catalog](docs/skills.md) for the full list.
 
-## CLI and H3Yun access
+## CRWU CLI
 
-The Go CLI is the stable command surface used by operators and AI clients. `crwu scheme` emits the canonical command catalog as clean JSON, including descriptions, usage, and examples.
-
-### Employee workflow
+The Go CLI is the stable command surface shared by operators and AI clients. `crwu scheme` emits machine-readable JSON whose descriptions, usage text, and examples stay synchronized with the real Cobra command tree.
 
 ```bash
-# Sign in and inspect identity
+# Discover commands
+crwu scheme
+crwu scheme h3yun records
+
+# Sign in and confirm employee identity
 crwu h3yun session login
 crwu h3yun session status
 
-# Discover accessible data
+# Find data visible to the employee
 crwu h3yun apps list
 crwu h3yun apps children --app <appCode>
 crwu h3yun forms search --keyword <name>
 
-# Read records and download their files
+# Read records and attachments
 crwu h3yun records list --schema <schemaCode> --filter "Status = 1"
 crwu h3yun records get --schema <schemaCode> --id <recordId>
-crwu h3yun file download --schema <schemaCode> --id <recordId> --out ./files
+crwu h3yun files list --schema <schemaCode> --id <recordId>
+crwu h3yun file get --id <fileId> --out ./files/report.pdf
 ```
 
-<details>
-<summary><strong>Show the complete CLI command catalog</strong></summary>
+See the [CLI manual](docs/v0.0.1/cli-manual.md) for arguments, filter syntax, output shapes, and Agent Gateway commands.
 
-#### Core
-
-| Command | Purpose |
-| --- | --- |
-| `crwu scheme [command-path]` | Print the machine-readable command catalog for AI clients. |
-| `crwu version` | Show the CLI version, commit, build time, and platform. |
-
-#### H3Yun session
-
-| Command | Purpose |
-| --- | --- |
-| `crwu h3yun session login` | Open a browser, scan with DingTalk, and bind the employee session locally. |
-| `crwu h3yun session bind --token <jwt>` | Bind a trusted employee web-session token as a fallback. |
-| `crwu h3yun session status` | Show the bound identity, engine, and expiry. |
-| `crwu h3yun session refresh` | Renew the bound session token. |
-| `crwu h3yun session clear` | Remove the bound session from this machine. |
-
-#### Apps, forms, and records
-
-| Command | Purpose |
-| --- | --- |
-| `crwu h3yun apps list [--keyword <name>]` | List applications available to the employee. |
-| `crwu h3yun apps children --app <code>` | List form nodes inside an application. |
-| `crwu h3yun apps search --keyword <name>` | Search applications through the agent channel. |
-| `crwu h3yun forms search --keyword <name>` | Search forms through the employee web session. |
-| `crwu h3yun records list --schema <code> [--keyword <kw>] [--filter <expr>]` | Page through records with optional search and field conditions. |
-| `crwu h3yun records get --schema <code> --id <id>` | Read one record with its fields. |
-| `crwu h3yun records query --schema <code> --sql <select>` | Execute a read-only SELECT through the agent channel. |
-
-#### Files and agent gateway
-
-| Command | Purpose |
-| --- | --- |
-| `crwu h3yun files list --schema <code> --id <id>` | List a record's attachment files. |
-| `crwu h3yun file download --schema <code> --id <id> --out <dir>` | Download every attachment from a record. |
-| `crwu h3yun file get --id <fileId> --out <file>` | Download one attachment by file ID. |
-| `crwu h3yun ping` | Handshake with the H3Yun agent gateway. |
-| `crwu h3yun tools` | List gateway tools visible to the current token. |
-
-</details>
-
-For flags, output contracts, filters, and examples, use the [CLI manual](docs/v0.0.1/cli-manual.md). When changing a command, follow the [CLI command contract](docs/v0.0.1/cli-command-contract.md) and keep `crwu scheme` authoritative.
-
-## Architecture
+## System architecture
 
 ```mermaid
 flowchart TB
-    HOSTS[AI hosts<br/>Codex · WorkBuddy · OpenCode · DSH]
-    USER[Employee or operator]
+    USER[Employee / reviewer]
+    DSH[CRWU Workbench<br/>DSH Host + Client]
+    HOSTS[Codex · WorkBuddy · OpenCode<br/>Other AI hosts]
+    SKILLS[30 portable Skills]
+    AUDIT[Audit orchestration<br/>and evidence boundary]
+    CLI[crwu CLI]
+    APP[Host-independent application services]
+    H3[H3Yun web session<br/>or Agent Gateway]
+    DWS[DingTalk DWS<br/>live knowledge]
+    OSS[Private OSS delivery]
+    IFIND[iFinD<br/>conditionally enabled]
+    REPORT[AuditResult JSON<br/>and single-file HTML]
 
-    HOSTS --> SKILLS[Portable CRWU Skills]
-    USER --> CLI[crwu CLI]
-    SKILLS --> AUDIT[Audit orchestration]
+    USER --> DSH
+    DSH --> SKILLS
+    HOSTS --> SKILLS
+    SKILLS --> AUDIT
     SKILLS --> CLI
-
-    AUDIT --> DWS[DingTalk DWS<br/>live rules]
-    AUDIT --> CHECKS[Data & external checks]
-    CHECKS -. optional .-> IFIND[iFinD]
-    AUDIT --> REPORT[Evidence-backed<br/>HTML report]
-
-    CLI --> APP[Host-neutral application services]
-    APP --> H3WEB[H3Yun web session]
-    APP -. conditional .-> H3AGENT[H3Yun agent gateway]
-    H3WEB --> CREDS[OS credential store]
+    DSH --> CLI
+    DSH --> OSS
+    AUDIT --> DWS
+    AUDIT -.-> IFIND
+    AUDIT --> REPORT
+    CLI --> APP
+    APP --> H3
+    REPORT --> OSS
 ```
 
-- **Skills** describe workflows, routing, evidence rules, and host-side tool use.
-- **CLI transports** own parsing and presentation; application services remain independent of the AI host.
-- **Provider integrations** encapsulate H3Yun protocols and do not import one another.
-- **Audit knowledge** is resolved by path and rule ID, then downloaded for the current engagement.
-- **Deliverables** are self-contained artifacts that remain readable without the execution environment.
+Boundary design:
+
+- **Skills** describe business workflows, routing, evidence rules, and tool usage;
+- **application services** do not depend on a specific AI host—the CLI is only a transport layer;
+- **H3Yun web sessions and Agent Gateway** are independent provider integrations;
+- the **DSH plugin Host** owns file, shell, OSS, sub-agent, and credential operations;
+- the **DSH plugin Client** owns browser state and interaction, communicating with the Host through same-origin RPC.
 
 ## Security and trust boundaries
 
 | Boundary | Project rule |
 | --- | --- |
-| Employee identity | Every H3Yun credential belongs to one explicit employee; the system never falls back to an administrator or engine-wide identity. |
-| Credential handling | H3Yun sessions are stored in the OS credential store, never in repository files, logs, `scheme` output, or chat. |
-| Authorization | A credential must be validated before an employee-scoped operation is allowed. |
-| Data mutation | H3Yun query workflows and DingTalk knowledge access are designed for read-only use. |
-| Hidden spreadsheet regions | Default audit mode excludes manually hidden sheets, rows, and columns; deeper inspection requires an explicit boundary change. |
-| Unsupported evidence | “Unchecked” is not rewritten as “missing,” and unrecalculated values are not presented as verified. |
-| External sources | External verification runs only through explicitly supported sources and reports when the connector is unavailable. |
+| Employee identity | Every H3Yun credential belongs to one explicit employee; there is no fallback to an administrator or engine-wide identity. |
+| Credential storage | H3Yun sessions enter the operating system credential store; OSS credentials remain on the employee machine with restricted file permissions; secrets never enter the repository. |
+| Least privilege | Queries execute within the employee's own visible scope; DSH commands that read local credentials require employee authorization first. |
+| Data provenance | Business-analysis sessions use only remote materials explicitly fetched in the current run, never an unverified local copy used to fill gaps. |
+| Two-phase isolation | Phase 1 cannot read human-review comments before its findings are frozen, preventing human conclusions from being presented as independent AI discoveries. |
+| Hidden data | Manually hidden areas are unreadable and unreportable by default; any boundary change must be explicit. |
+| Strength of conclusion | When data cannot be read, recalculated, or supported, CRWU reports “not checked”—never “missing” or “verified.” |
+| Private delivery | Audit artifacts enter a private bucket and are accessed through time-limited signed URLs by default. |
 
 > [!IMPORTANT]
-> CRWU helps reviewers find, organize, and compare evidence. Professional conclusions and final approval remain the responsibility of qualified human reviewers.
+> CRWU is a professional review-assistance system. It does not replace the final decisions of qualified appraisers, reviewers, or approvers.
 
-## Repository map
+## Repository layout
 
 ```text
 crwu-ai/
-├── cmd/crwu/                     # CLI entry point
+├── cmd/
+│   ├── crwu/                         # Production CLI entry
+│   └── probe/                        # Protocol probing tool
 ├── internal/
-│   ├── app/                      # host-neutral application services
-│   ├── integrations/h3yun/       # H3Yun web and agent-gateway clients
-│   ├── platform/                 # credential storage and scan login
-│   └── transport/                # CLI and MCP protocol boundaries
-├── skills/                       # 30 self-contained AI Skills
-│   ├── crwu-audit/               # audit router, contracts, scripts, template
-│   ├── crwu-audit-asset-*/       # 12 asset audit families
-│   ├── crwu-audit-biz-*/         # 8 business audit families
-│   ├── crwu-dws/                 # live DingTalk knowledge access
-│   └── crwu-h3yun-*/             # employee login and query workflows
-├── docs/                         # manuals, contracts, designs, and changelog
-├── scripts/html/                 # standalone HTML utilities/examples
-└── tests/                        # cross-package verification
+│   ├── app/                          # Host-independent application services
+│   ├── integrations/h3yun/           # H3Yun web and Agent Gateway clients
+│   ├── platform/                     # QR login, browser discovery, credential store
+│   └── transport/cli/                # Cobra CLI and scheme command catalog
+├── plugins/
+│   ├── common/skills/                # 3 common Skills (source)
+│   └── dsh-crwu-workbench/
+│       ├── src/host/                 # Host operations, configuration, state, services
+│       ├── src/client/               # Sidebar, Workbench UI, browser state
+│       ├── src/shared/               # Shared Host/Client protocol
+│       ├── skills/                   # 27 audit and maintenance Skills
+│       ├── config/                   # Single deployment YAML
+│       ├── tests/                    # Node unit and integration tests
+│       └── scripts/                  # Build, package, and release checks
+├── scripts/                          # Repository-level plugin distribution tools
+├── docs/                             # Manuals, designs, plans, and changelogs
+├── .github/workflows/                # Go/plugin CI and npm publishing
+└── Makefile                          # Unified CLI, plugin, and Skills entry points
 ```
 
-## Development
+## Development and verification
+
+### Go CLI
 
 ```bash
 make fmt
 make test
 make build
-
-# Validate every Skill and its self-containment contract
-python3 skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py \
-  validate --skill-root skills
 ```
 
-When contributing:
+### Full DSH plugin gate
 
-1. keep CLI behavior and AI-host adapters separated;
-2. register every invokable command in `crwu scheme`;
-3. keep each Skill independently installable;
-4. update `docs/v0.0.1/cli-manual.md` and `docs/v0.0.1/CHANGELOG.md` for functional CLI changes;
-5. synchronize this README with [`README.zh-CN.md`](README.zh-CN.md).
+```bash
+make plugin-check
+```
 
-The default CLI version must remain synchronized between `internal/buildinfo` and the root `Makefile`.
+This gate covers:
 
-## Documentation
+1. plugin version and YAML configuration consistency;
+2. common-Skill synchronization;
+3. strict TypeScript checking;
+4. Node unit and integration tests;
+5. Host and Client builds;
+6. real build-artifact load smoke tests;
+7. npm tarball contents and installation shape;
+8. self-containment linting for both Skill roots;
+9. audit routing, maintenance tooling, DWS data contracts, and distribution guards.
 
-| Document | Use it for |
+For plugin-only development:
+
+```bash
+cd plugins/dsh-crwu-workbench
+npm ci
+npm run check
+npm run pack:assert
+```
+
+Development constraints are defined in [`AGENTS.md`](AGENTS.md), [`plugins/AGENTS.md`](plugins/AGENTS.md), and the plugin's own [`AGENTS.md`](plugins/dsh-crwu-workbench/AGENTS.md).
+
+## Versions and distribution
+
+The CLI and Workbench are released independently:
+
+| Deliverable | Current source version | Distribution |
+| --- | --- | --- |
+| `crwu` CLI | `0.0.1` | `make build` produces macOS and Windows binaries |
+| `dsh-crwu-workbench` | `0.0.4` | npm, TGZ, or static OSS distribution |
+| AI Skills | Evolves with the repository | Included in the plugin package or installed with `make skills-install` |
+
+The plugin version must match in `package.json`, `VERSION`, and the plugin `CHANGELOG.md`. A `plugin-v*` tag drives npm publishing; OSS distribution follows the rule “one version number, one publication.”
+
+## Documentation map
+
+| Document | What it covers |
 | --- | --- |
-| [CLI manual](docs/v0.0.1/cli-manual.md) | Commands, flags, environment variables, filters, and operator workflows. |
-| [Skills catalog](docs/skills.md) | Complete Skill inventory, audit axes, triggers, and responsibilities. |
-| [Audit Skills design](docs/v0.0.1/design-crwu-audit-skills.md) | Domain model, capability tree, and routing architecture. |
-| [Live-knowledge protocol](docs/v0.0.1/design-audit-live-kb-protocol.md) | How audits resolve and retrieve current knowledge without copying rule bodies. |
-| [DWS design](docs/v0.0.1/design-crwu-dws.md) | DingTalk directory cache and live-content retrieval model. |
-| [CLI command contract](docs/v0.0.1/cli-command-contract.md) | Requirements for descriptions, usage, examples, and machine-readable discovery. |
-| [Change log](docs/v0.0.1/CHANGELOG.md) | Recent behavior, audit-system, and delivery-template changes. |
-| [Agent guidelines](AGENTS.md) | Repository-wide development and security constraints. |
+| [Workbench plugin guide](plugins/dsh-crwu-workbench/README.md) | Installation, configuration, development loop, device acceptance, and release. |
+| [Skills catalog](docs/skills.md) | Responsibilities, triggers, and dependency boundaries for all 30 Skills. |
+| [CLI manual](docs/v0.0.1/cli-manual.md) | Commands, arguments, filter syntax, environment variables, and operating flows. |
+| [Audit system design](docs/v0.0.1/design-crwu-audit-skills.md) | Project profiling, capability tree, multi-axis routing, and delivery model. |
+| [Live-knowledge protocol](docs/v0.0.1/design-audit-live-kb-protocol.md) | How every audit locates and fetches current knowledge text. |
+| [CLI command contract](docs/v0.0.1/cli-command-contract.md) | Requirements for `crwu scheme`, command descriptions, usage, and examples. |
+| [Plugin UI design guidelines](plugins/dsh-crwu-workbench/docs/ui-design-guidelines.md) | Visual language, theme variables, layout, and interaction rules. |
+| [Plugin development notes](plugins/dsh-crwu-workbench/docs/development-notes.md) | Cordis lifecycle, Host/Client boundary, build mechanics, and historical pitfalls. |
+| [Changelog](docs/v0.0.1/CHANGELOG.md) | CLI, Skills, and audit-system history. |
 | [Domain context](CONTEXT.md) | Shared terminology and system boundaries. |
 
 ---
 
 <div align="center">
 
-**Build AI workflows that remain useful when the evidence is incomplete — because they say exactly what was checked.**
+**Make AI explain what it checked, what evidence it used, and what still requires human judgment.**
 
-[简体中文](README.zh-CN.md) · [Skills](docs/skills.md) · [CLI Manual](docs/v0.0.1/cli-manual.md)
+[Back to top](#crwu-ai) · [简体中文](README.zh-CN.md) · [Get started](#quick-start)
 
 </div>
