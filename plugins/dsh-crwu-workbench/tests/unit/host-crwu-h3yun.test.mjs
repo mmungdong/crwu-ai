@@ -55,8 +55,8 @@ test('runCrwu 里白名单命令自己声明权限（员工零配置），非白
     get: (name) => (name === 'shell'
       ? {
           resolve: (request) => { specs.push(request); return request },
-          async run() {
-            return { exitCode: 0, timedOut: false, stdout: { text: '{}', truncated: false }, stderr: { text: '', truncated: false } }
+          async execute() {
+            return { result: async () => ({ exitCode: 0, timedOut: false, stdout: { text: '{}', truncated: false }, stderr: { text: '', truncated: false } }) }
           },
         }
       : undefined),
@@ -89,8 +89,8 @@ test('runCrwu quotes arguments and passes the big stdout budget through', async 
     get: (name) => (name === 'shell'
       ? {
           resolve: (request) => { specs.push(request); return request },
-          async run() {
-            return { exitCode: 0, timedOut: false, stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false } }
+          async execute() {
+            return { result: async () => ({ exitCode: 0, timedOut: false, stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false } }) }
           },
         }
       : undefined),
@@ -118,8 +118,8 @@ test('runCrwu offers escalation when the keychain blocked a sandboxed run', asyn
     get: (name) => (name === 'shell'
       ? {
           resolve: (request) => request,
-          async run() {
-            return { exitCode: 1, timedOut: false, stdout: { text: '', truncated: false }, stderr: { text: 'failed to access credential store', truncated: false } }
+          async execute() {
+            return { result: async () => ({ exitCode: 1, timedOut: false, stdout: { text: '', truncated: false }, stderr: { text: 'failed to access credential store', truncated: false } }) }
           },
         }
       : undefined),

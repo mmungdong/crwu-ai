@@ -74,7 +74,8 @@
 覆盖可以是该目录本身，也可以是其中任一单文件路径键。**只看键集合，不看正文**（正文由 crwu-dws 实时下载）。
 
 同时检查**通道可导性**：被覆盖的目录若含原生（非 `adoc`）节点，而下载规范未声明对应通道
-（`dws drive +download` 或 `dws markdown fetch`），记 `EXPORT_CHANNEL_UNDECLARED`
+<!-- crwu-cli-guard:exempt-next -->
+（历史记录：当时以 `dws drive +download` 或 `dws markdown fetch` 取正文），记 `EXPORT_CHANNEL_UNDECLARED`
 （2026-09-15 前的实测失效：`03-评估方法/**` 整批因通道判定缺失而静默失败，并因此漏装整套市场法清单）。
 
 ### 6 原型 / 非运行时模块是否被显式隔离

@@ -74,6 +74,7 @@
 **第 26 轮的另一条教训（不是 legacy 的锅，是我自己踩的）**：`parseJsonLoose` **返回 null 而不抛错**，
 而它替换掉的那些 `JSON.parse` 调用点里，有几个正是**靠抛异常**判失败的（`loadManifest` 的
 `catch → loaded:false`、`loadPending` / `discoverForm` 的 `catch → 报 CLI 原因`）。
+（`loadManifest` 这条链路后来随只读 OSS 分发桶一起删除了 —— 这段保留的是当时的教训。）
 换函数时必须逐个调用点改成显式判空 —— 否则一份坏清单会被当成「已加载」、一次坏取数会被显示成
 「0 条待办」。这次是**已有的测试先红了**才发现的（3 条），正好说明「防假绿」那类断言的价值。
 

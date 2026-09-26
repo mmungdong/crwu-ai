@@ -764,16 +764,15 @@ test('after boot and env the shell renders the self-check result', async () => {
     boot: { body: { ok: true, parentSessionId: '', workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false }, active: { key: '', childId: '', since: 0 }, ported: { done: [], todo: [] } } },
     env: {
       body: {
-        ok: true, manifestSource: 'https://x.invalid/m.json', manifestKind: 'url', manifestLoaded: true, manifestError: '',
-        manifestUpdatedAt: '', installDocUrl: '', platform: 'darwin-arm64',
-        checks: [{ name: 'node', command: 'node', required: true, note: '', found: true, path: '/usr/bin/node', versionText: 'v22.19.0', actual: '22.19.0', expect: '>=16.7', ok: true, reason: '', url: '', sha256: '', target: '' }],
-        ifindKey: { path: '/Users/x/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
+        ok: true, platform: 'darwin-arm64',
+        packageIntegrity: packagesOk(),
+        runtime: runtimeOk(),
+        external: externalOk(),
         services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
         blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+        delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-        oss: { bucket: '', prefix: 'crwu/audit', linkMode: 'signed', autoUpload: true, ossutilReady: false },
-        ossCred: { path: '/Users/x/.ossutilconfig', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
       },
     },
   })
@@ -781,12 +780,12 @@ test('after boot and env the shell renders the self-check result', async () => {
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.loadingEnv), false, '拿到数据后不该还显示加载中')
   assert.equal(text.includes(zhCN.envHeroOk), true, '环境就绪要有明确结论')
-  // 四层都在，且全就绪的层收成一行 `x/y 已就绪`（层里的路径不铺在员工视野里）。
-  for (const title of [zhCN.envLayerTools, zhCN.envLayerAuth, zhCN.envLayerUpload, zhCN.envLayerExternal]) {
+  // ②..⑥ 五层都在（① 是工作空间卡片，不属于层），且全就绪的层收成一行 `x/y 已就绪`。
+  for (const title of [zhCN.envLayerPackages, zhCN.envLayerRuntime, zhCN.envLayerAuth, zhCN.envLayerDelivery, zhCN.envLayerExternal]) {
     assert.equal(text.includes(title), true, `缺了分层「${title}」`)
   }
   assert.equal(text.includes(`1/1 ${zhCN.envLayerReady}`), true, '就绪的层要显示 x/y 已就绪')
-  assert.equal(text.includes('/usr/bin/node'), false, '全就绪的层默认收起，实际路径要点开才看')
+  assert.equal(text.includes('AKID****7890'), false, '全就绪的层默认收起，路径与 AK 掩码要点开才看')
   assert.equal(text.includes('https://x.invalid/m.json'), false, '排查详情默认不展开（维护者信息）')
 })
 
@@ -795,15 +794,15 @@ test('a blocked environment lists exactly what is missing', async () => {
     boot: { body: { ok: true } },
     env: {
       body: {
-        ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: false, manifestError: '未配置清单地址',
-        manifestUpdatedAt: '', installDocUrl: '', platform: '', checks: [],
-        ifindKey: { path: '/cfg', required: true, ok: false, reason: 'auth_token 为空', tokenLength: 0 },
+        ok: true, platform: '',
+        packageIntegrity: packagesOk({ ok: false, supported: false, tools: packagesOk().tools.map((tool) => ({ ...tool, present: false, sizeBytes: 0, ok: false, reason: '插件包不完整 / 平台不受支持' })) }),
+        runtime: runtimeOk({ ok: false, state: 'capability-gap', error: '宿主没有接线 DSH 自带 Python 运行时的解析' }),
+        external: externalOk({ path: '/cfg', ok: false, reason: 'auth_token 为空', tokenLength: 0 }),
         services: [], blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
         allOk: false, home: '/Users/x', trust: { credentials: true },
+        delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-        oss: { bucket: '', prefix: '', linkMode: 'signed', autoUpload: true, ossutilReady: false },
-        ossCred: { path: '/Users/x/.ossutilconfig', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
       },
     },
   })
@@ -825,27 +824,27 @@ test('the self-check never shows the iFinD token itself, only its length', async
     boot: { body: { ok: true } },
     env: {
       body: {
-        ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
-        installDocUrl: '', platform: 'darwin-arm64', checks: [],
-        ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
+        ok: true, platform: 'darwin-arm64',
+        packageIntegrity: packagesOk(),
+        runtime: runtimeOk(),
+        external: externalOk({ path: '/cfg.json' }),
         services: [], blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+        delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-        oss: { bucket: '', prefix: '', linkMode: 'signed', autoUpload: true, ossutilReady: false },
-        ossCred: { path: '/cfg', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
       },
     },
   })
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const env = {
-    ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
-    installDocUrl: '', platform: 'darwin-arm64', checks: [],
-    ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
+    ok: true, platform: 'darwin-arm64',
+    packageIntegrity: packagesOk(),
+    runtime: runtimeOk(),
+    external: externalOk({ path: '/cfg.json' }),
     services: [], blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+    delivery: deliveryOk(),
     workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-    oss: { bucket: '', prefix: '', linkMode: 'signed', autoUpload: true, ossutilReady: false },
-    ossCred: { path: '/cfg', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
   }
   const paneProps = {
     env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
@@ -949,7 +948,7 @@ function findByClass(node, className) {
 }
 
 /**
- * 点开某一层的卡片头（`title` 是层标题的一部分，如 zhCN.envLayerTools）。
+ * 点开某一层的卡片头（`title` 是层标题的一部分，如 zhCN.envLayerPackages）。
  *
  * 全就绪的层默认收成一行 `x/y 已就绪`，所以想断言层里的路径/版本，得先像用户那样点开。
  */
@@ -1414,13 +1413,14 @@ test('已授权的部署不弹框，认证层显示已满足的前置条件', as
 test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是「没挂到我的工作空间里」）', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const baseEnv = {
-    ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '',
-    manifestUpdatedAt: '', installDocUrl: '', platform: 'darwin-arm64', checks: [], services: [],
+    ok: true, platform: 'darwin-arm64', services: [],
     blocked: [], allOk: true, home: '/Users/mungdong', trust: { credentials: true },
-    ifindKey: { ok: true, tokenLength: 1, path: 'p', required: true, reason: '' },
+    packageIntegrity: packagesOk(),
+    runtime: runtimeOk(),
+    external: externalOk({ path: 'p', tokenLength: 1 }),
+    delivery: deliveryOk(),
     workspace: { chosen: true, path: '/Users/mungdong/中瑞世联工作空间', title: '中瑞世联工作空间', id: 'w1', source: 'manifest-workspace', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-    oss: {}, ossCred: { exists: false, path: '', endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
   }
   const props = (env) => ({
     env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
@@ -1730,6 +1730,114 @@ test('报告页把行 key 交给讨论入口（不是交给 activeKey）', async
   assert.deepEqual(opened, [], '小鲸鱼不该再把 key 交给 onOpenSession')
 })
 
+// ── 讨论会话：适配器与面板接线（2026-09-25 用户报「跳不到会话 / 建不出新对话」） ──
+
+/**
+ * 忠实的客户端 `sessions` 服务替身。
+ *
+ * 真实实现（DSH `ClientSessions`）的三个语义必须都建模，否则缺陷会从门禁里漏过去
+ * （上一版替身就是给每条会话都预置了 binding，比真服务宽容）：
+ * - `binding(id)` = 只有**当前被 retain** 的会话才有值；
+ * - `create()` 只登记清单、**不** retain → 紧接着 `binding(id)` 是 undefined；
+ * - 上面**没有** `open()`；切会话是 `uiWorkspace.openSession(id)`（这里放一个诱饵 `open` 抓错）。
+ */
+class FakeSessionsService {
+  constructor() {
+    this.calls = []
+    this.known = new Set()
+    this.scopes = new Map()
+    this.list = { getSnapshot: () => ({ ids: [...this.known], byId: {}, phase: 'ready' }) }
+  }
+  async create(input) {
+    this.calls.push(['create', input])
+    this.known.add('session-new')
+    return 'session-new'
+  }
+  async using(id, options, operation) {
+    this.calls.push(['using', id, options?.source])
+    this.scopes.set(id, { session: { rename: async () => {}, prompt: async () => {} } })
+    try {
+      return await operation({ binding: this.scopes.get(id) })
+    } finally {
+      this.scopes.delete(id)
+    }
+  }
+  binding(id) {
+    this.calls.push(['binding', id])
+    return this.scopes.get(id)
+  }
+  /** 诱饵：真实服务上不存在这个方法。 */
+  open(id) { this.calls.push(['decoy-open', id]) }
+}
+
+test('讨论 port 适配器：只转发真实存在的四个动词，且经接收者调用（不解绑 this）', async () => {
+  const { discussionPortOf } = await import(new URL('src/client/features/workbench/services.ts', ROOT).href)
+  const sessions = new FakeSessionsService()
+  const port = discussionPortOf({ sessions })
+  // ① 逐方法转发：**不能**写成 `{ ...sessions }` —— 方法在原型上，展开只会留下字段。
+  // ② 经接收者调用：`this` 一丢，真实 `ClientSessions` 的 `create` 立刻 TypeError。
+  assert.equal(await port.create({ workspaceId: 'ws-1' }), 'session-new')
+  await port.using('session-new', { source: 'x' }, () => undefined)
+  port.binding?.('session-new')
+  assert.deepEqual(sessions.calls.map((row) => row[0]), ['create', 'using', 'binding'])
+  assert.equal(typeof port.list?.getSnapshot, 'function', 'list 也要转发')
+  // ③ port 上不许凭空多出方法：`sessions.open` 不存在，早先那个 `open` 就是静默 no-op 的来源。
+  assert.deepEqual(Object.keys(port).sort(), ['binding', 'create', 'list', 'using'])
+  assert.equal(sessions.calls.some((row) => row[0] === 'decoy-open'), false)
+  // 服务缺席：空 port，面板据此如实报「这个宿主版本不支持…」。
+  assert.deepEqual(Object.keys(discussionPortOf({ sessions: undefined })), [])
+})
+
+test('点小鲸鱼从面板一路跳到会话：uiWorkspace.openSession 收到新会话 id', async () => {
+  // 用户报「点讨论/复核跳不到对应的会话，也创建不出新对话」。链路是
+  // 小鲸鱼 → report-files → ensureDiscussion(create+rename) → onOpenDiscussion → openSession。
+  const { createModuleStore } = await import(new URL('src/client/features/workbench/module-store.ts', ROOT).href)
+  const sessions = new FakeSessionsService()
+  const opened = []
+  stubOps({
+    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, parentSessionId: '' } },
+    env: { body: okEnvBody() },
+    pending: { body: { ok: true, error: '', rows: [PENDING_TASK], formName: '报告审核', page: 1, size: 20, total: 1, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
+    'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { key: '', childId: '', since: 0 } } },
+    'oss-index': { body: { ok: true, error: '', bucket: 'b', prefix: '', count: 0, items: {}, truncated: false } },
+    'report-files': { body: { ok: true, error: '', seqNo: PENDING_TASK.seqNo, h3yun: [{ field: 'F1', fileId: 'f1', name: 'V2定稿-估值报告.zip', size: 1, contentType: 'application/zip' }], h3yunError: '', oss: [], local: [], localDir: '', localExists: false, truncated: false } },
+  })
+  const services = fakeServices({ sessions, uiWorkspace: { openSession: (id) => { opened.push(id) } } })
+  const modules = createModuleStore()
+  modules.select('audit')
+  const noTimer = { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval }
+  globalThis.setInterval = () => 0
+  globalThis.clearInterval = () => {}
+  try {
+    const rendered = render(WorkbenchPanel, { services, modules })
+    await flushEffects(rendered.instance)
+    rerender(WorkbenchPanel, { services, modules })
+    await flushEffects(rendered.instance)
+    const tree = rerender(WorkbenchPanel, { services, modules })
+    const whale = find(
+      tree,
+      (node) => node.type === 'button'
+        && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.aiRowBtn),
+    )
+    assert.ok(whale, '报告审核页要有那枚小鲸鱼')
+    whale.props.onClick({ clientX: 40, clientY: 60 })
+    await settle()
+    assert.deepEqual(sessions.calls.filter((row) => row[0] === 'create').map((row) => row[1]), [{ workspaceId: 'w1' }])
+    // 恰好跳一次：`ensureDiscussion` 不再自己跳（两处都跳会连线两次 replaceMain）。
+    assert.deepEqual(opened, ['session-new'], '必须真的跳到新建的讨论会话，且只跳一次')
+    // 两次 retain：一次改名、一次发开场（每次操作各自 retain/release，是真实 using 的语义）。
+    assert.deepEqual(
+      sessions.calls.filter((row) => row[0] === 'using').map((row) => row[1]),
+      ['session-new', 'session-new'],
+      '命名与发问都必须经 using 拿到 face',
+    )
+    assert.equal(sessions.calls.some((row) => row[0] === 'decoy-open'), false, '不许调用 sessions 上不存在的 open')
+  } finally {
+    globalThis.setInterval = noTimer.setInterval
+    globalThis.clearInterval = noTimer.clearInterval
+  }
+})
+
 // ── 手工兜底提示词 ──────────────────────────────────────────────────────────
 
 test('handoffPrompt names the skill, the two phases and all three locating fields', async () => {
@@ -1837,14 +1945,16 @@ test('the iFinD card never echoes the token and points at the source when missin
     onPromptRefresh: () => {}, onPromptCopied: () => {},
   }
   const envBase = {
-    ok: true, manifestSource: '', manifestKind: 'builtin', manifestLoaded: true, manifestError: '', manifestUpdatedAt: '',
-    installDocUrl: '', platform: 'darwin-arm64', checks: [], services: [], blocked: ['iFinD 密钥'], allOk: false,
+    ok: true, platform: 'darwin-arm64', services: [], blocked: ['iFinD 密钥'], allOk: false,
     home: '/Users/x', trust: { credentials: true },
+    packageIntegrity: packagesOk(),
+    runtime: runtimeOk(),
+    external: externalOk({ path: '/cfg.json', ok: false, reason: 'auth_token 为空', tokenLength: 0 }),
+    delivery: deliveryOk(),
     workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-    oss: {}, ossCred: { path: '', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
   }
-  const missing = render(EnvironmentPane, { ...base, env: { ...envBase, ifindKey: { path: '/cfg.json', required: true, ok: false, reason: 'auth_token 为空', tokenLength: 0 } } })
+  const missing = render(EnvironmentPane, { ...base, env: envBase })
   const text = textOf(missing.tree)
   // ⑤ 外部数据层没就绪 → 默认展开，员工一眼看到"为什么 + 怎么配"。
   assert.equal(text.includes(zhCN.envLayerExternal), true, '要有「⑤ 外部数据」这一层')
@@ -1853,7 +1963,7 @@ test('the iFinD card never echoes the token and points at the source when missin
   assert.equal(text.includes(zhCN.envFixIfind), true, '要给出"怎么配"')
   assert.equal(text.includes('<你的令牌>'), true, '要给字段示例')
 
-  const okProps = { ...base, env: { ...envBase, blocked: [], allOk: true, ifindKey: { path: '/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 } } }
+  const okProps = { ...base, env: { ...envBase, blocked: [], allOk: true, external: externalOk({ path: '/cfg.json' }) } }
   const okCollapsed = render(EnvironmentPane, okProps)
   expandLayer(okCollapsed.tree, zhCN.envLayerExternal)
   const okText = textOf(rerender(EnvironmentPane, okProps))
@@ -1867,29 +1977,74 @@ test('the iFinD card never echoes the token and points at the source when missin
 // 2. 自检不通过 → 停在这一页，点「进入报告审核」会被 loading 拦住，报告页不出来；
 // 3. 右上角那颗灯：通过亮绿、不通过亮红，悬停就把「还差什么」说清。
 
-/** 一份全通过的 env 应答（真实字段名取自 Host 的 EnvResult）。 */
-function okEnvBody(patch = {}) {
+/**
+ * ② 插件内置组件的就绪形状：三件组件都在包里，字节数与包内清单一致。
+ *
+ * 用函数声明（而不是 `const`）是刻意的：这份夹具在文件前半段的用例里就要用，函数声明会提升。
+ */
+function packagesOk(patch = {}) {
+  const tool = (name, size) => ({
+    name, label: `${name} 组件`, file: name, present: true, sizeBytes: size, manifestSizeBytes: size,
+    sha256: `sha-${name}`, expectedVersion: name === 'dws' ? '>=0.2.14' : '', note: `${name} 的用途`,
+    ok: true, reason: '',
+  })
   return {
-    ok: true, manifestSource: 'https://x.invalid/m.json', manifestKind: 'url', manifestLoaded: true,
-    manifestError: '', manifestUpdatedAt: '2026-09-20T10:00:00.000Z', installDocUrl: 'https://doc.invalid/install.md',
-    platform: 'darwin-arm64',
-    checks: [{
-      name: 'node', command: 'node', required: true, note: '最上游运行时', found: true, path: '/usr/bin/node',
-      versionText: 'v22.19.0', actual: '22.19.0', expect: '>=16.7', ok: true, reason: '', url: '', sha256: '', target: '',
-    }],
-    ifindKey: { path: '/Users/x/cfg.json', required: true, ok: true, reason: '', tokenLength: 12 },
-    services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
-    blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
-    workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
-    sessionWorkspace: { parentSessionId: 'p1', sessionCwd: '/cases/a', workspaceId: 'w1', workspacePath: '/cases/a', workspaceTitle: 'A' },
+    ok: true, supported: true, platform: 'darwin-arm64',
+    packageRoot: '/Users/x/.dsh/plugins/dsh-crwu-workbench',
+    manifestPath: '/Users/x/.dsh/plugins/dsh-crwu-workbench/bin/manifest.json',
+    manifestFound: true,
+    tools: [tool('crwu', 7351330), tool('dws', 32432720), tool('ossutil', 10849218)],
+    note: '插件内置组件 3/3 完整：字节数与包内 bin/manifest.json 一致。',
+    ...patch,
+  }
+}
+
+/** ③ DSH 自带脚本运行时的就绪形状。 */
+function runtimeOk(patch = {}) {
+  return {
+    ok: true, state: 'ok', path: '/opt/dsh/python/bin/python3', versionText: '3.12.3',
+    distributions: { openpyxl: '3.1.2', 'python-docx': '1.1.2' },
+    missingPackages: [], error: '', source: 'DSH 自带（bundled runtime）',
+    expect: '>=3.10', required: true, requiredPackages: ['openpyxl', 'python-docx'],
+    note: '审核技能脚本用的 Python 运行时，由 DSH 自带',
+    ...patch,
+  }
+}
+
+/** ⑥ 外部数据（iFinD）的就绪形状。 */
+function externalOk(patch = {}) {
+  return { path: '/Users/x/cfg.json', required: true, ok: true, reason: '', tokenLength: 12, ...patch }
+}
+
+/** ⑤ OSS 交付配置的就绪形状：AK 写好且实测通过。 */
+function deliveryOk(patch = {}) {
+  return {
     oss: {
-      bucket: 'crwu-bucket', prefix: 'crwu/audit', endpoint: 'oss-cn-x.aliyuncs.com', linkMode: 'signed', linkTtl: 3600,
-      autoUpload: true, ossutilReady: true, probe: { ok: true, state: 'AK 正常', detail: 'AK 可访问 oss://crwu-bucket/' },
+      enabled: true, bucket: 'crwu-bucket', endpoint: 'oss-cn-x.aliyuncs.com', prefix: 'crwu/audit',
+      linkMode: 'signed', linkTtl: 3600, autoUpload: true, ossutilReady: true,
+      ossutilPath: '/Users/x/.dsh/plugins/dsh-crwu-workbench/bin/darwin-arm64/ossutil',
     },
     ossCred: {
       path: '/Users/x/.ossutilconfig', exists: true, endpoint: 'oss-cn-x.aliyuncs.com',
       accessKeyIdMasked: 'AKID****7890', hasSecret: true, hasSts: false, language: 'CH',
     },
+    probe: { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true, ok: true, state: 'AK 正常', detail: 'AK 可访问 oss://crwu-bucket/' },
+    ...patch,
+  }
+}
+
+/** 一份全通过的 env 应答（真实字段名取自 Host 的 `EnvResult`：六个分区 + 工作空间）。 */
+function okEnvBody(patch = {}) {
+  return {
+    ok: true, configSource: '/tmp/test-crwu-workbench.yml', platform: 'darwin-arm64',
+    packageIntegrity: packagesOk(),
+    runtime: runtimeOk(),
+    external: externalOk(),
+    services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
+    blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+    delivery: deliveryOk(),
+    workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
+    sessionWorkspace: { parentSessionId: 'p1', sessionCwd: '/cases/a', workspaceId: 'w1', workspacePath: '/cases/a', workspaceTitle: 'A' },
     // 「我是谁」跟着自检一起回来；默认空姓名 = 头部那句问候整句不展示。
     me: { name: '', org: '', userId: '' },
     ...patch,
@@ -2214,14 +2369,14 @@ test('envLampOf and envTally derive the light and the pass rate from the snapsho
   assert.equal(envLampOf({ env: okEnvBody(), busy: true, error: '', checkedAt: '' }), 'busy')
   assert.equal(envLampOf({ env: blockedEnvBody(), busy: true, error: '', checkedAt: '' }), 'busy')
 
-  // 参与计数的是：二进制 + 服务 + iFinD + 工作空间 + 平台。
+  // 参与计数的是：插件包(1) + 运行时(1) + 授权服务(1) + 交付(1) + 外部数据(1) + 工作空间 + 平台 = 7。
   const tally = envTally(okEnvBody())
-  assert.equal(tally.total, 5)
-  assert.equal(tally.passed, 5)
+  assert.equal(tally.total, 7)
+  assert.equal(tally.passed, 7)
   assert.equal(tally.ratio, 1)
   const partial = envTally(blockedEnvBody())
-  assert.equal(partial.passed, 4, '平台没识别那一项没过')
-  assert.equal(partial.total, 5)
+  assert.equal(partial.passed, 6, '平台没识别那一项没过')
+  assert.equal(partial.total, 7)
   assert.equal(envTally(null).ratio, 0)
 })
 
@@ -2239,50 +2394,55 @@ function envPaneProps(env, patch = {}) {
   }
 }
 
-test('环境自检页给员工看的是四层结论：分层标题 + x/y 已就绪 + 就绪的层收起', async () => {
+test('环境自检页给员工看的是五层结论：分层标题 + x/y 已就绪 + 就绪的层收起', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const { tree } = render(EnvironmentPane, envPaneProps(okEnvBody()))
   const text = textOf(tree)
   for (const expected of [
     zhCN.envHeroOk,
     zhCN.wsSectionTitle,
-    zhCN.envLayerTools,
+    zhCN.envLayerPackages,
+    zhCN.envLayerRuntime,
     zhCN.envLayerAuth,
-    zhCN.envLayerUpload,
+    zhCN.envLayerDelivery,
     zhCN.envLayerExternal,
     zhCN.promptTitle,
     'darwin-arm64',
     '/cases/a',
   ]) assert.equal(text.includes(expected), true, `自检页缺了「${expected}」`)
   assert.equal(text.includes(`1/1 ${zhCN.envLayerReady}`), true, '就绪的层要给出 x/y 已就绪')
-  assert.equal(text.includes('/usr/bin/node'), false, '全就绪的层默认收起，路径要点开才看')
+  assert.equal(text.includes('AKID****7890'), false, '全就绪的层默认收起，路径与 AK 掩码要点开才看')
   assert.equal(text.includes(zhCN.envDetailsTitle), true, '页脚要有「排查详情」入口')
   // 授权开关是**员工要能一眼看到并点**的东西，所以它不在排查详情里（维护者明细仍默认收起，
   // 由「维护者信息收在排查详情里」那条盯着）。
-  assert.equal(text.includes(zhCN.authGrantedLine), true, '③ 层要显示已授权这一行')
+  assert.equal(text.includes(zhCN.authGrantedLine), true, '④ 层要显示已授权这一行')
 })
 
-test('没就绪的层默认展开：状态词 + 原因 + 怎么配 + 下载地址都在', async () => {
+test('没就绪的层默认展开：状态词 + 原因 + 怎么配都在（不再有下载地址）', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const base = okEnvBody()
-  const missingCrwu = {
+  const brokenPackage = {
     ...base,
     allOk: false,
-    blocked: ['crwu'],
-    checks: [{
-      ...base.checks[0], name: 'crwu', command: 'crwu', found: false, path: '', versionText: '', actual: '',
-      ok: false, reason: '未找到命令 crwu', url: 'https://x.invalid/crwu.tgz', target: '/usr/local/bin/crwu',
-    }],
+    blocked: ['插件内置组件'],
+    packageIntegrity: packagesOk({
+      ok: false,
+      tools: base.packageIntegrity.tools.map((tool) => (tool.name === 'dws'
+        ? { ...tool, present: false, sizeBytes: 0, ok: false, reason: '插件包不完整：包内缺少 dws' }
+        : tool)),
+    }),
   }
-  const { tree } = render(EnvironmentPane, envPaneProps(missingCrwu))
+  const { tree } = render(EnvironmentPane, envPaneProps(brokenPackage))
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.envHeroBad), true, '结论要明说未通过')
   assert.equal(text.includes(`${zhCN.envHeroTodo}1${zhCN.envHeroTodoTail}`), true, '要说"还有 1 项要处理"')
-  assert.equal(text.includes(zhCN.envItemMissing), true, '没就绪项要有状态词')
-  assert.equal(text.includes('未找到命令 crwu'), true, '要说清原因')
-  assert.equal(text.includes(zhCN.envFixTool), true, '要给出怎么配')
-  assert.equal(text.includes('https://x.invalid/crwu.tgz'), true, '有平台包就给下载地址')
-  assert.equal(text.includes(zhCN.envCopyInstallPrompt), true, '工具层要给"复制安装提示词"的入口')
+  assert.equal(text.includes(zhCN.envPackagesBroken), true, '没就绪项要有状态词')
+  assert.equal(text.includes('插件包不完整：包内缺少 dws'), true, '要说清原因')
+  assert.equal(text.includes(zhCN.envFixPackages), true, '要给出怎么配')
+  // 组件随插件发布：界面**不该**出现「请安装 crwu / dws / ossutil」这类文案，也不该有下载地址。
+  assert.equal(/https?:\/\//.test(text), false, '没就绪的组件项不该出现下载地址')
+  assert.equal(/请安装\s*(crwu|dws|ossutil)/i.test(text), false, '不该提示员工安装这三个命令')
+  assert.equal(text.includes(zhCN.envCopyInstallPrompt), true, '组件层要给"复制安装提示词"的入口')
   assert.equal(text.includes(zhCN.envLoginH3yun), false, '氚云已就绪，不该给登录按钮')
 })
 
@@ -2295,14 +2455,20 @@ test('维护者信息（工具/OSS 明细、运行环境信息、氚云授权）
   const text = textOf(rerender(EnvironmentPane, paneProps))
   for (const expected of [
     zhCN.envDetailsTools,
+    zhCN.envDetailsRuntime,
     zhCN.envDetailsOss,
     zhCN.envDetailsInfo,
-    '/usr/bin/node',
-    'v22.19.0',
+    // 组件明细：包根 / 包内清单 / 逐组件字节数与清单 sha256 / 版本要求（都只在维护者详情里）。
+    '/Users/x/.dsh/plugins/dsh-crwu-workbench',
+    'sha-ossutil',
+    '>=0.2.14',
+    // 运行时明细：路径、来源与依赖包版本（至少 openpyxl）。
+    '/opt/dsh/python/bin/python3',
+    'DSH 自带（bundled runtime）',
+    'openpyxl 3.1.2',
     'AKID****7890',
     'crwu/audit',
-    'https://doc.invalid/install.md',
-    'https://x.invalid/m.json',
+    zhCN.envConfigSource,
   ]) assert.equal(text.includes(expected), true, `排查详情里缺了「${expected}」`)
   // 这条测试只管维护者明细；授权开关已在 ③ 层默认可见（上面那条测试盯着），这里核对它
   // **不是**靠展开排查详情才出现的。
@@ -2337,7 +2503,7 @@ test('侧栏分组卡上的子项就是模块切换：报告审核 ⇄ 环境信
   // 这里验另一半：store 一改，面板就停在对应的那一页。
   modules.select('env')
   const after = rerender(WorkbenchPanel, { services, modules })
-  assert.equal(textOf(after).includes(zhCN.envLayerTools), true, '切到环境信息要看到四层')
+  assert.equal(textOf(after).includes(zhCN.envLayerPackages), true, '切到环境信息要看到五层')
   assert.equal(textOf(after).includes(zhCN.tabPending), false)
 
   // 再切回报告审核：双向的，不是一次性跳转。
@@ -2375,7 +2541,7 @@ test('报告评估 是 Coming Soon 页：说清是什么/将来做什么/现在�
   // 占位页不画报告列表、也不画环境四层：它是第三种状态，别让人误会。
   const text = textOf(after)
   assert.equal(text.includes(zhCN.tabPending), false)
-  assert.equal(text.includes(zhCN.envLayerTools), false)
+  assert.equal(text.includes(zhCN.envLayerPackages), false)
 })
 
 // ── 加载态与右侧抽屉（审核信息）─────────────────────────────────────────────
@@ -3777,6 +3943,8 @@ test('上下文包：逐字注入 System Instruction，并如实写出缺失项�
     reportUpdatedAt: '2026-09-22 16:30', auditGeneratedAt: '2026-09-20 17:41',
   })
   const block = m.buildAuditContextBlock({
+    // 2026-09-25 用户口径：必须给出**唯一**允许读写的案例目录，模型才不会 `ls`/`find` 去猜。
+    caseDir: '/Users/me/中瑞世联工作空间/2026-302474-LX9995-BG8740',
     seqNo: '2026-302474-LX9995-BG8740', project: '某项目', reportUpdatedAt: '2026-09-22 16:30',
     reportVersion: '复核报告', auditGeneratedAt: '2026-09-20 17:41', auditSourceDigest: 'sha256:abc',
     auditArtifactVersion: '1.0', reviewUpdatedAt: '2026-08-12',
@@ -3800,10 +3968,19 @@ test('上下文包：逐字注入 System Instruction，并如实写出缺失项�
   // 版本关系的中文表述（不是英文枚举、也不是过度确定的语言）
   assert.equal(block.includes(zhCN.auditFreshPossibly), true)
   assert.equal(/(current|possibly_stale|stale|unknown)/.test(block), false, '不许把英文枚举写进上下文')
-  // 来源清单（只有远端标识）+ 缺失项都在；**本地路径一律不出现**（用户 §4/§7）
+  // 来源清单（只有远端标识）+ 缺失项都在
   assert.equal(block.includes(zhCN.auditCtxSourceHead), true)
   assert.equal(block.includes(`h3yun · ${zhCN.auditCtxRemoteId}：f1`), true, '来源清单要写明远端标识')
-  assert.equal(/\/Users\/|\/tmp\/|\/ws\//.test(block), false, 'System Prompt / 上下文里不许出现本地路径')
+  // 取数规则：**只有**案例目录这一条本机路径 + 用哪个 Tool 取 + 每次新建会话都重下 + 禁扫描
+  assert.equal(block.includes(zhCN.aiCaseDirHead), true)
+  assert.equal(block.includes('/Users/me/中瑞世联工作空间/2026-302474-LX9995-BG8740'), true, '要给出案例目录')
+  assert.equal(block.includes('crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<原文件名>" })'), true)
+  assert.equal(block.includes('**每一次新建对话都要重新执行**'), true)
+  assert.equal(block.includes('**禁止**用 `ls`、`find`、`grep`、`glob`'), true)
+  // 除案例目录之外的本地路径一律不许出现（`/Users/me/中瑞世联工作空间` 仅在那一行里）
+  const localPaths = block.match(/\/Users\/[^\s」、）)]*/g) ?? []
+  assert.deepEqual([...new Set(localPaths)], ['/Users/me/中瑞世联工作空间/2026-302474-LX9995-BG8740'], '本地路径只允许出现案例目录这一条')
+  assert.equal(/\/tmp\/|\/ws\//.test(block), false, '别的本地路径不许出现')
   assert.equal(block.includes('本地案例目录'), false)
   assert.equal(block.includes('工作区下面'), false)
   // 三类资料 + 缺失项都在
@@ -4132,12 +4309,14 @@ test('数据来源清单：只记远端标识，绝不含 localPath', async () =
   assert.equal(refs.some((ref) => ref.remoteId === '/ws/S/说明.md'), false)
 })
 
-test('报告讨论上下文：写入远端数据边界，且不含任何本地路径', async () => {
+test('报告讨论上下文：写入远端数据边界 + 唯一的案例目录 + 可执行的取数规则', async () => {
   const { discussionBrief } = await import(new URL('src/client/features/report-audit/assistant-context.ts', ROOT).href)
   const text = discussionBrief({
     seqNo: 'S-1', objectId: 'o-1', project: '某项目', name: '某报告', risk: 'B',
     reviewLevel: '初审', reviewState: '审核中', currentNode: '一级复核人',
     modifiedAt: '2026-09-22 16:30', formName: '报告审核',
+    // 2026-09-25 用户口径：必须给出唯一允许读写的案例目录，并要求每次新建对话重新从远端下载。
+    caseDir: '/Users/me/中瑞世联工作空间/S-1',
     files: ['氚云附件 报告.zip（1.0 MB）', '云端交付件 审核意见.S.html'],
     fetchedAt: '2026-09-23T10:00:00.000Z',
     sources: ['h3yun · 远端标识：f1 · 报告.zip', 'oss · 远端标识：crwu/audit/S/审核意见.S.html'],
@@ -4150,11 +4329,37 @@ test('报告讨论上下文：写入远端数据边界，且不含任何本地�
   ]) {
     assert.equal(text.includes(line), true, `数据边界要逐字注入：${line.slice(0, 20)}…`)
   }
-  // 只描述"远端提供"，**不许**出现本地路径 / 本地目录提法（用户 §4）
-  assert.equal(/\/Users\/|\/tmp\/|\/ws\/|\/cases\//.test(text), false, '上下文里不许出现本地路径')
+  // 取数规则（2026-09-25 用户口径「必须束缚模型不能去我电脑的目录里找已有文件」）：
+  // 给出**唯一**允许读写的案例目录 + 用哪个 Tool 取 + 每次新建对话都重下 + 禁止扫描本机。
+  assert.equal(text.includes(zhCN.aiCaseDirHead), true)
+  assert.equal(text.includes('/Users/me/中瑞世联工作空间/S-1'), true, '要给出本次会话的案例目录')
+  assert.equal(text.includes(zhCN.aiFetchRulesHead), true)
+  assert.equal(text.includes('`h3yun · <远端标识> · <文件名>` 里的**远端标识就是 `fileId`**'), true)
+  assert.equal(text.includes('crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<原文件名>" })'), true)
+  assert.equal(text.includes('**每次新建对话都必须重新下载**'), true)
+  assert.equal(text.includes('**禁止**用 `ls`、`find`、`grep`、`glob`'), true)
+  assert.equal(text.includes('不要读任何本机路径'), true)
+  // 7 条规则逐字钉住：这段文本是**交给模型的作业指令**，改写丢一条就等于少一道约束
+  // （安装提示词那次「意思差不多地改写」真的丢过安全指令，所以这里也逐条断言）。
+  for (const rule of zhCN.aiFetchRules) {
+    assert.equal(text.includes(rule), true, `取数规则要逐字注入：${rule.slice(0, 24)}…`)
+  }
+  assert.equal(zhCN.aiFetchRules.length, 7)
+  // 本地路径**只允许**出现案例目录这一条（别的路径一概不许进上下文）
+  const localPaths = text.match(/\/Users\/[^\s」、）)]*/g) ?? []
+  assert.deepEqual([...new Set(localPaths)], ['/Users/me/中瑞世联工作空间/S-1'], '本地路径只允许出现案例目录这一条')
+  assert.equal(/\/tmp\/|\/ws\/|\/cases\//.test(text), false, '别的本地路径不许出现')
   for (const forbidden of ['本地案例目录', '本地已经', '工作区下面', '从本地读取', '本地缓存']) {
     assert.equal(text.includes(forbidden), false, `不许提示模型去本地找：${forbidden}`)
   }
+  // 没给案例目录（旧宿主）时整段不写：宁可不给，也不给半截路径。
+  const without = discussionBrief({
+    seqNo: 'S-1', objectId: '', project: '', name: '', risk: '', reviewLevel: '', reviewState: '',
+    currentNode: '', modifiedAt: '', formName: '', caseDir: '', files: [], fetchedAt: '',
+    sources: [],
+  })
+  assert.equal(without.includes(zhCN.aiCaseDirHead), false)
+  assert.equal(without.includes(zhCN.aiFetchRulesHead), false)
   // 远端资料与来源清单都在
   assert.equal(text.includes('氚云附件 报告.zip'), true)
   assert.equal(text.includes('云端交付件 审核意见.S.html'), true)

@@ -4,9 +4,14 @@ export const PLUGIN_NAME = 'crwu-workbench'
 /**
  * 包形态实际使用的 DSH 服务（**硬依赖**）。
  *
- * 只放两个：
+ * 只放三个：
  * - `webServer`：没有它注册不了同源端点，插件完全没意义；
- * - `shell`：没有它跑不了 `crwu` / `dws` / `ossutil`，而这是插件的全部功能。
+ * - `shell`：没有它跑不了 `crwu` / `dws` / `ossutil`，而这是插件的全部功能；
+ * - `tools`：CRWU 自研审核链路只通过结构化 Tool 交付业务能力，审核子代理看到的
+ *   `crwu_*` 工具全部在 `apply()` 里 `ctx.tools.register()`。没有工具注册表，审核链就没有
+ *   合规的执行入口 —— 与其静默退回裸命令，不如让插件拒绝激活。
+ *   DSH 的 base bundle 已经以稳定 id `tools` 挂载了 `@deepseek-ai/dsh-tools`，所以这里
+ *   只声明依赖，**不重复插入第二个实例**。
  *
  * **故意不声明**的四个，以及理由：
  * - `fs` / `sessions` / `timer`：缺失时要能降级（例如没有 `timer` 就只是不上传看门狗轮询），
@@ -17,7 +22,7 @@ export const PLUGIN_NAME = 'crwu-workbench'
  *
  * 判据是「缺了它这个插件还该不该起来」：该起来 + 报错 = 可选；起不来 = 硬依赖。
  */
-export const PLUGIN_INJECT = ['webServer', 'shell']
+export const PLUGIN_INJECT = ['webServer', 'shell', 'tools']
 
 /**
  * 包版本（与 `package.json` / `VERSION` 三处一致）。
@@ -27,7 +32,7 @@ export const PLUGIN_INJECT = ['webServer', 'shell']
  * 还会让打包器的 JSON 插件成为隐式依赖。代价是升版本时要同时改这里 ——
  * `tests/unit/host-package.test.mjs` 有一条断言盯着它必须等于 `package.json` 的 version。
  */
-export const PLUGIN_VERSION = '0.0.5'
+export const PLUGIN_VERSION = '0.0.8'
 
 /**
  * `ping` / `boot` 应答里的版本指纹，形如 `pkg-0.0.5`。

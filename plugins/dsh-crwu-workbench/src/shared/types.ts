@@ -68,22 +68,96 @@ export interface CloudItem {
   jsonKey: string
 }
 
-/** 二进制探测结果。 */
-export interface EnvCheckView {
+/**
+ * 随插件发布的组件（`crwu` / `dws` / `ossutil`）的检查结果。
+ *
+ * 它们**不是 PATH 命令**：只按包内 `bin/<平台>/<文件>` 与包内 `bin/manifest.json` 核对，
+ * 所以这里没有 `command` / `versionText` 这类字段（旧线协议的 `EnvCheckView` 就是混装的产物）。
+ */
+export interface PackagedToolView {
   name: string
-  command: string
-  required: boolean
+  label: string
+  /** 包内文件名（Windows 平台带 `.exe`）。 */
+  file: string
+  present: boolean
+  sizeBytes: number
+  /** 包内清单声明的字节数；读不到时是 0。 */
+  manifestSizeBytes: number
+  /** 包内清单记的 sha256（不在自检里重算）；读不到时是空串。 */
+  sha256: string
+  expectedVersion: string
   note: string
-  found: boolean
-  path: string
-  versionText: string
-  actual: string
-  expect: string
   ok: boolean
   reason: string
-  url: string
-  sha256: string
-  target: string
+}
+
+/** 插件包完整性（② 层）：唯一一个聚合项，三件组件不各占一行。 */
+export interface PackageIntegrityView {
+  ok: boolean
+  /** 当前平台是否有随包发布的组件目录。 */
+  supported: boolean
+  platform: string
+  packageRoot: string
+  manifestPath: string
+  manifestFound: boolean
+  tools: PackagedToolView[]
+  note: string
+}
+
+/**
+ * DSH 自带脚本运行时（③ 层）。
+ *
+ * `source` 必须明说「DSH 自带（bundled runtime）」—— 写成系统 Python 会把员工指去装一份
+ * 插件根本不会用的解释器。
+ */
+export interface RuntimeView {
+  ok: boolean
+  /** 'ok' | 'capability-gap' | 'missing-package' | 'failed'（其它值按 Host 原文显示）。 */
+  state: string
+  path: string
+  versionText: string
+  distributions: Record<string, string>
+  missingPackages: string[]
+  error: string
+  source: string
+  /** 清单对该运行时的要求（版本约束 / 必需包），只用于展示与维护者对账。 */
+  expect: string
+  required: boolean
+  requiredPackages: string[]
+  note: string
+}
+
+/** OSS 配置视图（⑤ 层）。 */
+export interface OssConfigView {
+  enabled: boolean
+  bucket: string
+  endpoint: string
+  prefix: string
+  linkMode: string
+  linkTtl: number
+  autoUpload: boolean
+  /** 包内 ossutil 是否就绪（只认包内，不回退 PATH）。 */
+  ossutilReady: boolean
+  /** 维护者详情：包内 ossutil 的绝对路径；未就绪时空串。 */
+  ossutilPath: string
+}
+
+/** OSS 凭据的**脱敏**视图（只回掩码后的 AK ID，绝不回显 Secret）。 */
+export interface OssCredView {
+  path: string
+  exists: boolean
+  endpoint: string
+  accessKeyIdMasked: string
+  hasSecret: boolean
+  hasSts: boolean
+  language: string
+}
+
+/** ⑤ OSS 交付配置：配置 + 凭据 + 一次真实连通性探测。 */
+export interface DeliveryView {
+  oss: OssConfigView
+  ossCred: OssCredView
+  probe: ServiceCheckView
 }
 
 /** 服务（氚云/钉钉/OSS）探测结果。 */
@@ -142,4 +216,46 @@ export interface ActiveView {
   key: string
   childId: string
   since: number
+}
+
+/** 当前会话（父会话）的事实：只用于显示与 preset 提示，不决定审核父级。 */
+export interface SessionWorkspaceView {
+  parentSessionId: string
+  sessionCwd: string
+  workspaceId: string
+  workspacePath: string
+  workspaceTitle: string
+}
+
+/**
+ * `env` 操作的**线协议**应答。
+ *
+ * 六块分区是这一版（协议号 12）的核心：② 插件包完整性 / ③ DSH 自带运行时 / ④ 登录与凭据授权 /
+ * ⑤ OSS 交付配置 / ⑥ 外部数据，加上 ① 工作空间。旧线协议把它们混在 `checks[]` 里，
+ * 于是界面只能平铺成一列命令清单。
+ *
+ * Host 侧的内部类型（`host/environment/ops.ts` 的 `EnvResult`）由 `wire-contract.ts` 强制
+ * 可赋值给这里 —— 少字段或类型漂移在 typecheck 阶段就会红。
+ */
+export interface EnvResultView {
+  ok: boolean
+  configSource: string
+  packageIntegrity: PackageIntegrityView
+  runtime: RuntimeView
+  /** ④ 只放登录/授权那两条（氚云 + 钉钉）；OSS 归 `delivery`。 */
+  services: ServiceCheckView[]
+  delivery: DeliveryView
+  external: IfindCheckView
+  blocked: string[]
+  allOk: boolean
+  home: string
+  platform: string
+  trust: { credentials: boolean }
+  /** ① 案例根目录。 */
+  workspace: WorkspaceView
+  /** 可选：老版本 Host 不带这个字段，界面按「尚未创建」显示即可。 */
+  auditRoot?: AuditRootView
+  sessionWorkspace: SessionWorkspaceView
+  /** 「我是谁」：三个字段都可能是空串，界面整句不展示。 */
+  me: { name: string; org: string; userId: string }
 }

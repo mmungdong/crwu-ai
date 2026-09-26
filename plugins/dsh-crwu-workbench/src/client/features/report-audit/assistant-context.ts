@@ -37,6 +37,15 @@ export interface DiscussionFacts {
    * 这里**不许**出现本地案例目录的文件名或路径，也不许把工作空间路径写进上下文。
    */
   files: readonly string[]
+  /**
+   * 本次会话的案例目录（`<工作空间>/<流水号>`，见 `shared/utils/case-dir.ts`）。
+   *
+   * 2026-09-25 用户口径：**必须**把这一段写进上下文 —— 用户报「模型会从我电脑的目录里去找
+   * 已有的文件」，实测根因就是提示词只说了「不许读本地」却没给"允许读的唯一目录"，
+   * 模型于是 `ls` + `find` 去猜，猜成了 `cases/<流水号>`（错的），把材料下到了别处。
+   * 给了唯一路径之后，「只能在 caseDir 里读本次下载的文件」才是可执行的规则。
+   */
+  caseDir: string
   /** 本次从远端获取这批资料的时刻。 */
   fetchedAt: string
   /** 远端来源清单（provider + 远端标识 + 版本/时间 + 指纹），**不含 localPath**。 */
@@ -122,6 +131,8 @@ export function discussionBrief(facts: DiscussionFacts): string {
     '',
     `${zhCN.auditCtxSourceHead}（${String(facts.sources.length)}）：`,
     ...sources,
+    // 取数规则：唯一允许的目录 + 用哪个 Tool 取 + 每次新建会话都重下 + 禁止扫描本机。
+    ...fetchRules(facts.caseDir),
   ].join('\n')
 }
 
@@ -136,4 +147,23 @@ export function discussionPrompt(facts: DiscussionFacts, question: string, first
   if (asked === '') return ''
   if (!first) return asked
   return `${discussionBrief(facts)}\n\n${zhCN.aiQuestionHead}：\n${asked}`
+}
+
+/**
+ * 「唯一允许的目录 + 取数规则」这一段。
+ *
+ * 抽成函数是因为报告讨论与分析审核结果两条会话都要逐字一致地带上它 ——
+ * 两处各写一份，就会像 2026-09-25 的案例目录那样漂移。
+ * `caseDir` 为空（旧宿主或没选工作空间）时**整段不写**：宁可不给，也不给一个半截路径。
+ */
+export function fetchRules(caseDir: unknown): string[] {
+  const dir = String(caseDir ?? '').trim()
+  if (dir === '') return []
+  return [
+    '',
+    `${zhCN.aiCaseDirHead}${dir}`,
+    '',
+    zhCN.aiFetchRulesHead,
+    ...zhCN.aiFetchRules,
+  ]
 }

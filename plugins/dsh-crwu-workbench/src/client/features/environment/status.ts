@@ -32,8 +32,14 @@ export interface EnvStatusStore {
   get(): EnvSnapshot
   /** 订阅变化；返回解除订阅的函数（组件卸载时必须调用）。 */
   subscribe(listener: () => void): () => void
-  /** 跑一次自检。并发的调用共享同一次请求，不会把 shell 探测打两遍。 */
-  refresh(): Promise<EnvResult | null>
+  /**
+   * 跑一次自检。并发的调用共享同一次请求，不会把 shell 探测打两遍。
+   *
+   * `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存
+   * （首次进入页面用缓存，避免每次开面板都问一次 DSH）。若已有一次自检在飞，仍然共享它 ——
+   * 双击「重新自检」不该把整轮探测打两遍。
+   */
+  refresh(options?: { refresh?: boolean }): Promise<EnvResult | null>
 }
 
 function describe(cause: unknown): string {
@@ -61,11 +67,11 @@ export function createEnvStatusStore(): EnvStatusStore {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh() {
+    refresh(options) {
       // 并发去重：会话头的灯与面板几乎同时挂载时，只应该有一次真实自检。
       if (inflight !== null) return inflight
       patch({ busy: true, error: '' })
-      inflight = workbenchApi.env()
+      inflight = workbenchApi.env(options?.refresh === true ? { refresh: true } : {})
         .then((env) => {
           patch({ env, busy: false, error: '', checkedAt: new Date().toISOString() })
           return env
@@ -109,7 +115,7 @@ export function envLampOf(snapshot: EnvSnapshot): EnvLampTone {
 }
 
 export interface EnvTally {
-  /** 参与计数的检查项总数（二进制 + 服务 + iFinD + 工作空间 + 平台）。 */
+  /** 参与计数的检查项总数（插件包 + 运行时 + 授权 + 交付 + 外部数据 + 工作空间 + 平台）。 */
   total: number
   passed: number
   /** 通过率，0~1；没有检查项时是 0。 */
@@ -119,10 +125,19 @@ export interface EnvTally {
 /** 通过率只用于展示；**门禁判断一律看 `env.allOk`**（那是 Host 给的权威结论）。 */
 export function envTally(env: EnvResult | null): EnvTally {
   if (env === null) return { total: 0, passed: 0, ratio: 0 }
+  const cred = env.delivery.ossCred
   const results = [
-    ...env.checks.map((check) => check.ok === true),
+    // ② 插件包完整性：**一项**（三件组件是同一个包的事实，不按组件数计数）。
+    env.packageIntegrity.ok === true,
+    // ③ DSH 自带脚本运行时：**一项**。
+    env.runtime.ok === true,
+    // ④ 登录与凭据授权：氚云 / 钉钉。
     ...env.services.map((service) => service.ok === true),
-    env.ifindKey.ok === true,
+    // ⑤ OSS 交付：凭据写好了还不行，实测通过才算。
+    env.delivery.probe.ok === true && cred.exists === true && cred.hasSecret === true,
+    // ⑥ 外部数据。
+    env.external.ok === true,
+    // ① 案例根目录与平台事实。
     env.workspace.chosen === true,
     env.platform !== '',
   ]

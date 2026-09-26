@@ -26,7 +26,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 第一条：**先真的把两个平台的六个二进制装配出来**，作为 artifact 交给发布作业。
+  #
+  # 为什么必须在发布前装配、不能只靠工作树：`npm pack` 打的是工作树里的 `bin/`。
+  # 干净 runner 上没有它（`bin/` 是 gitignore 的构建产物），于是发出去的包会「插件在、
+  # crwu/dws/ossutil 不在」——只有员工装完才发现。
+  #
+  # 为什么只有一个 job 就够：`make build` 在 macOS 上**交叉编译**出 `bin/darwin/crwu` 与
+  # `bin/windows/crwu.exe` 两份；`sync-binaries.mjs` 再把 ossutil（阿里云官方包）与 dws
+  # （npm 包 `dingtalk-workspace-cli` 的 assets）按清单哈希落到各平台目录，并写
+  # `bin/manifest.json`。所以 darwin-arm64 与 win32-x64 能在同一台 macOS runner 上齐备。
+  binaries:
+    runs-on: macos-14
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: plugins/dsh-crwu-workbench
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugins/dsh-crwu-workbench/package-lock.json
+
+      - run: npm ci
+
+      - name: cross-compile crwu (darwin + windows)
+        working-directory: .
+        run: make build
+
+      - name: stage the six binaries and write bin/manifest.json
+        run: node scripts/sync-binaries.mjs
+
+      - name: verify the staging against its own manifest
+        run: node scripts/sync-binaries.mjs --check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crwu-workbench-bin
+          path: plugins/dsh-crwu-workbench/bin
+          if-no-files-found: error
+          retention-days: 3
+
   publish:
+    needs: binaries
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,6 +97,13 @@ jobs:
 
       - run: npm ci
 
+      # 把上面那个 job 装配好的 bin/ 放回包目录：发布作业自己**不构建**，只用已经过
+      # 清单校验的产物，避免「发布机上现装一份、和校验过的那份不是同一份」。
+      - uses: actions/download-artifact@v4
+        with:
+          name: crwu-workbench-bin
+          path: plugins/dsh-crwu-workbench/bin
+
       - name: tag must match the package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -60,8 +117,10 @@ jobs:
       - name: full gate
         run: npm run check
 
-      - name: packed artifact self-check
-        run: npm run pack:assert
+      # 发布严格模式：两个平台六个二进制 + manifest 必须在**真实 tarball** 里，
+      # 且逐个重算 size/sha256 与清单一致；bin/ 下不许有任何未声明的文件。
+      - name: packed artifact self-check (strict)
+        run: npm run pack:assert:strict
 
       - name: publish
         if: ${{ github.event_name == 'push' || inputs.dry-run == false }}

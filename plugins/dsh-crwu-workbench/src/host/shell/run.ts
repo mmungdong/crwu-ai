@@ -19,6 +19,13 @@ export interface ShellResult {
   stderr: string
   truncated: boolean
   timedOut: boolean
+  /**
+   * 调用方的取消信号（`ShellExecRequest.signal`）是不是**第一因**。
+   *
+   * 必须与 `error`（=「命令根本没跑起来」的基础设施故障，见 `shellUnavailable`）分开：
+   * 把「被取消」当成「shell 服务不可用」会让上层把一次正常的取消报成部署故障。
+   */
+  aborted: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -30,7 +37,7 @@ function failureMessage(error: unknown): string {
 }
 
 function failed(error: string): ShellResult {
-  return { ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false }
+  return { ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false }
 }
 
 /**
@@ -59,6 +66,14 @@ export async function runShell(
     escalate?: boolean
     stdoutMaxBytes?: number
     stdinText?: string
+    /**
+     * 调用方（通常是 Tool 的 `exec.signal`）的取消信号。
+     *
+     * 直接交给 `ShellExecRequest.signal`：DSH 在它触发时杀掉命令，并把它算作
+     * `ShellRunResult.aborted` 的第一因。没有这一条，Tool 的取消只能在命令跑完之后
+     * 才生效 —— 取消一条正在跑的 `dws` / `ossutil` 会退化成「等它自己结束」。
+     */
+    signal?: AbortSignal
   } = {},
 ): Promise<ShellResult> {
   const shell = ctx.get('shell') as ShellExecutor | undefined
@@ -77,6 +92,7 @@ export async function runShell(
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       stdoutMaxBytes: options.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX_BYTES,
       ...(options.stdinText === undefined ? {} : { stdin: options.stdinText }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.escalate === true
         ? { sandboxPolicy: { mode: 'danger-full-access', workspaceRoot: workRoot } }
         : {}),
@@ -86,7 +102,11 @@ export async function runShell(
   }
 
   try {
-    const result = await shell.run(spec)
+    // 0.1.7 把原来的 `run(spec)` 拆成两步：`execute(spec)` 返回进程句柄（`ShellExecution`），
+    // 句柄上的 `result()` 才是前台投影（收齐 stdout/stderr 并给出 timedOut/aborted 归因）。
+    // 两步都会为**基础设施故障** reject，所以一起包在同一个 try 里。
+    const execution = await shell.execute(spec)
+    const result = await execution.result()
     return {
       ok: result.exitCode === 0,
       error: '',
@@ -95,6 +115,7 @@ export async function runShell(
       stderr: text(result.stderr?.text),
       truncated: result.stdout?.truncated === true || result.stderr?.truncated === true,
       timedOut: result.timedOut === true,
+      aborted: result.aborted === true,
     }
   } catch (error) {
     return failed(`执行失败：${failureMessage(error)}`)
@@ -104,10 +125,10 @@ export async function runShell(
 /**
  * 命令**根本没有执行**（shell 服务缺失、沙箱后端不可用、审批拒绝、`resolve` 抛错）。
  *
- * 依据 DSH 契约（`@deepseek-ai/dsh-shell` 的 `ShellExecutor.run` 文档）：
- * 「`run` 只为**基础设施故障** reject；非零退出、超时击杀、取消击杀都 resolve 成
- * `ShellRunResult`」。所以本模块里带 `error` 的结果只可能来自 reject 或 `resolve` 抛错，
- * 与「命令跑完了、只是退出码非 0」是两件事。
+ * 依据 DSH 契约（`@deepseek-ai/dsh-shell` 的 `ShellExecution.result` 文档）：
+ * 「Rejects only for **infrastructure failures** (a spawn that never produced a process)；
+ * 非零退出、超时击杀、取消击杀都 resolve 成 `ShellRunResult`」。所以本模块里带 `error`
+ * 的结果只可能来自 reject 或 `resolve` 抛错，与「命令跑完了、只是退出码非 0」是两件事。
  *
  * **为什么这个区分必须存在**（真实 DSH 上踩到过）：沙箱后端不可用（macOS 上
  * `sandbox-exec: sandbox_apply: Operation not permitted`，典型原因是进程本身已在沙箱里）时，

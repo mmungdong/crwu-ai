@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
@@ -104,14 +105,15 @@ test('the package YAML is the runtime source of deployment values', () => {
   const config = resolveConfig()
   assert.equal(config.configSource, YAML_CONFIG.pathname)
   assert.equal(config.caseRoot, '')
-  assert.equal(config.manifestUrl, 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-env-manifest.json')
+  assert.equal('manifestUrl' in config, false, '只读分发桶的清单地址已整体下掉')
+  assert.equal('installDocUrl' in config, false, '安装文档地址同上')
   assert.equal(config.ossBucket, 'crwu-workspace')
   assert.equal(config.ossLinkMode, 'signed')
 })
 
 test('host declares exactly the services it reads', () => {
   // 少声明 → 插件等待或运行失败；多声明 → 无谓的激活依赖。
-  assert.deepEqual(PLUGIN_INJECT, ["webServer", "shell"])
+  assert.deepEqual(PLUGIN_INJECT, ["webServer", "shell", "tools"])
   assert.equal(PLUGIN_NAME, 'crwu-workbench')
   assert.equal(WORKBENCH_ROUTE, '/api/crwu-workbench')
 })
@@ -162,8 +164,8 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
   // 所以给一个答不出话的替身比给 undefined 更接近实际。
   const stubShell = {
     resolve: (request) => request,
-    async run() {
-      return { exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }
+    async execute() {
+      return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }) }
     },
   }
   const stubFs = {
@@ -179,7 +181,22 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
     effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
     ...(sessions === undefined ? {} : { sessions }),
   }
-  return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world) }
+  // 两个实例级解析器：审核启动/记录类 Tool 依赖它们。
+  // 这里给**最小替身**（表单已缓存、Python 可用），因为这份测试盯的是操作表与包清单，
+  // 不是解析逻辑本身（那两条各有专门测试：host-audit-lifecycle / host-runtime-python）。
+  const form = {
+    async ensure() { return { ok: true, code: 'FORM-1', name: '报告审核', error: '', escalated: false } },
+  }
+  const python = {
+    cached: () => null,
+    async check() {
+      return {
+        ok: true, state: 'ok', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
+        distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stub',
+      }
+    },
+  }
+  return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world, { form, python }) }
 }
 
 test('buildKind 靠包根旁边有没有 src/ 判断：源码检出 = dev，装好的包 = installed', async () => {
@@ -251,6 +268,47 @@ test('ping and boot answer with the state the panel needs to render', async () =
     assert.ok(boot.ported.done.includes(name), `${name} 应当已移植`)
   }
   assert.deepEqual(boot.ported.todo, [], '不该再有未移植的操作')
+})
+
+test('env 操作的运行时分区来自 DSH Python 解析器（接线 + refresh 透传）', async () => {
+  // 环境页 ③ 层显示什么，取决于 `apply()` 把实例级解析器接进了 `env` 操作。
+  // 这一条钉的是**接线**：解析器被调用、`refresh` 原样透传、结果落在 `runtime` 分区里。
+  // （解析器自身的行为在 host-runtime-python.test.mjs；loadEnvironment 的分区在
+  //   host-environment-env.test.mjs。）
+  const calls = []
+  const python = {
+    cached: () => null,
+    async check(options) {
+      calls.push(options)
+      return {
+        ok: true, state: 'ok', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
+        distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stubDSH',
+      }
+    },
+  }
+  const resolved = resolveConfig({})
+  const state = createWorkbenchState(resolved)
+  const world = fakeWorld()
+  const stubShell = {
+    resolve: (request) => request,
+    async execute() {
+      return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }) }
+    },
+  }
+  const ctx = {
+    get: (name) => (name === 'shell' ? stubShell : undefined),
+    effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
+  }
+  const form = { async ensure() { return { ok: true, code: 'F', name: '报告审核', error: '', escalated: false } } }
+  const operations = createCoreOperations(ctx, resolved, state, world, { form, python })
+
+  const plain = await operations.env({})
+  assert.equal(plain.runtime.ok, true, '接线后 runtime 分区应当是解析器的结论')
+  assert.equal(plain.runtime.path, '/dsh/runtime/python/bin/python3')
+  assert.deepEqual(calls.map((item) => item.refresh), [false], '默认不刷新（走缓存）')
+
+  await operations.env({ refresh: true })
+  assert.deepEqual(calls.map((item) => item.refresh), [false, true], '「重新自检」的 refresh 要透传到解析器')
 })
 
 test('the declared ported lists match which operations actually run', async () => {
@@ -368,14 +426,14 @@ test('授权状态重启后仍在（从状态文件读回，不需要重新授�
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async run(spec) {
+          async execute(spec) {
             const command = String(spec.command)
             const out = command.includes('curl') ? '{}'
               : command.includes('dws auth status') ? JSON.stringify({ authenticated: true })
                 : command.includes('h3yun session status') ? JSON.stringify({ data: { userId: 'u', expiresAt: '2099-01-01T00:00:00Z' } })
                   : command.includes(' ls ') ? 'ok\n'
                     : ''
-            return { exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: out, truncated: false }, stderr: { text: '', truncated: false } }
+            return { result: async () => ({ exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: out, truncated: false }, stderr: { text: '', truncated: false } }) }
           },
         }
       }
@@ -441,26 +499,17 @@ test('bind-session rejects an empty id and tolerates a missing sessions service'
   assert.equal(padded.state.parentSessionId, '   ')
 })
 
-test('install-prompt resolves the URL manifest-first and keeps the legacy wording', () => {
-  // 清单优先（现拉的、随组织变），Config 兜底 —— 与 env 返回 installDocUrl 的口径一致。
-  const fromConfig = operationsFor({ installDocUrl: 'https://example.invalid/doc.md' })
-  const result = fromConfig.operations['install-prompt']({ workspace: '/cases/x' })
-  assert.equal(result.url, 'https://example.invalid/doc.md')
-  assert.match(result.prompt, /先完整阅读这份安装清单/)
-  assert.match(result.prompt, /不要凭经验跳步/)
+test('install-prompt 整篇自述：没有 URL，规则逐条保留', () => {
+  // 旧口径是「清单优先（现拉的、随组织变），Config 兜底」——那条链路已随只读 OSS 一起删掉，
+  // 于是这里也少了一条「地址可被替换」的通道：`url` 恒为空，提示词里不许出现任何外链。
+  const result = operationsFor({}).operations['install-prompt']({ workspace: '/cases/x' })
+  assert.equal(result.url, '', '提示词不再有清单地址')
+  assert.equal(/https?:\/\//.test(result.prompt), false, '提示词必须是整篇自述，不带任何外链')
+  assert.match(result.prompt, /随包自带/)
+  assert.match(result.prompt, /不要尝试、不要兜底、不要试探连通性/)
   assert.match(result.prompt, /密钥、令牌一律不要回显/)
   assert.match(result.prompt, /\/cases\/x/)
-
-  // 清单里给了地址就以它为准，哪怕 Config 也写了。
-  const withManifest = operationsFor({ installDocUrl: 'https://example.invalid/doc.md' })
-  withManifest.state.manifest = { ...DEFAULT_MANIFEST, installDocUrl: 'https://manifest.invalid/doc.md' }
-  assert.equal(withManifest.operations['install-prompt']({}).url, 'https://manifest.invalid/doc.md')
-
-  // 两个来源都没有时用内置常量，而不是给一个空地址。
-  const fallback = operationsFor({ installDocUrl: '' })
-  assert.match(fallback.operations['install-prompt']({}).url, /^https:\/\//)
 })
-
 test('audit-release clears the single-audit occupancy and reports what it released', async () => {
   const { state, operations } = operationsFor()
   state.activeKey = '2026-301705'
@@ -671,18 +720,39 @@ test('an installed tarball can actually be installed and imported', async () => 
     await stat(join(packageDir, 'skills', 'crwu', 'crwu-audit', 'SKILL.md'))
     await stat(join(packageDir, 'skills', 'dws', 'dingtalk-doc', 'SKILL.md'))
     await stat(join(packageDir, 'common', 'skills', 'crwu-dws', 'SKILL.md'))
+    // 自带二进制 + 构建产物清单：发布形态必须齐备（干净发布环境的 tarball 里就该有它们）。
+    // 工作树没装配时（干净 checkout）跳过这一段，由 `npm run pack:assert:strict` 在发布链路硬卡。
+    if (existsSync(join(fileURLToPath(ROOT), 'bin', 'manifest.json'))) {
+      await stat(join(packageDir, 'bin', 'manifest.json'))
+      for (const platform of ['darwin-arm64', 'win32-x64']) {
+        for (const tool of ['crwu', 'dws', 'ossutil']) {
+          const name = platform.startsWith('win32') ? `${tool}.exe` : tool
+          await stat(join(packageDir, 'bin', platform, name))
+        }
+      }
+    }
 
+    // `tools` 是硬依赖：`apply()` 会把 CRWU 工具注册进去（注册失败就抛）。
+    // 这里的替身只做两件事：收集被注册的工具名、返回 disposer —— 这条测试要证的是
+    // 「装出来的包能从包内 YAML 激活，并且真的注册了 9 个工具」；
+    // 「注册进**真实**注册表后 schema/pipeline 的行为」由 `host-tools-register.test.mjs` 覆盖。
     const activate = [
       'import("dsh-crwu-workbench").then(m => {',
       'const routes = [];',
+      'const registered = [];',
+      'const tools = { register: (definition) => { registered.push(definition.name); return () => {} } };',
       'const ctx = { webServer: { register: () => { routes.push(1); return () => {} } },',
-      'get: () => undefined, on: () => () => {}, effect: (fn) => fn() };',
+      'get: (name) => (name === "tools" ? tools : undefined), on: () => () => {}, effect: (fn) => fn(),',
+      'logger: { info: () => {}, warn: () => {} } };',
       'm.apply(ctx, m.Config({}));',
-      'console.log(`${Object.keys(m).sort().join(",")}:${routes.length}`);',
+      'console.log(`${Object.keys(m).sort().join(",")}:${routes.length}:${registered.length}`);',
       '})',
     ].join('')
     const { stdout } = await run('node', ['-e', activate], { cwd: packageDir })
-    assert.equal(stdout.trim(), 'Config,ROUTE,apply,inject,name:1', '装出来的包必须从包内 YAML 激活并注册路由')
+    const [members, routes, toolCount] = stdout.trim().split(':')
+    assert.equal(members, 'Config,ROUTE,apply,inject,name', '装出来的包必须导出 DSH 插件协议的成员')
+    assert.equal(routes, '1', '装出来的包必须从包内 YAML 激活并注册路由')
+    assert.equal(toolCount, '9', '装出来的包必须把 9 个 CRWU 工具注册进真实注册表')
   } finally {
     await rm(workdir, { recursive: true, force: true })
   }

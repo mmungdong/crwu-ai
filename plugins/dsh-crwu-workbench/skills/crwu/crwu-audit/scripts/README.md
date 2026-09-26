@@ -7,7 +7,7 @@
 | --- | --- | --- |
 | `audit_result.schema.json` | AuditResult JSON Schema（draft 2020-12）：必填、枚举、条件必填、路径安全 | §9.1–§9.3 |
 | `audit_delivery.py` | 校验器 + renderer（纯标准库，无第三方依赖）；`validate` / `digest` / `render` 子命令 | §9.4、§10、§11.1、§12.2 |
-| `upload_audit_result.py` | 最终态 AuditResult 钉钉回传：固定组织/空间/结果目录，按审核年月归档并写后验证 | `references/13-dingtalk-result-publish.md` |
+| `upload_audit_result.py` | **非 DSH 宿主兼容入口**：最终态 AuditResult 钉钉回传（固定组织/空间/结果目录、按审核年月归档、写后验证）。DSH 环境**不要运行它** —— 那一步是 `crwu_audit_dingtalk_archive` Tool | `references/13-dingtalk-result-publish.md` |
 | `template/audit-report.html`（从技能根目录定位） | 独立 HTML/CSS 模板：左侧目录、响应式正文、折叠轨迹与 A4 打印 | §10、附录 B |
 | `examples/audit-result.sample.json` | 【示意】样例（数值与名称为占位，禁止当真值使用） | §9.3 |
 | `test_audit_delivery.py` | 契约测试（Schema 语义、门禁、证据链、统计可重算、隐私、模板、目录、渲染确定性、转义、打印、空态） | §13.4 |
@@ -31,6 +31,8 @@ python3 scripts/audit_delivery.py render scripts/examples/audit-result.sample.js
 python3 scripts/audit_delivery.py validate <rendered.json> --rendered
 
 # 最终态监控 JSON 回传钉钉（只允许自动创建 YYYY/MM）
+#   ⚠️ 仅用于**非 DSH 宿主**；DSH 环境调 crwu_audit_dingtalk_archive({caseDir, seqNo})，
+#      不要运行这个脚本（它内部用 subprocess 调 dws，会绕过 DSH 的沙箱与审批）。
 python3 scripts/upload_audit_result.py 审核结果.PRJ-2026-0001.json
 
 # 契约测试
@@ -80,7 +82,7 @@ python3 scripts/test_media_extract.py
 | 阶段二收口（router 步骤 14 ①） | `validate 审核意见.<项目ID>.json` | 失败 → 停止交付、逐条报错，禁止绕过或删检查 |
 | 阶段二收口（router 步骤 14 ②） | `render … --out 审核意见.<项目ID>.html --json-out 审核结果.<项目ID>.json`（内置 JSON 校验与渲染后自检） | 失败 → HTML 与配套 JSON 均不产出，记 capability gap，**不得跳过 JSON 校验出 HTML** |
 | 交付（router 步骤 14 ③） | 员工侧交付 HTML；内部监控读取配套 JSON，且该 JSON 与 HTML 内嵌对象逐字段一致 | — |
-| 钉钉回传（router 步骤 15） | `python3 scripts/upload_audit_result.py 审核结果.<项目ID>.json` | 失败 → 保留本地交付件并报告真实原因；不得换组织、猜目录或覆盖同名文件 |
+| 钉钉回传（router 步骤 15） | **DSH**：`crwu_audit_dingtalk_archive` + `crwu_audit_dingtalk_notify_self`；**非 DSH 宿主**：`python3 scripts/upload_audit_result.py 审核结果.<项目ID>.json` | 失败 → 保留本地交付件并报告真实原因；不得换组织、猜目录或覆盖同名文件 |
 
 `digest`、`render` 共用同一规范化序列化（排序键、UTF-8、无多余空白），故冻结指纹可复现，且可与
 `fileTrace.sourceDigest` 互校；脚本仅依赖 Python 标准库。

@@ -5,6 +5,13 @@ description: Use when auditing/inventorying, creating, repairing, or remapping c
 
 # crwu-audit Skill 维护器
 
+## 脚本运行时（Python）
+
+本技能的自带脚本统一用 **DSH 自带的 Python**（`load_workspace_dependencies` 返回的 `python` 字段，
+调用**一次**并在同一次会话内复用）；**禁止**裸 `python3` 名字、任何解释器查找、以及静默降级到系统解释器
+（缺 `openpyxl` 等包时记 capability gap 并停下）。本技能不安装 Python、不执行 pip。
+下面出现的 `python3 scripts/<文件>` 一律按这个解释器路径执行。
+
 ## 职责
 
 维护 `crwu-audit` 的一级资产 Skill、一级业务 Skill、分类、registry，以及一份**知识库 ↔ Skill 映射校准表**。它不执行评估报告审核、不修改钉钉知识库、不替代 `crwu-dws`，也不创建资产与业务组合 Skill。

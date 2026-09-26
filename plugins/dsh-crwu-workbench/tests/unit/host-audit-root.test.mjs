@@ -20,7 +20,7 @@ const { auditRootTitle, mintSessionId, probeMessage, auditRootUsability, ensureA
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
 
 const CONFIG = {
-  caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
+  caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true,
   requireTopLevelParent: true,
 }
@@ -114,8 +114,8 @@ function makeCtx(options = {}) {
         })
         return {
           resolve: (request) => request,
-          async run() {
-            return options.mkdirFails === true ? result(1, 'sandbox unavailable') : result(0, '')
+          async execute() {
+            return { result: async () => (options.mkdirFails === true ? result(1, 'sandbox unavailable') : result(0, '')) }
           },
         }
       }
@@ -130,6 +130,16 @@ function makeCtx(options = {}) {
         }
       }
       if (name === 'timer') return { timeout: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))) }
+      if (name === 'tools') {
+        // 注册表替身：必需 Tool 全部「可见」（`get` 必须按 scope resolver 的形状回答），
+        // `execute` 走一遍真实调用形状并返回零副作用能力自检的结构化值。
+        return {
+          get: () => ({ name: 'crwu_audit_capabilities' }),
+          async execute() {
+            return { isError: false, value: { ok: true, platform: 'darwin-arm64', binPlatform: 'darwin-arm64' } }
+          },
+        }
+      }
       return undefined
     },
   }

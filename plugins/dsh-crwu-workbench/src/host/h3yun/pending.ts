@@ -2,17 +2,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
 import { runCrwu, describeFailure } from '../crwu/run.ts'
-import type { WorkbenchConfig } from '../config/config.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { RECORDS_STDOUT_MAX } from './consts.ts'
-import { discoverForm } from './discover.ts'
+import type { H3yunFormResolver } from './form.ts'
 import { buildQueryFilter, rowToTask, rowsFromEnvelope, totalFromEnvelope, type H3yunTask } from './records.ts'
 
 /**
  * 拉取待审核报告列表。
  *
  * 三个「不显眼但会坑人」的点：
- * 1. **表单 code 只定位一次**：`discoverForm` 要跑 60 秒，不能每次翻页都搜；
+ * 1. **表单 code 只定位一次**：定位要跑十几到六十秒，不能每次翻页都搜 —— 现在统一交给
+ *    实例级的 `H3yunFormResolver`（已缓存零成本、并发共享同一个 in-flight Promise，
+ *    与业务 Tool 用的是同一个解析器，所以两条链路不会各搜一遍）；
  * 2. **检索词含引号/反斜杠直接拒绝**：不拼进氚云过滤表达式，回明确的错误让用户改写；
  * 3. **`--size` 上限 100**：氚云那边的分页上限，不夹住会让命令报错而不是少拿数据。
  */
@@ -32,17 +33,18 @@ export interface PendingResult {
 
 export interface PendingDeps {
   ctx: Context
-  config: WorkbenchConfig
   state: WorkbenchState
   trusted: boolean
   platform: string
   /** 显式 workdir；省略/空串时用会话工作目录（提权执行必须有它）。 */
   workdir?: string
   sessionRoot: () => Promise<string>
+  /** 表单 code 的实例级解析器（审核启动与业务 Tool 共用同一个，保证全插件只发现一次）。 */
+  form: H3yunFormResolver
 }
 
 export async function loadPending(deps: PendingDeps, args: Record<string, unknown>): Promise<PendingResult> {
-  const { ctx, config, state } = deps
+  const { ctx, state } = deps
   const base = {
     rows: [] as H3yunTask[],
     page: 1,
@@ -58,20 +60,11 @@ export async function loadPending(deps: PendingDeps, args: Record<string, unknow
   // 提权执行必须绑定工作区。调用方通常不传，所以这里统一解析一次并复用。
   const workdir = deps.workdir !== undefined && deps.workdir !== '' ? deps.workdir : await deps.sessionRoot()
 
-  if (state.formCode === '') {
-    const found = await discoverForm(ctx, config.formName, {
-      escalate: args.escalate === true,
-      trusted: deps.trusted,
-      platform: deps.platform,
-      workdir,
-    })
-    if (!found.ok) {
-      return { ...base, ok: false, error: found.error, formName: '', escalateAvailable: found.escalateAvailable }
-    }
-    state.formCode = found.code
-    state.formName = found.name
-    escalated = found.escalated
+  const found = await deps.form.ensure()
+  if (!found.ok) {
+    return { ...base, ok: false, error: found.error, formName: '', escalateAvailable: false }
   }
+  if (found.escalated) escalated = true
 
   const rawPage = Number(args.page)
   const rawSize = Number(args.size)

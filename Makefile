@@ -20,13 +20,13 @@ DARWIN_ARCH  ?= $(shell $(GO) env GOARCH)
 WINDOWS_ARCH ?= amd64
 
 # ── DSH 插件：plugins/dsh-crwu-workbench ──────────────────────────────
-# 插件以 tarball 分发给员工，所以「打包 + 上传 OSS + 打印安装命令」都在这里，
-# 让 Go CLI 与插件两种形态共用一条出口：`make plugin-dist`。
+# 插件**从 npm 分发**（`npm publish`，走 `.github/workflows/release.yml` 的 tag 流程）；
+# `make plugin-pack` 只负责在本地打一份 tarball 供 `npm publish --dry-run` 与接收方自测。
 #
-# **发布纪律：同一个版本号只发一次**（用户 2026-09-21 定的）。分发包 URL 就是
-# `<包名>-<版本>.tgz`，覆盖同版本对象会让「同一版本号、两份内容」—— 员工之间装的不是同一份，
-# 版本号也不再能用来定位问题。所以 `plugin-dist` 上传前会先只读查远端：内容一致就跳过（幂等）、
-# 不一致就拒绝并让你升版本号，判断逻辑在 scripts/dist-plugin.mjs（可 `PLUGIN_DIST_DRY_RUN=1` 空跑）。
+# 2026-09-25 之前这里是「打包 + 上传只读 OSS + 打印安装命令」（`make plugin-dist`）。
+# 那条路连同只读 Bucket 一起下掉了：员工设备的安装行为不该依赖一个远端对象，
+# 而且那个地址谁都能换 —— 少一个远端数据源就少一条可被远程改写的通道。
+# **发布纪律仍然有效**：同一个版本号只发一次（npm 的不可变版本号天然守住这条，别手工 `npm publish`）。
 PLUGIN        ?= dsh-crwu-workbench
 PLUGIN_DIR    := $(CURDIR)/plugins/$(PLUGIN)
 # npm 包的 tarball 名跟着 `package.json` 的 name 走（不一定等于插件目录名），所以从包里取。
@@ -35,9 +35,6 @@ PLUGIN_VERSION ?= $(shell node -p "require('$(PLUGIN_DIR)/package.json').version
 DIST_DIR      := $(CURDIR)/dist
 PLUGIN_TGZ    := $(DIST_DIR)/$(PLUGIN_PKG_NAME)-$(PLUGIN_VERSION).tgz
 
-# 开发运行、TGZ 内配置与分发地址共用这一份 YAML。
-PLUGIN_CONFIG ?= $(PLUGIN_DIR)/config/crwu-workbench.yml
-
 # 技能装到非 DSH 宿主时用：`make skills-install AGENT_DIR=~/.agents/skills`。
 # 收哪些技能只由目录布局决定：**任何含 SKILL.md 的目录都算一个技能**，不管它在哪一层
 # （插件层 `plugins/<插件>/skills/<层>/<技能>/`、公共层 `plugins/common/skills/<技能>/`）。
@@ -45,7 +42,7 @@ PLUGIN_CONFIG ?= $(PLUGIN_DIR)/config/crwu-workbench.yml
 SKILL_DIRS    := $(shell find plugins -name SKILL.md -type f 2>/dev/null | sed 's|/SKILL.md$$||' | sort)
 
 .PHONY: build build-mac build-win fmt test clean \
-        plugin-deps plugin-skills plugin-dws plugin-check plugin-pack plugin-dist plugin-clean \
+        plugin-deps plugin-skills plugin-dws plugin-bin plugin-bin-check plugin-check plugin-pack plugin-clean \
         skills-install
 
 build: build-mac build-win
@@ -89,40 +86,51 @@ plugin-skills: plugin-deps
 plugin-dws: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run dws:sync
 
+# 把工作台需要的三个二进制装配进包内 `bin/<平台>/`（darwin-arm64 与 win32-x64 各一套）：
+#   crwu    ← 本仓构建产物（`bin/darwin/crwu`、`bin/windows/crwu.exe`）
+#   ossutil ← 阿里云官方包（URL/sha256 在 scripts/sync-binaries.mjs 里，构建时才用得到）
+#   dws     ← npm 包 dingtalk-workspace-cli 的 assets（sha256 对照包内 checksums.txt）
+#
+# **依赖 `build`**：仓库根 `bin/` 是 gitignore 的构建产物，随时可能不在（`make clean`、换机器）；
+# 少了这层依赖，`make plugin-pack` 会在装配阶段以一句「找不到本仓构建产物」收场（实测踩到）。
+# 需要网络；`--check` 只校验已装配内容（CI 用不到，发布链路必须真装配）。
+plugin-bin: build plugin-deps
+	cd "$(PLUGIN_DIR)" && node scripts/sync-binaries.mjs
+
+plugin-bin-check: plugin-deps
+	cd "$(PLUGIN_DIR)" && node scripts/sync-binaries.mjs --check
+
 # 完整门禁 = 版本一致 + 公共技能同步 + dws 层内容一致 + 类型 + 测试 + 构建 + 产物冒烟 + tarball 自检
 #            + 技能自洽性 lint（crwu 层与公共层各一次）+ 三个源仓契约测试 + 分发守卫判定自检
 #            （与 CI 同一条命令集）。dws 层是上游正文，按 `skills/README.md` 的口径豁免自洽性 lint。
 plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run check
 	cd "$(PLUGIN_DIR)" && npm run pack:assert
+	# 发布严格模式：两个平台六个二进制 + manifest 必须在真实 tarball 里且逐个哈希一致。
+	cd "$(PLUGIN_DIR)" && npm run pack:assert:strict
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
 	cd "$(PLUGIN_DIR)" && python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
-	node "$(CURDIR)/scripts/dist-plugin.mjs" --self-test
 
-# 打成可直接分发的 tgz。包内已含全部技能层（skills/crwu、skills/dws、common/skills），
-# 员工装完即得全部技能。
+# 打成可直接分发的 tgz（`npm publish` 的对象，也是接收方自测的输入）。
+# 包内已含全部技能层（skills/crwu、skills/dws、common/skills）与两个平台的自带二进制。
+#
+# **先 plugin-bin 再 plugin-check**：二进制不在包里时 `pack:assert` 会断言失败，而顺序必须
+# 由配方显式保证（并列 prerequisites 在 `make -j` 下会并行，门禁可能跑在装配之前）。
 plugin-pack: plugin-deps
+	@$(MAKE) --no-print-directory plugin-bin
+	@$(MAKE) --no-print-directory plugin-check
 	mkdir -p "$(DIST_DIR)"
 	cd "$(PLUGIN_DIR)" && npm pack --pack-destination "$(DIST_DIR)"
 	@echo "==> $(PLUGIN_TGZ)"
+	@echo "    发布：走 tag（git tag plugin-v$(PLUGIN_VERSION) && git push origin plugin-v$(PLUGIN_VERSION)），"
+	@echo "    由 .github/workflows/release.yml 跑 npm publish --provenance；不要手工 npm publish。"
 
-# 上传到 OSS 静态站点并打印员工侧安装命令。
-#
-# 依赖 `plugin-check`：发出去的东西不能是红的。上传本身由 scripts/dist-plugin.mjs 做，
-# 它守着「同版本只发一次」——远端已有同版本且内容一致 → 跳过；内容不一致 → **拒绝上传**
-# 并提示升版本号（详见该脚本头部）。空跑：`PLUGIN_DIST_DRY_RUN=1 make plugin-dist`。
-plugin-dist: plugin-check
-	@$(MAKE) --no-print-directory plugin-pack
-	node scripts/dist-plugin.mjs \
-		--tgz "$(PLUGIN_TGZ)" \
-		--config "$(PLUGIN_CONFIG)" \
-		$(if $(PLUGIN_DIST_DRY_RUN),--dry-run)
-
+# 插件侧的构建产物：分发包（dist/）、装配好的二进制（bin/）与它的下载缓存（.cache/）。
 plugin-clean:
-	rm -rf -- "$(DIST_DIR)"
+	rm -rf -- "$(DIST_DIR)" "$(PLUGIN_DIR)/bin" "$(PLUGIN_DIR)/.cache"
 
 # 把仓库里的全部技能装进任意宿主的 skills 目录（非 DSH 宿主，例如 codex / workbuddy）。
 # 同名覆盖：先删后拷，保证不带旧文件。

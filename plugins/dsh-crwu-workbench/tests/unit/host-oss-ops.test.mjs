@@ -16,13 +16,16 @@ const { ossIndex, ossResult, ossLink, ossUpload, ossCredSave, uploadArtifacts, b
 )
 const { maybeAutoUpload, runUploadWatch } = await import(new URL('src/host/oss/auto.ts', ROOT).href)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
-const { normalizeManifest } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
+const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const { normalizeAudit } = await import(new URL('src/host/state/registry.ts', ROOT).href)
+const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
 
 const SEQ = '2026-301705-LX10170'
+/** 包内 ossutil 的绝对路径：`resolveOssutil` 只认它（不再回退 PATH）。 */
+const BUNDLED_OSSUTIL = bundledBinaryPath('darwin-arm64', 'ossutil')
 
 function manifestWith(patch = {}) {
-  return normalizeManifest({
+  return manifestFixture({
     oss: { enabled: true, bucket: 'bkt', prefix: 'crwu/audit', linkMode: 'signed', linkTtl: 3600, autoUpload: true, ...patch },
   })
 }
@@ -34,20 +37,25 @@ function ossDeps(patch = {}) {
       if (name === 'shell') {
         return {
           resolve: (request) => { commands.push(request.command); return request },
-          async run(spec) {
+          async execute(spec) {
             const out = patch.shell === undefined ? { stdout: '' } : patch.shell(spec.command)
-            return {
+            return { result: async () => ({
               exitCode: out.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout ?? '', truncated: out.truncated === true },
               stderr: { text: out.stderr ?? '', truncated: false },
-            }
+            }) }
           },
         }
       }
       if (name === 'fs') {
         return {
           async resolve(path) { return { targetKey: path, displayPath: path } },
-          async stat(target) { return (patch.files ?? {})[target.targetKey] === undefined ? undefined : { type: 'file' } },
+          // 包内 ossutil 一律「在」（`patch.missingOssutil` 可以把它拿掉，用来验插件包不完整那条）：
+          // ossutil 只按包内绝对路径解析，PATH 已经不再是判据。
+          async stat(target) {
+            if (target.targetKey === BUNDLED_OSSUTIL) return patch.missingOssutil === true ? undefined : { type: 'file' }
+            return (patch.files ?? {})[target.targetKey] === undefined ? undefined : { type: 'file' }
+          },
           async readText(target) { return (patch.files ?? {})[target.targetKey] ?? '' },
           async writeText(target, content) {
             patch.writes?.push({ path: target.targetKey, content })
@@ -74,8 +82,16 @@ function ossDeps(patch = {}) {
   }
 }
 
-/** 让 resolveOssutil 在 PATH 上找到 ossutil。 */
-const ossutilOnPath = (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: '' })
+/**
+ * 除 ossutil 解析之外，其余命令一律回空 stdout。
+ *
+ * 2026-09-25 起 ossutil **只按包内绝对路径**解析（`ossDeps` 的 fs 替身让包内那份存在），
+ * 所以这里不再需要为 `command -v` 单独回一条路径 —— PATH 已经不是判据了。
+ */
+const ossutilOnPath = (command) => {
+  void command
+  return { stdout: '' }
+}
 
 // ── oss-index ───────────────────────────────────────────────────────────────
 
@@ -128,8 +144,12 @@ test('oss-index refuses when OSS is disabled, has no bucket, or has no ossutil',
   const noBucket = ossDeps({ manifest: manifestWith({ bucket: '' }) })
   assert.match((await ossIndex(noBucket.deps)).error, /bucket/)
 
-  const noOssutil = ossDeps({ shell: () => ({ stdout: '' }) })
-  assert.match((await ossIndex(noOssutil.deps)).error, /ossutil/)
+  // 「没有 ossutil」= **插件包**不完整（不再是「员工没装命令」）。
+  const noOssutil = ossDeps({ missingOssutil: true })
+  const error = (await ossIndex(noOssutil.deps)).error
+  assert.match(error, /ossutil/)
+  assert.match(error, /插件包不完整|平台不受支持/)
+  assert.doesNotMatch(error, /请先安装/)
 })
 
 test('oss-index 按流水号查：只列该流水号那一层，命中它自己的交付件', async () => {

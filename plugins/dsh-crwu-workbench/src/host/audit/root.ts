@@ -1,9 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { text } from '../../shared/utils/value.ts'
 import { isWindowsPlatform } from '../platform/detect.ts'
 import { quoteArg } from '../environment/manifest.ts'
 import { runShell } from '../shell/run.ts'
 import { agentRegistry } from './spawn.ts'
+import { auditToolsVisible } from './preflight.ts'
 import { persistAuditRoot } from '../state/registry.ts'
 import type { AuditRootView } from '../../shared/types.ts'
 import type { WorkbenchState } from '../state/types.ts'
@@ -27,8 +29,8 @@ import type { WorldFacts } from '../platform/world.ts'
 /** 根会话的标题前缀；后面会补时间戳，便于区分分叉出来的多棵树。 */
 export const AUDIT_ROOT_TITLE = '审核子代理根节点'
 
-/** 预检指令：一句话同时证明「模型能回」与「bash 能用、cwd 正确」。 */
-export const AUDIT_ROOT_PROBE = 'hello，请用 bash 执行 `pwd`，然后回复当前目录。'
+/** 预检指令：一次调用同时证明「模型能回」「bash 能用、cwd 正确」「CRWU Tool 链路与 policy pipeline 通」。 */
+export const AUDIT_ROOT_PROBE = 'hello，请依次做两件事：① 用 bash 执行 `pwd`；② 调用 `crwu_audit_capabilities`（无参数）。然后回复当前目录，以及该工具返回的 `ok`、`platform` 与 `binPlatform`。'
 
 export interface AuditRootDeps {
   ctx: Context
@@ -190,9 +192,19 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   const renamed = renameSession(ctx, sessionId, title)
   if (!renamed) notes.push('根会话改名失败（不影响审核，只是标题不好认）')
 
-  // ④ hello 预检：证明这个会话真的能被驱动。
+  // ④ hello 预检：证明这个会话真的能被驱动，并且 CRWU 工具链路可用。
   const probeError = await preflight(ctx, created.agent, sessionId)
   if (probeError !== '') return fail(`审核根会话预检未通过：${probeError}`)
+
+  // ⑤ 确定性门禁：必需 Tool 必须对该 Agent 可见。
+  //
+  // 这一步**不能**只写在预检提示词里：提示词是请求，看不到工具的子代理会自己去找别的手段
+  // （裸命令 / `which` / 改 PATH）。缺任何一个就在这里失败，并列出缺失的工具名，
+  // 把「跑不起来」拦在创建审核子代理之前。
+  const missing = auditToolsVisible(ctx, created.agent as unknown as Agent)
+  if (missing.length > 0) {
+    return fail(`审核所需的 CRWU Tool 对该 Agent 不可见：${missing.join('、')}。请确认部署已装配 @deepseek-ai/dsh-tools（base bundle 的 tools 行）。`)
+  }
 
   // 这一段才是「钩子」：先落到进程内状态，再落盘。
   state.auditRoot = { workspacePath, sessionId, title, assignedAt: new Date().toISOString() }

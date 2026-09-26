@@ -7,7 +7,7 @@ import { workspaceView } from '../state/store.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { finiteNumber, text } from '../../shared/utils/value.ts'
 import { auditRelease, auditStart, auditStatus, auditStop } from '../audit/ops.ts'
-import { DEFAULT_INSTALL_DOC, buildInstallPromptText } from '../environment/install-prompt.ts'
+import { buildInstallPromptText } from '../environment/install-prompt.ts'
 import { WORKBENCH_PROTOCOL } from '../../shared/consts.ts'
 import { ensureRegistry } from '../state/registry.ts'
 import { writeWorkbenchConfig } from '../state/persist.ts'
@@ -23,6 +23,8 @@ import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { loadEnvironment } from '../environment/ops.ts'
 import { loadPending } from '../h3yun/pending.ts'
+import type { H3yunFormResolver } from '../h3yun/form.ts'
+import type { PythonRuntimeResolver } from '../runtime/python.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import type { OperationMap } from './types.ts'
 
@@ -55,11 +57,19 @@ function sessionDelegation(ctx: Context, id: string): DelegationView {
 }
 
 /** 创建包形态当前已经支持的操作表。 */
+export interface HostResolvers {
+  /** 氚云表单 code 的实例级解析器（列表 / 审核启动 / 业务 Tool 共用）。 */
+  form: H3yunFormResolver
+  /** DSH 自带 Python 的实例级解析器（审核启动与环境页共用）。 */
+  python: PythonRuntimeResolver
+}
+
 export function createCoreOperations(
   ctx: Context,
   config: WorkbenchConfig,
   state: WorkbenchState,
   world: WorldFacts,
+  resolvers: HostResolvers,
 ): OperationMap {
   /**
    * OSS 操作的依赖。
@@ -87,7 +97,7 @@ export function createCoreOperations(
   let meCache: WhoamiResult | null = null
   const identity = async (): Promise<WhoamiResult> => {
     if (meCache !== null) return meCache
-    const me = await dwsSelf({ ctx, workdir: () => world.workdir() })
+    const me = await dwsSelf({ ctx, workdir: () => world.workdir(), platform: await world.platform() })
     if (me.name !== '') meCache = me
     return me
   }
@@ -190,11 +200,10 @@ export function createCoreOperations(
       }
     },
     'install-prompt': (args) => {
-      // 清单优先：它是从组织自己的 OSS 现拉的，比部署配置更新；Config 是兜底覆盖。
-      // 与 `env` 返回 installDocUrl 的口径保持一致（同一个值有两个来源时不能各写一套）。
-      const url = state.manifest.installDocUrl || config.installDocUrl || DEFAULT_INSTALL_DOC
+      // 提示词整篇自述，不再有清单地址：外链来自只读 OSS，既让安装依赖远端对象，
+      // 也开了一条「换掉地址把 agent 引到别处」的通道。二进制随包自带，剩下的只有登录与密钥。
       const workspace = text(args.workspace) || state.workspacePath || state.caseRoot
-      return { ok: true, url, prompt: buildInstallPromptText(url, workspace) }
+      return { ok: true, url: '', prompt: buildInstallPromptText(workspace) }
     },
 
     env: async (args) => {
@@ -202,7 +211,13 @@ export function createCoreOperations(
       const [platform, home] = [await world.platform(), await world.home()]
       return await loadEnvironment(
         // 「我是谁」跟着自检一起拿（见 identity 的注释）：自检本来就要问一次钉钉登录态。
-        { ctx, config, state, home, platform, sessionRoot: () => world.workdir(), identity },
+        {
+          ctx, config, state, home, platform,
+          sessionRoot: () => world.workdir(),
+          identity,
+          // DSH 自带 Python 由实例级解析器给（成功缓存、失败可显式刷新）。
+          pythonRuntime: (options: { refresh: boolean }) => resolvers.python.check({ refresh: options.refresh }),
+        },
         args,
       )
     },
@@ -211,7 +226,7 @@ export function createCoreOperations(
       // 平台探测要跑子进程，所以按实例缓存一次；提权执行必须带工作区，由 loadPending 统一解析。
       const platform = await world.platform()
       return await loadPending(
-        { ctx, config, state, trusted: state.trustCredentials, platform, sessionRoot: () => world.workdir() },
+        { ctx, state, trusted: state.trustCredentials, platform, sessionRoot: () => world.workdir(), form: resolvers.form },
         args,
       )
     },
@@ -230,13 +245,13 @@ export function createCoreOperations(
       })
     },
     'audit-start': async (args) => {
-      const result = await auditStart({ ctx, config, state, world }, args)
+      const result = await auditStart({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }, args)
       // 起了审核就开始盯交付件：子会话跑完不会回调，只能轮询。
       if (result.ok) watch.start()
       return result
     },
     'audit-stop': async (args) => {
-      const result = await auditStop({ ctx, config, state, world }, args)
+      const result = await auditStop({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }, args)
       // 手动停止后把看门狗也停掉（legacy 行为）：这条审核已经不活动了，
       // 定时器留着只是空转。真正已产出的交付件仍会被 audit-status 的每轮触发上传。
       if (result.ok) watch.stop()
@@ -248,13 +263,15 @@ export function createCoreOperations(
         config,
         state,
         world,
+        form: resolvers.form,
+        python: resolvers.python,
         autoUpload: async (record) => await maybeAutoUpload(await ossDeps(), record),
       }, args)
       // 状态轮询本来就每 10 秒一次，顺手踢一脚看门狗，不必再等满 30 秒。
       await watch.kick()
       return result
     },
-    'audit-release': async () => await auditRelease({ ctx, config, state, world }),
+    'audit-release': async () => await auditRelease({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }),
     'report-files': async (args) => await reportFiles(
       {
         ctx,

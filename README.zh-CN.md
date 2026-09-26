@@ -162,7 +162,7 @@ dsh plugin --profile web add ./dist/dsh-crwu-workbench-<版本>.tgz
 - 14 个 vendored 的钉钉 Skills（上游 `dingtalk-workspace-cli`，`skills/dws/` 层）；
 - 3 个公共的企业接入 Skills（`common/skills/` 层）。
 
-维护者可以使用 `make plugin-dist` 校验并分发插件。远端已有同版本、但内容不同的 tarball 时，命令会拒绝覆盖，必须先升级版本号。
+维护者用 `make plugin-pack` 本地打包（它先装配包内二进制再跑完整门禁），发布走 tag 触发的 npm 流程（`git tag plugin-v<版本>`）。插件**从 npm 安装**：`dsh plugin add dsh-crwu-workbench@<版本>` —— 不再往 OSS 传分发包，因为那个地址谁都能换。
 
 ### 4. 给其它 AI 宿主安装 Skills
 

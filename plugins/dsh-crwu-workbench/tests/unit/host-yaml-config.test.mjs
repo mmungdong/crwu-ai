@@ -1,3 +1,10 @@
+/**
+ * 唯一部署配置源（`config/crwu-workbench.yml`）的解析与校验。
+ *
+ * 2026-09-25 起 YAML 里**只剩 `oss.protected`**：`oss.readonly`（环境清单 / 安装文档 / 插件 TGZ
+ * 的分发桶）连同依赖它的三条链路一起下掉了。所以这里少了两条测试：readonly 的地址推导、
+ * 以及 `distributionTargets`（插件改从 npm 安装，不再往 OSS 传 tgz）。
+ */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -5,11 +12,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
-const {
-  distributionTargets,
-  loadWorkbenchYaml,
-  parseWorkbenchYaml,
-} = await import(new URL('src/host/config/yaml.ts', ROOT).href)
+const { loadWorkbenchYaml, parseWorkbenchYaml } = await import(new URL('src/host/config/yaml.ts', ROOT).href)
 const { resolveWorkbenchConfig } = await import(new URL('src/host/config/config.ts', ROOT).href)
 
 const VALID_YAML = `
@@ -23,13 +26,6 @@ report:
 audit:
   autoUpload: true
 oss:
-  readonly:
-    bucket: crwu-only-workspace
-    endpoint: oss-cn-beijing.aliyuncs.com
-    baseUrl: https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com
-    manifestKey: crwu-env-manifest.json
-    installDocKey: crwu-env-install.md
-    pluginPrefix: crwu-dsh-plugins
   protected:
     bucket: crwu-workspace
     endpoint: oss-cn-beijing.aliyuncs.com
@@ -39,25 +35,19 @@ oss:
     linkTtlSeconds: 3600
 `
 
-test('YAML resolves the public read-only OSS and protected audit OSS into runtime config', () => {
+test('YAML resolves the protected audit OSS into runtime config', () => {
   const resolved = parseWorkbenchYaml(VALID_YAML, 'inline-test.yml')
 
-  assert.equal(resolved.runtime.manifestUrl, 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-env-manifest.json')
-  assert.equal(resolved.runtime.installDocUrl, 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-env-install.md')
   assert.equal(resolved.runtime.ossBucket, 'crwu-workspace')
   assert.equal(resolved.runtime.ossPrefix, 'crwu/audit')
   assert.equal(resolved.runtime.ossEndpoint, 'oss-cn-beijing.aliyuncs.com')
   assert.equal(resolved.runtime.ossLinkMode, 'signed')
   assert.equal(resolved.runtime.ossLinkTtlSeconds, 3600)
   assert.equal(resolved.runtime.preferWorkspaceTitle, '中瑞世联工作空间')
-})
-
-test('distribution targets come from the read-only OSS section', () => {
-  const resolved = parseWorkbenchYaml(VALID_YAML, 'inline-test.yml')
-  assert.deepEqual(distributionTargets(resolved, 'dsh-crwu-workbench-0.0.1.tgz'), {
-    ossUrl: 'oss://crwu-only-workspace/crwu-dsh-plugins/dsh-crwu-workbench-0.0.1.tgz',
-    installUrl: 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-dsh-plugins/dsh-crwu-workbench-0.0.1.tgz',
-  })
+  // 只读分发桶已经不存在：运行时配置里不该再出现清单地址或安装文档地址。
+  assert.equal('manifestUrl' in resolved.runtime, false)
+  assert.equal('installDocUrl' in resolved.runtime, false)
+  assert.equal('readonly' in resolved.oss, false)
 })
 
 test('invalid YAML is rejected before development or packaging can use it', () => {
@@ -66,13 +56,15 @@ test('invalid YAML is rejected before development or packaging can use it', () =
     /schemaVersion/,
   )
   assert.throws(
-    () => parseWorkbenchYaml(VALID_YAML.replace('https://crwu-only-workspace', 'http://crwu-only-workspace'), 'bad.yml'),
+    () => parseWorkbenchYaml(VALID_YAML.replace('https://crwu-workspace', 'http://crwu-workspace'), 'bad.yml'),
     /HTTPS/,
   )
   assert.throws(
     () => parseWorkbenchYaml(VALID_YAML.replace('linkTtlSeconds: 3600', 'linkTtlSeconds: 30'), 'bad.yml'),
     /linkTtlSeconds/,
   )
+  // 只读那一整段已经不在校验范围内：写了也不再解析（少一段配置就少一条可被改写的地址）。
+  assert.doesNotThrow(() => parseWorkbenchYaml(`${VALID_YAML}  readonly:\n    bucket: x\n`, 'extra.yml'))
 })
 
 test('development can load an explicitly selected YAML file', async () => {

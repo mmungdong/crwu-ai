@@ -18,7 +18,7 @@ const { sessionView, isExpired, parseSessionOutput } = await import(new URL('src
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
 
 const CONFIG = {
-  caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
+  caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
   autoUpload: true, requireTopLevelParent: true,
 }
@@ -35,17 +35,17 @@ function makeCtx({ shell, inside = () => true, files = {}, dirs = [] } = {}) {
       if (name === 'shell') {
         return {
           resolve(request) { specs.push(request); return request },
-          async run(spec) {
+          async execute(spec) {
             commands.push(spec.command)
             const out = shell === undefined ? { stdout: '' } : shell(spec.command, spec)
-            return {
+            return { result: async () => ({
               // 注意不能用 `?? 0`：`exitCode: null`（进程被信号杀死）会被当成 0，
               // 于是「超时/被杀」在测试里变成成功。用属性存在性判断。
               exitCode: 'exitCode' in out ? out.exitCode : 0,
               signal: null, timedOut: out.timedOut === true, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout ?? '', truncated: false },
               stderr: { text: out.stderr ?? '', truncated: false },
-            }
+            }) }
           },
         }
       }

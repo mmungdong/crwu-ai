@@ -20,8 +20,9 @@ export async function detectHome(ctx: Context, workdir?: string): Promise<string
   }
   if (local !== '') return local
 
+  // 与 `detectPlatform` 同理：不用 node 探测。Host 自己的 `os.homedir()` 在绝大多数部署里
+  // 已经答了；下面这条链是给「shell 在别的执行世界」准备的，python3 是清单必需项、`$HOME` 兜底。
   const probes = [
-    'node -p \'require("os").homedir()\'',
     'python3 -c \'import os;print(os.path.expanduser("~"))\'',
     'printf %s "$HOME"',
     'Write-Output $env:USERPROFILE',

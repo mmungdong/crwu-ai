@@ -55,6 +55,24 @@ src/
 │   │   ├── state.ts
 │   │   ├── types.ts
 │   │   └── consts.ts
+│   ├── dws/                         # dws 的**唯一**调用点：白名单 argv → ctx.shell
+│   │   ├── run.ts                   #   runDws / assertDwsCommand / dwsEscalationAllowed
+│   │   ├── consts.ts                #   允许的命令前缀、提权前缀、固定目标
+│   │   ├── plan.ts                  #   钉钉回传的纯计划逻辑（无 IO，可单测）
+│   │   └── knowledge-tree.ts        #   知识库目录树解析与寻址（纯函数）
+│   ├── tools/                       # CRWU 业务 Tool：模型可见的**唯一**执行入口
+│   │   ├── register.ts              #   registerCrwuTools / missingAuditTools（生命周期与可见性）
+│   │   ├── capabilities.ts          #   crwu_audit_capabilities（零副作用自检）
+│   │   ├── h3yun.ts                 #   crwu_h3yun_record_get / files_list / file_get
+│   │   ├── knowledge.ts             #   crwu_audit_knowledge_materialize
+│   │   ├── oss.ts                   #   crwu_audit_oss_publish
+│   │   ├── dingtalk.ts              #   crwu_audit_dingtalk_archive / notify_self
+│   │   ├── case-dir.ts              #   案例目录门禁（containment，防越界写/读）
+│   │   ├── case-files.ts            #   案例目录内的本地文件操作（同样经 ctx.shell）
+│   │   ├── dws-json.ts              #   dws --format json 的调用与解析
+│   │   ├── outcome.ts               #   失败三分类（审批 / 基础设施 / CLI）与统一包络
+│   │   ├── types.ts                 #   ToolDeps / toolContext（优先调用者 Agent scope）
+│   │   └── consts.ts                #   工具名、必需工具集、固定目录名
 │   ├── oss/
 │   │   ├── service.ts
 │   │   ├── parser.ts
@@ -110,6 +128,18 @@ tests/
 - 部署可变的值必须进入 `config/crwu-workbench.yml`；开发与 TGZ 运行共用这一份配置，不能再写进
   `cordis.patch.yml` 或伪装成 `DEFAULT_*` 常量。
 - 固定路由、字段代码、协议版本、状态枚举等不可配置的协议值可以进入 `consts.ts`。
+- **环境清单按语义分区，不许再混装**（`crwu.env-manifest.v3`，2026-09-25）：`packaged[]` 是**随插件
+  发布**的组件（`crwu` / `dws` / `ossutil`，只有 `name` / `label` / `note` / `expectedVersion`），
+  `runtime.python` 是 **DSH 自带**的脚本运行时。清单里**没有** `binaries[]`，也**没有**裸 `python3`
+  检查项 —— 混装的直接后果是界面把两类东西平铺成一列命令清单，员工于是去装 Python、去找 ossutil 安装包。
+- **自检只读事实，不跑命令**：② 只 `stat` 包内 `bin/<平台>/<文件>` 并与包内 `bin/manifest.json`
+  比对**字节数**（sha256 从清单读出来进维护者详情，**不**每次自检重算 —— 三个二进制一百多 MB）；
+  **不得** `command -v`、**不得**回退 PATH 上的同名命令、**不得**执行 `dws version`（会在二进制旁落
+  `.dws/` 状态目录，`pack:assert` 判成运行残留）。缺失文案只能是「插件包不完整 / 平台不受支持」。
+- **`env` 的分区就是界面层级**：`packageIntegrity` / `runtime` / `services`（氚云 + 钉钉，不含 OSS）/
+  `delivery`（OSS 配置 + 凭据 + 连通性）/ `external`（iFinD）+ `workspace`。`blocked` 口径：插件包不完整
+  只算**一个**故障、运行时不可用只算**一个**故障，三件组件与 vendored dws 的 PATH 兼容性都**不得**
+  各占一项、也**不得**阻断自动审核。
 
 ## 4. DSH 插件规范
 
@@ -210,8 +240,11 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 - **权限按命令声明、且以「员工授权」为前提**（2026-09-22 口径）：读本机凭据的命令
   （`crwu h3yun session login|records|forms|…`、`dws auth status|login`）在请求里带
   `sandboxPolicy`，但这个提权**只在用户授权后**发生 —— 授权是插件状态文件里的
-  `trustCredentials`（一次授权、长期有效），没授权时环境自检把它算作**阻塞项**，
+  `trustCredentials`（一次授权、长期有效），没授权时环境自检把它作**阻塞项**，
   绝不谎报「未登录」。其余命令一律走 profile 的默认沙箱（能给最小权限就给最小）。
+- **自研审核链路的模型可见执行入口只有 CRWU 结构化 Tool**（2026-09-25 口径，见 §4.5）。
+  审核子代理不许查找、拼接或执行 `crwu` / `dws` / `ossutil` 命令；插件也不得把二进制目录、
+  `PATH` 注入方式或裸命令写进 system prompt / user prompt。
 
 ### 4.4 Client UI
 
@@ -250,6 +283,57 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
      而操作列几乎不变，右侧一直很挤）；表格另设 `min-width`，**外面必须套
      `.crwu-audit-table-wrap { overflow-x: auto }`**，视口太窄时表内滚动而不是被卡片裁掉；
    - 窄列（流水号 / 风险 / 时间）一律 `white-space: nowrap` 并给 `title`，否则会被从中间折断。
+
+### 4.5 CRWU 结构化 Tool 层（`src/host/tools/` + `src/host/dws/`）
+
+**这是本次改造的核心口径，不是可选风格。**
+
+1. **注册只走 DSH 注册表**：`defineTool()` + `ctx.tools.register()`，在 `apply()` 里用
+   `ctx.effect()` 包住；返回的 disposer 逆序注销每个工具。**不得自造私有 registry** ——
+   只有进 `ctx.tools`，schema 才会自动进 Agent 的 system prompt，也才会走
+   `tools/pre-execute → guard → tools/execute → tools/post-execute` 这条审批/超时/取消 pipeline。
+   `tools` 是**硬依赖**（`PLUGIN_INJECT`），缺了就直接拒绝激活；DSH 的 base bundle 已以稳定 id
+   `tools` 挂载 `@deepseek-ai/dsh-tools`，所以插件**只声明依赖，不重复插入第二个实例**。
+2. **没有通用逃生工具**。工具 schema 里不得出现 `command` / `argv` / `args` / `binary` /
+   `executable` / `path`(to binary) / `sandbox` / `sandboxPolicy` / `sandbox_permissions` /
+   `escalate` / `profile` / `bucket` / `endpoint` / `prefix` / `corpName` / `spaceId` /
+   `folderId` / `nodeId` / `conversationId` / `messageId` / `openDingId` / `userId` 这类字段
+   （`host-tools.test.mjs` 有逐工具的封禁清单断言）。业务参数 + 案例目录才是输入。
+3. **命令由 Tool 内部构造**：`dws` 只能经 `src/host/dws/run.ts` 的 `runDws`（argv 前缀白名单，
+   表外默认拒绝）；`crwu` 只能经 `runCrwu`；`ossutil` 只能由 `crwu_audit_oss_publish` 拼装。
+   所有参数经 `shellQuote`，**模型输入永远不进任意命令字符串**。
+4. **二进制只按包内绝对路径解析**：审核 Tool 必须用 `requireBundledCommand`（严格）：受支持平台上
+   找不到包内二进制就回 `capability-gap`，**绝不回退裸命令名** —— 回退会让模型看到
+   `command not found`，下一步自然就是搜 PATH（正是要消灭的行为）。
+5. **执行必须走 `ctx.shell`**：`ctx.shell.resolve()` → `execute()` → `result()`，并把
+   `exec.signal` 透传进 `ShellExecRequest.signal`。**禁止** `ctx.subprocess`、`node:child_process`
+   或 Python `subprocess` 执行 `crwu` / `dws` / `ossutil`。
+6. **沙箱与提权**：默认走默认沙箱；只有「本机凭据命令 + 已授权（`trustCredentials`）+
+   `workspaceRoot` 已知」才在请求里带 `sandboxPolicy: danger-full-access`。**模型无法通过参数提权**
+   （schema 里没有这个字段）。工作区未知时退回默认沙箱，而不是无条件提权。
+7. **失败三分类**：`approval`（审批拒绝）/ `infrastructure`（命令根本没跑起来）/ `cli`（退出码非 0）
+   必须分开，另有 `input` / `capability-gap` / `policy` / `not-found` / `cancelled`。普通命令失败
+   作为规范的结构化失败结果返回（`ok:false` + `errorKind`），不抛异常、不伪装成功。
+8. **输出契约**：每个 Tool 必须声明 `output.schema`，`execute` 只返回该 schema 的 JSON 值；
+   渲染统一用 `renderJson`。返回值里不得出现凭据、签名 URL 或二进制路径（OSS 错误另有
+   `sanitizeOssError` 脱敏）。
+9. **凭据与 URL 零外泄**：`crwu_h3yun_files_list` 不回显带会话鉴权的下载 URL；
+   `crwu_audit_knowledge_materialize` 不回显 profile / 签名 URL；
+   `crwu_audit_dingtalk_*` 只回稳定 ID 与远端路径。
+10. **案例目录门禁**：任何写/读案例目录内文件的 Tool 先过 `case-dir.ts` 的
+    `requireCaseDir` / `requireInsideCase`（`fs.contains` 判据，不做字符串前缀比较）。
+11. **基础设施标识不进模型参数**（2026-09-25）：氚云表单的 `schemaCode` 是 Host 状态，
+    不是业务参数 —— `crwu_h3yun_record_get` / `crwu_h3yun_files_list` / `crwu_audit_case_bootstrap`
+    的 `parameters` 里**没有**它，Tool 内部从 `H3yunFormResolver` 取（见 §7.15）。
+12. **`crwu_audit_case_bootstrap` 是记录的唯一交接点**：按精确 `objectId` 各取一次记录与附件元数据，
+    落盘到案例目录的 `输入快照/`，只回紧凑摘要（路径 + 指纹 + 计数 + 少量路由事实）；
+    完整记录**不进**模型上下文。审核启动前由 Host 经 `ctx.tools.execute()` 调一次。
+
+**审核链路的能力门禁**（`src/host/audit/preflight.ts`）：发起审核之前，插件自己检查
+（1）全部必需 Tool 对审核根 Agent 可见（`ctx.tools.get(name, agent)`，agent 对象就是 scope key）；
+（2）通过 `ctx.tools.execute()` 真调一次零副作用的能力自检，证明注册表与 policy pipeline 通得过；
+（3）子代理发布后按**它自己的 scope** 复查一次（provider 可能进一步收窄）。
+任何一步不过都在**创建子代理之前**失败并列出缺失的工具名 —— 提示词是请求，这里才是门禁。
 
 ## 5. 代码风格
 
@@ -337,6 +421,10 @@ tests/unit/                         # 配置 / 路由 / 操作表 / 包清单 + 
 | **构建 / 交付配置**（tsdown、`package.json` 的 `exports`/`files`/`dsh.client`、`prepare.mjs`、新依赖） | `npm run build` + `smoke:built` + `pack:assert` | `pack:assert`（缺入口 / `require` 只允许 react 与 react/jsx-runtime / ModuleLoader id 必须等于包名）；`host-package.test.mjs`（peer、`dsh.client.inject`、真跑 `npm pack` + `npm install` 的回归） |
 | 用户可见文案（UI 中文 / 安装提示词） | **逐条**断言的测试，模板见 `host-install-prompt.test.mjs` | 没人拦 —— 但「意思差不多地改写」真的丢过安全指令 |
 | 新增部署可变的值 | YAML Schema 边界测试，并写进 `config/crwu-workbench.yml` | `host-yaml-config.test.mjs` + `host-package.test.mjs` 的真实 pack/install/激活测试 |
+| **新增 / 改名一个 CRWU Tool**（`host/tools/`） | 工具名的**逐字**断言（`host-tools.test.mjs` 的注册清单与 `REQUIRED_AUDIT_TOOLS` 对照）+ 参数无逃生字段 + 输出 schema 能过 `validateJsonSchemaValue` + 命令走包内绝对路径 + `exec.signal` 透传 + 沙箱/提权断言 | `host-tools.test.mjs`（注册清单、封禁字段、工具名）；`smoke:built`（产物里 8 个工具名）；改名的工具还要同步 `host-audit-prompt.test.mjs`（提示词逐字列 Tool 名） |
+| **审核提示词 / 审核链路**（`host/audit/`） | 逐条断言（`host-audit-prompt.test.mjs`）：必需 Tool 名、**不含**插件 bin 路径 / `export PATH` / `which` / `command -v` / 裸命令 / Python 回传脚本；能力门禁（`host-audit-lifecycle.test.mjs`：缺 Tool 或能力缺失时**不得创建子代理**） | `host-audit-prompt.test.mjs`（删一步就红）；`skills:cli-guard`（技能侧的对应约束） |
+| **技能正文里的执行指令**（`skills/crwu/**`、`plugins/common/skills/**`） | 改完跑 `npm run skills:cli-guard`；新增兼容章节必须用 `crwu-cli-guard:legacy-compat-start/end` 包起来 | `skills:cli-guard`（`check` 与 CI 里都有）；`host-skills-guard.test.mjs` 另有守卫自身的证伪用例 |
+| **自带二进制 / 打包**（`scripts/sync-binaries.mjs`、`assert-pack.mjs`、`release.yml`） | 改清单字段或判据时补 `host-bin-manifest.test.mjs`（哈希变化、缺平台/工具/manifest、运行残留）；发布形状改动跑 `npm run pack:assert:strict` | `host-bin-manifest.test.mjs`；`make plugin-check` 里的 `pack:assert:strict`；`release.yml` 的 `binaries` job |
 
 **新增一个 Host 操作的最小改动清单**（最容易漏的是 2~4）：
 
@@ -410,8 +498,11 @@ curl -s -X POST "http://127.0.0.1:3080/api/crwu-workbench?token=$TOKEN" \
 用户说「测试没问题」之后，agent 做的是：
 
 ```bash
-npm run check        # = version:check + typecheck + test + build + smoke:built
-npm run pack:assert  # 改过 files / exports / publishConfig / 入口时必须
+npm run check               # = version:check + config:check + skills:check + skills:cli-guard
+                            #   + dws:check + typecheck + test + build + smoke:built
+npm run pack:assert         # 改过 files / exports / publishConfig / 入口时必须
+npm run pack:assert:strict  # 发布形态：两平台六个二进制 + manifest 必须在真实 tarball 里且哈希一致
+npm run bin:check           # 装配过 bin/ 时：按 manifest 重算最终文件哈希
 git diff --check
 ```
 
@@ -540,8 +631,12 @@ dsh plugin --profile <临时 profile> add ./dsh-crwu-workbench-<ver>.tgz
    `审核子代理根节点 · MM-DD HH:mm`。所有审核子代理都挂在它下面，侧栏里就是一棵树。
 2. **稳定优先**：根可用就一直复用（判据：Agent 活着 + cwd 仍是当前工作空间 + 不是子代理）；
    不可用（进程重启、换工作空间、会话没了）→ **新建一个**，旧树保留（用户已确认接受分叉）。
-3. **hello 预检**：建完立刻 `followup` 一句「hello，请用 bash 执行 pwd」并 `whenIdle`。
-   预检不过就**不落钩子、不起审核** —— 把「跑不起来」拦在第一条真审核之前。
+3. **hello 预检**：建完立刻 `followup` 一句「hello，请用 bash 执行 pwd；并调用
+   `crwu_audit_capabilities` 回报 ok/platform」并 `whenIdle`；随后插件**自己**再做两件确定性检查
+   （`host/audit/preflight.ts`）：全部必需 Tool 对该 Agent 可见、通过 `ctx.tools.execute()`
+   真调一次能力自检（证明注册表与 policy pipeline 通得过）。
+   任一不过就**不落钩子、不起审核** —— 把「跑不起来」拦在第一条真审核之前。
+   发起审核时还会再查一次（复用的根不会重新预检），并在子代理发布后按它自己的 scope 复查。
 4. 根是插件自己 `agents.create` 的，所以**插件重载后根会失效**（这正是分叉规则的用途）；
    根建会话时优先跟随「你正在用的那个会话」的 preset，取不到才用部署默认。
 5. `bind-session` 仍然登记「当前会话」，但它**不再决定审核父级** —— 只用于显示与 preset 提示。
@@ -584,10 +679,11 @@ dsh plugin --profile <临时 profile> add ./dsh-crwu-workbench-<ver>.tgz
 - 排查口诀：`env` 应答里缺字段 = 宿主是旧代；`ping.builtAt` 只反映「产物被加载那一刻的文件时间」，
   **它匹配磁盘 mtime 不代表跑的是最新代码**（旧构建里那一版可能是每次请求现读的）。
 
-### 7.13 「查看会话」的三条硬规则
+### 7.13 「跳到某条会话」的四条硬规则
 
-用户报过「点『查看会话』出现 客户端 sessions 服务不可用」。这是**两个独立根因**叠在一起，
-改这块时两个都要留着测试：
+用户报过两次：一次是「点『查看会话』出现 客户端 sessions 服务不可用」，一次是
+「点『与 DeepSeek 讨论报告』/『复核报告』跳不到对应的会话，也创建不出新对话」。
+四个根因彼此独立，改这块时四条都要留着测试：
 
 1. **目标是「被点那一行」的 key**，不能拿面板的 `activeKey`（「当前在跑的那条」）顶替 ——
    在别的行上点会开到错的孩子；`activeKey` 为空时更直接，得到「该记录没有子会话 id。」。
@@ -599,18 +695,119 @@ dsh plugin --profile <临时 profile> add ./dsh-crwu-workbench-<ver>.tgz
 3. 打开会话有两条路：`sessions.openSubagent`（先 `refreshSubagents`，再按 mode 逐个试，
    最后切主面板）与兜底的 `uiWorkspace.openSession(id)`；**两条都缺**才允许说「服务不可用」，
    失败时要把**真实原因**带出来。`install/browser-check.mjs` 有一条真实点击的断言盯着这句话。
+4. **客户端 `sessions` 服务上没有 `open()`**（2026-09-25 踩到）。`ClientSessions` 只有
+   `retain / using / binding / list / create / fork / scope / sessionOf / search / subagentAddress …`；
+   切会话的唯一入口是 **`uiWorkspace.openSession(id)`** → 内部 `replaceMain(id, signal, 'reveal')`
+   = 设置主会话 + `layout.selectPanel(null)`（左侧会话列表被点也是走它）。
+   写成 `sessions?.open?.(id)` 会被可选链吞成**静默 no-op**，只剩半截 `selectPanel` ——
+   用户看到「点下去什么都不发生」。
+5. **会话 face（`rename` / `prompt`）必须经 `sessions.using(id, {source}, op)` 借**，
+   不能只写 `binding(id)`：`binding(id)` 是 `this.scopes.get(id)?.binding`，**只有已被 retain 的会话**
+   才有值，而刚 `create()` 出来的那条还没 retain → `undefined` → rename 被静默跳过（会话没名字 →
+   下次按名字找不到，只能再建一条），kickoff prompt 也发不出去。`binding` 只作为旧宿主的退路。
+
+### 7.14 讨论会话的资料来源：远端 only + **唯一**案例目录（2026-09-25）
+
+用户在「与 DeepSeek 讨论报告」/「复核报告」两条会话里报过两件事，一起看：
+
+1. **「工具好像调不动」** —— 实测**工具是通的**：真实会话记录里 `crwu_audit_capabilities`
+   返回 8 个工具全部 `available:true`、5 个附件都由 `crwu_h3yun_file_get` 从远端下回来了
+   （`ok:true` + 真实字节数），会话标题也正确写成了 `报告讨论 · <流水号>`。
+   看起来"没调工具"的真相是：**模型同时还在用 `bash`/`read` 翻本机目录**。
+2. **「模型会从我电脑的目录里去找已有的文件」** —— 记录里的原话是 `pwd; ls -la`、
+   `find cases -maxdepth 4`、`md5 *.doc`、`read …`；它还自己 `mkdir -p cases/<流水号>/材料-源`，
+   把材料下到了**错的目录**。
+
+**根因不是工具，是提示词**：原来只有一段抽象的数据边界（「不得读取本地文件」），
+却**没给"唯一允许读写的目录"**。模型不知道材料该放哪，就 `ls` + `find` 去猜 —— 猜出了
+`cases/<流水号>`（与审核链路实际使用的 `<工作空间>/<流水号>` 不一致）。
+
+所以现在的口径是三条，改这块时必须同时满足：
+
+- **案例目录的约定只有一份**：`shared/utils/case-dir.ts` 的 `caseDirOf(workspacePath, seqNo)`
+  → `<工作空间>/<流水号>`。Host 的审核提示词与 Client 的两条讨论提示词**都**用它算；
+  两处各写一次拼接就是这次漂移的温床。`client-assistant.test.mjs` 有一条「Host 与 Client 算出同一个路径」的断言。
+- **两条讨论提示词都注入「取数规则」**（`assistant-context.ts` 的 `fetchRules()`，报告讨论与审核分析共用）：
+  唯一案例目录 + 用 `crwu_h3yun_file_get({fileId, caseDir, relativePath})` 逐件下载 +
+  **每次新建对话都重新下载**（磁盘上的同名文件可能是上一轮或别的报告的过期文件）+
+  **禁止** `ls`/`find`/`grep`/`glob` 扫描本机 + 不要自己建目录树 + 清单外资料一律「当前不可用」。
+  `caseDir` 为空（旧宿主 / 没选工作空间）时**整段不写** —— 宁可不给，也不给半截路径。
+- **本机路径只允许出现这一条**：上下文里除了案例目录，不许再出现任何 `/Users/...` 之类的路径。
+  `client-package.test.mjs` 用正则抽出全部本机路径，断言去重后就等于案例目录那一条。
+
+**还没做（按需再上）**：让 `crwu_h3yun_file_get` 支持「只给 `seqNo`、目录由 Host 算」，
+这样模型连路径都不用写。现在先靠提示词 + 共享约定把它约束住；如果真机上仍看到模型乱翻目录，
+再上这一级（工具 schema 会多一种定位方式，要同时补 `input` 错误分支与测试）。
+
+### 7.15 报告定位交接：Host 定位 + 输入快照（2026-09-25）
+
+用户报「自动审核启动后子代理重新定位/搜索报告」。根因是**交接不完整**：`auditStart` 只把
+`objectId` / `seqNo` / `project` 交给子代理，而记录接口要 `schemaCode` —— 于是子代理自己去
+发现表单、列记录、在案例目录里翻找材料。`schemaCode` 属于 Host 的基础设施状态，不是模型该推断的
+业务参数。现在的口径：
+
+1. **表单 code 只在 Host 解析一次**：`H3yunFormResolver`（`host/h3yun/form.ts`，**插件实例级**）
+   —— `state.formCode` 非空直接复用；为空才调一次 `discoverForm`，并发请求共享同一个 in-flight
+   Promise；失败不缓存（允许下次重试）。列表（`loadPending`）与所有记录类 Tool 共用它，
+   所以两条链路不会各搜一遍。
+2. **模型可见的 Tool 参数里没有 `schemaCode`**：`record_get` / `files_list` / `case_bootstrap` 都由
+   Tool 内部向解析器要。测试按**逐字**断言参数集合里没有它，并断言命令里的 `--schema` 来自解析器。
+3. **`crwu_audit_case_bootstrap` 一次做完**：`records get` 与 `files list` **各一次**（按精确
+   `objectId`，禁止 `records list` / 搜表单 / 扫目录 —— argv 是固定模板，模型只提交业务标识与案例目录），
+   写 `<案例目录>/输入快照/{报告记录,附件清单,快照元数据}.json`，返回
+   `snapshotPath / digest / fieldCount / attachmentCount / routingFacts`。
+   同一 `attemptId` 重复调用直接返回上次摘要（`reused:true`），`refresh:true`（重审）才覆盖。
+   元数据里只放 `schemaCode` 的**指纹**，原文不落盘、不进上下文。
+4. **审核启动的三道门禁**（都在 `startChild` 之前，任一失败就不创建子代理）：
+   capability 预检（§4.5）→ 表单 code 解析成功 → `bootstrapInputSnapshot()`（经
+   `ctx.tools.execute()`、以**审核根 Agent** 为 scope，走完整 policy pipeline）→ DSH Python 可用（§7.16）。
+   成功后把 `snapshotPath` / `digest` / `objectId` / `seqNo` / `attemptId` / Python 路径写进指令。
+5. **子代理指令里写明**：报告已由 Host 精确定位、以输入快照为唯一记录来源、不得重新定位或重复取数、
+   附件只按清单 `fileId` 取、快照与任务不一致时立即停止并报「数据边界错误」。
+6. **重审**：`attemptId` 每轮都新（`<key>-a<attempt>-<time36>`），bootstrap 强制 `refresh:true`
+   覆盖本轮快照；仍然不得读取上一轮审核产物与 `复核-人工/`。
+
+### 7.16 DSH 自带 Python：审核脚本的运行时（2026-09-25）
+
+**不再把系统 `python3` 当运行时依赖。** 技能脚本要 `openpyxl` 这类包，员工机器上的
+`/usr/bin/python3` 既没有它们、版本也不受控。DSH 0.1.7 起自带 workspace runtime，并把它暴露成工具
+`load_workspace_dependencies`（返回 `python` / `pythonPackages` / `pythonDistributions`）。
+
+- **`WorkspaceRuntimeResolver`**（`host/runtime/python.ts`，插件实例级）：经 `ctx.tools.execute()`
+  调 `load_workspace_dependencies`（审核启动时带审核根 Agent 作为 scope）；校验返回的路径
+  **真的是普通文件**并真能跑出版本；校验 `pythonDistributions` 里至少有 `openpyxl`（缺了就
+  `missing-package` + 明确文案）；顺带记录 `python-docx` / `python-pptx` / `Pillow` / `lxml` /
+  `numpy` / `pandas` / `XlsxWriter` 的版本。
+- **只解析一次、只缓存成功**：成功结果缓存（环境自检反复刷新也只问一次 DSH）；失败不缓存，
+  `refresh: true`（界面「重新自检」）可重试。
+- **不硬编码、不改 PATH**：不写 `/Applications/DeepSeek Harness.app`、不写 `~/.dsh/dsh-runtimes`、
+  不读 `process.argv`，路径只能来自工具真实返回；也不把 Python 复制进 `bin/`，不做下载 / 安装 /
+  pip 自动安装。`host-runtime-python.test.mjs` 用源码扫描钉住这两条。
+- **审核启动前解析**：解析失败**不创建子代理**（否则子代理会退回系统解释器）。
+  解析成功后把绝对路径写进 `AuditPromptTask.python`，子代理直接复用。
+- **技能正文**：`crwu-audit` 的「脚本运行时（Python）」一节写死三条 —— 自动审核用注入的绝对路径；
+  独立使用技能时先调**一次** `load_workspace_dependencies` 并复用；**禁止**裸解释器名字、
+  任何解释器查找、静默降级到系统解释器。`crwu-audit-datacheck` / `crwu-audit-external-data` /
+  两个维护元技能同样加了这一段；`skills/dws/**`（vendored）不改。
+- **脚本仍然走 shell**：命令经 `ctx.shell` 执行（沙箱 / 审批 / 取消照旧），不用 `node:child_process`、
+  不用 `ctx.subprocess`（`host-tools.test.mjs` 的源码扫描同时覆盖这两条）。
 
 ## 8. 发版（npm）
 
 ### 8.1 版本号与 CHANGELOG
 
 ```bash
-npm run version:set 0.0.2     # 改 package.json + VERSION，并同步 package-lock.json 的根版本
+npm run version:set 0.0.2     # 改 package.json + VERSION + src/host/consts.ts，并同步 package-lock.json 的根版本
 # 手动在 CHANGELOG.md 加一节：## package · 0.0.2 · <日期>
-npm run version:check         # 校验 package.json / VERSION / CHANGELOG 三处一致
+npm run version:check         # 校验 package.json / VERSION / CHANGELOG.md / src/host/consts.ts 四处一致
 ```
 
-`npm run check` 里已含 `version:check`，三处不一致会直接红。CHANGELOG 那一节不会自动生成，必须手写。
+`npm run check` 里已含 `version:check`，四处不一致会直接红。CHANGELOG 那一节不会自动生成，必须手写。
+
+**为什么 `src/host/consts.ts` 也要跟着走**：`PLUGIN_VERSION` / `PLUGIN_REV` 是 `ping` / `boot` 与界面
+版本徽章的唯一来源（§7.2 的排查全靠它），漏改的表现是「包是新的、面板显示的还是 v0.0.5」——
+正是 §7.2 要区分的那种假象。`version:set` 与 `version:check` 都会管这一份；
+`tests/unit/host-package.test.mjs` 另有断言 `ping.rev === pkg-<package.json.version>` 兜底。
 
 ### 8.2 发布前空跑
 
@@ -620,10 +817,16 @@ npm run pack:assert
 npm publish --dry-run
 ```
 
-`npm publish --dry-run` 会真的跑完 `prepublishOnly`（= `pack:assert` + `check`）并打印将要发布的清单，
-但**不上传**。期望看到 `Publishing to https://registry.npmjs.org …(dry-run)` 与 `total files: 450`
-（`lib/` + 补丁 + 文档 + 三层技能 `skills/crwu/`、`skills/dws/`、`common/skills/`；技能正文是体积大头，
-解包约 5.5MB），以及 `PASS …：450 个文件 / 解包 5664KB`。层数或体积大幅变化时先怀疑有东西误进包。
+`npm publish --dry-run` 会真的跑完 `prepublishOnly`（= `pack:assert:strict` + `check`）并打印将要发布的清单，
+但**不上传**。期望看到 `Publishing to https://registry.npmjs.org …(dry-run)`。
+
+**发布前必须先装配自带二进制**（`make plugin-pack` 会先跑 `plugin-bin`），否则包里没有它们。
+装配好的形态是 `total files: 457`、解包约 **106MB**（`PASS …：457 个文件 / 解包 108340KB`）——
+`lib/` + 补丁 + 文档 + 三层技能 + **两个平台各一套 `crwu`/`dws`/`ossutil`**。
+体积大头从「技能正文（约 5.5MB）」变成了「自带二进制（约 100MB，其中 dws 一个平台就 32MB）」，
+所以 `pack:assert` 的上限也提到了 160MB。**没装配时它会打印 `WARN 未装配 bin/` 并显示 450 个文件 /
+约 5.7MB** —— 那是 CI（Ubuntu/Windows 不做 `make build` + 110MB 下载）的正常形态，
+不是可以直接发布的包。文件数或体积与这两种形态都不符时，先怀疑有东西误进包。
 
 ### 8.3 走 tag 发布，不要手工 publish
 
@@ -637,7 +840,8 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 `.github/workflows/release.yml`（插件是子目录，工作流用 `working-directory` 立在包目录里）：
 
 1. 断言 tag 与 `package.json` / `VERSION` 一致（CHANGELOG 由 `check` 里的 `version:check` 覆盖）；
-2. 跑 `npm run check` + `npm run pack:assert`（tag 可能指向没经过 CI 的提交，所以这里再跑一遍）；
+2. `binaries` job 先在 macOS 上交叉编译并按 manifest 装配六个二进制，作为 artifact 交给发布 job；
+   再跑 `npm run check` + `npm run pack:assert:strict`（tag 可能指向没经过 CI 的提交，所以这里再跑一遍）；
 3. `npm publish --provenance`，走仓库 secret `NPM_TOKEN`，附构建来源证明。
 
 也可以在 Actions 里 `workflow_dispatch` 手动跑：`dry-run` 默认 true，只打包与校验、不发布。
@@ -646,19 +850,18 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 和 CI 的构建来源，而且本机 registry 未必是官方源（见下）。
 **`git push` 与发版都要等用户明确说**（§7.4）。
 
-### 8.3.1 同一个版本号只发一次（分发包不可变）
+### 8.3.1 同一个版本号只发一次（发布不可变）
 
-分发包 URL 就是 `<包名>-<版本>.tgz`（员工侧 `dsh plugin add <URL>` 认的就是它），所以**同版本重发
-= 覆盖远端对象**：同一版本号出现两份内容，早装与重装的员工跑的不是同一份，版本号也不再能定位问题；
-`dsh plugin add` 甚至未必真的替换（pnpm 见 spec 未变就跳过 —— 实测过）。用户 2026-09-21 明确要求
-守住这条。
+**分发通道是 npm**（2026-09-25 起）：员工侧 `dsh plugin add dsh-crwu-workbench@<版本>`。
+原来走的是「把一个 tgz 传到匿名只读 OSS，员工按 URL 装」——那条路连同那个桶一起删了
+（理由见 CHANGELOG 0.0.7：那个地址谁都能换，换掉就能换掉插件本体）。
 
 - 改了任何东西（代码 / 技能 / 文档 / `cordis.patch.yml` / `config/crwu-workbench.yml`）→ **升版本号**：`npm run version:set x.y.z`
-  + 手写 CHANGELOG 一节，然后 `make plugin-dist`。
-- 机器判据在 `scripts/dist-plugin.mjs`（`make plugin-dist` 先跑完整门禁再接它）：远端没有该对象 →
-  上传；已有且内容一致 → 跳过（幂等重跑无害）；已有但内容不同 → **拒绝上传**并提示升版本号；
-  `ossutil stat` 读不出来（网络/权限/输出变了）→ 同样不动远端。空跑：`PLUGIN_DIST_DRY_RUN=1 make plugin-dist`。
-- 员工侧升级 = 用**新** URL 再 `add` 一次（旧版本的 URL 一直有效、内容不变），然后重启 profile。
+  + 手写 CHANGELOG 一节，然后 `make plugin-pack`（它会先 `plugin-bin` 再 `plugin-check`）。
+- 「同版本只发一次」这条纪律现在由 **npm 自己**守住：已发布的版本号不能覆盖，改了内容只能发新版本号。
+  **不要手工 `npm publish`** —— 走 §8.3 的 tag 流程，那里同时校验 tag 与版本一致并附构建来源证明。
+- 本地要空跑一遍：`npm publish --dry-run`（会真跑 `prepublishOnly` = `pack:assert:strict` + `check`，但不上传）。
+- 员工侧升级 = 装新版本号再重启 profile。
 
 ### 8.4 发布目标固定为官方 registry
 
@@ -679,13 +882,34 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 3. `files` 带 `lib/` + 补丁 + 文档 + **三层技能**（`skills/crwu/` 自研层、`skills/dws/` vendored 上游层、
    `common/skills/` 打包前由 `scripts/sync-common-skills.mjs` 从源仓 `plugins/common/skills/` 拷进来）；
    `src/`、`tests/`、`install/`、`AGENTS.md`、`PORTING.md`、`scripts/`（除 `prepare.mjs`）都不进包。
-   改完必须跑 `pack:assert` 核对（它会断言每一层都有一个代表文件在包里，vendored 层还钉 `provenance.json`）。
+   改完必须跑 `pack:assert` 核对（它会断言每一层都有一个代表文件在包里，vendored 层还钉 `provenance.json`）；
+   **发布链路还要跑 `pack:assert:strict`** —— 它真打一份 tarball、解包后按 `bin/manifest.json`
+   逐个重算 size/sha256，并拒绝 `bin/` 下任何未声明的运行残留。
 
 ### 8.6 与 DSH 版本对齐
 
-`peerDependencies` 里的 `@deepseek-ai/dsh-*` 与已安装 DSH 对齐（当前 `0.1.5-rc.2`）。
+`peerDependencies` 里的 `@deepseek-ai/dsh-*` 与已安装 DSH 对齐（当前 `^0.1.7-rc.2`，cordis `^4.0.4`）。
 DSH API 是 developer preview：**升级 DSH 时必须**同步核对这几个 peer、重跑门禁，并把兼容到的
 DSH 版本写进 `CHANGELOG.md`。
+
+**0.1.7 起 peer 是硬门禁，不再是提醒**（依据 0.1.7-rc.2 的 app-boot 文档原文）：加载 profile 的
+bundle 层时会拿 `getDshRuntimeVersion()` 与每个 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的
+peer 范围比对，**「Every declared range must match; prereleases participate in range matching」**，
+不匹配的 bundle 会被**当作不可读直接跳过**并记进 `skippedBundles` —— 表现为「插件装上了、界面里
+什么都没有」，而启动日志干干净净。注意三点：
+
+- 判据是 **`peerDependencies`，不是 `engines.dsh`**：官方文档明确写了「These checks use peer
+  declarations, not `engines.dsh`」，而 `dsh.manifestVersion` 与 `engines.dsh` 目前**只是声明、
+  没有任何强制**（`dsh-package-manifest` README：「Current installers and loaders do not enforce」）。
+  本包两者都写，仅为声明口径；真正生效的是 peer。
+- 范围写 `^0.1.7-rc.2` 而不是钉死：同一条 `0.1.7` 线上的 rc 补丁（rc.3…）与正式版都能过门禁，
+  避免 DSH 一升级就全员硬失败。语义上 `^0.1.7-rc.2` = `>=0.1.7-rc.2 <0.2.0`，且预发布只在
+  同一 `[major,minor,patch]` 元组内匹配（所以 `0.1.8-rc.1` **不会**被放行）。
+- 精确版本豁免写在 **profile 自己的 `compatibility.json`**（不在本包），由插件管理器写入；
+  「同一个版本只发一次」的纪律意味着**豁免不是升级路径**，改 API 就该发新版本。
+- **0.1.7 的 shell 契约变更**：`ShellExecutor.run(spec)` 已不存在，改为 `execute(spec)` 返回进程句柄，
+  前台结果在句柄的 `result()` 上（`ShellExecSpec` 另增 `onExpiry`）。本仓的 `runShell` 是唯一调用点，
+  测试替身必须跟着 `execute().result()` 走 —— 0.1.5 的 `run` 形状在 0.1.7 上会直接 `is not a function`。
 
 ### 8.7 发完再验一次接收方
 

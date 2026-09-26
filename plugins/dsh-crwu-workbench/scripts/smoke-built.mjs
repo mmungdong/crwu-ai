@@ -50,13 +50,23 @@ function fakeHostContext() {
   const effects = []
   const logs = []
   const listeners = new Map()
+  // `tools` 是硬依赖：`apply()` 会把 9 个 CRWU 工具注册进去（缺注册表直接抛）。
+  // 替身只收集注册名并返回 disposer；「注册进真实注册表后的 schema/pipeline 行为」
+  // 由 `tests/unit/host-tools.test.mjs` 对着真实契约覆盖。
+  const registeredTools = []
+  const tools = {
+    register(definition) {
+      registeredTools.push(definition.name)
+      return () => {}
+    },
+  }
   const ctx = {
     effect(callback) {
       const dispose = callback()
       effects.push(dispose)
       return () => { if (typeof dispose === 'function') dispose() }
     },
-    get: () => undefined,
+    get: (name) => (name === 'tools' ? tools : undefined),
     // 插件订阅子代理事件（ended / endReason 的唯一来源），所以 ctx.on 必须存在并返回解除函数。
     on(event, listener) {
       const list = listeners.get(event) ?? []
@@ -72,7 +82,7 @@ function fakeHostContext() {
       },
     },
   }
-  return { ctx, routes, effects, logs, listeners }
+  return { ctx, routes, effects, logs, listeners, registeredTools }
 }
 
 /** 最小请求/应答替身，够走完一次同源 RPC。 */
@@ -101,19 +111,21 @@ export async function smokeHost() {
   assert.equal(module.name, 'crwu-workbench', 'name 导出不对')
   assert.ok(Array.isArray(module.inject), 'inject 必须是服务名数组')
   assert.ok(module.inject.every((item) => typeof item === 'string'), 'inject 里只能放字符串服务名')
-  assert.deepEqual(module.inject, ['webServer', 'shell'], 'inject 声明变了')
+  // `tools`：审核链路只通过结构化 Tool 交付业务能力，没有注册表就不该激活。
+  assert.deepEqual(module.inject, ['webServer', 'shell', 'tools'], 'inject 声明变了')
   assert.equal(typeof module.apply, 'function')
   assert.equal(typeof module.Config, 'function', 'Config 必须是可以被 Cordis 调用的 schema')
   // DSH 以**位置参数**传 config（对照 dsh-tool-bash 的 `function apply(ctx, config = {})`）。
   assert.equal(module.apply.length >= 2, true, 'apply 必须接受 (ctx, config) 两个位置参数')
 
-  const { ctx, routes, listeners } = fakeHostContext()
+  const { ctx, routes, listeners, registeredTools } = fakeHostContext()
   const config = module.Config({})
   module.apply(ctx, config)
   assert.equal(routes.length, 1, '应当注册恰好一个同源路由')
   assert.equal(routes[0].path, module.ROUTE)
   // 没有这个订阅，ended / endReason 永远是空 → 「已中断」不出现、自动上传不触发。
   assert.equal(listeners.has('subagent/end'), true, 'apply() 必须订阅 subagent/end')
+  assert.equal(registeredTools.length, 9, `apply() 必须注册 9 个 CRWU 工具，实际 ${registeredTools.length}`)
 
   // 走一遍真实的 HTTP 处理器：这是「装上去之后 RPC 到底通不通」的最小证据。
   const { req, res, response } = fakeExchange({ op: 'ping' })
@@ -257,20 +269,34 @@ await check('Client 半：经 __ModuleLoader__ 加载并注册四个槽位条目
   return `槽位条目 ${result.slots} 个 · 模块 id ${result.loaded}`
 })
 
-// 审核指令里的钉钉回传脚本路径是**随包发布**的（`src/host/audit/skill-paths.ts`）。
-// 这里能证明的是「产物里没有写死部署路径 + 层名正确 + 脚本真的在包内 `skills/crwu/` 层下」；
-// 真正跑一次回传要连真实钉钉，只有用户点「AI 审核」才会发生（见 AGENTS.md §7.2）。
-//
-// 层名是通过常量拼进候选路径的（`../${CRWU_SKILLS_LAYER}/…`），产物里**不会**出现折叠后的
-// `../skills/crwu/` 字符串 —— 所以断言分两半：常量值对，且候选确实是从产物自身位置起算的相对路径。
-await check('Host 产物：钉钉回传脚本按包内相对路径解析，脚本随包存在', async () => {
+// 审核链路只走结构化 Tool：产物里必须能看到 9 个 `crwu_*` 工具名，而且**不许**再出现
+// 插件二进制目录或 PATH 注入这类「让模型自己拼命令行」的指纹。
+// 真跑一次取数要连真实氚云/钉钉/OSS，只有用户点「AI 审核」才会发生（见 AGENTS.md §7.2）。
+await check('Host 产物：注册 9 个 CRWU 结构化 Tool，且不含路径注入指纹', async () => {
   const bundle = await readFile(join(ROOT, 'lib', 'index.js'), 'utf8')
-  assert.equal(bundle.includes('~/.dsh/skills'), false, '产物里不许再出现写死的 ~/.dsh/skills（员工机器上不存在）')
-  assert.equal(bundle.includes('"skills/crwu"'), true, '产物里的自研层目录必须是 skills/crwu')
-  assert.equal(bundle.includes('../${CRWU_SKILLS_LAYER}/'), true, '产物要按自身所在目录解析包内技能层')
-  const script = join(ROOT, 'skills', 'crwu', 'crwu-audit', 'scripts', 'upload_audit_result.py')
-  assert.equal(existsSync(script), true, `脚本必须随包发布：${script}（package.json 的 files 要有 skills/crwu/）`)
-  return 'lib/index.js → ../${CRWU_SKILLS_LAYER}/…（skills/crwu）'
+  for (const name of [
+    'crwu_audit_capabilities',
+    'crwu_h3yun_record_get',
+    'crwu_h3yun_files_list',
+    'crwu_h3yun_file_get',
+    'crwu_audit_knowledge_materialize',
+    'crwu_audit_oss_publish',
+    'crwu_audit_dingtalk_archive',
+    'crwu_audit_dingtalk_notify_self',
+  ]) {
+    assert.equal(bundle.includes(name), true, `产物里缺少工具：${name}`)
+  }
+  assert.equal(bundle.includes('~/.dsh/skills'), false, '产物里不许出现写死的 ~/.dsh/skills')
+  assert.equal(bundle.includes('export PATH='), false, '产物里不许出现 PATH 注入文案')
+  // 只认**真的导入**：`shell/run.ts` 的注释里会出现这个词（说明「不得用」），注释不是执行路径。
+  assert.equal(/from\s*["']node:child_process["']/.test(bundle), false, '产物里不许导入 node:child_process')
+  assert.equal(/require\(\s*["']node:child_process["']\s*\)/.test(bundle), false, '产物里不许 require node:child_process')
+  // 回传脚本的名字只出现在注释里（讲"为什么删掉它"），执行路径里不存在：
+  // 审核链路的业务命令只有 `ctx.shell` + 包内二进制这一条，Python 不在其中。
+  // 「不再依赖 Python 回传脚本 / 不再有裸命令拼接」由 `tests/unit/host-tools.test.mjs` 与
+  // `host-audit-prompt.test.mjs` 对着**源码**与**提示词**逐条断言：产物里这些词会出现在
+  // 讲"为什么删掉它们"的注释中，对 bundle 做文本包含式断言只会得到假红。
+  return 'lib/index.js → 9 个 crwu_* 工具，无路径注入指纹'
 })
 
 if (failures.length > 0) {

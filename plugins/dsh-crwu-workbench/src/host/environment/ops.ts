@@ -5,42 +5,74 @@ import type { WorkbenchConfig } from '../config/config.ts'
 import { applyDeploymentConfig } from '../config/deployment.ts'
 import { runCrwu } from '../crwu/run.ts'
 import type { WhoamiResult } from '../system/identity.ts'
-import { loadManifest } from '../environment/manifest.ts'
+import { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } from './manifest-default.ts'
+import { shellQuote } from './probe.ts'
+import { resolveBundledCommand } from '../platform/command.ts'
 import type { EnvManifest } from '../environment/manifest-default.ts'
-import { probeEnv, probeIfindKey, probeOss, type EnvCheck, type IfindCheck, type ServiceCheck } from '../environment/probe.ts'
+import {
+  probePackageIntegrity, probeIfindKey, probeOss,
+  type IfindCheck, type PackageIntegrityCheck, type ServiceCheck,
+} from '../environment/probe.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
 import { ossConfigPath, readOssCred, type OssCredView } from '../oss/cred.ts'
 import type { WorkbenchState } from '../state/types.ts'
-import type { WorkspaceView } from '../../shared/types.ts'
+import type { OssConfigView, RuntimeView, WorkspaceView } from '../../shared/types.ts'
 import { ensureRegistry } from '../state/registry.ts'
 import { readWorkbenchConfig } from '../state/persist.ts'
 import { workspaceView } from '../state/store.ts'
 import { ensureWorkspace, sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
+import { bundledBinaryPath } from '../platform/bin-dir.ts'
 
 /**
  * 环境自检聚合：面板的入口页，也是所有后续操作的门禁。
  *
- * 聚合顺序是**有依赖的**：先恢复注册表与工作空间（其它操作都依赖它们），再探测二进制与
- * 各项服务。返回的 `blocked` 是给界面看的「还差什么」，`allOk` 是硬门禁。
+ * 聚合顺序是**有依赖的**：先恢复注册表与工作空间（其它操作都依赖它们），再核对插件包完整性、
+ * 解析 DSH 自带运行时、探测各项服务与外部数据。返回的 `blocked` 是给界面看的「还差什么」，
+ * `allOk` 是硬门禁。
+ *
+ * 结果按**语义分区**（2026-09-25 改造，协议号 +1）：插件包 / 运行时 / 授权 / 交付 / 外部数据 / 工作空间。
+ * 旧的 `checks[]` 把「随包组件」「系统命令」「运行时探针」混成一列，界面只能平铺成命令清单 ——
+ * 于是员工会去装 python3、去找 ossutil 的安装包。分区的直接目的就是让**每一类失败有各自的处置**。
  *
  * 两个反直觉但必须保留的规则：
- * 1. **平台未识别也算 blocked**：探测不到平台就没法选对 ossutil 包，硬往下走只会装错二进制；
+ * 1. **平台未识别也算 blocked**：探测不到平台就没法核对包内组件，硬往下走只会用错二进制；
  * 2. **没有工作空间也算 blocked 且排在最前**：没有它审核产物没有落地目录，
- *    而这条正是为了避免「照搬父会话工作区、把产物写进源码仓库」。
+ *   而这条正是为了避免「照搬父会话工作区、把产物写进源码仓库」。
  */
+
+/** 插件包不完整时的**唯一**一条阻塞文案（三件组件不许各占一项）。 */
+export const PACKAGE_BLOCKER = '插件内置组件'
+/** DSH 自带运行时不可用时的**唯一**一条阻塞文案。 */
+export const RUNTIME_BLOCKER = 'DSH 脚本运行时'
+
+/** 主 agent 提供的 DSH 自带 Python 运行时解析结果；本模块只消费它。 */
+export interface PythonRuntimeResult {
+  ok: boolean
+  /** 'ok' | 'capability-gap' | 'missing-package' | 'failed' */
+  state: string
+  path: string
+  versionText: string
+  distributions: Record<string, string>
+  missingPackages: string[]
+  error: string
+  source: string
+}
 
 export interface EnvResult {
   ok: boolean
-  manifestSource: string
-  manifestKind: string
-  manifestLoaded: boolean
-  manifestError: string
-  manifestUpdatedAt: string
-  installDocUrl: string
-  checks: EnvCheck[]
-  ifindKey: IfindCheck
+  /** 部署配置的来源 YAML 路径（清单只有内置一份，故障对账时看的是这份配置）。 */
+  configSource: string
+  /** ② 插件内置组件（crwu / dws / ossutil）：只按包内文件与包内清单核对。 */
+  packageIntegrity: PackageIntegrityCheck
+  /** ③ DSH 自带脚本运行时（Python）：不是系统 Python，也不是 PATH 命令。 */
+  runtime: RuntimeView
+  /** ④ 登录与凭据授权：氚云 + 钉钉（**不含 oss**）。 */
   services: ServiceCheck[]
+  /** ⑤ OSS 交付配置：配置视图 + 凭据脱敏视图 + 一次真实连通性探测。 */
+  delivery: { oss: OssConfigView; ossCred: OssCredView; probe: ServiceCheck }
+  /** ⑥ 外部数据：iFinD 的 auth_token。 */
+  external: IfindCheck
   blocked: string[]
   allOk: boolean
   home: string
@@ -51,12 +83,11 @@ export interface EnvResult {
    * 覆盖氚云会话与钉钉登录态，不再只是氚云。
    */
   trust: { credentials: boolean }
+  /** ① 案例根目录（工作空间）：不在 `services` 里，是审核产物的落地目录。 */
   workspace: WorkspaceView
   /** 审核子代理挂在哪个会话下（建在选定工作空间里的那个顶层会话）。 */
   auditRoot: ReturnType<typeof auditRootView>
   sessionWorkspace: ReturnType<typeof sessionWorkspaceInfo>
-  oss: Record<string, unknown>
-  ossCred: OssCredView
   /**
    * 「我是谁」：面板头部那句「晚上好，某某某」的姓名，来自**同一次自检**里的钉钉 CLI。
    * 三个字段都可能是空串 —— 没授权 / 没登录 / 命令没跑起来时，界面整句不展示。
@@ -88,13 +119,84 @@ export interface EnvDeps {
    * 缺省（单测直接调 `loadEnvironment`）= 没有这个来源，`me` 就是三个空串。
    */
   identity?: () => Promise<WhoamiResult>
+  /**
+   * DSH 自带 Python 运行时的解析（**主 agent 接线**）。
+   *
+   * 可选是刻意的：宿主还没接线时必须如实报 **capability gap**，而不是退回去看系统 `python3` ——
+   * 本插件的技能脚本用的是 DSH 自带运行时，系统那一份不是依赖。缺这个函数 = 能力缺口，不是「没装」。
+   */
+  pythonRuntime?: (options: { refresh: boolean }) => Promise<PythonRuntimeResult>
 }
 
-export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unknown>): Promise<EnvResult> {
+/**
+ * 组装 ③ 层：DSH 自带 Python 运行时。
+ *
+ * 三件事必须分清（否则界面会说错处置）：
+ * - 宿主没接线 / 运行时本身缺失 → `capability-gap`：**不是**员工要装 Python；
+ * - 运行时在、缺少必需包 → `missing-package`：要点名缺哪个包；
+ * - 解析过程抛错 → `failed`：如实报错，不假装就绪。
+ */
+async function probePythonRuntime(
+  deps: EnvDeps,
+  manifest: EnvManifest,
+  refresh: boolean,
+): Promise<RuntimeView> {
+  const spec = manifest.runtime.python
+  const base = {
+    expect: spec.expect,
+    required: spec.required,
+    requiredPackages: [...spec.requiredPackages],
+    note: spec.note,
+  }
+  const fail = (state: string, error: string): RuntimeView => ({
+    ...base,
+    ok: false,
+    state,
+    path: '',
+    versionText: '',
+    distributions: {},
+    missingPackages: [],
+    error,
+    source: DSH_RUNTIME_SOURCE,
+  })
+
+  if (deps.pythonRuntime === undefined) {
+    return fail('capability-gap',
+      '宿主没有接线 DSH 自带脚本运行时的解析：本次自检拿不到运行时事实。'
+      + '这不是系统 Python 的问题 —— 本插件只使用 DSH 自带运行时，不需要员工安装或配置 PATH；'
+      + '请重启 profile，或联系维护者确认宿主侧已接线。')
+  }
+
+  let result: PythonRuntimeResult
+  try {
+    result = await deps.pythonRuntime({ refresh })
+  } catch (error) {
+    return fail('failed', `运行时解析抛错：${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const state = text(result.state) || (result.ok === true ? 'ok' : 'failed')
+  const missingPackages = Array.isArray(result.missingPackages) ? result.missingPackages.map((item) => text(item)).filter((item) => item !== '') : []
+  const error = text(result.error) || (state === 'missing-package' && missingPackages.length > 0
+    ? `DSH 自带运行时缺少必需包：${missingPackages.join('、')}`
+    : '')
+  return {
+    ...base,
+    ok: result.ok === true && state === 'ok',
+    state,
+    path: text(result.path),
+    versionText: text(result.versionText),
+    distributions: result.distributions !== null && typeof result.distributions === 'object' ? { ...result.distributions } : {},
+    missingPackages,
+    error,
+    source: text(result.source) || DSH_RUNTIME_SOURCE,
+  }
+}
+
+export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknown>): Promise<EnvResult> {
   const { ctx, config, state, home, platform } = deps
 
-  const loaded = await loadManifest(ctx, config.manifestUrl, { workdir: await deps.sessionRoot() })
-  const manifest = applyDeploymentConfig(loaded.manifest, config)
+  // 清单只有内置一份（远程清单的拉取已随只读 OSS 依赖一起删掉），YAML 的部署值盖在上面。
+  const manifest = applyDeploymentConfig(DEFAULT_MANIFEST, config)
   state.manifest = manifest
 
   await ensureRegistry(ctx, home, state)
@@ -106,8 +208,12 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
     preferPath: manifest.workspace.preferPath,
   })
 
-  const checks = await probeEnv(ctx, manifest, platform, { home })
-  const ifindKey = await probeIfindKey(ctx, manifest, { home, platform })
+  // ② 插件内置组件：只 stat 包内文件 + 比对包内清单的字节数，**一次 shell 都不跑**。
+  const packageIntegrity = await probePackageIntegrity(ctx, manifest, platform)
+  // ③ DSH 自带运行时：`refresh` 由界面「重新自检」传 true（刷新运行时缓存）。
+  const runtime = await probePythonRuntime(deps, manifest, args.refresh === true)
+  // ⑥ 外部数据。
+  const external = await probeIfindKey(ctx, manifest, { home, platform })
   const services: ServiceCheck[] = []
 
   // 氚云会话：只有 crwu 能回答，所以直接问它。
@@ -154,8 +260,9 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
   // 带 `sandboxPolicy: danger-full-access` 时 true。所以「未授权时不许猜」：宁可说需要授权，
   // 也不能报一个假的「未登录」把员工指去重新登录。
   const trustedCredentials = state.trustCredentials === true
+  const dwsCommand = await resolveBundledCommand(ctx, platform, 'dws')
   const dwsRun = trustedCredentials
-    ? await runShell(ctx, 'dws auth status --format json', {
+    ? await runShell(ctx, `${shellQuote(dwsCommand, platform)} auth status --format json`, {
       workdir: await deps.sessionRoot(),
       timeoutMs: 30_000,
       escalate: true,
@@ -185,18 +292,32 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
         ? '本机凭据读取被拦住'
         : (dwsDoc === null ? '未知' : (dwsAuthed ? '已登录' : '未登录'))),
     detail: !trustedCredentials
-      ? '还没授权读取本机凭据：授权后本插件才能读钉钉登录态、拉氚云待办与回传结果。在 ③ 登录认证 里勾选「信任本插件读取本机凭据」——只需授权一次，长期有效。'
+      ? '还没授权读取本机凭据：授权后本插件才能读钉钉登录态、拉氚云待办与回传结果。在 ④ 登录与凭据授权 里勾选「信任本插件读取本机凭据」——只需授权一次，长期有效。'
       : (dwsUnconfirmed
         ? `读本机凭据的命令没跑起来：${text(dwsRun?.error) || '未知原因'}。这不是「没登录」—— 你已经授权，仍被拦住说明是 DSH 的沙箱/审批策略在挡，请让部署方放行本插件读取钥匙串。`
         : (dwsDoc?.message === undefined ? (text(dwsRun?.stderr) || text(dwsRun?.error)) : text(dwsDoc.message))),
   })
 
+  // ⑤ OSS 交付配置：配置视图 + 凭据脱敏视图 + 一次真实连通性探测。
   const oss = manifest.oss
-  const ossProbe = await probeOss(ctx, oss, platform, { manifest, home })
-  services.push({ ...ossProbe, required: serviceRequired(manifest, 'oss', true) })
-
-  const declaredIds = manifest.services.map((service) => text(service.id))
-  const filtered = declaredIds.length > 0 ? services.filter((service) => declaredIds.includes(service.id)) : services
+  const ossutil = packageIntegrity.tools.find((tool) => tool.name === 'ossutil')
+  const ossutilReady = ossutil?.ok === true
+  const ossProbe = await probeOss(ctx, oss, platform)
+  const delivery = {
+    oss: {
+      enabled: oss.enabled,
+      bucket: oss.bucket,
+      endpoint: oss.endpoint,
+      prefix: oss.prefix,
+      linkMode: oss.linkMode,
+      linkTtl: oss.linkTtl,
+      autoUpload: oss.autoUpload,
+      ossutilReady,
+      ossutilPath: ossutilReady ? bundledBinaryPath(platform, 'ossutil') : '',
+    },
+    ossCred: await readOssCred(ctx, home),
+    probe: { ...ossProbe, required: serviceRequired(manifest, 'oss', true) },
+  }
 
   const blocked: string[] = []
   if (state.workspaceMissing) {
@@ -210,15 +331,16 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
   // 授权是**硬前置**：没它就读不到本机凭据（氚云待办 / 钉钉登录态 / 结果回传），插件不可用。
   // 放在平台之后、具体检查项之前 —— 它不是一个"某项没配好"，而是"整条链路还没被允许"。
   if (!state.trustCredentials) blocked.push('授权读取本机凭据（氚云 / 钉钉）')
-  for (const check of checks) {
-    if (check.required && !check.ok) blocked.push(check.name)
-  }
-  for (const service of filtered) {
+  // 插件包不完整**只算一个**故障：旧口径把 crwu / dws / ossutil 各报一项，
+  // 界面于是出现三条「未安装」，而它其实只需要重装插件。
+  if (!packageIntegrity.ok) blocked.push(PACKAGE_BLOCKER)
+  // 运行时同理：一个运行时故障，不是「python3 未安装 + openpyxl 缺失」两条命令问题。
+  if (manifest.runtime.python.required && !runtime.ok) blocked.push(RUNTIME_BLOCKER)
+  for (const service of services) {
     if (service.required && !service.ok) blocked.push(service.label)
   }
-  if (ifindKey.required && !ifindKey.ok) blocked.push('iFinD 密钥')
-
-  const ossutilCheck = checks.find((check) => check.name === oss.ossutil)
+  if (delivery.probe.required && !delivery.probe.ok) blocked.push(delivery.probe.label)
+  if (external.required && !external.ok) blocked.push('iFinD 密钥')
 
   // 「我是谁」：**只有员工已授权**才去读（受限沙箱下 dws 会假报「未登录」，问出来的姓名不可信）。
   // 它是钉钉那条链路的副产品，所以直接跟在服务探测之后，失败就是三个空串。
@@ -226,15 +348,12 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
 
   return {
     ok: true,
-    manifestSource: loaded.source,
-    manifestKind: loaded.kind,
-    manifestLoaded: loaded.loaded,
-    manifestError: loaded.error,
-    manifestUpdatedAt: text(manifest.updatedAt),
-    installDocUrl: text(manifest.installDocUrl),
-    checks,
-    ifindKey,
-    services: filtered,
+    configSource: config.configSource,
+    packageIntegrity,
+    runtime,
+    services,
+    delivery,
+    external,
     blocked,
     allOk: blocked.length === 0,
     home,
@@ -243,12 +362,6 @@ export async function loadEnvironment(deps: EnvDeps, _args: Record<string, unkno
     workspace: workspaceView(state),
     auditRoot: auditRootView(ctx, state),
     sessionWorkspace: sessionWorkspaceInfo(ctx, state),
-    oss: {
-      ...oss,
-      ossutilReady: ossutilCheck !== undefined && ossutilCheck.found,
-      probe: ossProbe,
-    },
-    ossCred: await readOssCred(ctx, home),
     me: {
       name: me?.name ?? '',
       org: me?.org ?? '',

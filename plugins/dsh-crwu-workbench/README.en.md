@@ -40,8 +40,9 @@ npm ci && dsh plugin --profile web add .
 ```
 
 Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack` →
-`dist/dsh-crwu-workbench-<version>.tgz`; `make plugin-dist` uploads it to OSS and prints the
-employee-side install command.
+`dist/dsh-crwu-workbench-<version>.tgz`; releasing goes through the tag-driven npm flow
+(`git tag plugin-v<version>`). The plugin is **installed from npm** —
+`dsh plugin add dsh-crwu-workbench@<version>` — not from OSS, because that address was replaceable by anyone.
 
 **Restart that profile afterwards** — plugins load with the profile. Then:
 
@@ -50,9 +51,12 @@ employee-side install command.
    (a source checkout) or the installed version (`v0.0.4`), and the body holds three sub-items —
    Report Evaluation (marked "in development"), Report Audit, and Environment. Clicking a sub-item
    switches the panel to that module and opens it; the panel itself no longer has a module bar.
-2. If the panel opens on the Environment module, get the environment in place first: use "copy prompt" to
-   hand the install manifest to the agent, then install `crwu` / `dws` / `ossutil`, the iFinD key, and
-   the H3Yun + DingTalk logins.
+2. If the panel opens on the Environment module, get it configured: click the sign-in buttons in section
+   **④ Sign-in & credential consent**, and enter the OSS AccessKey in the form in section **⑤ OSS delivery**.
+   `crwu` / `dws` / `ossutil` **ship with the plugin** — there is nothing to install, and section
+   **② Bundled components** only ever reports "package incomplete / platform unsupported" if one is missing.
+   Section **③ DSH script runtime** reports the **DSH-bundled** Python (with its `openpyxl` and other
+   package versions); the system `python3` is not a dependency and is never used as a fallback.
 3. To dispatch an audit, register the parent from a **top-level** session header first. Audits may only
    be parented by a top-level session; nesting them is what used to make status tracking lose track of
    a running child.
@@ -81,22 +85,32 @@ dsh plugin --profile web add dsh-crwu-workbench@<version>   # then restart the p
 dsh plugin --profile web remove dsh-crwu-workbench
 ```
 
-> **A version is published once.** `make plugin-dist` refuses to overwrite an existing tarball of the
-> same version when its content differs, so any change means bumping the version first — otherwise
-> employees who installed early and those who reinstall end up on different code under one version.
+> **A version is published once.** Distribution is npm, whose published versions are immutable, so any
+> change means bumping the version first — otherwise employees who installed early and those who
+> reinstall end up on different code under one version.
 
 ## One YAML configuration
 
 [`config/crwu-workbench.yml`](config/crwu-workbench.yml) is the single configuration source for source
-development, packaging, and the installed employee tarball. `oss.readonly` names the anonymously readable
-bucket that carries the environment manifest, install instructions, and plugin tarballs. `oss.protected`
-names the private audit-deliverable bucket; credentials stay on the employee machine and object links use
-signed URLs by default.
+development, packaging, and the installed employee tarball. `oss.protected` names the private
+audit-deliverable bucket; credentials stay on the employee machine and object links use signed URLs by
+default.
+
+> **There is no `oss.readonly`.** Since 2026-09-25 that anonymously readable distribution bucket is gone.
+> Binaries ship inside the package under `bin/<platform>/`, the environment manifest is built in, and the
+> plugin is installed from npm — one less remote data source means one less channel through which someone
+> else can rewrite the meaning of what runs on an employee machine.
+>
+> The built-in manifest is **partitioned** (`crwu.env-manifest.v3`): `packaged[]` (crwu / dws / ossutil —
+> name, label, note, expected version only; no `command`, no version probing) and `runtime.python`
+> (the DSH-bundled interpreter, its version constraint and required packages). There is **no `binaries[]`**
+> and no bare `python3` check: the self-check only stats files inside `bin/<platform>/` and compares their
+> byte sizes against the packaged `bin/manifest.json` (sha256 is read from that manifest, never recomputed
+> during a self-check — 100+ MB is a release-gate concern, not a page-load concern).
 
 The Host reads this YAML directly in source development. Set `CRWU_CONFIG_FILE=/absolute/path/config.yml`
 before starting the DSH profile to test another file. `npm pack` validates and embeds the package-local YAML,
-and the installed Host automatically reads that packaged copy. `make plugin-dist` derives both its OSS write
-target and the employee HTTPS install URL from the same `oss.readonly` section.
+and the installed Host automatically reads that packaged copy. Distribution needs no bucket constants at all.
 
 ## Releasing
 
@@ -105,14 +119,16 @@ Never run `npm publish` by hand. The release path is tag-driven and gated:
 ```bash
 npm run version:set 0.1.3          # package.json + VERSION + lockfile root
 # add a `## package · 0.1.3 · <date>` section to CHANGELOG.md
-npm run check && npm run pack:assert
+npm run check && npm run pack:assert:strict
 git commit -am "release: 0.1.3" && git push
 git tag plugin-v0.1.3 && git push origin plugin-v0.1.3
 ```
 
 A `plugin-v*` tag triggers the repository-root [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
 (`v*` is reserved for the Go CLI in the same repository, keeping the two release lines apart); it asserts the
-tag matches `package.json` / `VERSION`, runs the full gate and the packed-artifact check, then publishes
+tag matches `package.json` / `VERSION`, builds and stages both platforms' binaries in a separate job,
+recomputes every staged hash against `bin/manifest.json`, runs the full gate and the **strict** packed-artifact
+check, then publishes
 with `--provenance` (needs an `NPM_TOKEN` repository secret). `workflow_dispatch` runs the same pipeline
 as a dry run. `prepublishOnly` re-runs the artifact check and the gate, so a manual publish cannot skip them.
 
@@ -127,9 +143,13 @@ it builds when the sources are present and skips with an explanation when they a
 `tests/unit/host-package.test.mjs` pins this with a real `npm pack` + `npm install` + import regression —
 both failure modes were invisible to local gates and only surfaced for the person installing the package.
 
-`peerDependencies` currently pin the `@deepseek-ai/dsh-*@0.1.5-rc.2` line, matching the installed DSH.
-The DSH plugin API is a developer preview: when you upgrade DSH, re-check those peers, re-run the gate, and
-record the supported DSH version in `CHANGELOG.md`.
+`peerDependencies` currently target the `@deepseek-ai/dsh-*@^0.1.7-rc.2` line (cordis `^4.0.4`), matching the
+installed DSH. The DSH plugin API is a developer preview: when you upgrade DSH, re-check those peers, re-run the
+gate, and record the supported DSH version in `CHANGELOG.md`.
+
+> **Since 0.1.7 this is a hard gate.** DSH compares the runtime version against every `@deepseek-ai/dsh*` peer
+> range and **skips the whole bundle** on any mismatch (recorded in `skippedBundles`) — the symptom is "the plugin
+> is installed but nothing appears", with a clean startup log. The check reads `peerDependencies`, not `engines.dsh`.
 
 ## Development
 
@@ -143,10 +163,21 @@ record the supported DSH version in `CHANGELOG.md`.
 | `npm run check` | `version:check` → `typecheck` → `test` → `build` → `smoke:built` — run this before delivering or opening a PR |
 | `npm run version:set 0.1.3` | Bump the version in `package.json` + `VERSION` + the lockfile root |
 | `npm run version:check` | Verify `package.json` / `VERSION` / `CHANGELOG.md` agree |
-| `npm run pack:assert` | Verify what `npm pack` actually ships (required before publishing) |
+| `npm run pack:assert` | Verify what `npm pack` actually ships (dry-run file list + the three loading contracts) |
+| `npm run pack:assert:strict` | Release shape: extract a **real** tarball and recompute size/sha256 for all six binaries against `bin/manifest.json` |
+| `npm run bin:check` | Recompute the staged binaries' final-file hashes from the manifest (size alone is not evidence) |
+| `npm run skills:cli-guard` | Static guard over non-vendored Skills: no bare `crwu`/`dws`/`ossutil`, `which`, `command -v`, `export PATH=`, or packaged `bin/<platform>/` paths in active instructions |
 | `npm run build:lib` | Build `lib/` for release (`prepack` uses it; fails if sources are missing) |
 
 CI runs the same gates on Ubuntu + Windows across Node 22 and 24, so a skipped gate cannot slip through.
+
+**The CRWU audit chain is Tool-first since 2026-09-25.** The audit subagent's prompt no longer contains the
+plugin binary directory, `export PATH`, or any bare `crwu` / `dws` / `ossutil` command; it calls business-level
+`crwu_*` tools, and the plugin executes the packaged binaries by absolute path through `ctx.shell`. When a tool
+is invisible, or a packaged binary is missing, the plugin fails with an explicit **capability gap** *before*
+creating the subagent — it never falls back to searching `PATH`. The vendored `skills/dws/**` layer is an
+upstream-compatible CLI layer and deliberately stays outside this chain, so the accurate statement is
+"the CRWU audit chain does not depend on `PATH`", not "the plugin is `PATH`-free".
 
 The package's **Client half is tested directly** in `tests/unit/client-package.test.mjs`.
 `tests/helpers/tsx-loader.mjs` registers an in-process Node loader that strips types and transforms JSX

@@ -42,9 +42,16 @@ description: >-
   统计口径 `data_diff_count` 按单文件 `00-总纲/执行契约/03-审核统计与台账规范` 加载；规则判断交回对象/方法技能。
 
 ## 前置与工具链（依赖说明）
-- `.xlsx`：优先 `python3` + `openpyxl`（读缓存值 `data_only=True`；再开一档读公式串做公式审查）。
+
+**解释器口径（先读）**：本技能所有 Python 脚本都用 **DSH 自带的 Python** 执行 ——
+自动审核模式用启动指令注入的**绝对路径**；独立使用技能时先调一次 `load_workspace_dependencies`
+并用返回的 `python` 字段，复用同一个路径。**禁止**裸 `python3` 名字、任何解释器查找、
+以及静默降级到系统解释器；本技能**不安装** Python、也不执行 pip。下面写的 `python3 scripts/<文件>`
+一律按这个路径执行。
+
+- `.xlsx`：用上面的解释器 + `openpyxl`（读缓存值 `data_only=True`；再开一档读公式串做公式审查）。
   未安装时可用 Python 标准库（zipfile+xml）读值（本会话已用此方式跑通）。
-- **C7 计算链重算引擎**：`python3 scripts/recalc_check.py --workbook <raw.xlsx> [--out <diff.json>]`
+- **C7 计算链重算引擎**：`<上面的解释器路径> scripts/recalc_check.py --workbook <raw.xlsx> [--out <diff.json>]`
   （随本技能安装、仅用 openpyxl 标准库，对 `.xlsx` **可见区**公式独立重算，H0 安全；见主流程 C7）。
 - `.xls`（老二进制）与**公式重算**：需 LibreOffice headless：
   `soffice --headless --convert-to xlsx --outdir <dir> <file.xls>`（含 `.xls→xlsx`、公式重算需 `--convert-to xlsx:Calc MS Excel 2007 XML` 后以 data_only 读取，或用 macro 强制重算）；
@@ -58,7 +65,7 @@ description: >-
   锚点落在隐藏区的媒体按 H0 **不进清单、不得引用**。
   （真实失效 2026-302150-LX9757-BG8677：`MKT-004` 判"位置图为空、询价截图缺失"，
   而原件实有 26 个媒体对象、位置图带 4.6/5.4/3.8 km 标注。）
-- 安装（如允许）：`python3 -m pip install --user openpyxl`；LibreOffice 需按系统安装。
+- `openpyxl` 由 **DSH 运行时自带**：缺失时记 capability gap 并停下，**不要**自行 pip 安装（判据见主流程与 `crwu-audit` 的「脚本运行时（Python）」）。LibreOffice 仍需按系统安装。
 
 ## 主流程
 0. **H0 人工隐藏区强制跳过（铁律 · 最先执行）**
@@ -92,7 +99,7 @@ description: >-
    - C5 跨项目模板串扰：只扫**可见区** 项目名/坐落/房屋名称/权证号/页码 等是否残留**其他项目**内容
      （如同一机构同系列模板漏替换，如"红桂路2087"出现在"红宝路39号"表内）；
    - C6 口径与假设残留：只扫**可见区** 模板固定文字、占位（xxxx号文号、日期序列号未格式化、无关表数据 0 值大行）。
-   - C7 计算链重算（只对 `.xlsx` raw 原件**可见区**公式格；`python3 scripts/recalc_check.py --workbook <raw.xlsx> [--out <diff.json>]`）：
+   - C7 计算链重算（只对 `.xlsx` raw 原件**可见区**公式格；`<上面的解释器路径> scripts/recalc_check.py --workbook <raw.xlsx> [--out <diff.json>]`）：
      独立重算可见区公式并与缓存值比对，**只报差异、不下判断**（引擎不自判谁对谁错）；
      支持算术 `+ - * / ^`、括号、比较、`SUM/PRODUCT/ROUND/IF/MAX/MIN`、单元格/绝对引用 `$A$1`、跨表引用 `'表名'!A1`；
      其余（百分比 `%`、文本拼接 `&`、未列函数）不实现 → 标「未重算」，绝不猜值；

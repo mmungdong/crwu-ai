@@ -129,9 +129,8 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 
 - `npm run version:set x.y.z` + 手写 CHANGELOG 一节 + `npm run version:check`（三处一致）；
 - 走 `plugin-v*` tag 发布（CI 里跑完整门禁 + `npm publish --provenance`），**不要手工 publish**；
-- **同一个版本号只发一次**：分发包 URL 就是 `<包名>-<版本>.tgz`，同版本重发 = 覆盖远端对象，
-  早装与重装的员工跑的不是同一份。`scripts/dist-plugin.mjs`（`make plugin-dist` 调用）按
-  「没有就上传 / 内容一致就跳过 / 内容不同就拒绝」执行，空跑用 `PLUGIN_DIST_DRY_RUN=1`；
+- **同一个版本号只发一次**：分发走 npm，已发布的版本号不可覆盖，所以改了内容就必须升版本号
+  —— 否则早装与重装的员工跑的不是同一份，而版本号也不再能定位问题；
 - 改了任何东西（代码 / 技能 / 文档 / 配置）→ **升版本号**再发。
 
 ## 11. 常见坑速查
@@ -141,6 +140,14 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 | 插件装上了、面板不出现 | `slots.inject` 被包进 `ctx.effect` → 激活期 `TypeError` | 直接调用 `slots.inject`，把 `effect` 留给自有副作用 |
 | 技能表里一个 crwu-* 都没有，日志干净 | 补丁里 `new URL('skills/', baseUrl)` 指向 profile 目录 | 按包名解析包目录（§3） |
 | 只有某一层技能全不见（如 `dws` 层），日志干净 | 补丁只注册了上层 `skills/`，而 DSH 对每个根只扫一层 | 一层一个 `customSkillDirs` 条目（§3）；`host-skills-patch.test.mjs` 会红 |
+| **升级 DSH 后插件装上了、界面里什么都没有，启动日志干净** | **0.1.7 起 peer 是硬门禁**：`peerDependencies` 的 `@deepseek-ai/dsh*` 与 `getDshRuntimeVersion()` 不匹配 → 整个 bundle 被当作不可读**跳过**，记进 `skippedBundles` | 把 peer 升到与运行时同线（本包写 `^0.1.7-rc.2`）；应急时用 profile 的 `compatibility.json` 精确豁免。判据是 peer，**不是** `engines.dsh` |
+| 所有命令都失败，报 `shell.execute is not a function`（或 `run is not a function`） | 0.1.7 的 shell 契约变更：`ShellExecutor.run(spec)` → `execute(spec)` + 句柄的 `result()` | 改 `src/host/shell/run.ts`；**测试替身也要一起改**，否则单测里每个 shell 调用都会静默变成「执行失败」 |
+| 想让员工零安装（把 `crwu`/`dws`/`ossutil` 放进插件 `bin/`，指望 DSH 挂上 PATH） | **DSH 没有这个机制**：`dsh-package-manifest` 不认 `bin` 字段、`dsh-bash-local` 的 `Config` 无 env/PATH、`dsh-shell-env` 只收 `DSH_*` 键（前缀校验抛错）、`.env` 明确拒绝 `PATH` | 插件按平台自己解析包内绝对路径（`src/host/platform/bin-dir.ts`）；**再加一条 export 到 PATH**（见下条） |
+| 审核子代理里 `dws: command not found`，而插件自己的调用正常（**2026-09-25 前的旧症状**） | 那时审核子代理要自己拼命令行，而它跑的是 **DSH shell 的 PATH**（实测 `/usr/bin:/bin:/usr/sbin:/sbin`） | **不要再用「给用户 export PATH」这条路**（那等于把执行世界的要求推给员工，还把沙箱/审批绕开了）。现在自研审核链路只走结构化 Tool，命令由插件用**包内绝对路径**经 `ctx.shell` 发出 —— 见 §12 |
+| 本机 `bin/` 里明明有二进制，员工装上却没有 | `npm pack` **静默丢弃符号链接**（相对/绝对都不进 tarball，只有真实文件会） | 一律落真实文件；`assert-pack` 在本地装配了 `bin/` 时逐个断言真在 tarball 里 |
+| `make plugin-pack` 打出来的包缺自带二进制 | `plugin-bin` 没跑，或并列 prerequisites 在 `make -j` 下并行、门禁跑在了装配之前 | `plugin-pack` 用配方**显式**依次跑 `plugin-bin` → `plugin-check` → `npm pack`；`pack:assert` 会逐个断言 |
+| 有人想把只读分发桶加回来（环境清单 / 安装说明 / 插件 TGZ） | 那四个用途都让员工机器的行为依赖一个**地址谁都能换**的远端对象 | 别加。二进制随包自带、清单内置、插件走 npm；`host-yaml-config.test.mjs` 有一条「只读整段不存在」的断言盯着 |
+| 包是新的，面板版本徽章还是上一版 | `PLUGIN_VERSION`（`src/host/consts.ts`）没跟着 `version:set` 走 | `version:set` / `version:check` 现在都管这一份；`host-package.test.mjs` 有 `ping.rev === pkg-<version>` 兜底 |
 | 某个 skill 静默消失 | `SKILL.md` frontmatter 有一行没缩进 | 修缩进；`skills:check` / 契约测试盯着数量 |
 | 样式被截断且不报错 | `WORKBENCH_STYLE_TEXT` 注释里出现了反引号 | 模板字符串里不许有反引号（连注释也不行） |
 | 卡片没边框、底色透明 | 用了 DSH 里**不存在**的 token | 到 theme 表核对；扫硬编码色值的测试扫不出这个 |
@@ -156,12 +163,33 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 | 想在插件面板里内嵌 DSH 原生对话 | `main` 槽位只有保留键 `conversation` 有会话绑定；客户端产物只能 `require('react')`，装不进 `ui-chat`；右栏是资源标签页、没有对话类型 | 自绘外壳 + 挂**真实会话**：`services.sessions` 的 `create/open/binding/list`（见下条），对话正文按会话事件流自己渲染 |
 | 自绘面板里读会话事件流总是空 | 会话的**事件窗口只对当前会话打开**（stage 语义），而且绑定与历史是**异步**就绪的 | 绑定/发问前调 `sessions.open(id)`（只切会话选中，**不动主面板**）；读一次 + 挂订阅不够 —— 再加一路 1.2s 轮询（引用比较，没变化不重渲染）；`create` 不支持标题，建完要 `rename`，会话名就是复用凭据 |
 | 事件映射一条都匹配不上（面板空着，控制台也不报错） | 会话事件是**信封 + data**：`{type, seq, time, data:{…}}`，字段在 `data` 里，不在顶层 | 先取 `event.data` 再读 `content/source/message/name`；**单测样本抄真实事件**（真机探针打印一条即可），想当然的平铺样本会让单测全绿而真机全空 |
+| 审核子代理「重新定位/搜索报告」：自己发现表单、列记录、翻案例目录 | 交接不完整：启动只给 objectId/seqNo/project，而记录接口要 `schemaCode` | Host 先解析表单 code（实例级 `H3yunFormResolver`，只发现一次、并发共享），再用 `crwu_audit_case_bootstrap` 按精确 objectId 取一次数落成 `输入快照/`；`schemaCode` 不进任何 Tool 参数（`host-tools.test.mjs` 逐字断言） |
+| 技能脚本报缺 `openpyxl` / 结果不可信 | 用了系统 `python3`：它不是审核运行时 | 只用 `load_workspace_dependencies` 返回的 DSH Python（实例级解析、只缓存成功）；审核启动解析不出来就不建子代理；技能正文禁止裸解释器名字与静默降级 |
+| 环境自检里 packaged 三件套又「未安装」 | 拿 PATH 当判据（Finder 启动的桌面端 PATH 只有 `/usr/bin:/bin`） | packageIntegrity 只认包内 `bin/<平台>/` 与 `bin/manifest.json`（比对 size），**不** `command -v`、**不**回退 PATH、**不**跑 `dws version`（会生成 `.dws/` 残留）；缺了就说「插件包不完整/平台不受支持」 |
+| 自检里出现「未安装 python3」 | 把系统解释器当依赖 | 环境页的 ③ 层是「DSH 脚本运行时」：拿不到就报 capability gap，不检查裸 `python3`、也不接受 `/usr/bin/python3` |
+| 讨论会话里模型去 `ls`/`find` 翻本机目录、并把材料下到 `cases/<流水号>`（错的） | 提示词只写了「不得读本地文件」，却**没给唯一允许的目录** → 模型自己猜 | 两条讨论提示词都注入 `fetchRules()`：唯一案例目录（`<工作空间>/<流水号>`，与审核链路共用 `caseDirOf()`）+ 用 `crwu_h3yun_file_get` 逐件重下 + 禁止 `ls`/`find`/`grep` 扫本机；本机路径只允许出现这一条（测试按正则抽出全部路径去重断言） |
+| 「讨论会话里工具调不动」的错觉 | 实测工具是通的（`crwu_audit_capabilities` 返回 8 个 available、附件都下回来了），真正在动的是并行的 `bash`/`read` 翻目录 | 先读真实会话记录再动手：`~/.dsh/sessions/<工作空间>/<会话>/session.v4.jsonl.zstd` 是**多帧 zstd**（逐帧 `zstdDecompressSync` 才解得全，`createZstdDecompress` 只给第一帧） |
+| 点「与 DeepSeek 讨论报告」/「复核报告」**跳不到对应的会话**（点下去什么都不发生，也不报错） | 客户端 `sessions` 服务上**没有** `open()`（`ClientSessions` 只有 retain/using/binding/create…）= 早先写的 `sessions?.open?.(id)` 被可选链吞成静默 no-op | 跳到会话只有一条路：`uiWorkspace.openSession(id)`（内部 `replaceMain(…, 'reveal')`）；`discussionPortOf` 里**不许**凭空发明服务上没有的方法，`DiscussionPort` 只放真实的四个动词 |
+| 讨论会话「建不出新对话」/ 每次都新建一条 | 会话 face 取得不对：`binding(id)` 只对**已被 retain** 的会话有值，刚 `create()` 的还没有 → rename 静默跳过、kickoff prompt 发不出去 | 用 `sessions.using(id, {source}, (ref) => ref.binding.session.rename/prompt)`；`binding` 只作旧宿主退路。改名失败要如实报（`aiRenameFailed`） |
+| 客户端适配器把服务方法「取出来再调」后第一个调用就 `TypeError` | `ClientSessions.create/using/binding` 都依赖 `this`（`this.manager` / `this.scopes`） | 适配器里一律 `svc.create(...)` 经接收者调用；也不要 `{ ...sessions }`（方法在原型上，展开只剩字段） |
+| 安装提示词还让 agent 手工跑 `crwu h3yun session login` / `dws auth login` | 旧文案把「本机零安装」只做了一半：二进制随包了，但登录仍交给 agent 拼命令行 | 改成在面板 ③ 登录认证 里点按钮（`install-prompt.ts` + `install/INSTALL-PROMPT.md`），`host-install-prompt.test.mjs` 里有一条「不许出现可直接照抄的登录命令」 |
+| 想「顺手」把插件 `bin/<平台>/` 挂进用户 shell PATH（或往 `~/bin` 拷副本） | 那会让「手工拼命令行」看起来可用，绕开沙箱/审批；插件升级后该路径还可能失效 | **不要这么做**。插件用包内绝对路径启动；`~/.zshrc` 里那条 PATH 注入已按此口径删除，并留了「为什么不要再加回来」的注释 |
+| 审核子代理自己去 `which crwu` / `command -v dws` / `find … ossutil` | 提示词里写着「命令在哪」，或某个 Tool 不可见时它自然去找退路 | 审核链路只给结构化 Tool；插件在**创建子代理之前**做确定性能力门禁（`host/audit/preflight.ts`），缺 Tool 直接失败并点名 |
+| 某个 Tool 在根 Agent 可见、在**子代理**却不可见 | 子代理是新的 scope，预设/委托运行时可以再加一层 restriction | 子代理发布后按**它自己的 scope** 复查（`missingAuditTools(ctx, childAgent)`），被收窄就立刻停掉该子会话并失败 |
+| `ctx.tools.get(name, agent)` 老是返回 undefined | scope 传错了：DSH 的 scoped 路由 key **就是 agent 对象**（`scopeTarget(base, exec.agent)`），不是 `agent.ctx` | 传 Agent 对象本身；`agent.ctx` 只用于「优先用调用者的 Context 执行 shell」 |
+| Tool 的输出 schema 校验总是失败 | `defineTool` 的 schema DSL **没有 `required: [...]` 数组**：必填是**每个属性上的 `required: true`**；也不支持 `type: ['integer','null']` | 见 `src/host/tools/*.ts` 的写法；`type` 只允许单一类型，联合用 `oneOf` |
+| shell 取消不生效，`exec.signal` 像是被丢掉 | `runShell` 直到 2026-09-25 才接收 `signal` | Tool 把 `exec.signal` 传进 `runShell` → `ShellExecRequest.signal`；`ShellResult.aborted` 单独一位，别和 `error`（基础设施故障）混用 |
+| 审批拒绝被报成「沙箱不可用」 | DSH 的三类失败文案不同：审批是 `approval / rejected / cancelled`，基础设施是 spawn/服务缺失 | `src/host/tools/outcome.ts` 的 `APPROVAL_FAILURE` 一处收口；`classifyRun` 先看 `aborted`，再看审批，最后才是退出码 |
+| `assert-pack` 说通过，员工装到的二进制却是坏的 | 旧判据只看「文件在不在、非不空」—— 内容无关 | `bin/manifest.json` 记**最终文件**的 size + sha256，`sync-binaries --check` 与 `assert-pack --strict` 都按清单重算 |
+| 干净发布机上打出来的包没有 `bin/` | `bin/` 是 gitignore 的构建产物，发布作业自己没装配 | `release.yml` 先跑 `binaries` job（macOS 交叉编译 + 装配 + 自检），artifact 交给发布 job；发布作业跑 `pack:assert:strict`，缺一个平台/工具/manifest 就红 |
 | 悬停操作列的「AI 审核 / 重新审核」时整个按钮**全黑** | 选择器特异性 + 顺序：基础 `.crwu-audit-btn` 是 (0,1,0)，§20 迁移覆盖层把它写在样式表**最后**；单类变体 `.crwu-audit-btn-primary` 也是 (0,1,0) → 变体底色与字色被基础规则吃掉（主按钮看起来就是普通按钮），而变体那条 `:hover` (0,3,0) 反倒生效 —— 深底 + 深字 | 变体改用**双类** `.crwu-audit-btn.crwu-audit-btn-primary`（(0,2,0)）把顺序依赖去掉；hover 的选择器组里带上基础按钮的 `:hover:not(:disabled)`；hover 里**不要**写 `opacity`（会盖掉 `:disabled` 的 0.45）。分辨"是色值不对还是规则没生效"直接用 CSSOM：遍历 `document.styleSheets` + `element.matches(sel)`，按顺序打印所有命中该元素的 `background/color` 声明（`getComputedStyle` 只看结果，看不出谁赢了） |
 | 改了 `~/.dsh/settings.yaml` 的 `ui-theme.preference` 来验另一套主题，之后文件被改回去/改不回来 | 正在跑的 profile 进程会把内存里的主题偏好**回写**这个文档；两个实例（用户 `web` + 自测 profile）同时活着时更乱 | 验主题时**先停掉会回写的实例**再改文件；验完按备份逐字还原（`diff` 确认），最后重启一个实例读回用户原值。主题是 Host 侧设置（`~/.dsh/settings.yaml` 的 `ui-theme`），**不是**浏览器 localStorage，也不是 `prefers-color-scheme` |
 | 往页面里注入探针按钮量颜色，量出来全是 `rgba(0,0,0,0)` + 继承色 | 探针挂在 `document.body` 上，而 `--crwu-*` token 定义在**面板子树**（`.crwu-audit-root` / `.crwu-audit-surface`）里；token 取不到 → 每条 `var()` 声明都失效、退化成透明/继承（几何类声明照旧生效，所以"看起来像样式没加载"） | 探针必须挂进**真实的面板节点内部**（如 `.crwu-audit-td-action .crwu-audit-row-actions`），要浮在角落再给 `position: fixed`（自定义属性按 DOM 继承，与布局无关）；量颜色时把**邻近的真实按钮一起读**，能立刻发现"三个按钮全透明"这种整体失效 |
 | 深色主题下工作台还是浅色（或反之） | 拿 `@media (prefers-color-scheme: dark)` 当判据 —— 那跟的是**操作系统**，不是用户在 Harness 里选的偏好 | DSH 的主题插件把解析后的明暗写到 **`body[data-ds-dark-theme]`**；在 §19 里用 `body[data-ds-dark-theme] .crwu-audit-root { --crwu-…: … }` 覆盖同名 token，规则与组件一份都不用改 |
 | 「样式里出现硬编码颜色」的红条报在一个根本没写颜色的地方 | 单测是**先把 §19「工作台 Design Token」整块剔除**再扫 `#hex` / `rgb(` / `hsl(`；那块靠 `/* ═` 分隔线结束 | 新的字面量色值只能加进 §19 那一块；别在别处补 `#hex`，也别动 §19 的标题文字（正则按它定位） |
 | 新加的类名没有样式，页面看起来"少了一块" | `WORKBENCH_CLASSES` 里加了键但样式表里没有 `.<类名>` 规则 | 有一条单测断言"每个类名常量都有一条规则"（`client-package.test.mjs`），补规则即可；新写的断言记得**注入缺陷证伪一次** |
+| `oss-index` / `report-files` 等测试突然全部报「插件包不完整」 | `resolveOssutil` **删掉了 PATH 回退**（2026-09-25）：只认包内 `bin/<平台>/ossutil`，替身里的 `command -v ossutil` 回应已经不算数 | 测试的 fs 替身要让 `bundledBinaryPath(platform, 'ossutil')` 这个 key `stat` 出 `{type:'file'}`，且 `platform` 必须是 `darwin-arm64`/`win32-x64` 这类规范键（写成 `'darwin'` 会直接判成平台不受支持） |
+| 环境自检突然对一台装好 Python 的机器报「未安装」/ 少一项 | 清单曾把 `crwu`/`dws`/`ossutil`（packaged）与 `python3`（runtime）混在一张 `binaries[]` 里统一按 PATH 命令探 | 清单已拆成 `packaged[]` + `runtime.python`（`crwu.env-manifest.v3`）：packaged 只 `stat` 包内文件比字节数（**不跑命令**），runtime 只认 **DSH 自带** Python（缺了报 capability gap，不是「未安装」）；`blocked` 里插件包不完整只算一项 |
 | 客户端里点「复制」没反应也不报错 | `navigator.clipboard` 在非安全上下文（老宿主 / 非 https）里是 `undefined`，`writeText` 也可能 reject | `ReportPane.copySeqNo` 先判 `typeof clipboard?.writeText === 'function'`，失败就**静默不改状态**（不假装复制成功），Hover 复制图标只在行悬停/聚焦时出现 |
 | 同一行里的次级控件看起来"颜色不一致" | 各自的底色被写成了不同的值（一个填充、一个透明、一个又是 Ghost） | 次级控件（刷新 / 小鲸鱼 / ••• / 复制）**只允许走 `--crwu-control*` 这一对**；单测「次级控件共用同一套中性底」盯着 |
 | 鼠标移到某一行时，小鲸鱼 / ••• 的底色"消失" | 中性控件的底与 `--crwu-hover`（行悬停底）取了同一档 | `--crwu-control` 必须与 `--crwu-hover` **分得开**（浅色 `#EFF0F2` vs `#F5F6F7`、深色 `#2E2F34` vs `#222326`），且浅深两套里各写一遍 |
@@ -176,3 +204,45 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 | 点了 DeepSeek 直接建会话，把半个月前的审核结论当成"当前问题" | 没有做版本检查 | 先 `freshnessOf()`（`digest → version → etag → mtime → 时间退化`）；**纯时间差只给 possibly_stale**，`stale` 必须有 digest/version/etag 证据；缺原始报告要进 Limited 并如实写进上下文 |
 | | 抽屉/浮层里的菜单项点了没反应（脚本里 `getByRole('button', { name })` 超时） | 菜单项挂的是 `role="menuitem"`，可访问角色不是 button | 用类名 + 文案定位（`.crwu-audit-float-item` + hasText）；`install/browser-check.mjs` 里已经踩过两次 |
 | 用户报「界面颜色不对」，但自己本地看是对的 | 主题是**服务端设置**（`~/.dsh/settings.yaml` 的 `ui-theme.preference`），用户切到 dark 之后整页观感全变（主操作会从深色实心翻成近白实心） | 改配色先在**当前真实主题**下量一遍：读 `~/.dsh/settings.yaml` 或用浏览器会话里 `document.body.hasAttribute('data-ds-dark-theme')` 确认，不要默认浅色 |
+
+## 12. 自研审核链路：结构化 Tool 优先（2026-09-25）
+
+**一句话口径**：审核子代理**只**调用业务级 Tool，插件**只**经 `ctx.shell` 执行包内二进制；
+链路里没有「让模型自己找命令」这条退路。
+
+### 12.1 谁在哪一层
+
+| 层 | 职责 | 文件 |
+| --- | --- | --- |
+| Tool 定义 | 模型可见的 schema、输出契约、失败分类 | `src/host/tools/{capabilities,h3yun,knowledge,oss,dingtalk}.ts` |
+| 注册与生命周期 | `ctx.tools.register()` + 注销、可见性判据 | `src/host/tools/register.ts` |
+| 命令构造 | `dws` argv 白名单、包内绝对路径、`ctx.shell` | `src/host/dws/run.ts`、`src/host/crwu/run.ts` |
+| 纯逻辑 | 回传计划、知识库目录树寻址（可单测，不碰 IO） | `src/host/dws/{plan,knowledge-tree}.ts` |
+| 门禁 | 案例目录包含、失败分类、能力预检 | `src/host/tools/{case-dir,outcome}.ts`、`src/host/audit/preflight.ts` |
+
+### 12.2 三条不许破的边界
+
+1. **模型不提交基础设施参数**：binary / argv / command / sandbox 模式 / bucket / 组织 / 团队空间 /
+   profile / nodeId 都不在 schema 里。审核 Tool 的输入只有业务标识 + `caseDir`。
+2. **命令不经模型**：`dws` 走 `runDws`（argv 前缀白名单，表外默认拒绝），`crwu` 走 `runCrwu` 且审核
+   Tool 先做严格二进制解析，`ossutil` 只在 `crwu_audit_oss_publish` 里拼。
+3. **提权不由模型触发**：只有本机凭据命令 + 已授权（`trustCredentials`）+ `workspaceRoot` 已知，
+   插件才在请求里带 `danger-full-access`；其它一律默认沙箱。
+
+### 12.3 怎么验
+
+- `npm test`：`host-tools.test.mjs`（注册/schema/逃生字段/包内路径/signal/沙箱/钉钉/OSS/失败分类）、
+  `host-audit-prompt.test.mjs`（提示词里只有 Tool 名，没有路径与裸命令）、
+  `host-audit-lifecycle.test.mjs`（缺 Tool 或能力缺失时**不得创建子代理**）、
+  `host-bin-manifest.test.mjs`（清单哈希判据）、`host-skills-guard.test.mjs`（技能侧守卫 + 证伪）。
+- `npm run skills:cli-guard`：非 vendored 技能的活跃指令里不许出现裸 CLI / `which` / `command -v` /
+  `export PATH=` / 包内 `bin/<平台>/`。非 DSH 宿主兼容章节必须用
+  `<!-- crwu-cli-guard:legacy-compat-start/end -->` 包起来，且**自动审核主路径不得引用兼容层**。
+- `npm run pack:assert:strict`：真实 tarball 里两个平台六个二进制 + `bin/manifest.json`，逐个重算哈希。
+
+### 12.4 vendored 兼容边界（不许含糊）
+
+`skills/dws/**` 是上游 `dingtalk-workspace-cli` 的**原样正文**，本次改造**没有**改它：
+它的 `dws …` 命令是给非 DSH 宿主与人工用的，内容一致性由 `npm run dws:check` 按 provenance 守。
+所以正确的说法是：**CRWU 自研自动审核链路不依赖 PATH；vendored DWS 技能仍是命令行兼容层。**
+不要对外说「整个插件摆脱了 PATH」—— 那不是事实。

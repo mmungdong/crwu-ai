@@ -2,15 +2,6 @@ import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import type { WorkbenchConfig } from './config.ts'
 
-interface ReadonlyOssConfig {
-  bucket: string
-  endpoint: string
-  baseUrl: string
-  manifestKey: string
-  installDocKey: string
-  pluginPrefix: string
-}
-
 interface ProtectedOssConfig {
   bucket: string
   endpoint: string
@@ -23,7 +14,7 @@ interface ProtectedOssConfig {
 export interface WorkbenchDeployment {
   schemaVersion: 1
   runtime: Omit<WorkbenchConfig, 'configSource' | 'ossBaseUrl'>
-  oss: { readonly: ReadonlyOssConfig; protected: ProtectedOssConfig }
+  oss: { protected: ProtectedOssConfig }
   source: string
 }
 
@@ -69,10 +60,6 @@ function objectKey(value: unknown, path: string): string {
   return string(value, path).replace(/^\/+|\/+$/g, '')
 }
 
-function objectUrl(baseUrl: string, key: string): string {
-  return `${baseUrl}/${objectKey(key, 'OSS object key')}`
-}
-
 /** 把唯一 YAML 配置收窄成 Host 可直接使用的运行时配置。 */
 export function parseWorkbenchYaml(sourceText: string, source = '<inline>'): WorkbenchDeployment {
   let parsed: unknown
@@ -88,17 +75,8 @@ export function parseWorkbenchYaml(sourceText: string, source = '<inline>'): Wor
   const report = record(root.report, 'report')
   const audit = record(root.audit, 'audit')
   const oss = record(root.oss, 'oss')
-  const readonlyValue = record(oss.readonly, 'oss.readonly')
   const protectedValue = record(oss.protected, 'oss.protected')
 
-  const readonly: ReadonlyOssConfig = {
-    bucket: string(readonlyValue.bucket, 'oss.readonly.bucket'),
-    endpoint: string(readonlyValue.endpoint, 'oss.readonly.endpoint'),
-    baseUrl: httpsUrl(readonlyValue.baseUrl, 'oss.readonly.baseUrl'),
-    manifestKey: objectKey(readonlyValue.manifestKey, 'oss.readonly.manifestKey'),
-    installDocKey: objectKey(readonlyValue.installDocKey, 'oss.readonly.installDocKey'),
-    pluginPrefix: objectKey(readonlyValue.pluginPrefix, 'oss.readonly.pluginPrefix'),
-  }
   const linkMode = string(protectedValue.linkMode, 'oss.protected.linkMode')
   if (linkMode !== 'signed' && linkMode !== 'public') {
     throw new Error('oss.protected.linkMode 只能是 signed 或 public')
@@ -115,12 +93,10 @@ export function parseWorkbenchYaml(sourceText: string, source = '<inline>'): Wor
   return {
     schemaVersion: 1,
     source,
-    oss: { readonly, protected: protectedOss },
+    oss: { protected: protectedOss },
     runtime: {
       caseRoot: string(workspace.caseRoot, 'workspace.caseRoot', true),
       preferWorkspaceTitle: string(workspace.preferTitle, 'workspace.preferTitle'),
-      manifestUrl: objectUrl(readonly.baseUrl, readonly.manifestKey),
-      installDocUrl: objectUrl(readonly.baseUrl, readonly.installDocKey),
       formName: string(report.formName, 'report.formName'),
       ossBucket: protectedOss.bucket,
       ossPrefix: protectedOss.auditPrefix,
@@ -136,14 +112,4 @@ export function parseWorkbenchYaml(sourceText: string, source = '<inline>'): Wor
 /** 开发模式可显式传路径；包内运行时传入随 TGZ 安装的 YAML 路径。 */
 export function loadWorkbenchYaml(configFile: string): WorkbenchDeployment {
   return parseWorkbenchYaml(readFileSync(configFile, 'utf8'), configFile)
-}
-
-/** 从只读 OSS 配置确定唯一版本 TGZ 的写入地址和员工安装地址。 */
-export function distributionTargets(config: WorkbenchDeployment, tarballName: string): { ossUrl: string; installUrl: string } {
-  const filename = objectKey(tarballName, 'tarballName')
-  const key = `${config.oss.readonly.pluginPrefix}/${filename}`
-  return {
-    ossUrl: `oss://${config.oss.readonly.bucket}/${key}`,
-    installUrl: objectUrl(config.oss.readonly.baseUrl, key),
-  }
 }

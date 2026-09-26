@@ -2,11 +2,14 @@
  * 环境自检页的**分层规则**测试（`src/client/features/environment/layers.ts`）。
  *
  * 用户口径："这个检查很乱，对普通员工很不友好" —— 乱在没有层次。所以这里钉的不是文案措辞，
- * 而是四条可观察的规则：
- *   1. 四层固定顺序与计数（工具 → 登录认证 → 上传配置 → 外部数据）；
+ * 而是可观察的规则：
+ *   1. **五层固定顺序**：② 插件组件 → ③ DSH 脚本运行时 → ④ 登录与凭据授权 → ⑤ OSS 交付配置
+ *      → ⑥ 外部数据（① 案例根目录由 WorkspaceCard 承担，**不在** layers 里）；
  *   2. 没就绪的项排在该层最前；
  *   3. 每层的 `needsWork` 与 Host 的权威结论（`blocked` / `allOk`）不打架；
- *   4. **每个没就绪的项都必须有"怎么配"的文案与对应交互**，已就绪的项不许留半句提示。
+ *   4. **每个没就绪的项都必须有"怎么配"的文案与对应交互**，已就绪的项不许留半句提示；
+ *   5. 三件随包组件是**一个**聚合项，且整页**不许**出现「请安装 crwu / dws / ossutil」这类文案 ——
+ *      它们随插件发布，员工机器上零安装。
  *
  * 样本用真实 EnvResult 片段（字段名与 Host 的应答一致），不是自造的简化结构。
  */
@@ -19,119 +22,155 @@ const { envLayers, envLayerSet, envTodoText } = await import(
 )
 const { zhCN } = await import(new URL('src/client/locales/zh-CN.ts', ROOT).href)
 
-/** 一台装齐了的机器：五个工具、两个登录、AK 可用、iFinD 有 token。 */
+const PKG_ROOT = '/Users/x/.dsh/plugins/dsh-crwu-workbench'
+const tool = (name, size, patch = {}) => ({
+  name,
+  label: `${name} 组件`,
+  file: name,
+  present: true,
+  sizeBytes: size,
+  manifestSizeBytes: size,
+  sha256: `sha-${name}`,
+  expectedVersion: name === 'dws' ? '>=0.2.14' : '',
+  note: `${name} 的用途`,
+  ok: true,
+  reason: '',
+  ...patch,
+})
+
+/** 一台装齐了的机器：插件包完整、DSH 运行时正常、两条登录、AK 可用、iFinD 有 token。 */
 function okEnv() {
   return {
     ok: true,
-    manifestSource: 'https://x.invalid/m.json', manifestKind: 'url', manifestLoaded: true,
-    manifestError: '', manifestUpdatedAt: '2026-09-20T10:00:00.000Z', installDocUrl: 'https://doc.invalid/i.md',
+    configSource: '/tmp/test-crwu-workbench.yml',
     platform: 'darwin-arm64',
-    checks: [
-      {
-        name: 'node', command: 'node', required: true, note: '最上游运行时：dws 与 iFinD 的 Node 路径都依赖它',
-        found: true, path: '/usr/local/bin/node', versionText: 'v22.19.0', actual: '22.19.0', expect: '>=16.7',
-        ok: true, reason: '', url: '', sha256: '', target: '',
-      },
-      {
-        name: 'crwu', command: 'crwu', required: true, note: '审核编排 CLI（crwu-audit 全流程）',
-        found: true, path: '/Users/x/.local/bin/crwu', versionText: '0.0.1', actual: '0.0.1', expect: '>=0.0.1',
-        ok: true, reason: '', url: '', sha256: '', target: '',
-      },
-      {
-        name: 'dws', command: 'dws', required: true, note: '钉钉 CLI（npm 包 dingtalk-workspace-cli）',
-        found: true, path: '/usr/local/bin/dws', versionText: '1.0.0', actual: '1.0.0', expect: '>=0.1',
-        ok: true, reason: '', url: '', sha256: '', target: '',
-      },
-      {
-        name: 'python3', command: 'python3', required: true, note: '技能自带脚本运行时',
-        found: true, path: '/usr/bin/python3', versionText: '3.11.5', actual: '3.11.5', expect: '>=3.8',
-        ok: true, reason: '', url: '', sha256: '', target: '',
-      },
-      {
-        name: 'ossutil', command: 'ossutil', required: true, note: '阿里云 OSS 上传（按平台自动选用对应包）',
-        found: true, path: '/Users/x/.local/bin/ossutil', versionText: '1.7.19', actual: '1.7.19', expect: '',
-        ok: true, reason: '', url: '', sha256: '', target: '',
-      },
-    ],
-    ifindKey: { path: '/Users/x/.crwu/ifind.json', required: true, ok: true, reason: '', tokenLength: 64 },
+    packageIntegrity: {
+      ok: true, supported: true, platform: 'darwin-arm64',
+      packageRoot: PKG_ROOT, manifestPath: `${PKG_ROOT}/bin/manifest.json`, manifestFound: true,
+      tools: [tool('crwu', 7351330), tool('dws', 32432720), tool('ossutil', 10849218)],
+      note: '随包清单：darwin-arm64 / 3 个组件',
+    },
+    runtime: {
+      ok: true, state: 'ok', path: '/opt/dsh/python/bin/python3', versionText: '3.12.3',
+      distributions: { openpyxl: '3.1.2', 'python-docx': '1.1.2' },
+      missingPackages: [], error: '', source: 'DSH 自带（bundled runtime）',
+      expect: '>=3.10', required: true, requiredPackages: ['openpyxl', 'python-docx'],
+      note: '审核技能脚本用的 Python 运行时，由 DSH 自带',
+    },
     services: [
       { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1 · 到期 2026-10-01' },
       { id: 'dingtalk', label: '钉钉认证', required: true, ok: true, state: '已登录', detail: '' },
-      { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true, ok: true, state: 'AK 正常', detail: 'AK 可访问 oss://crwu-bucket/' },
     ],
-    blocked: [], allOk: true, home: '/Users/x', trust: { h3yun: false },
+    delivery: {
+      oss: {
+        enabled: true, bucket: 'crwu-bucket', endpoint: 'oss-cn-x.aliyuncs.com', prefix: 'crwu/audit',
+        linkMode: 'signed', linkTtl: 3600, autoUpload: true, ossutilReady: true,
+        ossutilPath: `${PKG_ROOT}/bin/darwin-arm64/ossutil`,
+      },
+      ossCred: {
+        path: '/Users/x/.ossutilconfig', exists: true, endpoint: 'oss-cn-x.aliyuncs.com',
+        accessKeyIdMasked: 'AKID****7890', hasSecret: true, hasSts: false, language: 'CH',
+      },
+      probe: { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true, ok: true, state: 'AK 正常', detail: 'AK 可访问 oss://crwu-bucket/' },
+    },
+    external: { path: '/Users/x/.crwu/ifind.json', required: true, ok: true, reason: '', tokenLength: 64 },
+    blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
     workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
     auditRoot: { sessionId: 'session-abcdef12', title: '审核子代理根节点', workspacePath: '/cases/a', assignedAt: '', usable: true, reason: '' },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-    oss: {
-      bucket: 'crwu-bucket', prefix: 'crwu/audit', endpoint: 'oss-cn-x.aliyuncs.com', linkMode: 'signed', linkTtl: 3600,
-      autoUpload: true, ossutilReady: true, probe: { ok: true, state: 'AK 正常', detail: 'AK 可访问 oss://crwu-bucket/' },
-    },
-    ossCred: {
-      path: '/Users/x/.ossutilconfig', exists: true, endpoint: 'oss-cn-x.aliyuncs.com',
-      accessKeyIdMasked: 'AKID****7890', hasSecret: true, hasSts: false, language: 'CH',
-    },
+    me: { name: '', org: '', userId: '' },
   }
 }
 
-/** 一台什么都没配的机器（含"装上了但版本不符"和"登录过期"两种边界）。 */
+/** 一台什么都没配的机器（插件包不全、运行时缺包、登录过期、没有 AK、iFinD 空）。 */
 function badEnv() {
-  const env = okEnv()
   return {
-    ...env,
+    ...okEnv(),
     platform: '',
-    checks: [
-      { ...env.checks[0], found: false, path: '', versionText: '', actual: '', ok: false, reason: '未找到命令 node' },
-      {
-        ...env.checks[1], found: true, path: '/Users/x/.local/bin/crwu', versionText: '0.0.0', actual: '0.0.0',
-        ok: false, reason: '版本 0.0.0 不满足 >=0.0.1',
-        // 没有本平台预编译包：url 为空时文案必须如实说，不能给一个假下载地址。
-        url: '', target: '/Users/x/.local/bin/crwu',
-      },
-      env.checks[2], env.checks[3], env.checks[4],
+    allOk: false,
+    blocked: [
+      '运行平台未识别', '插件内置组件', 'DSH 脚本运行时',
+      '氚云（H3Yun）员工会话', '钉钉认证', '阿里云 OSS（AK 权限）', 'iFinD 密钥',
     ],
+    packageIntegrity: {
+      ...okEnv().packageIntegrity,
+      ok: false, supported: false,
+      tools: [
+        tool('crwu', 7351330),
+        tool('dws', 32432720, { present: false, sizeBytes: 0, manifestSizeBytes: 32432720, ok: false, reason: '插件包不完整：包内缺少 dws' }),
+        tool('ossutil', 10849218),
+      ],
+      note: '插件包不完整 / 平台不受支持',
+    },
+    runtime: {
+      ...okEnv().runtime,
+      ok: false, state: 'missing-package', missingPackages: ['openpyxl'],
+      versionText: '3.12.3', error: 'DSH 自带运行时缺少必需包：openpyxl',
+    },
     services: [
       { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: false, state: '已过期', detail: '到期 2026-09-01' },
       { id: 'dingtalk', label: '钉钉认证', required: true, ok: false, state: '未登录', detail: '请先 dws login' },
-      { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true, ok: false, state: '无凭据', detail: '未找到 OSS 凭据' },
     ],
-    ifindKey: { path: '/Users/x/.crwu/ifind.json', required: true, ok: false, reason: 'auth_token 为空', tokenLength: 0 },
-    blocked: ['运行平台未识别', 'node', 'crwu', '氚云（H3Yun）员工会话', '钉钉认证', '阿里云 OSS（AK 权限）', 'iFinD 密钥'],
-    allOk: false,
-    ossCred: { path: '', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
-    oss: { ...env.oss, probe: { ok: false, state: '无凭据', detail: '未找到 OSS 凭据' } },
+    delivery: {
+      oss: { ...okEnv().delivery.oss, ossutilReady: true },
+      ossCred: { path: '', exists: false, endpoint: '', accessKeyIdMasked: '', hasSecret: false, hasSts: false, language: '' },
+      probe: { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true, ok: false, state: 'AK 未配置', detail: 'AK and SK are both empty' },
+    },
+    external: { path: '/Users/x/.crwu/ifind.json', required: true, ok: false, reason: 'auth_token 为空', tokenLength: 0 },
   }
 }
 
-test('四层顺序与计数固定：工具 → 登录认证 → 上传配置 → 外部数据', () => {
+test('五层顺序与计数固定：插件组件 → 运行时 → 授权 → 交付 → 外部数据（① 不在层里）', () => {
   const ok = envLayers(okEnv())
-  assert.deepEqual(ok.map((layer) => layer.id), ['tools', 'auth', 'upload', 'external'])
+  assert.deepEqual(ok.map((layer) => layer.id), ['packages', 'runtime', 'auth', 'delivery', 'external'])
   assert.deepEqual(ok.map((layer) => layer.title), [
-    zhCN.envLayerTools, zhCN.envLayerAuth, zhCN.envLayerUpload, zhCN.envLayerExternal,
+    zhCN.envLayerPackages, zhCN.envLayerRuntime, zhCN.envLayerAuth, zhCN.envLayerDelivery, zhCN.envLayerExternal,
   ])
-  assert.deepEqual(ok.map((layer) => `${layer.pass}/${layer.total}`), ['5/5', '2/2', '1/1', '1/1'])
-  assert.deepEqual(ok.map((layer) => layer.needsWork), [false, false, false, false])
+  // 层标题自带 ②..⑥ 编号：① 是 WorkspaceCard，不许混进 layers。
+  for (const [index, layer] of ok.entries()) {
+    assert.equal(layer.title.startsWith(['②', '③', '④', '⑤', '⑥'][index]), true, `第 ${String(index + 2)} 层的标题要带编号：${layer.title}`)
+  }
+  assert.deepEqual(ok.map((layer) => layer.id).includes('tools'), false, '旧的「工具」层必须消失')
+  assert.deepEqual(ok.map((layer) => layer.id).includes('upload'), false, '旧的上传层改名成交付配置')
+  assert.deepEqual(ok.map((layer) => `${layer.pass}/${layer.total}`), ['1/1', '1/1', '2/2', '1/1', '1/1'])
+  assert.deepEqual(ok.map((layer) => layer.needsWork), [false, false, false, false, false])
 
   const bad = envLayers(badEnv())
-  // 工具层 5 个里只有 3 个通过（node 没装、crwu 版本不符）；③ 两条登录都没过；④⑤ 各一条。
-  assert.deepEqual(bad.map((layer) => `${layer.pass}/${layer.total}`), ['3/5', '0/2', '0/1', '0/1'])
-  assert.deepEqual(bad.map((layer) => layer.needsWork), [true, true, true, true])
+  assert.deepEqual(bad.map((layer) => `${layer.pass}/${layer.total}`), ['0/1', '0/1', '0/2', '0/1', '0/1'])
+  assert.deepEqual(bad.map((layer) => layer.needsWork), [true, true, true, true, true])
+})
+
+test('② 插件组件是**一个**聚合项：显示「插件内置组件 3/3 完整」，缺失时只说插件包不完整', () => {
+  const ok = envLayerSet(okEnv()).packages
+  assert.equal(ok.items.length, 1, '三件组件不许各占一行')
+  assert.equal(ok.items[0].id, 'packages')
+  assert.equal(ok.items[0].name, zhCN.envItemPackagesName)
+  assert.equal(ok.items[0].stateText, zhCN.envItemOk)
+  assert.equal(ok.items[0].meta.includes(`${zhCN.envItemPackagesName} 3/3 ${zhCN.envPackagesComplete}`), true)
+
+  const bad = envLayerSet(badEnv()).packages.items[0]
+  assert.equal(bad.state, 'missing')
+  assert.equal(bad.stateText, zhCN.envPackagesBroken)
+  assert.match(bad.stateText, /插件包不完整|平台不受支持/)
+  // 缺哪一件要说得出（但它仍然是同一项）。
+  assert.match(bad.reason, /dws|插件包不完整/)
+  assert.equal(bad.fixKind, 'packages')
 })
 
 test('没就绪的项排在该层最前（同组内保持 Host 给的顺序）', () => {
-  const env = okEnv()
-  env.checks = [env.checks[0], env.checks[2], env.checks[3], env.checks[4], { ...env.checks[1], ok: false, found: true, reason: '版本不符' }]
-  const tools = envLayerSet(env).tools
-  assert.equal(tools.items[0].id, 'tool-crwu', '没就绪的 crwu 要排到最前')
-  assert.deepEqual(
-    tools.items.slice(1).map((item) => item.id),
-    ['tool-node', 'tool-dws', 'tool-python3', 'tool-ossutil'],
-    '已就绪的项保持 Host 的顺序',
-  )
-
-  // 两条登录都排在前面：氚云是「需重新登录」（已过期），钉钉是「未配置」（未登录）。
   const auth = envLayerSet(badEnv()).auth
+  // 氚云是「需重新登录」（已过期），钉钉是「未配置」（未登录）：两条都没就绪时保持 Host 顺序。
+  assert.deepEqual(auth.items.map((item) => item.id), ['service-h3yun', 'service-dingtalk'])
   assert.deepEqual(auth.items.map((item) => item.state), ['reauth', 'missing'])
+
+  const base = okEnv()
+  const env = {
+    ...base,
+    services: [base.services[1], { ...base.services[0], ok: false, state: '未绑定', detail: 'no session' }],
+  }
+  const mixed = envLayerSet(env).auth
+  assert.equal(mixed.items[0].id, 'service-h3yun', '没就绪的要排到最前')
+  assert.equal(mixed.items[1].id, 'service-dingtalk')
 })
 
 test('每层 needsWork 与 Host 的 blocked / allOk 不打架', () => {
@@ -147,9 +186,10 @@ test('每层 needsWork 与 Host 的 blocked / allOk 不打架', () => {
   assert.equal(bad.blocked.length > 0, true)
   assert.equal(badLayers.some((layer) => layer.needsWork), true, 'blocked 非空时至少有一层要处理')
   // Host 的 blocked 里凡是被层覆盖的项，都必须能在层里找到对应的没就绪项（不丢人话）。
-  const notReady = badLayers.flatMap((layer) => layer.items).filter((item) => item.state !== 'ok').map((item) => item.name)
-  for (const name of ['node', 'crwu', '氚云（H3Yun）员工会话', '钉钉认证']) {
-    assert.equal(notReady.includes(name), true, `blocked 提到的「${name}」必须在层里表现为没就绪`)
+  const notReady = badLayers.flatMap((layer) => layer.items).filter((item) => item.state !== 'ok')
+  const names = notReady.map((item) => item.name)
+  for (const name of ['插件内置组件', 'DSH 脚本运行时（Python）', '氚云（H3Yun）员工会话', '钉钉认证']) {
+    assert.equal(names.includes(name), true, `blocked 提到的「${name}」必须在层里表现为没就绪`)
   }
 })
 
@@ -170,39 +210,107 @@ test('每个没就绪的项都有"怎么配"的文案与交互；已就绪的项
   }
 })
 
-test('状态词按事实选：未配置 / 版本不符 / 需重新登录 / Host 原文', () => {
+test('整页不出现「请安装 crwu / dws / ossutil」这类文案（它们随插件发布）', () => {
+  for (const env of [okEnv(), badEnv()]) {
+    for (const layer of envLayers(env)) {
+      assert.equal(/②|③|④|⑤|⑥/.test(layer.title), true)
+      for (const item of layer.items) {
+        const text = [item.name, item.stateText, item.purpose, item.meta, item.reason, item.fix, item.detail, item.note].join('\n')
+        for (const banned of [/请安装\s*(crwu|dws|ossutil)/i, /安装到\s*~?\/?bin/i, /npm i(nstall)?\s+(dws|ossutil|crwu)/i, /下载/]) {
+          assert.equal(banned.test(text), false, `不该出现「${String(banned)}」：${text}`)
+        }
+      }
+    }
+  }
+})
+
+test('③ 运行时：能力缺口与缺包都要点名，且明说不需要装系统 Python', () => {
+  const gapEnv = {
+    ...okEnv(),
+    allOk: false,
+    blocked: ['DSH 脚本运行时'],
+    runtime: {
+      ...okEnv().runtime,
+      ok: false, state: 'capability-gap', path: '', versionText: '', distributions: {},
+      missingPackages: [], error: '宿主没有接线 DSH 自带 Python 运行时解析',
+    },
+  }
+  const gap = envLayerSet(gapEnv).runtime.items[0]
+  assert.equal(gap.state, 'missing')
+  assert.equal(gap.stateText, zhCN.envRuntimeStateGap)
+  assert.match(gap.stateText, /capability gap|能力缺口/i)
+  assert.equal(gap.fix, zhCN.envFixRuntime)
+  assert.match(gap.fix, /DSH 自带/)
+  assert.doesNotMatch(gap.fix, /安装\s*python3|装 Python|请安装/i)
+  assert.equal(gap.fixKind, 'runtime')
+
+  const missing = envLayerSet(badEnv()).runtime.items[0]
+  assert.equal(missing.stateText.startsWith(zhCN.envRuntimeStateMissingPackage), true)
+  assert.match(missing.stateText, /openpyxl/)
+  assert.match(missing.reason, /openpyxl/)
+
+  // 就绪时展示 Python 版本、关键包版本与来源。
+  const ready = envLayerSet(okEnv()).runtime.items[0]
+  assert.equal(ready.meta.includes('3.12.3'), true)
+  assert.equal(ready.meta.includes('openpyxl 3.1.2'), true)
+  assert.equal(ready.meta.includes('DSH 自带'), true)
+})
+
+test('状态词按事实选：未配置 / 需重新登录 / Host 原文 / 缺包', () => {
   const bad = envLayerSet(badEnv())
   const byId = (layer, id) => layer.items.find((item) => item.id === id)
-  assert.equal(byId(bad.tools, 'tool-node').stateText, zhCN.envItemMissing, '没装 = 未配置')
-  assert.equal(byId(bad.tools, 'tool-crwu').stateText, zhCN.envItemOutdated, '装上了但版本不符 ≠ 未配置')
+  assert.equal(byId(bad.packages, 'packages').stateText, zhCN.envPackagesBroken)
   assert.equal(byId(bad.auth, 'service-h3yun').state, 'reauth')
   assert.equal(byId(bad.auth, 'service-h3yun').stateText, zhCN.envItemReauth, '登录过期 = 需重新登录')
   assert.equal(byId(bad.auth, 'service-dingtalk').stateText, '未登录', 'Host 的原文比"未配置"更说明问题')
-  assert.equal(byId(envLayerSet(okEnv()).tools, 'tool-node').stateText, zhCN.envItemOk)
+  assert.equal(byId(bad.delivery, 'oss-cred').stateText, zhCN.envItemMissing)
+  assert.equal(byId(envLayerSet(okEnv()).delivery, 'oss-cred').stateText, zhCN.envItemOk)
 })
 
-test('工具层没就绪时：给出安装提示词的做法，并区分"本平台暂无预编译包"', () => {
-  const bad = envLayerSet(badEnv())
-  const noPackage = bad.tools.items.find((item) => item.id === 'tool-crwu')
-  assert.equal(noPackage.url, '', '样本里这一项没有下载地址')
-  assert.equal(noPackage.fix.includes(zhCN.envFixToolNoPackage), true, '没有平台包必须如实说，不能给假地址')
-  assert.equal(noPackage.target, '/Users/x/.local/bin/crwu', '安装目标路径要透出来')
-
-  // 有下载地址时不许再说"本平台暂无预编译包"（fixture 里给 node 一个真实地址）。
-  const withUrl = okEnv()
-  withUrl.checks[0] = { ...withUrl.checks[0], ok: false, found: false, path: '', versionText: '', actual: '', url: 'https://x.invalid/node.tgz', target: '/usr/local/bin/node' }
-  const node = envLayerSet(withUrl).tools.items.find((item) => item.id === 'tool-node')
-  assert.equal(node.url, 'https://x.invalid/node.tgz')
-  assert.equal(node.fix.includes(zhCN.envFixToolNoPackage), false)
+test('可选项目缺失不算「要处理」：门禁与层的口径必须一致', () => {
+  // 不变量：Host 的 `blocked` 只看 `required` 项，所以层的 `needsWork` / `pass` / `total` 也必须只看必需项。
+  // 两边不一致就会出现「Hero 说环境已就绪、某一层却显示 2/3 并默认展开」这种自相矛盾的画面。
+  const base = okEnv()
+  const env = {
+    ...base,
+    services: [
+      ...base.services,
+      { id: 'extra', label: '可选的额外服务', required: false, ok: false, state: '未接入', detail: '清单声明为可选' },
+    ],
+  }
+  const auth = envLayerSet({ ...env, allOk: true, blocked: [] }).auth
+  assert.equal(auth.needsWork, false, '可选项缺失不该让这一层要求处理')
+  assert.equal(auth.total, 2, 'total 只数必需项')
+  assert.equal(auth.pass, 2)
+  // 但可选项仍然看得见（排查时能核对它在不在），而且带着「可选」这个事实。
+  const optional = auth.items.find((item) => item.required === false)
+  assert.ok(optional, '可选项仍要出现在列表里')
+  assert.equal(optional.state, 'missing')
 })
 
-test('每项都有"一句人话用途"（工具用 Host 的 note，其余用本地文案）', () => {
+test('⑤ 交付：AK 与连通性两条都算数（写进文件 ≠ 能用）', () => {
+  const base = okEnv()
+  const noSecret = {
+    ...base,
+    delivery: { ...base.delivery, ossCred: { ...base.delivery.ossCred, hasSecret: false } },
+  }
+  const item = envLayerSet(noSecret).delivery.items[0]
+  assert.equal(item.state, 'missing')
+  assert.equal(item.reason, zhCN.envOssReasonNoSecret)
+  assert.equal(item.fixKind, 'oss')
+
+  const deadAk = { ...base, delivery: { ...base.delivery, probe: { ...base.delivery.probe, ok: false, state: 'AK 无效', detail: 'InvalidAccessKeyId' } } }
+  assert.equal(envLayerSet(deadAk).delivery.items[0].state, 'missing')
+  assert.match(envLayerSet(deadAk).delivery.items[0].reason, /InvalidAccessKeyId/)
+})
+
+test('每项都有"一句人话用途"（组件与运行时用 Host 的 note，其余用本地文案）', () => {
   const ok = envLayerSet(okEnv())
-  const node = ok.tools.items.find((item) => item.id === 'tool-node')
-  assert.equal(node.purpose, '最上游运行时：dws 与 iFinD 的 Node 路径都依赖它', '工具用途直接用 Host 的 note，不自编')
+  assert.equal(ok.packages.items[0].purpose, zhCN.envPackagesPurpose)
+  assert.equal(ok.runtime.items[0].purpose, okEnv().runtime.note, '运行时用途直接用 Host 的 note，不自编')
   assert.equal(ok.auth.items.find((item) => item.id === 'service-h3yun').purpose, zhCN.envPurposeH3yun)
   assert.equal(ok.auth.items.find((item) => item.id === 'service-dingtalk').purpose, zhCN.envPurposeDingtalk)
-  assert.equal(ok.upload.items[0].purpose, zhCN.envPurposeOss)
+  assert.equal(ok.delivery.items[0].purpose, zhCN.envPurposeOss)
   assert.equal(ok.external.items[0].purpose, zhCN.envPurposeIfind)
 })
 
@@ -222,14 +330,15 @@ test('Hero 的结论句：就绪 / 还有 N 项 / 没有 blocked 但有失败', 
   assert.equal(envTodoText({ ...bad, blocked: [] }), zhCN.envHeroBadSub, 'blocked 为空时退回通用说明，别说"还有 0 项"')
 })
 
-test('envLayerSet 只认这四个层 id，取不到会抛而不是画错层', () => {
+test('envLayerSet 只认这五个层 id，取不到会抛而不是画错层', () => {
   const set = envLayerSet(okEnv())
-  assert.deepEqual(Object.keys(set), ['tools', 'auth', 'upload', 'external'])
-  assert.equal(set.tools.title, zhCN.envLayerTools)
+  assert.deepEqual(Object.keys(set), ['packages', 'runtime', 'auth', 'delivery', 'external'])
+  assert.equal(set.packages.title, zhCN.envLayerPackages)
   assert.equal(set.external.id, 'external')
+  assert.equal('workspace' in set, false, '① 案例根目录不属于 layers')
 })
 
-test('未授权时：③ 登录认证里的那一项说「需要授权」，怎么配指向那个开关', () => {
+test('未授权时：④ 授权里的那一项说「需要授权」，怎么配指向那个开关', () => {
   const base = okEnv()
   const env = {
     ...base,
@@ -244,5 +353,5 @@ test('未授权时：③ 登录认证里的那一项说「需要授权」，怎�
   assert.equal(item.state, 'missing', '未授权 = 没就绪（红），不是"已就绪"')
   assert.equal(item.stateText, '需要授权')
   assert.equal(item.fix, zhCN.envFixAuthorize, '未授权的"怎么办"就是先授权')
-  assert.equal(auth.needsWork, true, '③ 层要默认展开，员工一眼看到')
+  assert.equal(auth.needsWork, true, '④ 层要默认展开，员工一眼看到')
 })

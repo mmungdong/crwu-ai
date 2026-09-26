@@ -1,32 +1,67 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { text } from '../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
+import { binPlatformDir, bundledBinaryPath, binaryFileName } from '../platform/bin-dir.ts'
 import { isWindowsPlatform } from '../platform/detect.ts'
 import { expandLocal } from '../platform/home.ts'
+import { packageRootFrom } from '../platform/package-root.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
-import type { BinarySpec, EnvManifest, OssSpec, ServiceSpec } from './manifest-default.ts'
-import { quoteArg, resolveBinary } from './manifest.ts'
-import { parseVersion, satisfies, type SatisfyVerdict } from './version.ts'
+import type { EnvManifest, OssSpec, PackagedToolSpec, ServiceSpec } from './manifest-default.ts'
+import { quoteArg } from './manifest.ts'
 
-/** 单个二进制的探测结果。字段与 legacy 的 `checks[]` 一一对应，界面不需要改。 */
-export interface EnvCheck {
+/**
+ * 随插件发布的组件（`crwu` / `dws` / `ossutil`）的完整性与 ossutil 的定位。
+ *
+ * **这一层只认包内**（2026-09-25 改造）：
+ * - 只 `stat` 包内 `bin/<平台>/<文件>`，与包内 `bin/manifest.json` 的**字节数**比对；
+ * - **不** `command -v`、**不**回退 PATH 上的同名命令、**不**执行 `dws version`；
+ * - 缺失时的文案是「插件包不完整 / 平台不受支持」，绝不提示员工去安装命令。
+ *
+ * 为什么把「执行版本命令」整条去掉：
+ * 1. `dws version` 会在二进制旁产生 `.dws/` 状态目录，`bin/` 会整包带走，
+ *    `pack:assert:strict` 会把它判成运行残留（发布门禁直接红）；
+ * 2. 每次自检都跑三个进程去读版本，本来就是自检里最慢的一段，而版本是否一致是**发布**的事 ——
+ *    `bin/manifest.json` 里已经记着 sourceVersion 与 sha256。
+ *
+ * 为什么**不**在自检里重算 sha256：三个二进制加起来一百多 MB，哈希一次要几百毫秒到数秒；
+ * 哈希是发布门禁（`pack:assert:strict` / `bin:check`）的判据，自检只把清单里记的哈希读出来
+ * 放进维护者详情，用来做人工对账。
+ */
+
+/** 单个随包组件的检查结果。 */
+export interface PackagedToolCheck {
   name: string
-  command: string
-  required: boolean
+  label: string
+  /** 包内文件名（Windows 平台带 `.exe`）。 */
+  file: string
+  present: boolean
+  sizeBytes: number
+  /** 包内 `bin/manifest.json` 里声明的字节数；读不到时是 0。 */
+  manifestSizeBytes: number
+  /** 包内清单里记的 sha256（**不**在自检里重算）；读不到时是空串。 */
+  sha256: string
+  expectedVersion: string
   note: string
-  found: boolean
-  path: string
-  versionText: string
-  actual: string
-  expect: string
   ok: boolean
   reason: string
-  url: string
-  sha256: string
-  target: string
 }
 
-/** OSS / 氚云 / 钉钉这类「服务」的探测结果。 */
+/** 插件内置组件的整体检查结果（② 层的唯一数据源）。 */
+export interface PackageIntegrityCheck {
+  ok: boolean
+  /** 当前平台是否有随包发布的组件目录（`BUNDLED_BIN_PLATFORMS`）。 */
+  supported: boolean
+  platform: string
+  packageRoot: string
+  manifestPath: string
+  manifestFound: boolean
+  tools: PackagedToolCheck[]
+  note: string
+}
+
+/** 单个服务的探测结果（氚云 / 钉钉登录态，以及 OSS 交付探测）。 */
 export interface ServiceCheck {
   id: string
   label: string
@@ -69,161 +104,229 @@ export function checkIfindToken(raw: unknown, placeholder: unknown): { ok: boole
 }
 
 /**
- * 探测所有二进制。
+ * 包内路径：`<包根>` 与 `<包根>/bin/manifest.json`。
  *
- * 做法与 legacy 一致，但每步都有明确用途：
- * 1. 一次 shell 调用把所有命令的绝对路径捞出来（`command -v`），避免 N 次子进程；
- * 2. 命令不在 PATH 时，再由 `fs.stat` 检查清单里写的 `target`（`~/bin/ossutil` 这类）；
- * 3. 只有真的找到了才去跑版本命令，并用 `satisfies` 判定。
- *
- * 「找不到」是 `未安装`，「找到但读不出版本」是另一种失败 —— 两者不能混。
+ * 为什么不用相对层数硬拼：这份代码在源码形态（`src/host/environment/`，距包根 3 层）与构建产物
+ * （`lib/`，距包根 1 层）里都跑，由 `packageRootFrom` 按 `package.json` 定位才是唯一可靠的做法。
+ * 导出它是为了让测试与实现比对**同一条**路径，而不是各写一份。
  */
-export async function probeEnv(
-  ctx: Context,
-  manifest: EnvManifest,
-  platform: string,
-  options: { home?: string; workdir?: string } = {},
-): Promise<EnvCheck[]> {
-  const entries = manifest.binaries
-  const safeCommands = entries
-    .map((entry) => text(entry.command))
-    .filter((command) => /^[A-Za-z0-9._-]+$/.test(command))
+export function packageIntegrityPaths(): { packageRoot: string; manifestPath: string } {
+  const packageRoot = packageRootFrom(dirname(fileURLToPath(import.meta.url)))
+  return { packageRoot, manifestPath: packageRoot === '' ? '' : join(packageRoot, 'bin', 'manifest.json') }
+}
 
-  const paths: Record<string, string> = {}
-  // 路径探测这步**自己**没跑起来的原因。它为空才说明「查过了，确实不在 PATH 上」。
-  // 生成脚的循环以 `done` 结束，正常跑完必是退出码 0，所以 `!ok` 只可能是沙箱后端不可用 /
-  // shell 服务缺失 / 被超时或取消杀掉 —— 这时空结果是「不知道」，不是「没装」。
-  let pathProbeError = ''
-  if (safeCommands.length > 0) {
-    const script = `for b in ${safeCommands.join(' ')}; do p=$(command -v "$b" 2>/dev/null); printf "%s\\t%s\\n" "$b" "$p"; done`
-    const result = await runShell(ctx, script, {
-      timeoutMs: 30_000,
-      ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
-    })
-    if (!result.ok) pathProbeError = result.error === '' ? '路径探测命令未能正常完成' : result.error
-    for (const line of text(result.stdout).split('\n')) {
-      const at = line.indexOf('\t')
-      if (at > 0) paths[line.slice(0, at)] = line.slice(at + 1).trim()
-    }
+/** 包内 `bin/manifest.json` 里某个平台声明的组件（`size` / `sha256` / `sourceVersion`）。 */
+interface BinManifestTool {
+  file: string
+  size: number
+  sha256: string
+  sourceVersion: string
+}
+
+/** 读包内 `bin/manifest.json` 里某个平台的声明；读不到就返回空表（**不**当成「没有组件」）。 */
+function readBinManifest(raw: unknown, platform: string): { found: boolean; tools: Map<string, BinManifestTool> } {
+  const tools = new Map<string, BinManifestTool>()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text(raw))
+  } catch (error) {
+    // 不是合法 JSON：调用方按「读不到清单」处理（不完整），不是异常。
+    void error
+    return { found: false, tools }
   }
-
-  const fs = fileSystem(ctx)
-  const home = options.home ?? ''
-  const isWindows = isWindowsPlatform(platform)
-  const checks: EnvCheck[] = []
-
-  /** 组装一条结果，避免两处对象字面量漂移。 */
-  const record = (entry: BinarySpec, found: string, versionText: string, verdict: SatisfyVerdict): EnvCheck => ({
-    name: entry.name,
-    command: entry.command,
-    required: entry.required,
-    note: entry.note,
-    found: found !== '',
-    path: found,
-    versionText,
-    actual: versionText === '' ? '' : (parseVersion(versionText) ?? []).join('.'),
-    expect: entry.expect,
-    ok: found !== '' && verdict.ok,
-    reason: verdict.reason,
-    url: entry.url,
-    sha256: entry.sha256,
-    target: entry.target,
-  })
-
-  for (const raw of entries) {
-    const entry: BinarySpec = resolveBinary(raw, platform)
-    let found = text(paths[entry.command])
-    if (found === '' && entry.target !== '') {
-      const candidate = expandLocal(entry.target, home, isWindows)
-      try {
-        const target = await resolveTarget(ctx, candidate)
-        const info = fs === undefined ? undefined : await fs.stat(target)
-        if (info?.type === 'file') found = text(target.displayPath)
-      } catch (error) {
-        // 目标不存在等于「没装」，不是异常。
-        void error
-      }
-    }
-
-    // 连 PATH 都没查成（沙箱不可用等）时，「没找到」不构成证据。
-    if (found === '' && pathProbeError !== '') {
-      checks.push(record(entry, '', '', { ok: false, reason: `无法探测：${pathProbeError}` }))
-      continue
-    }
-
-    let versionText = ''
-    let versionError = ''
-    if (found !== '') {
-      const args = entry.versionArgs.map((arg) => shellQuote(arg, platform)).join(' ')
-      const command = shellQuote(found, platform) + (args === '' ? '' : ` ${args}`)
-      const result = await runShell(ctx, command, {
-        timeoutMs: 30_000,
-        ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
+  const doc = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  const platforms = Array.isArray(doc.platforms) ? doc.platforms : []
+  for (const entry of platforms) {
+    const row = entry !== null && typeof entry === 'object' ? entry as Record<string, unknown> : {}
+    if (text(row.platform) !== platform) continue
+    for (const item of Array.isArray(row.tools) ? row.tools : []) {
+      const tool = item !== null && typeof item === 'object' ? item as Record<string, unknown> : {}
+      const file = text(tool.file)
+      if (file === '') continue
+      tools.set(text(tool.tool) || file, {
+        file,
+        size: typeof tool.size === 'number' && Number.isFinite(tool.size) ? tool.size : 0,
+        sha256: text(tool.sha256),
+        sourceVersion: text(tool.sourceVersion),
       })
-      // 「版本命令根本没执行」（沙箱不可用）与「执行了但输出读不出版本」必须分开报。
-      if (shellUnavailable(result)) versionError = result.error
-      versionText = `${text(result.stdout)}\n${text(result.stderr)}`.trim().split('\n')[0]?.trim() ?? ''
     }
-
-    const verdict = found === ''
-      ? { ok: false, reason: '未安装' }
-      : (versionError === ''
-          ? satisfies(versionText, entry.expect)
-          : { ok: false, reason: `无法执行版本命令：${versionError}` })
-    checks.push(record(entry, found, versionText, verdict))
+    return { found: true, tools }
   }
-  return checks
+  return { found: false, tools }
+}
+
+/** 「插件包不完整 / 平台不受支持」那一句：三件组件共用，措辞里不许出现「安装命令」。 */
+export function packageGapMessage(platform: string, detail: string): string {
+  return `插件包不完整 / 平台不受支持：${detail}。`
+    + '请重新安装中瑞世联工作台插件，或联系管理员确认插件包是否完整；'
+    + `这些组件由插件按包内绝对路径使用（当前平台 ${platform || '未知'}），不从 PATH 上查找，也不由员工单独配置。`
 }
 
 /**
- * 解析 ossutil 的实际路径：先看 PATH，再落到清单给的安装目标。
+ * 检查随包组件：只读文件事实，**一次 shell 都不跑**。
  *
- * `error` 区分「探测本身没跑起来」（沙箱不可用 / shell 服务缺失）与「确实没装」：
- * 前者报成「未安装 ossutil，请先安装」会让人去装一个已经装好的东西。
+ * 判据（三条都来自包内，互相独立）：
+ * 1. 当前平台有随包目录（否则「平台不受支持」）；
+ * 2. 文件真的在 `bin/<平台>/` 里；
+ * 3. 字节数与包内 `bin/manifest.json` 一致（运行残留 / 安装不完整都会在这里露出来）。
+ */
+export async function probePackageIntegrity(
+  ctx: Context,
+  manifest: EnvManifest,
+  platform: string,
+): Promise<PackageIntegrityCheck> {
+  const { packageRoot, manifestPath } = packageIntegrityPaths()
+  const supported = binPlatformDir(platform) !== ''
+  const fs = fileSystem(ctx)
+
+  let manifestFound = false
+  const declared = new Map<string, BinManifestTool>()
+  if (fs !== undefined && manifestPath !== '') {
+    try {
+      const parsed = readBinManifest(await fs.readText(await resolveTarget(ctx, manifestPath)), platform)
+      manifestFound = parsed.found
+      for (const [name, tool] of parsed.tools) declared.set(name, tool)
+    } catch (error) {
+      // 清单文件不存在 / 文件服务读不到：两种情况都只意味着「无法按清单比对」。
+      void error
+      manifestFound = false
+    }
+  }
+
+  const tools: PackagedToolCheck[] = []
+  for (const spec of manifest.packaged) {
+    tools.push(await checkPackagedTool(ctx, spec, platform, { supported, manifestFound, manifestPath, declared }))
+  }
+
+  const failed = tools.filter((tool) => !tool.ok)
+  const ok = failed.length === 0
+  return {
+    ok,
+    supported,
+    platform,
+    packageRoot,
+    manifestPath,
+    manifestFound,
+    tools,
+    note: ok
+      ? `插件内置组件 ${String(tools.length)}/${String(tools.length)} 完整：`
+        + `字节数与包内 bin/manifest.json 一致（sha256 见明细，不在自检里重算）。`
+      : (failed[0]?.reason ?? packageGapMessage(platform, '插件内置组件不可用')),
+  }
+}
+
+/** 单个组件：存在性 + 字节数；理由必须能分辨「平台不受支持」「缺文件」「清单读不到」「字节数不一致」。 */
+async function checkPackagedTool(
+  ctx: Context,
+  spec: PackagedToolSpec,
+  platform: string,
+  facts: { supported: boolean; manifestFound: boolean; manifestPath: string; declared: Map<string, BinManifestTool> },
+): Promise<PackagedToolCheck> {
+  const file = binaryFileName(spec.name, platform)
+  const entry = facts.declared.get(spec.name)
+  const base: PackagedToolCheck = {
+    name: spec.name,
+    label: spec.label,
+    file,
+    present: false,
+    sizeBytes: 0,
+    manifestSizeBytes: entry?.size ?? 0,
+    sha256: entry?.sha256 ?? '',
+    expectedVersion: spec.expectedVersion,
+    note: spec.note,
+    ok: false,
+    reason: '',
+  }
+  if (!facts.supported) {
+    return { ...base, reason: packageGapMessage(platform, '当前平台没有随包发布的组件目录') }
+  }
+  const bundled = bundledBinaryPath(platform, spec.name)
+  if (bundled === '') {
+    return { ...base, reason: packageGapMessage(platform, '当前平台没有随包发布的组件目录') }
+  }
+  const fs = fileSystem(ctx)
+  if (fs === undefined) {
+    return { ...base, reason: `无法核对插件包完整性：Host 文件服务不可用（包内路径 ${bundled}）` }
+  }
+  let info: { type?: string; size?: number } | undefined
+  try {
+    info = await fs.stat(await resolveTarget(ctx, bundled))
+  } catch (error) {
+    // 文件不在 / stat 被拒：都只意味着「这个绝对路径现在不可用」。
+    void error
+    info = undefined
+  }
+  if (info?.type !== 'file') {
+    return { ...base, reason: `插件包不完整：包内缺少 ${bundled}` }
+  }
+  const sizeBytes = typeof info.size === 'number' && Number.isFinite(info.size) ? info.size : 0
+  const present = { ...base, present: true, sizeBytes }
+  if (!facts.manifestFound) {
+    return { ...present, reason: `插件包不完整：读不到包内清单 ${facts.manifestPath}，无法核对 ${file} 的字节数` }
+  }
+  if (present.manifestSizeBytes === 0) {
+    return { ...present, reason: `插件包不完整：包内清单里没有 ${spec.name} 的字节数，无法核对` }
+  }
+  if (sizeBytes !== present.manifestSizeBytes) {
+    return {
+      ...present,
+      reason: `插件包不完整：包内 ${file} 的字节数与随包清单不一致（磁盘 ${String(sizeBytes)} / 清单 ${String(present.manifestSizeBytes)}，可能是安装不完整或运行残留）`,
+    }
+  }
+  return { ...present, ok: true, reason: '' }
+}
+
+/**
+ * ossutil 的定位结果：**只认包内**。
+ *
+ * `error` 为空表示解析到了绝对路径；否则是非空的失败原因（「插件包不完整 / 平台不受支持」
+ * 或「Host 文件服务不可用」）。调用方（`oss/ops.ts`、`oss/auto.ts`）只读这两个字段。
  */
 export interface OssutilLookup {
   /** 解析到的路径；没找到时为空串。 */
   path: string
-  /** 探测命令没能执行的原因；为空表示探测真的执行过。 */
+  /** 失败原因；为空表示解析成功。 */
   error: string
 }
 
-/** 定位失败时给用户的那句话：探测失败报真实原因，真的没有才说去安装。 */
+/** 定位失败时给用户的那句话。文案里不许出现安装指引：这个二进制随插件发布。 */
 export function ossutilMissingMessage(lookup: OssutilLookup): string {
-  return lookup.error === '' ? '未找到 ossutil，请先安装' : `无法定位 ossutil：${lookup.error}`
+  return lookup.error === ''
+    ? packageGapMessage('', '没有找到随包发布的 ossutil')
+    : lookup.error
 }
 
+/**
+ * 解析包内 ossutil 的绝对路径。
+ *
+ * **没有 PATH 回退**（2026-09-25 口径）：回退会让模型在某台机器上看到 `command not found`，
+ * 下一步自然就是 `which` / `command -v` / 去搜可执行文件 —— 正是本次改造要消灭的行为。
+ * `oss` 参数保留是为了不改调用方签名：清单里的 `ossutil` 命令名已经不再参与解析。
+ */
 export async function resolveOssutil(
   ctx: Context,
   oss: OssSpec,
   platform: string,
-  options: { manifest?: EnvManifest; home?: string; workdir?: string } = {},
+  options: { workdir?: string } = {},
 ): Promise<OssutilLookup> {
-  const probe = await runShell(ctx, `command -v ${shellQuote(oss.ossutil, platform)} 2>/dev/null || true`, {
-    timeoutMs: 15_000,
-    ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
-  })
-  const onPath = text(probe.stdout).trim()
-  if (onPath !== '') return { path: onPath, error: '' }
-
-  const entry = options.manifest?.binaries.find((item) => text(item.name) === 'ossutil')
-  if (entry !== undefined) {
-    const resolved = resolveBinary(entry, platform)
-    if (resolved.target !== '') {
-      const candidate = expandLocal(resolved.target, options.home ?? '', isWindowsPlatform(platform))
-      try {
-        const target = await resolveTarget(ctx, candidate)
-        const info = await fileSystem(ctx)?.stat(target)
-        if (info?.type === 'file') return { path: candidate, error: '' }
-      } catch (error) {
-        // 目标不存在等于「没装」，不是异常。
-        void error
-      }
-    }
+  void oss
+  void options
+  const bundled = bundledBinaryPath(platform, 'ossutil')
+  if (bundled === '') {
+    return { path: '', error: packageGapMessage(platform, '当前平台没有随包发布的 ossutil') }
   }
-
-  // PATH 与清单目标都没命中：只有探测命令真的执行过，才能断言「没装」。
-  return { path: '', error: probe.ok ? '' : (probe.error || 'ossutil 路径探测命令未能正常完成') }
+  const fs = fileSystem(ctx)
+  if (fs === undefined) {
+    return { path: '', error: `无法核对插件包完整性：Host 文件服务不可用（包内路径 ${bundled}）` }
+  }
+  try {
+    const info = await fs.stat(await resolveTarget(ctx, bundled))
+    if (info?.type === 'file') return { path: bundled, error: '' }
+  } catch (error) {
+    // 文件不在 / stat 被拒：都只意味着「这个绝对路径现在不可用」，交给下面的统一文案。
+    void error
+  }
+  return { path: '', error: packageGapMessage(platform, `包内缺少 ${bundled}`) }
 }
 
 /** 探测 OSS 的 AK 是否真的能列对象 —— 这是「AK 配好了吗」唯一可信的证据。 */
@@ -231,7 +334,7 @@ export async function probeOss(
   ctx: Context,
   oss: OssSpec,
   platform: string,
-  options: { manifest?: EnvManifest; home?: string; workdir?: string } = {},
+  options: { workdir?: string } = {},
 ): Promise<ServiceCheck> {
   const base = { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true }
   if (!oss.enabled) return { ...base, ok: false, state: '未启用', detail: '清单 oss.enabled 为 false' }
@@ -239,10 +342,8 @@ export async function probeOss(
 
   const lookup = await resolveOssutil(ctx, oss, platform, options)
   if (lookup.path === '') {
-    // 「探测命令没跑起来」不能报成「ossutil 未安装」—— 那会让人去装一个已经装好的东西。
-    return lookup.error === ''
-      ? { ...base, ok: false, state: 'ossutil 未安装', detail: '请复制安装提示词交给 Agent。' }
-      : { ...base, ok: false, state: '无法探测', detail: lookup.error }
+    // 包内没有 ossutil / 平台不受支持：这是**插件包**的问题，不是「员工没装」。
+    return { ...base, ok: false, state: '插件包不完整 / 平台不受支持', detail: lookup.error }
   }
   const ossutil = lookup.path
 
@@ -259,6 +360,10 @@ export async function probeOss(
     ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
   })
   const raw = (text(run.stderr) || text(run.stdout) || text(run.error) || '探测失败').trim()
+
+  // 「命令根本没跑起来」（沙箱后端不可用 / 审批被拒）与「跑完了报 AK 错」是两件事：
+  // 前者说成「AK 无效」会把人指去换 AK，而真正的问题是执行环境。
+  if (shellUnavailable(run)) return { ...base, ok: false, state: '无法探测', detail: raw }
 
   let state = 'AK 配置有误或不可用'
   if (run.ok) state = 'AK 正常'

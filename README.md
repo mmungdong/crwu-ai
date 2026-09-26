@@ -162,7 +162,7 @@ The plugin package includes:
 - 14 vendored DingTalk Skills from upstream `dingtalk-workspace-cli` (`skills/dws/` layer);
 - 3 common enterprise-access Skills (`common/skills/` layer).
 
-Maintainers can validate and distribute the plugin with `make plugin-dist`. If a remote tarball already exists with the same version but different contents, the command refuses to overwrite it; bump the version first.
+Maintainers package locally with `make plugin-pack` (it stages the bundled binaries and runs the full gate); releasing goes through the tag-driven npm flow (`git tag plugin-v<version>`). The plugin is **installed from npm**: `dsh plugin add dsh-crwu-workbench@<version>` — distribution no longer goes through OSS, because that address was replaceable by anyone.
 
 ### 4. Install Skills for another AI host
 

@@ -79,10 +79,15 @@
 
 #### OSS 边界
 
-- `oss.readonly` 是匿名只读 Bucket，保存环境清单、安装说明和员工下载的插件 TGZ；`manifestKey`、
-  `installDocKey`、`pluginPrefix` 都相对它的 `baseUrl`/`bucket` 解析。
-- `oss.protected` 是审核交付件私有 Bucket，匿名访问应返回 403；保存 `auditPrefix`、签名模式与 TTL。
-  插件使用员工机器上的 OSS 凭据上传，并默认生成签名 URL。
+- **只有一个 Bucket，而且是私有的**：`oss.protected` 保存审核交付件，匿名访问应返回 403；保存
+  `auditPrefix`、签名模式与 TTL。插件使用员工机器上的 OSS 凭据上传，并默认生成签名 URL。
+- **不存在 `oss.readonly`**（2026-09-25 整体下掉）。它原来是匿名只读的，承担环境清单、安装说明和
+  插件 TGZ 的分发；现在：二进制随插件发布在包内 `bin/<平台>/`（`make plugin-bin`），环境清单只有
+  内置一份（`src/host/environment/manifest-default.ts`），安装提示词整篇自述，插件改从 **npm** 安装。
+  理由：那四个用途都让员工机器的行为依赖一个**地址谁都能换**的远端对象 —— 换掉清单就能改员工认哪些
+  二进制、换掉文档就能改 agent 照着做什么、换掉 TGZ 就能换掉插件本体。**不要把只读分发桶加回来**：
+  加回来就等于把这条通道重新接上，而且 `oss.readonly` 一进 YAML，`host-yaml-config.test.mjs`
+  的「只读整段不存在」断言会立刻变红。
 - YAML 与 TGZ 不得包含 AK、SK、STS Token、签名 URL 或其它临时凭据。配置只保存 Bucket、Endpoint、
   Base URL、对象前缀和行为参数；凭据只能保存在员工机器的凭据存储中。
 - 不得用旧字段名 `publicBaseUrl` 描述私有 Bucket。新增字段使用 `baseUrl`/`objectBaseUrl`，公开性由 Bucket
@@ -101,15 +106,15 @@
 
 #### 运行与分发解释权
 
-- 远程环境清单只提供二进制与服务目录；私有 OSS 的 bucket、endpoint、prefix、链接模式、TTL 和自动上传
-  策略以 YAML 为最终解释权。
-- `env` RPC 不得接受请求级 `source` 替换 YAML 确定的清单地址；远程清单不得向宿主注入 `probeCommand`
-  或其它自由格式 Shell。
-- `make plugin-dist` / `scripts/dist-plugin.mjs` 必须从 `oss.readonly` 计算 `oss://` 上传目标与员工 HTTPS
-  安装地址，并遵守“同版本对象不可覆盖”。
-- 修改 YAML 结构或字段时，必须同批更新解析类型、Schema 校验、`config:check`、Host 映射、分发推导、
-  TGZ 断言、README、CHANGELOG 和版本号；最低测试为 `host-yaml-config.test.mjs`、
-  `dist-config.test.mjs` 与 `host-package.test.mjs`。
+- 环境清单**只有内置一份**，私有 OSS 的 bucket、endpoint、prefix、链接模式、TTL 和自动上传策略
+  以 YAML 为唯一解释权。
+- `env` RPC 不得接受请求级 `source` 替换清单来源（那条链路已删除）；任何形式的远端数据都不得向宿主
+  注入 `probeCommand` 或其它自由格式 Shell。
+- 分发走 **npm + tag 流程**（`.github/workflows/release.yml`）：`make plugin-pack` 只在本地产出
+  `dist/<包名>-<版本>.tgz` 供 `npm publish --dry-run` 与接收方自测，上传由 tag 触发的 CI 完成。
+  「同版本只发一次」由 npm 的不可变版本号守住，**不要手工 `npm publish`**。
+- 修改 YAML 结构或字段时，必须同批更新解析类型、Schema 校验、`config:check`、Host 映射、
+  TGZ 断言、README、CHANGELOG 和版本号；最低测试为 `host-yaml-config.test.mjs` 与 `host-package.test.mjs`。
 
 ### 3.3 开发要点与设计规范放在插件的 `docs/` 下
 
@@ -290,8 +295,10 @@
 
 **不用改**（目录布局即名单，改多了反而两套口径）：`Makefile` 的 `SKILL_DIRS` / `skills-install`
 （已是 `find plugins -name SKILL.md`，自动收全部层）、`kb_tool.py` 的扫描逻辑、三个源仓契约测试的
-`_skill_roots()`（按「根里直接放着技能」自动识别所有层并跨层查找）、`smoke-built.mjs` 与
-`host-audit-prompt.test.mjs`（只与自研层的回传脚本路径有关）。
+`_skill_roots()`（按「根里直接放着技能」自动识别所有层并跨层查找）。
+（2026-09-25 更正：`smoke-built.mjs` 与 `host-audit-prompt.test.mjs` 不再与"回传脚本路径"有关 ——
+前者改为断言产物里注册了 8 个 CRWU 工具且无路径注入指纹，后者改为断言提示词里只有 Tool 名；
+加层时这两份**不需要**改。）
 
 **四个会咬人的坑**：
 
@@ -305,6 +312,28 @@
    「技能名」，`_REPO_REF_PATTERNS` 的 `skills/crwu-*/` 规则与人的目录直觉都会打架。
 
 兜底：改完跑 `make plugin-check` —— 它同时覆盖上表 1–6 的自动护栏与 `pack:assert` 的真实 tarball 清单。
+
+### 5.6 非 vendored 技能的 CLI 静态守卫（2026-09-25）
+
+DSH 的自研审核链路只走结构化 Tool。为了让这条约束**不靠自觉**，非 vendored 技能的正文受一条
+静态守卫约束：`npm --prefix plugins/dsh-crwu-workbench run skills:cli-guard`
+（`scripts/check-skill-cli-guard.mjs`，已接进插件的 `check`、`make plugin-check` 与 CI）。
+
+- **扫**：`plugins/dsh-crwu-workbench/skills/crwu/**` 与 `plugins/common/skills/**`（源仓那一份；
+  包内 `common/skills/` 是同步产物，不重复扫）。
+- **不扫**：`plugins/dsh-crwu-workbench/skills/dws/**` —— vendored 上游正文，冲突时以上游为准，
+  由 `npm run dws:check` 按 provenance 守。
+- **活跃指令里禁止**：裸 `crwu` / `dws` / `ossutil` 命令；`which <命令>`、`command -v <命令>`；
+  `export PATH=`；包内 `bin/<平台>/` 路径；`~/bin/<命令>` 副本。
+- **窄范围豁免**（三种，都必须显式写在文档里）：
+  1. `<!-- crwu-cli-guard:legacy-compat-start -->` … `<!-- crwu-cli-guard:legacy-compat-end -->`：
+     技能的**非 DSH 宿主兼容章节**（`crwu-dws`、`crwu-h3yun-*` 各有一段）；
+  2. `<!-- crwu-cli-guard:exempt-next -->`：豁免紧随其后的**一行**（历史说明、负面示例）；
+  3. 文件级豁免：`examples/`、`fixtures/` 目录（脚本里逐条写了理由）。
+- **禁止整层/整文件豁免**：区块标记必须在文件中间收尾，守卫在区块结束后立刻恢复检查
+  （`tests/unit/host-skills-guard.test.mjs` 有用例钉住这一点）。
+- **自动审核主路径不许引用兼容层**：`crwu-audit` 的 `SKILL.md` 与 `references/00`、`references/13`
+  里**不得出现**兼容区块标记，也不得出现任何裸命令 —— 这两条都由测试断言。
 
 ## 6. 审核叶子的 `SKILL.md` 与 references
 

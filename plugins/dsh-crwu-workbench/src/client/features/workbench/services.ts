@@ -21,10 +21,11 @@ export interface UiWorkspaceService {
   /** 打开系统目录选择器；用户取消时返回 falsy。 */
   pickDirectory?: () => Promise<string | null>
   /**
-   * 选中并切换到某个会话（内部就是会话控制器的 `open` + 切回会话面板）。
+   * 选中并切换到某个会话：内部是 `replaceMain(sessionId, signal, 'reveal')`
+   * —— 设置主会话（`selection`）+ `layout.selectPanel(null)`（切回原生对话）。
    *
-   * 它是「查看会话」的第二条路径：`sessions.openSubagent` 走的是子代理地址，
-   * 而这个是客户端根服务、按 id 直接开，激活顺序上更稳。
+   * 这是**唯一**有效的「跳到某条会话」入口（左侧会话列表被点也是走它）。
+   * 注意客户端 `sessions` 服务上**没有** `open()`：不要写成 `sessions.open(id)`。
    */
   openSession?: (sessionId: string) => void
   /** 在 parent 下新建目录，返回新目录的绝对路径。 */
@@ -46,8 +47,10 @@ export interface LayoutService {
 /**
  * 会话服务：既有的两条「查看会话」路径 + 讨论面板要的四个动词。
  *
- * 讨论面板那四个（`create` / `open` / `binding` / `list`）直接沿用 `DiscussionPort`
+ * 讨论面板用到的 `create` / `using` / `binding` / `list` 直接沿用 `DiscussionPort`
  * 的形状 —— 一处定义，面板与这里不会各写一份而对不上。
+ *
+ * **这个服务上没有 `open()`**：切会话是 `uiWorkspace.openSession`（见 `discussionPortOf`）。
  */
 export interface SessionsService extends DiscussionPort {
   /** 在会话控制器里选中某个子会话（不会切主面板，所以要配合 layout.selectPanel）。 */
@@ -81,4 +84,32 @@ export function readClientServices(ctx: ClientContext): ClientServices {
     get layout() { return ctx.get('layout') as LayoutService | undefined },
     get sessions() { return ctx.get('sessions') as SessionsService | undefined },
   }
+}
+
+/**
+ * 把客户端会话服务适配成讨论面板要的 `DiscussionPort`（只转发**真的存在**的四个动词）。
+ *
+ * 三条口径，都是 2026-09-25 那次「点讨论/复核跳不到会话、也建不出新对话」的结论：
+ *
+ * 1. **不许凭空发明方法**：port 里只放 `ClientSessions` 上确实有的
+ *    `create` / `using` / `binding` / `list`。早先这里塞了一个 `open`（服务上不存在），
+ *    可选链把它变成静默 no-op —— 点下去什么都不发生，也不报错。
+ *    「跳到某条会话」由面板的 `onOpenDiscussion` 接 **`uiWorkspace.openSession`** 负责。
+ * 2. **不许 `{ ...sessions }`**：`sessions` 是 `ClientSessions` 的**实例**，方法挂在原型上，
+ *    展开只复制自有字段（`manager` / `list` / `scopes`…），四个动词全丢。
+ * 3. **必须经接收者调用**（`svc.create(...)`）：这些方法都依赖 `this`（`this.manager` /
+ *    `this.scopes`），先把方法取出来再调会在第一个调用上 `TypeError`，症状同样是「建不出会话」。
+ *
+ * 服务缺席时返回 `{}`，由面板如实报「这个宿主版本不支持…」，而不是抛出去把整页打崩。
+ */
+export function discussionPortOf(services: Pick<ClientServices, 'sessions'>): DiscussionPort {
+  const sessions = services.sessions
+  const port: DiscussionPort = {}
+  if (sessions === undefined) return port
+  const svc = sessions
+  if (typeof svc.create === 'function') port.create = (input) => svc.create!(input)
+  if (typeof svc.using === 'function') port.using = (id, options, operation) => svc.using!(id, options, operation)
+  if (typeof svc.binding === 'function') port.binding = (id) => svc.binding!(id)
+  if (svc.list !== undefined) port.list = svc.list
+  return port
 }

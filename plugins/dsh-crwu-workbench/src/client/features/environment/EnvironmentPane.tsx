@@ -16,12 +16,17 @@ import type { ClientServices } from '../workbench/services.ts'
  * 环境自检页。
  *
  * 它是**所有后续操作的门禁**：`blocked` 非空时报告页不给发起审核。但它的读者是普通员工
- * （资产评估师），不是维护者 —— 所以页面按**排查顺序分四层**（工具 → 登录认证 → 上传配置 →
- * 外部数据），每层一行结论 + `x/y 已就绪`；没就绪的层默认展开、没就绪的项排在最前，并且
- * **每一项都写明"怎么配"**（按钮或填哪里）。① 案例根目录在四层之前（它是前置条件）。
+ * （资产评估师），不是维护者 —— 所以页面按**排查顺序分五层**（② 插件内置组件 → ③ DSH 脚本运行时
+ * → ④ 登录与凭据授权 → ⑤ OSS 交付配置 → ⑥ 外部数据），每层一行结论 + `x/y 已就绪`；
+ * 没就绪的层默认展开、没就绪的项排在最前，并且**每一项都写明"怎么配"**（按钮或填哪里）。
+ * ① 案例根目录在五层之前（它是前置条件，由 `WorkspaceCard` 承担）。
  *
- * 维护者信息（清单来源、sha256、会话 id、probe 原文、氚云授权开关）全部收进页脚
- * 「排查详情」，默认不展开：它们只在排查时有用，摆在员工视野里就是噪声。
+ * 三件随包组件（crwu / dws / ossutil）是**一个**聚合项：它们要么一起在包里、要么一起不在
+ * （未装配 / 平台不受支持），各占一行只会让员工以为要分别装三个命令。这一页**不出现**
+ * 「请安装 crwu / dws / ossutil」这类文案，也不出现系统 Python —— 运行时由 DSH 自带。
+ *
+ * 维护者信息（包内路径 / 清单字节数 / sha256 / 依赖包版本 / 会话 id / probe 原文 / 授权开关）
+ * 全部收进页脚「排查详情」，默认不展开：它们只在排查时有用，摆在员工视野里就是噪声。
  *
  * 分层、排序、状态词、"怎么配"这四件事都在 `layers.ts` 里（纯函数、有单测），
  * 这里只负责画。
@@ -38,6 +43,10 @@ export interface EnvironmentPaneProps {
   copied: boolean
   onRelogin: () => void
   onDwsLogin: () => void
+  /** 设备码登录：浏览器打不开 / 远程无头时的退路（`dws auth login --device`）。 */
+  onDwsLoginDevice?: () => void
+  /** 最近一次登录的结果（成功、失败原因、CLI 打印的 URL 或设备码）；空串 = 还没点过。 */
+  loginMessage?: string
   /** 「进入报告审核」。不通过时由工作台外壳用 loading 状态拦住，这里照旧给入口。 */
   onEnterReport?: () => void
   /** 被门禁拦住时的界面状态：`running` 正在自检、`blocked` 自检没过。 */
@@ -104,14 +113,8 @@ function LayerItemRow(props: { item: EnvLayerItem; extra?: React.ReactNode }): R
       {item.meta === '' ? null : <div className={`${C.itemMeta} ${C.mono}`}>{item.meta}</div>}
       {item.reason === '' ? null : <div className={C.itemFix}>{item.reason}</div>}
       {item.fix === '' ? null : <div className={C.itemFix}>{item.fix}</div>}
-      {/* 工具：下载地址与安装目标路径（sha256 只进排查详情）。没有平台包时上面那句已经如实说了。 */}
-      {item.fixKind !== 'tool' || item.url === '' ? null : <div className={C.row}>
-        <span className={C.muted}>{zhCN.envDownloadUrl}</span>
-        <span className={`${C.mono} ${C.link}`}>{item.url}</span>
-      </div>}
-      {item.fixKind !== 'tool' || item.target === '' ? null
-        : <div className={`${C.muted} ${C.mono}`}>{`${zhCN.envInstallTarget} ${item.target}`}</div>}
-      {/* iFinD 的申请入口：沿用安装清单里已有的那条来源说明，不另编流程。 */}
+{/* 插件内置组件没就绪时不再有"下载地址 / 安装目标"可显示：它们随插件发布，缺了就是插件包不完整。
+          iFinD 的申请入口沿用原来的来源说明。 */}
       {item.fixKind !== 'ifind' ? null : <div className={C.muted}>{zhCN.ifindSource}</div>}
       {props.extra}
     </div>
@@ -122,7 +125,7 @@ function LayerItemRow(props: { item: EnvLayerItem; extra?: React.ReactNode }): R
  * 一层一张卡（受控：展开状态由页面持有）。
  *
  * 状态放在**页面**而不是卡片里，有两个原因：① 页面才知道"这层要不要默认展开"（没就绪的展开）；
- * ② 展开状态集中一处，刷新自检后四层的展开/收起不会被各卡片各说各话。
+ * ② 展开状态集中一处，刷新自检后五层的展开/收起不会被各卡片各说各话。
  * 初值一律用非函数式（构建产物冒烟的极小 react 替身不认函数式初值）。
  */
 function LayerCard(props: {
@@ -249,19 +252,53 @@ function Hero(props: {
   </div>
 }
 
-/** 工具类的维护者明细：每项的版本约束 / 实际值 / sha256 / 安装目标路径。 */
-function ToolDetails(props: { env: EnvResult }): React.ReactElement {
+/** 工具类的维护者明细：插件内置组件逐项的包内文件 / 字节数 / 清单哈希 / 版本要求。 */
+function PackageDetails(props: { env: EnvResult }): React.ReactElement {
+  const integrity = props.env.packageIntegrity
   return <Section title={zhCN.envDetailsTools}>
     <div className={C.kv}>
-      {props.env.checks.map((check) => <Kv key={check.name} label={check.name}>
-        <span className={C.mono}>{check.found ? check.path : zhCN.envNotInstalled}</span>
-        {check.versionText === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${check.versionText}`}</span>}
-        {check.expect === '' ? null : <span className={C.muted}>{` · ${zhCN.envExpected} ${check.expect}`}</span>}
-        {check.actual === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${zhCN.envVersionText} ${check.actual}`}</span>}
-        {check.sha256 === '' ? null : <div className={`${C.muted} ${C.mono}`}>{`${zhCN.envChecksum} ${check.sha256}`}</div>}
-        {check.target === '' ? null : <div className={`${C.muted} ${C.mono}`}>{`${zhCN.envInstallTarget} ${check.target}`}</div>}
-        {check.reason === '' ? null : <div className={C.itemFix}>{`${zhCN.envReason}：${check.reason}`}</div>}
+      <Kv label={zhCN.envPackagesRoot}><span className={C.mono}>{integrity.packageRoot === '' ? zhCN.envNotResolved : integrity.packageRoot}</span></Kv>
+      <Kv label={zhCN.envPackagesManifest}>
+        <span className={C.mono}>{integrity.manifestPath === '' ? zhCN.envNotResolved : integrity.manifestPath}</span>
+        <span className={C.muted}>{` · ${integrity.manifestFound ? zhCN.envPass : zhCN.envFail}`}</span>
+      </Kv>
+      <Kv label={zhCN.envMetricPlatform}>
+        {integrity.supported ? integrity.platform : `${integrity.platform === '' ? zhCN.envNotResolved : integrity.platform}${zhCN.envPackagesBroken}`}
+      </Kv>
+    </div>
+    <div className={C.kv}>
+      {integrity.tools.map((tool) => <Kv key={tool.name} label={tool.name}>
+        <span className={C.mono}>{tool.present ? tool.file : zhCN.envNotInstalled}</span>
+        {tool.present ? <span className={`${C.muted} ${C.mono}`}>{` · ${zhCN.envPackagesSize} ${String(tool.sizeBytes)} / ${zhCN.envPackagesManifestSize} ${String(tool.manifestSizeBytes)}`}</span> : null}
+        {tool.sha256 === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${zhCN.envPackagesSha} ${tool.sha256}`}</span>}
+        {tool.expectedVersion === '' ? null : <span className={C.muted}>{` · ${zhCN.envPackagesExpected} ${tool.expectedVersion}`}</span>}
+        {tool.reason === '' ? null : <div className={C.itemFix}>{`${zhCN.envReason}：${tool.reason}`}</div>}
       </Kv>)}
+    </div>
+  </Section>
+}
+
+/** 运行时的维护者明细：路径、版本约束、必需包与实测到的依赖包版本（含 openpyxl）。 */
+function RuntimeDetails(props: { env: EnvResult }): React.ReactElement {
+  const runtime = props.env.runtime
+  const distributions = Object.entries(runtime.distributions)
+  return <Section title={zhCN.envDetailsRuntime}>
+    <div className={C.kv}>
+      <Kv label={zhCN.envRuntimePath}>
+        <span className={C.mono}>{runtime.path === '' ? zhCN.envUnset : runtime.path}</span>
+        <span className={`${C.muted} ${C.mono}`}>{` · ${runtime.source}`}</span>
+      </Kv>
+      <Kv label={zhCN.envRuntimeExpect}>
+        {`${runtime.expect === '' ? zhCN.envUnset : runtime.expect}${runtime.versionText === '' ? '' : ` · ${runtime.versionText}`}`}
+      </Kv>
+      <Kv label={zhCN.envRuntimeRequiredPackages}>
+        <span className={C.mono}>{runtime.requiredPackages.join(' / ')}</span>
+        {runtime.missingPackages.length === 0 ? null : <span className={C.muted}>{` · ${zhCN.envRuntimeMissingPackages}${runtime.missingPackages.join('、')}`}</span>}
+      </Kv>
+      <Kv label={zhCN.envRuntimeDistributions}>
+        <span className={C.mono}>{distributions.length === 0 ? zhCN.envUnset : distributions.map(([name, version]) => `${name} ${version}`).join(' · ')}</span>
+      </Kv>
+      {runtime.error === '' ? null : <Kv label={zhCN.envReason}><div className={C.itemFix}>{runtime.error}</div></Kv>}
     </div>
   </Section>
 }
@@ -279,19 +316,7 @@ function InfoSection(props: {
     <div className={C.kv}>
       <Kv label={zhCN.envMetricPlatform}>{env.platform === '' ? zhCN.envNotResolved : env.platform}</Kv>
       <Kv label={zhCN.envHome}><span className={C.mono}>{env.home}</span></Kv>
-      <Kv label={zhCN.envManifestSource}>
-        <span className={C.mono}>{env.manifestSource === '' ? zhCN.envNotConfigured : env.manifestSource}</span>
-        <span className={C.muted}>{`（${env.manifestLoaded ? zhCN.envManifestLoaded : zhCN.envManifestBuiltin}${env.manifestKind === '' ? '' : ` · ${env.manifestKind}`}）`}</span>
-      </Kv>
-      <Kv label={zhCN.envManifestUpdated}>
-        {env.manifestUpdatedAt === '' ? zhCN.envUnset : `${localTime(env.manifestUpdatedAt)}（${env.manifestUpdatedAt}）`}
-      </Kv>
-      {env.manifestError === '' ? null : <Kv label={zhCN.envManifestError}>
-        <span className={C.error}>{env.manifestError}</span>
-      </Kv>}
-      <Kv label={zhCN.envInstallDoc}>
-        <span className={`${C.mono} ${C.link}`}>{env.installDocUrl === '' ? zhCN.envNotConfigured : env.installDocUrl}</span>
-      </Kv>
+      <Kv label={zhCN.envConfigSource}><span className={C.mono}>{env.configSource === '' ? zhCN.envNotConfigured : env.configSource}</span></Kv>
       <Kv label={zhCN.envCheckedAt}>{props.checkedAt === '' ? zhCN.envUnset : localTime(props.checkedAt)}</Kv>
       <Kv label={zhCN.envCaseRoot}>
         <span className={C.mono}>{env.workspace.path === '' ? zhCN.envUnset : env.workspace.path}</span>
@@ -321,11 +346,12 @@ function InfoSection(props: {
   </Section>
 }
 
-/** 交付件回传的明细（AK 表单在 ④ 层里，这里只放配置事实）。 */
+/** 交付件回传的明细（AK 表单在 ⑤ 层里，这里只放配置事实）。 */
 function OssSection(props: { env: EnvResult }): React.ReactElement {
   const { env } = props
-  const oss = env.oss
-  const probe = (oss.probe ?? {}) as { ok?: boolean; state?: string; detail?: string }
+  const oss = env.delivery.oss
+  const cred = env.delivery.ossCred
+  const probe = env.delivery.probe
   return <Section title={zhCN.envDetailsOss}>
     <div className={C.kv}>
       <Kv label={zhCN.envOssBucket}>
@@ -338,22 +364,23 @@ function OssSection(props: { env: EnvResult }): React.ReactElement {
       <Kv label={zhCN.envOssLinkMode}>{`${text(oss.linkMode)}${text(oss.linkTtl) === '' ? '' : ` · ${text(oss.linkTtl)}${zhCN.envSeconds}`}`}</Kv>
       <Kv label={zhCN.envOssAutoUpload}>{text(oss.autoUpload)}</Kv>
       <Kv label={zhCN.envOssOssutil}>
-        {oss.ossutilReady === true ? zhCN.envOssReady : zhCN.envOssNotReady}
+        {oss.ossutilReady ? zhCN.envOssReady : zhCN.envOssNotReady}
+        {oss.ossutilPath === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${oss.ossutilPath}`}</span>}
       </Kv>
       <Kv label={zhCN.envOssCredFile}>
-        <span className={C.mono}>{env.ossCred.exists ? env.ossCred.path : zhCN.envOssCredMissing}</span>
+        <span className={C.mono}>{cred.exists ? cred.path : zhCN.envOssCredMissing}</span>
       </Kv>
       <Kv label={zhCN.envOssCredAk}>
-        <span className={C.mono}>{env.ossCred.accessKeyIdMasked === '' ? zhCN.envOssCredMissing : env.ossCred.accessKeyIdMasked}</span>
+        <span className={C.mono}>{cred.accessKeyIdMasked === '' ? zhCN.envOssCredMissing : cred.accessKeyIdMasked}</span>
       </Kv>
       <Kv label={zhCN.envProbe}>
         <Chip
-          text={probe.state === undefined || probe.state === '' ? (probe.ok === true ? zhCN.envPass : zhCN.envFail) : probe.state}
+          text={probe.state === '' ? (probe.ok === true ? zhCN.envPass : zhCN.envFail) : probe.state}
           tone={probe.ok === true ? 'ok' : 'bad'}
         />
       </Kv>
     </div>
-    {probe.detail === undefined || probe.detail === '' ? null
+    {probe.detail === '' ? null
       : <div className={`${C.itemMeta} ${C.mono}`}>{probe.detail}</div>}
   </Section>
 }
@@ -378,7 +405,8 @@ function MaintenanceDetails(props: {
     </button>
     {open
       ? <div className={C.detailsBody}>
-          <ToolDetails env={props.env} />
+          <PackageDetails env={props.env} />
+          <RuntimeDetails env={props.env} />
           <OssSection env={props.env} />
           <InfoSection env={props.env} checkedAt={props.checkedAt} />
         </div>
@@ -389,9 +417,10 @@ function MaintenanceDetails(props: {
 /** 各层初始展开状态：没就绪的展开（员工一眼看到要处理什么），全就绪的收成一行。 */
 function initialOpenLayers(layers: EnvLayerSet): Record<EnvLayerId, boolean> {
   return {
-    tools: layers.tools.needsWork,
+    packages: layers.packages.needsWork,
+    runtime: layers.runtime.needsWork,
     auth: layers.auth.needsWork,
-    upload: layers.upload.needsWork,
+    delivery: layers.delivery.needsWork,
     external: layers.external.needsWork,
   }
 }
@@ -400,7 +429,9 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
   const { env } = props
   // 展开状态在**页面**这一层（见 LayerCard 的注释）：初值不是函数式，替身也认。
   const [openLayers, setOpenLayers] = React.useState<Record<EnvLayerId, boolean>>(
-    env === null ? { tools: false, auth: false, upload: false, external: false } : initialOpenLayers(envLayerSet(env)),
+    env === null
+      ? { packages: false, runtime: false, auth: false, delivery: false, external: false }
+      : initialOpenLayers(envLayerSet(env)),
   )
   const [detailsOpen, setDetailsOpen] = React.useState(false)
 
@@ -453,7 +484,7 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
         onEnterReport={props.onEnterReport}
       />
 
-      {/* ① 案例根目录：前置条件，排在四层之前（审核产物写到哪）。 */}
+      {/* ① 案例根目录：前置条件，排在五层之前（审核产物写到哪）。 */}
       <WorkspaceCard
         workspace={env.workspace}
         services={props.services}
@@ -464,18 +495,30 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
         onRefresh={props.onRefresh}
       />
 
-      {/* ② 工具：怎么配都一样 —— 把安装提示词交给 Agent，所以动作放在层上，缺哪个都在那一句里。 */}
+      {/* ② 插件内置组件：三件组件是**一个**聚合项，怎么配都一样 —— 重装插件或找管理员，
+          所以动作放在层上，缺哪件都在那一句里。 */}
+      {/* 最近一次登录的结果：成功一句话、失败带原因、CLI 打的 URL / 设备码原样带出来。
+          这两条命令要开浏览器等人扫码（宿主侧超时 5 分钟），没有这块回显用户就只能看它「没反应」。 */}
+      {props.loginMessage === undefined || props.loginMessage === '' ? null
+        : <div className={C.itemFix} style={{ whiteSpace: 'pre-wrap' }}>{props.loginMessage}</div>}
       <LayerCard
-        layer={layers.tools}
-        open={openLayers.tools}
-        onToggle={() => { setOpenLayers({ ...openLayers, tools: !openLayers.tools }) }}
+        layer={layers.packages}
+        open={openLayers.packages}
+        onToggle={() => { setOpenLayers({ ...openLayers, packages: !openLayers.packages }) }}
         actions={<>
           {/* 复制安装提示词**全页只留 Hero 那一枚**：同一动作在这里再放一枚只会让人犹豫点哪个。 */}
           <Button label={zhCN.refreshEnv} small disabled={props.busy} onClick={props.onRefresh} />
         </>}
       />
 
-      {/* ③ 登录认证：登录按钮就在没就绪的那一项上（不再挤在 Hero 里）。 */}
+      {/* ③ DSH 脚本运行时：失败是插件的能力缺口，不是员工要装 Python —— 层里只有说明，没有按钮。 */}
+      <LayerCard
+        layer={layers.runtime}
+        open={openLayers.runtime}
+        onToggle={() => { setOpenLayers({ ...openLayers, runtime: !openLayers.runtime }) }}
+      />
+
+      {/* ④ 登录与凭据授权：登录按钮就在没就绪的那一项上（不再挤在 Hero 里）。 */}
       <LayerCard
         layer={layers.auth}
         open={openLayers.auth}
@@ -490,24 +533,28 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
           if (item.fixKind === 'dws') {
             return <div className={C.layerActions}>
               <Button label={zhCN.dwsLogin} small onClick={props.onDwsLogin} />
+              {/* 默认那条会开浏览器等回调；浏览器起不来时设备码是唯一走得通的路，
+                  而它此前只能靠改代码才能用上（门面支持 device，界面没入口）。 */}
+              {props.onDwsLoginDevice === undefined ? null
+                : <Button label={zhCN.dwsLoginDevice} small onClick={props.onDwsLoginDevice} />}
             </div>
           }
           return null
         }}
       />
 
-      {/* ④ 上传配置（AK）：表单就嵌在这一层里 —— 审核跑完等着上传时再去找 agent 是来不及的。 */}
+      {/* ⑤ OSS 交付配置（AK）：表单就嵌在这一层里 —— 审核跑完等着上传时再去找 agent 是来不及的。 */}
       <LayerCard
-        layer={layers.upload}
-        open={openLayers.upload}
-        onToggle={() => { setOpenLayers({ ...openLayers, upload: !openLayers.upload }) }}
+        layer={layers.delivery}
+        open={openLayers.delivery}
+        onToggle={() => { setOpenLayers({ ...openLayers, delivery: !openLayers.delivery }) }}
         fix={<OssAuthCard
-          cred={env.ossCred}
+          cred={env.delivery.ossCred}
             onRefresh={props.onRefresh}
         />}
       />
 
-      {/* ⑤ 外部数据（同花顺 iFinD）。 */}
+      {/* ⑥ 外部数据（同花顺 iFinD）。 */}
       <LayerCard
         layer={layers.external}
         open={openLayers.external}

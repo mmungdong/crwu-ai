@@ -60,7 +60,7 @@
 | [`crwu-dev-audit-optimize`](../plugins/dsh-crwu-workbench/skills/crwu/crwu-dev-audit-optimize/SKILL.md) | 提示型（维护/元技能） | 审核能力族**维护/优化入口**（不经 crwu-audit 路由、不产审核判断）：既支持常规反馈分桶，也支持审核后 AI—人工差距分析。后者逐条对齐仅人工发现项，追踪知识库/Skill/路由/装配/执行/输出根因，生成表格 + ECharts 单文件 HTML、`L → 根因 → FIX` 双向映射、知识库人工修复单与经批准的 Skill 修复 prompt。**知识库只读且只能人工修复；Skill 逐项确认后才可改源仓**。规范见其 references/00-03 |
 | [`crwu-dev-audit-skill-maintainer`](../plugins/dsh-crwu-workbench/skills/crwu/crwu-dev-audit-skill-maintainer/SKILL.md) | 提示型（维护/元技能） | 资产/业务 Skill 的盘点、创建、修复和重映射：读取目录树或 DWS 快照，识别缺失的一级资产/业务 Skill、遗留命名、失效根映射及细分审核文件缺口；资产用 `crwu-audit-asset-*`、业务用 `crwu-audit-biz-*`，细分对象和子业务只进入父 Skill 索引；修改 source 前先给逐文件方案并等待确认 |
 
-| [`crwu-dws`](../plugins/common/skills/crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联评估审核知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据（含 `extension` 通道判据）；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；**取数按节点 `extension` 双通道分流**——`adoc`→`doc +export`，可读原生文本 `md`/`txt`→`drive +download`（原件即正文），其余类型记 `skipped` 不伪造正文；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
+| [`crwu-dws`](../plugins/common/skills/crwu-dws/SKILL.md) | 提示型 | 钉钉「中瑞世联评估审核知识库」**只读域**（与 audit 族平级、互为上下游）：M1 查询并缓存目录元数据（含 `extension` 通道判据）；M2 按**本次审核清单**实时下载知识正文，清单可混合单文件路径和目录路径（目录递归展开、逐文件 exportedAt、跨审核重下、清单外零下载）；**取数按节点 `extension` 双通道分流**（`adoc`→导出 markdown，可读原生文本 `md`/`txt`→原样取回，其余类型记 `skipped` 不伪造正文；DSH 下这两个通道由 `crwu_audit_knowledge_materialize` 内部完成，命令形式只在技能的非 DSH 兼容层）；M3 按文件名/nodeId/库内层级路径定位，正文仍从钉钉现场下载；目录缓存无正文且不能作为正文兜底；对钉钉零写 |
 
 ## crwu-audit 审核能力族（分轴并集）
 

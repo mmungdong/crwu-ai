@@ -10,38 +10,39 @@ import { zhCN } from '../../locales/zh-CN.ts'
  * 而且只有 iFinD 给了"怎么配"。分层、排序、状态词、"怎么办"这四件事全是判断，放在组件里
  * 就只能靠人眼看界面来验证，所以抽到这里由单测覆盖。
  *
- * 四个层固定顺序（员工排查顺序）：工具 → 登录认证 → 上传配置（AK）→ 外部数据。
- * ① 案例根目录由 WorkspaceCard 承担（它要先于这四层），排查详情（维护者看）不在层里。
+ * **②..⑥ 五层固定顺序**（员工排查顺序）：
+ *   ② 插件内置组件（一个聚合项）/ ③ DSH 脚本运行时 / ④ 登录与凭据授权 / ⑤ OSS 交付配置 / ⑥ 外部数据。
+ * ① 案例根目录由 `WorkspaceCard` 承担（它要先于这五层），**不属于** layers。
+ *
+ * 三件随包组件（crwu / dws / ossutil）合并成**一个**聚合项是刻意的：它们要么一起在包里、
+ * 要么一起不在（未装配 / 平台不受支持），各占一行只会让员工以为要分别装三个命令。
  */
 
 export type EnvItemState = 'ok' | 'missing' | 'reauth'
-export type EnvLayerId = 'tools' | 'auth' | 'upload' | 'external'
+export type EnvLayerId = 'packages' | 'runtime' | 'auth' | 'delivery' | 'external'
 /** 该项"怎么配"要用哪种交互；`none` = 已就绪、不需要动。 */
-export type EnvFixKind = 'none' | 'tool' | 'h3yun' | 'dws' | 'oss' | 'ifind'
+export type EnvFixKind = 'none' | 'packages' | 'runtime' | 'h3yun' | 'dws' | 'oss' | 'ifind'
 
 export interface EnvLayerItem {
   id: string
-  /** 显示名（工具用 Host 的 name，服务用 Host 的 label）。 */
+  /** 显示名（组件与运行时用本地聚合名，服务用 Host 的 label）。 */
   name: string
   state: EnvItemState
-  /** 状态词：已就绪 / 未配置 / 版本不符 / Host 原文（未绑定、未登录、探测失败…）。 */
+  /** 状态词：已就绪 / 未配置 / 能力缺口 / Host 原文（未绑定、未登录、探测失败…）。 */
   stateText: string
   /** 一句人话：它是干什么用的。 */
   purpose: string
-  /** 现在是什么情况（实际路径 / 版本 / AK 掩码 / 连通性）。 */
+  /** 现在是什么情况（聚合计数 / 版本 / AK 掩码 / 连通性）。 */
   meta: string
-  /** 没就绪的原因（Host 原文，不改写）。 */
+  /** 没就绪的原因（Host 原文优先，不改写）。 */
   reason: string
   /** 怎么配置（人话）；已就绪时是空串。 */
   fix: string
   fixKind: EnvFixKind
-  /** 工具：下载地址；空串 = 本平台暂无预编译包。 */
-  url: string
-  /** 工具：安装目标路径（HOST 给的 host 相对路径）。 */
-  target: string
-  /** 以下四项只进"排查详情"，员工视野里不出现。 */
+  /** 缺失时会不会阻塞审核（Host 清单里的 `required`）。可选项目只作为诊断信息展示。 */
+  required: boolean
+  /** 以下三项只进"排查详情"，员工视野里不出现。 */
   expect: string
-  sha256: string
   detail: string
   note: string
 }
@@ -70,38 +71,110 @@ function notReadyFirst(items: EnvLayerItem[]): EnvLayerItem[] {
   return [...items.filter((item) => item.state !== 'ok'), ...items.filter((item) => item.state === 'ok')]
 }
 
+/**
+ * 汇总一层。
+ *
+ * **只有必需项参与 `pass` / `total` / `needsWork`。** 可选项缺失不该让这一层显示「0/1 已就绪」
+ * 并默认展开 —— 那与 Hero 那句「环境就绪、可以开始审核」自相矛盾，而本仓反复要求的就是
+ * 「别把不需要处理的东西说成需要处理」。可选项目仍会出现在展开后的列表里。
+ *
+ * 一层里一个必需项都没有（例如运行时被标成可选）时退回按全部项目计，免得显示成 `0/0`。
+ */
 function layerOf(id: EnvLayerId, title: string, items: EnvLayerItem[]): EnvLayer {
-  const pass = items.filter((item) => item.state === 'ok').length
-  return { id, title, pass, total: items.length, needsWork: pass < items.length, items: notReadyFirst(items) }
+  const required = items.filter((item) => item.required)
+  const counted = required.length > 0 ? required : items
+  const pass = counted.filter((item) => item.state === 'ok').length
+  return { id, title, pass, total: counted.length, needsWork: pass < counted.length, items: notReadyFirst(items) }
 }
 
-/** ② 工具与运行时：Host 的 `checks`（node / crwu / dws / python3 / ossutil）。 */
-function toolItem(check: EnvResult['checks'][number]): EnvLayerItem {
-  const ok = check.ok === true
-  const meta = check.found
-    ? `${check.path}${check.versionText === '' ? '' : ` · ${check.versionText}`}`
-    : zhCN.envNotInstalled
+/**
+ * ② 插件内置组件：**一个**聚合项。
+ *
+ * 判据全在 Host 的 `packageIntegrity` 里（包内文件 + 包内清单字节数）；这里只做聚合与文案。
+ * 失败时**不许**出现「请安装 crwu / dws / ossutil」—— 它们随插件发布，员工机器上零安装。
+ */
+function packageItem(env: EnvResult): EnvLayerItem {
+  const integrity = env.packageIntegrity
+  const total = integrity.tools.length
+  const ready = integrity.tools.filter((tool) => tool.ok).length
+  const ok = integrity.ok === true
+  const failed = integrity.tools.filter((tool) => !tool.ok)
   return {
-    id: `tool-${check.name}`,
-    name: check.name,
+    id: 'packages',
+    name: zhCN.envItemPackagesName,
     state: ok ? 'ok' : 'missing',
-    // 装上了但版本/校验不达标时说"版本不符"：说成"未配置"会让人去重装一个已经在的东西。
-    stateText: ok ? zhCN.envItemOk : (check.found ? zhCN.envItemOutdated : zhCN.envItemMissing),
-    purpose: check.note,
-    meta,
-    reason: check.reason,
-    fix: ok ? '' : (check.url === '' ? `${zhCN.envFixTool}（${zhCN.envFixToolNoPackage}）` : zhCN.envFixTool),
-    fixKind: ok ? 'none' : 'tool',
-    url: check.url,
-    target: check.target,
-    expect: check.expect,
-    sha256: check.sha256,
-    detail: check.actual,
-    note: check.note,
+    stateText: ok ? zhCN.envItemOk : zhCN.envPackagesBroken,
+    purpose: zhCN.envPackagesPurpose,
+    meta: ok ? `${zhCN.envItemPackagesName} ${String(ready)}/${String(total)} ${zhCN.envPackagesComplete}` : '',
+    reason: ok
+      ? ''
+      : (failed.map((tool) => tool.reason).filter((reason) => reason !== '').join('；') || integrity.note || zhCN.envPackagesBroken),
+    fix: ok ? '' : zhCN.envFixPackages,
+    fixKind: ok ? 'none' : 'packages',
+    required: true,
+    expect: '',
+    detail: '',
+    note: integrity.note,
   }
 }
 
-/** ③ 登录认证：Host 的 `services` 里非 oss 的那几条（氚云 / 钉钉 / 清单声明的其它服务）。 */
+/** ③ 运行时的状态词：能力缺口 / 缺包 / Host 原文三种要能分辨。 */
+function runtimeStateText(runtime: EnvResult['runtime']): string {
+  if (runtime.state === 'capability-gap') return zhCN.envRuntimeStateGap
+  if (runtime.state === 'missing-package') {
+    return runtime.missingPackages.length === 0
+      ? zhCN.envRuntimeStateMissingPackage
+      : `${zhCN.envRuntimeStateMissingPackage}：${runtime.missingPackages.join('、')}`
+  }
+  if (runtime.state === '') return zhCN.envItemMissing
+  return runtime.state
+}
+
+/** 依赖包版本：按清单里 `requiredPackages` 的顺序排，其余附在后面。 */
+function distributionPairs(runtime: EnvResult['runtime']): Array<[string, string]> {
+  const entries = Object.entries(runtime.distributions)
+  const order = new Map(runtime.requiredPackages.map((name, index) => [name, index]))
+  return entries.sort(([a], [b]) => (order.get(a) ?? Number.MAX_SAFE_INTEGER) - (order.get(b) ?? Number.MAX_SAFE_INTEGER))
+}
+
+/**
+ * ③ DSH 脚本运行时（Python）。
+ *
+ * 来源必须明说「DSH 自带」：写成系统 Python 会把员工指去装一份插件根本不会用的解释器，
+ * 而 `capability-gap` 的处置是「重启 profile / 找维护者接线」，不是「装 Python」。
+ */
+function runtimeItem(env: EnvResult): EnvLayerItem {
+  const runtime = env.runtime
+  const ok = runtime.ok === true
+  const pairs = distributionPairs(runtime)
+  const meta = runtime.versionText === '' && pairs.length === 0
+    ? ''
+    : [
+        runtime.versionText === '' ? '' : `Python ${runtime.versionText}`,
+        ...pairs.map(([name, version]) => `${name} ${version}`),
+        `${zhCN.envRuntimeSourceLabel}${runtime.source === '' ? zhCN.envRuntimeName : runtime.source}`,
+      ].filter((part) => part !== '').join(' · ')
+  const missing = runtime.missingPackages.length === 0
+    ? ''
+    : `${zhCN.envRuntimeMissingPackages}${runtime.missingPackages.join('、')}`
+  return {
+    id: 'runtime',
+    name: zhCN.envRuntimeName,
+    state: ok ? 'ok' : 'missing',
+    stateText: ok ? zhCN.envItemOk : runtimeStateText(runtime),
+    purpose: runtime.note === '' ? zhCN.envRuntimePurpose : runtime.note,
+    meta: ok ? meta : '',
+    reason: ok ? '' : (missing || runtime.error || zhCN.envRuntimeStateGap),
+    fix: ok ? '' : zhCN.envFixRuntime,
+    fixKind: ok ? 'none' : 'runtime',
+    required: runtime.required === true,
+    expect: runtime.expect,
+    detail: ok ? '' : runtime.path,
+    note: runtime.note,
+  }
+}
+
+/** ④ 登录与凭据授权：Host 的 `services`（氚云 / 钉钉）。 */
 function authItem(service: ServiceCheckView): EnvLayerItem {
   const ok = service.ok === true
   const purpose = service.id === 'h3yun'
@@ -125,33 +198,28 @@ function authItem(service: ServiceCheckView): EnvLayerItem {
     reason: ok ? '' : service.detail,
     fix: ok ? '' : fix,
     fixKind: ok ? 'none' : (service.id === 'h3yun' ? 'h3yun' : (service.id === 'dingtalk' ? 'dws' : 'none')),
-    url: '',
-    target: '',
+    required: service.required === true,
     expect: '',
-    sha256: '',
     detail: service.detail,
     note: '',
   }
 }
 
-/** ④ 上传配置（OSS AK）：凭据文件 + Host 的 oss 连通性探测。 */
-function uploadItem(env: EnvResult): EnvLayerItem {
-  const cred = env.ossCred
-  const probe = (env.oss.probe ?? {}) as { ok?: boolean; state?: string; detail?: string }
-  const service = env.services.find((item) => item.id === 'oss')
+/** ⑤ OSS 交付配置：凭据文件（AK）+ Host 的连通性实测。两条都算数：写进文件 ≠ 能用。 */
+function deliveryItem(env: EnvResult): EnvLayerItem {
+  const delivery = env.delivery
+  const cred = delivery.ossCred
+  const probe = delivery.probe
   const credReady = cred.exists === true && cred.hasSecret === true
-  // 连通性优先用 Host 的服务探测（它带 state/detail）；老 Host 没这条时退回 oss.probe。
-  const connectivityOk = service === undefined ? probe.ok === true : service.ok === true
+  const connectivityOk = probe?.ok === true
   const ok = credReady && connectivityOk
   const masked = cred.accessKeyIdMasked === '' ? zhCN.envOssCredMissing : cred.accessKeyIdMasked
-  const probeState = service?.state ?? probe.state ?? ''
+  const probeState = probe?.state ?? ''
   const file = cred.path === '' ? '~/.ossutilconfig' : cred.path
   const meta = `${file} · AK ${masked}${probeState === '' ? '' : ` · ${probeState}`}`
   const reason = ok
     ? ''
-    : (!cred.exists
-      ? zhCN.envOssReasonNoCred
-      : (!cred.hasSecret ? zhCN.envOssReasonNoSecret : (service?.detail ?? probe.detail ?? '')))
+    : (!cred.exists ? zhCN.envOssReasonNoCred : (!cred.hasSecret ? zhCN.envOssReasonNoSecret : (probe?.detail ?? '')))
   return {
     id: 'oss-cred',
     name: zhCN.envItemOssName,
@@ -162,18 +230,16 @@ function uploadItem(env: EnvResult): EnvLayerItem {
     reason,
     fix: ok ? '' : zhCN.envFixOss,
     fixKind: ok ? 'none' : 'oss',
-    url: '',
-    target: '',
+    required: probe?.required ?? true,
     expect: '',
-    sha256: '',
-    detail: service?.detail ?? probe.detail ?? '',
-    note: '',
+    detail: probe?.detail ?? '',
+    note: delivery.oss.ossutilReady ? '' : zhCN.envOssOssutilMissing,
   }
 }
 
-/** ⑤ 外部数据：同花顺 iFinD 的 auth_token（只回长度，绝不回显）。 */
-function ifindItem(env: EnvResult): EnvLayerItem {
-  const ifind = env.ifindKey
+/** ⑥ 外部数据：同花顺 iFinD 的 auth_token（只回长度，绝不回显）。 */
+function externalItem(env: EnvResult): EnvLayerItem {
+  const ifind = env.external
   const ok = ifind.ok === true
   const where = ifind.path === '' ? zhCN.envUnset : ifind.path
   return {
@@ -188,35 +254,34 @@ function ifindItem(env: EnvResult): EnvLayerItem {
     reason: ok ? '' : (ifind.reason === '' ? zhCN.ifindMissing : ifind.reason),
     fix: ok ? '' : `${zhCN.envFixIfind}${where}${zhCN.envFixIfindField}${zhCN.envFixIfindExample}${zhCN.envFixIfindNote}`,
     fixKind: ok ? 'none' : 'ifind',
-    url: '',
-    target: '',
+    required: ifind.required === true,
     expect: '',
-    sha256: '',
     detail: '',
     note: '',
   }
 }
 
-/** 四个层的完整结构（顺序固定：工具 → 登录认证 → 上传配置 → 外部数据）。 */
+/** 五层的完整结构（顺序固定：② 组件 → ③ 运行时 → ④ 授权 → ⑤ 交付 → ⑥ 外部数据）。 */
 export function envLayers(env: EnvResult): EnvLayer[] {
-  const auth = env.services.filter((service) => service.id !== 'oss')
   return [
-    layerOf('tools', zhCN.envLayerTools, env.checks.map(toolItem)),
-    layerOf('auth', zhCN.envLayerAuth, auth.map(authItem)),
-    layerOf('upload', zhCN.envLayerUpload, [uploadItem(env)]),
-    layerOf('external', zhCN.envLayerExternal, [ifindItem(env)]),
+    layerOf('packages', zhCN.envLayerPackages, [packageItem(env)]),
+    layerOf('runtime', zhCN.envLayerRuntime, [runtimeItem(env)]),
+    layerOf('auth', zhCN.envLayerAuth, env.services.map(authItem)),
+    layerOf('delivery', zhCN.envLayerDelivery, [deliveryItem(env)]),
+    layerOf('external', zhCN.envLayerExternal, [externalItem(env)]),
   ]
 }
 
 export interface EnvLayerSet {
-  tools: EnvLayer
+  packages: EnvLayer
+  runtime: EnvLayer
   auth: EnvLayer
-  upload: EnvLayer
+  delivery: EnvLayer
   external: EnvLayer
 }
 
 /**
- * 按 id 取四层。
+ * 按 id 取五层。
  *
  * 组件里刻意不走下标（`layers[0]`）：层顺序哪天变了，下标会**静默**画错一层；这里找不到就抛。
  */
@@ -227,7 +292,13 @@ export function envLayerSet(env: EnvResult): EnvLayerSet {
     if (hit === undefined) throw new Error(`envLayers 未返回 ${id} 层`)
     return hit
   }
-  return { tools: pick('tools'), auth: pick('auth'), upload: pick('upload'), external: pick('external') }
+  return {
+    packages: pick('packages'),
+    runtime: pick('runtime'),
+    auth: pick('auth'),
+    delivery: pick('delivery'),
+    external: pick('external'),
+  }
 }
 
 /** 员工视野里"还差什么"的一句话（Hero 用 Host 的权威清单，不自己拼结论）。 */

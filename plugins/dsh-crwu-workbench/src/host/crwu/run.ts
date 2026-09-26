@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { runShell } from '../shell/run.ts'
 import { shellQuote } from '../environment/probe.ts'
+import { resolveBundledCommand } from '../platform/command.ts'
 import type { ShellResult } from '../shell/run.ts'
 
 /**
@@ -10,11 +11,14 @@ import type { ShellResult } from '../shell/run.ts'
  * 三条门禁，缺一条就会变成「工作台能执行任意命令」：
  * 1. **只允许 argv[0] === 'crwu'**，其余一律拒绝；
  * 2. **无沙箱执行（escalate）只有白名单子命令能声明**：`crwu h3yun session login` 与
- *    `forms/records/apps/files/file/tools`。这些都必须在沙箱外跑（要读系统钥匙串）；
- * 3. **员工零配置**（2026-09-22 定的口径）：命中白名单就**自己声明**所需权限
- *    （`ShellExecSpec.sandboxPolicy`），不要求员工改任何启动参数、也不要求先勾选什么。
- *    是否放行由 DSH 的审批策略决定；`trusted` 只是「记住授权、不再逐次询问」的优化，
- *    它**不再**决定提不提权（旧口径是「没勾信任就退回沙箱」，结果员工读氚云一直撞钥匙串）。
+ *    `forms/records/apps/files/file/tools`。这些都必须在沙箱外跑（要读系统钥匙串）。
+ *    白名单是**必要条件**：不在白名单里的子命令即使调用方传 `escalate: true` 也直接失败；
+ * 3. **提权的真实语义**（这一段曾与实现互相矛盾，以代码为准）：
+ *    `effective = (trusted ∧ 白名单) ∨ escalate`。也就是说
+ *    - 员工已在面板上授权（`trusted`）时，白名单内的读凭据命令**自动**提权，不再逐次询问；
+ *    - 未授权时，只有调用方**显式**声明 `escalate: true` 才会提权（这是客户端「去授权」重试
+ *      与插件内部初始化路径的通道），DSH 的审批策略决定放不放行。
+ *    两种路径都**不要求员工改启动参数**。
  */
 
 export interface CrwuRun {
@@ -25,6 +29,8 @@ export interface CrwuRun {
   stderr: string
   truncated: boolean
   timedOut: boolean
+  /** 调用方的取消信号是第一因（与 `error` = 基础设施故障分开）。 */
+  aborted: boolean
   escalated: boolean
   /** stdout/stderr 命中「钥匙串被拒」特征：提示用户需要无沙箱执行。 */
   keychainBlocked: boolean
@@ -59,12 +65,14 @@ export interface CrwuOptions {
   trusted: boolean
   /** 用于拼接命令的引用方式；Windows 与 POSIX 不同。 */
   platform?: string
+  /** 调用方（Tool 的 `exec.signal`）的取消信号；透传到 `ShellExecRequest.signal`。 */
+  signal?: AbortSignal
 }
 
 /** 执行一条 crwu 命令。返回结构与 legacy 一致，界面不需要改。 */
 export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions): Promise<CrwuRun> {
   const failed = (error: string): CrwuRun => ({
-    ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false,
+    ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false,
     escalated: false, keychainBlocked: false, escalateAvailable: false,
   })
 
@@ -76,8 +84,8 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
   if (options.escalate === true && !allowed) {
     return failed(`该 crwu 子命令不允许无沙箱执行：${clean.slice(0, 3).join(' ')}`)
   }
-  // 提权 = 白名单 ∧ 已授权（授权就是用户对「读本机凭据」的同意；没授权时环境自检会硬阻塞，
-  // 这里也不再偷偷无沙箱执行）。`options.escalate` 保留为客户端显式重试的通道（同样只对白名单生效）。
+  // 提权 = 白名单 ∧ (已授权 ∨ 调用方显式声明)。授权就是用户对「读本机凭据」的同意；
+  // 没授权又没显式声明时，这里不会偷偷无沙箱执行 —— 环境自检会把「未授权」算成阻塞项。
   const effective = (options.trusted === true && allowed) || options.escalate === true
 
   // 提权请求必须带 `workspaceRoot`（DSH 契约），所以会话工作区未知时**退回沙箱执行**：
@@ -85,11 +93,17 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
   // 而不是「钥匙串被拒，去授权」这条可操作的路径。
   const canEscalate = effective && (options.workdir ?? '') !== ''
   const quote = (value: string): string => shellQuote(value, options.platform ?? '')
-  const result: ShellResult = await runShell(ctx, clean.map(quote).join(' '), {
+  // 上面已经按「argv[0] 必须是 crwu」放行过了；这里再把命令名换成**包内绝对路径**。
+  // 只按名字调用会在 Finder 启动的桌面端直接失败（PATH 里没有 crwu，实测
+  // `bash: crwu: command not found`），而那时「氚云登录」按钮点了没有任何反应。
+  const resolved = await resolveBundledCommand(ctx, options.platform ?? '', 'crwu')
+  const spawnArgv = [resolved, ...clean.slice(1)]
+  const result: ShellResult = await runShell(ctx, spawnArgv.map(quote).join(' '), {
     ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
     timeoutMs: options.timeoutMs ?? 60_000,
     escalate: canEscalate,
     ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
 
   const blocked = keychainBlocked(result)
@@ -101,6 +115,7 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
     stderr: text(result.stderr),
     truncated: result.truncated,
     timedOut: result.timedOut,
+    aborted: result.aborted,
     escalated: canEscalate,
     keychainBlocked: blocked,
     // 需要给员工一个「授权入口」的两种情况：凭据读取被钥匙串/沙箱拦下（blocked），

@@ -13,7 +13,8 @@ import test from 'node:test'
 const ROOT = new URL('../../', import.meta.url)
 
 const { reportFiles } = await import(new URL('src/host/report/files.ts', ROOT).href)
-const { normalizeManifest } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
+const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
+const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
 
 const SEQ = '2026-302441-LX9967-BG8790'
 
@@ -38,7 +39,7 @@ const REAL_FILES_LIST = JSON.stringify({
 })
 
 function manifest() {
-  return normalizeManifest({
+  return manifestFixture({
     oss: { enabled: true, bucket: 'bkt', prefix: 'crwu/audit', linkMode: 'signed', linkTtl: 3600, autoUpload: true },
   })
 }
@@ -51,19 +52,23 @@ function deps(patch = {}) {
       if (name === 'shell') {
         return {
           resolve: (request) => { commands.push(request.command); return request },
-          async run(spec) {
+          async execute(spec) {
             const out = patch.shell === undefined ? { stdout: '' } : patch.shell(spec.command)
-            return {
+            return { result: async () => ({
               exitCode: out.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout ?? '', truncated: out.truncated === true },
               stderr: { text: out.stderr ?? '', truncated: false },
-            }
+            }) }
           },
         }
       }
       if (name === 'fs') {
         return {
           async resolve(path) { return { targetKey: path, displayPath: path } },
+          // ossutil 只按包内绝对路径解析（不再有 PATH 回退），所以这一步要让包内那份「存在」。
+          async stat(target) {
+            return target.targetKey === bundledBinaryPath('darwin-arm64', 'ossutil') ? { type: 'file' } : undefined
+          },
           async listDir(target) {
             const rows = (patch.dirs ?? {})[target.targetKey]
             if (rows === undefined) throw new Error('ENOENT')
@@ -81,7 +86,7 @@ function deps(patch = {}) {
       oss: {
         ctx,
         manifest: manifest(),
-        platform: 'darwin',
+        platform: 'darwin-arm64',
         workdir: async () => '/tmp',
         home: '/tmp/home',
       },
@@ -89,7 +94,7 @@ function deps(patch = {}) {
       // 氚云那一路：表单 code + 授权状态（没授权就不该去读钥匙串）。
       formCode: () => patch.formCode ?? 'Srabfcm8figc1xuzxawc5u04x5',
       trusted: patch.trusted !== false,
-      platform: 'darwin',
+      platform: 'darwin-arm64',
       workdir: async () => '/tmp',
     },
   }

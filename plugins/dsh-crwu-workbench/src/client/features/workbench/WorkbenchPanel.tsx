@@ -9,6 +9,7 @@ import { gatingOf, workbenchApi } from '../report-audit/api.ts'
 import type { PendingResult } from '../report-audit/api.ts'
 import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
 import { openChildSession } from './open-session.ts'
+import { discussionPortOf } from './services.ts'
 import type { ClientServices } from './services.ts'
 import { EnvironmentPane } from '../environment/EnvironmentPane.tsx'
 import { createEnvStatusStore, useEnvStatus, type EnvStatusStore } from '../environment/status.ts'
@@ -87,6 +88,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   /** 被门禁拦住的界面状态：running = 正在重新自检，blocked = 自检没过。 */
   const [gate, setGate] = React.useState<'idle' | 'running' | 'blocked'>('idle')
   const [copied, setCopied] = React.useState(false)
+  // 登录结果（成功/失败原因/CLI 打印的 URL 或设备码）。**不能丢**：命令跑不起来时
+  // 它是用户唯一的线索 —— 实测「点了钉钉登录没有任何反应」就是因为它被丢掉了。
+  const [loginMessage, setLoginMessage] = React.useState('')
   // 授权门槛：拒绝**不落盘**（下次打开页面还会再问）；同意落盘在 Host 的 trustCredentials 里。
   const [authDeclined, setAuthDeclined] = React.useState(false)
   const [authBusy, setAuthBusy] = React.useState(false)
@@ -136,6 +140,31 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   React.useEffect(() => () => {
     if (drawerTimer.current !== null) window.clearTimeout(drawerTimer.current)
   }, [])
+
+  /**
+   * 跑一次登录并把结果**显示出来**。
+   *
+   * 这两条命令会开浏览器、等人扫码（宿主侧超时 5 分钟），所以：成功也要给一句话，
+   * 失败必须带原因，CLI 打到 stdout 的 URL / 设备码 / 提示原样带出来 —— 浏览器打不开时，
+   * 那串 URL 就是员工唯一能自己走下去的路。
+   */
+  const runLogin = React.useCallback(async (label: string, call: () => Promise<{ ok: boolean; error?: string; timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>) => {
+    setLoginMessage(`${label}：正在等待浏览器授权…（最多 5 分钟）`)
+    try {
+      const result = await call()
+      if (!mounted.current) return
+      const lines: string[] = []
+      if (result.ok) lines.push(`${label}：命令已执行完成，请刷新查看结果。`)
+      else if (result.timedOut === true) lines.push(`${label}：等待超时（5 分钟）。若浏览器没有自动打开，请重试或改用设备码登录。`)
+      else lines.push(`${label}失败：${result.error || result.stderrTail || '未知原因'}`)
+      const detail = (result.stdoutTail ?? '').trim() || (result.stderrTail ?? '').trim()
+      if (detail !== '') lines.push(detail)
+      setLoginMessage(lines.join('\n'))
+    } catch (cause) {
+      if (mounted.current) setLoginMessage(`${label}失败：${describe(cause)}`)
+    }
+    if (mounted.current) await envStatus.refresh()
+  }, [envStatus])
 
   const loadPrompt = React.useCallback(async () => {
     setPromptBusy(true)
@@ -423,11 +452,13 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     error={snapshot.error !== '' ? snapshot.error : bootError}
     busy={snapshot.busy}
     checkedAt={snapshot.checkedAt}
-    onRefresh={() => { void envStatus.refresh() }}
+    onRefresh={() => { void envStatus.refresh({ refresh: true }) }}
     onCopyPrompt={() => { void loadPrompt() }}
     copied={copied}
-    onRelogin={() => { void workbenchApi.relogin().then(() => envStatus.refresh()) }}
-    onDwsLogin={() => { void workbenchApi.dwsLogin({}).then(() => envStatus.refresh()) }}
+    onRelogin={() => { void runLogin('氚云登录', workbenchApi.relogin) }}
+    onDwsLogin={() => { void runLogin('钉钉登录', () => workbenchApi.dwsLogin({})) }}
+    onDwsLoginDevice={() => { void runLogin('钉钉设备码登录', () => workbenchApi.dwsLogin({ device: true })) }}
+    loginMessage={loginMessage}
     onEnterReport={enterReport}
     gate={gate}
     services={props.services}
@@ -522,13 +553,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                 state={reportState}
                 gating={gating}
                 workspace={{ id: env?.workspace.id ?? '', path: env?.workspace.path ?? '' }}
-                // 讨论面板要的是**会话服务本身**（create/open/binding/list 四个动词）。
-                // 服务可能缺席（别的部署/旧宿主），面板会自己降级成一句「请用会话中打开」。
-                port={props.services.sessions ?? {}}
+                // 讨论面板只拿**真实存在的四个动词**（create/using/binding/list），
+                // 适配器保证经接收者调用；「跳会话」不在 port 里（见下面的 onOpenDiscussion）。
+                port={discussionPortOf(props.services)}
                 onOpenDiscussion={(sessionId) => {
-                  // 「在会话中打开」= 把这条讨论会话设为当前会话 + 主面板切回原生对话
-                  // （工具调用、审批、完整渲染都在那边）。
-                  props.services.sessions?.open?.(sessionId)
+                  // 「跳到这条讨论会话」= DSH 原生入口 `uiWorkspace.openSession(id)`：
+                  // 内部 replaceMain(…, 'reveal') 会设置主会话并切回原生对话
+                  //（工具调用、审批、完整渲染都在那边）。左侧会话列表被点也是走它。
+                  props.services.uiWorkspace?.openSession?.(sessionId)
+                  // 保底：`uiWorkspace` 缺席（旧宿主）时至少把插件面板让开，
+                  // 用户还能在左侧列表里点那条会话。`openSession` 自己也会调这一句，幂等。
                   props.services.layout?.selectPanel?.(null)
                 }}
                 onSearch={(next) => { setQuery(next); setPage(1); void loadReport(pendingArgs(next, 1)) }}

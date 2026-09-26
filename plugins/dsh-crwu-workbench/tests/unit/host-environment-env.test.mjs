@@ -2,7 +2,13 @@
  * 环境自检聚合（`env` 操作）的单元测试。
  *
  * 这是面板的入口页，也是所有后续操作的硬门禁。最需要防的是「假绿」：
- * blocked 为空但用户其实干不了活（缺工作空间、平台没识别、清单没拉到）。
+ * blocked 为空但用户其实干不了活（缺工作空间、平台没识别、插件包不完整）。
+ *
+ * 2026-09-25 的口径变化（这一版测试盯的就是它们）：
+ * - `env` 的返回从 `checks[]` 混装改成 `packageIntegrity` / `runtime` / `services`（授权）/
+ *   `delivery`（OSS）/ `external`（iFinD）分区；
+ * - 裸 `python3` 不再是检查项，运行时只认 **DSH 自带** 的那一份（能力缺口要如实报）；
+ * - 三件随包组件不再各自贡献阻塞项 —— 插件包不完整只算**一个**故障。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -11,54 +17,68 @@ const ROOT = new URL('../../', import.meta.url)
 
 const { loadEnvironment } = await import(new URL('src/host/environment/ops.ts', ROOT).href)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
+const { packageIntegrityPaths } = await import(new URL('src/host/environment/probe.ts', ROOT).href)
+const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
 
 const CONFIG = {
-  caseRoot: '', formName: '报告审核', installDocUrl: 'https://doc.invalid/install.md', manifestUrl: 'https://x.invalid/m.json',
-  preferWorkspaceTitle: '中瑞世联工作空间', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossBaseUrl: '',
+  configSource: '/tmp/test-crwu-workbench.yml', caseRoot: '', formName: '报告审核',
+  preferWorkspaceTitle: '中瑞世联工作空间',
+  // 审核产物那个私有桶由 YAML 提供（内置清单里的 bucket 是空的，否则整条 OSS 链路都是「缺 bucket」）。
+  ossBucket: 'bkt', ossPrefix: 'crwu/audit', ossEndpoint: '', ossBaseUrl: '',
   ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true,
 }
 
 /** 沙箱后端不可用时 DSH 抛出的那条原文（真实环境逐字抄回，不是编的）。 */
 const SANDBOX_DOWN = 'sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined.'
 
-const MANIFEST_JSON = JSON.stringify({
-  binaries: [
-    { name: 'node', command: 'node', versionArgs: ['--version'], expect: '>=16.7', required: true },
-    { name: 'ossutil', command: 'ossutil', versionArgs: ['--version'], required: true, platforms: { 'darwin-arm64': { url: 'https://dl/ossutil.zip', sha256: 'a'.repeat(64), target: '~/bin/ossutil', archive: 'zip', member: 'ossutil' } } },
-  ],
-  services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true }, { id: 'dingtalk', label: '钉钉认证', required: true }, { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true }],
-  oss: { enabled: true, bucket: 'bkt', prefix: 'crwu/audit', linkMode: 'signed', linkTtl: 3600, autoUpload: true },
-  ifindKey: { required: true, path: '~/.agents/skills/ifind-finance-data/mcp_config.json', field: 'auth_token' },
-  workspace: { preferTitle: '中瑞世联工作空间', preferPath: '' },
-})
+const PATHS = packageIntegrityPaths()
+const BUNDLED = (name, platform = 'darwin-arm64') => bundledBinaryPath(platform, name)
+const sizeOf = (name) => 1000 + name.length
+
+/** 包内 bin/manifest.json 的内容（三个组件的字节数与自己的文件一致）。 */
+function binManifest(platform = 'darwin-arm64', tools = DEFAULT_MANIFEST.packaged.map((spec) => spec.name)) {
+  return JSON.stringify({
+    schemaVersion: 'crwu.plugin-bin-manifest.v1',
+    platforms: [{ platform, tools: tools.map((name) => ({ tool: name, file: name, platform, size: sizeOf(name), sha256: `sha-${name}` })) }],
+  })
+}
 
 /**
- * 一个 ctx：shell 按命令回放，fs 同时提供目录与文件，workspaceRegistry/sessions 可选。
+ * 一个 ctx：shell 按命令回放（并记录真的发过哪些命令），fs 同时提供目录、文件与字节数；
+ * `workspaceRegistry` / `sessions` 可选。
  */
-function makeCtx({ shellLines = {}, shellDown = [], dirs = [], files = {}, entries = [], sessions } = {}) {
+function makeCtx({ shellLines = {}, shellDown = [], dirs = [], files = {}, infos = {}, entries = [], sessions, packaged = true } = {}) {
   const directories = new Set(dirs)
+  const specs = []
+  const allInfos = { ...infos }
+  if (packaged) {
+    for (const spec of DEFAULT_MANIFEST.packaged) allInfos[BUNDLED(spec.name)] = { type: 'file', size: sizeOf(spec.name) }
+    files = { [PATHS.manifestPath]: binManifest(), ...files }
+  }
   return {
+    specs,
     get(name) {
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async run(spec) {
-            // `shellDown` 里的 needle 命中时**抛错**：DSH 契约里 `run` 只为基础设施故障 reject，
+          async execute(spec) {
+            specs.push(spec)
+            // `shellDown` 里的 needle 命中时**抛错**：DSH 契约里 `execute` 只为基础设施故障 reject，
             // 沙箱后端不可用就长这样（真实环境逐字抄回的那条错误）。
             for (const needle of shellDown) {
               if (spec.command.includes(needle)) throw new Error(SANDBOX_DOWN)
             }
             for (const [needle, out] of Object.entries(shellLines)) {
               if (spec.command.includes(needle)) {
-                return {
+                return { result: async () => ({
                   exitCode: out.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
                   stdout: { text: out.stdout ?? '', truncated: false },
                   stderr: { text: out.stderr ?? '', truncated: false },
-                }
+                }) }
               }
             }
-            return { exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false } }
+            return { result: async () => ({ exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false } }) }
           },
         }
       }
@@ -67,6 +87,7 @@ function makeCtx({ shellLines = {}, shellDown = [], dirs = [], files = {}, entri
           async resolve(path) { return { targetKey: path, displayPath: path } },
           async stat(target) {
             const key = String(target.targetKey).replace(/[\\/]+$/, '')
+            if (allInfos[target.targetKey] !== undefined) return allInfos[target.targetKey]
             if (directories.has(key)) return { type: 'directory' }
             return files[target.targetKey] === undefined ? undefined : { type: 'file' }
           },
@@ -81,17 +102,22 @@ function makeCtx({ shellLines = {}, shellDown = [], dirs = [], files = {}, entri
   }
 }
 
-/** 全部就绪：清单拉得到、二进制齐、氚云/钉钉已登录、OSS 可用、iFinD 配好、工作空间选定。 */
-function healthyContext() {
+/** DSH 自带 Python 就绪时主 agent 那个依赖函数会回的形状。 */
+function healthyPython(patch = {}) {
+  return {
+    ok: true, state: 'ok', path: '/opt/dsh/python/bin/python3', versionText: '3.12.3',
+    distributions: { openpyxl: '3.1.2', 'python-docx': '1.1.2', pandas: '2.2.2' },
+    missingPackages: [], error: '', source: 'DSH 自带（bundled runtime）',
+    ...patch,
+  }
+}
+
+/** 全部就绪：插件包完整、DSH 运行时正常、氚云/钉钉已登录、OSS 可用、iFinD 配好、工作空间选定。 */
+function healthyContext(patch = {}) {
   return makeCtx({
     shellLines: {
-      'curl': { stdout: MANIFEST_JSON },
-      'for b in': { stdout: 'node\t/usr/local/bin/node\nossutil\t/usr/local/bin/ossutil\n' },
-      '/usr/local/bin/node --version': { stdout: 'v22.19.0\n' },
-      '/usr/local/bin/ossutil --version': { stdout: 'Version: 1.7.19\n' },
       'h3yun session status': { stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) },
       'dws auth status': { stdout: JSON.stringify({ authenticated: true }) },
-      'command -v': { stdout: '/usr/local/bin/ossutil\n' },
       ' ls ': { stdout: 'oss://bkt/obj\n' },
     },
     dirs: ['/cases/space'],
@@ -100,6 +126,7 @@ function healthyContext() {
       '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"token-123456"}',
       '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
     },
+    ...patch,
   })
 }
 
@@ -111,7 +138,12 @@ function depsOf(ctx, patch = {}) {
       ctx, config: { ...CONFIG, ...(patch.config ?? {}) }, state,
       home: patch.home ?? '/Users/x', platform: patch.platform ?? 'darwin-arm64',
       sessionRoot: async () => '/cases/session',
-      // 「我是谁」的来源：只有传了才会有 me（见文件末尾那条用例）。
+      // DSH 自带 Python 的解析：主 agent 接线后才会传。缺省给一个就绪的替身；
+      // 显式传 `null` 表示「宿主还没接线」，用来验 capability gap。
+      ...(patch.pythonRuntime === null
+        ? {}
+        : { pythonRuntime: patch.pythonRuntime ?? (async () => healthyPython()) }),
+      // 「我是谁」的来源：只有传了才会有 me（见身份那条用例）。
       ...(patch.identity === undefined ? {} : { identity: patch.identity }),
     },
     state,
@@ -119,50 +151,155 @@ function depsOf(ctx, patch = {}) {
 }
 
 test('a healthy environment reports allOk with nothing blocked', async () => {
-  const { deps, state } = depsOf(healthyContext())
+  const ctx = healthyContext()
+  const { deps, state } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
 
   assert.equal(result.ok, true)
   assert.equal(result.allOk, true, `不该有 blocked，实际：${result.blocked.join(' / ')}`)
   assert.deepEqual(result.blocked, [])
   assert.equal(result.platform, 'darwin-arm64')
-  assert.equal(result.manifestLoaded, true)
-  assert.equal(result.manifestKind, 'url')
+  assert.equal(result.configSource, CONFIG.configSource, '故障对账看的就是这份部署配置来源')
   // 自检顺手把注册表恢复了，并把工作空间采用了。
   assert.equal(state.registryLoaded, true)
   assert.equal(state.workspaceChosen, true)
   assert.equal(state.workspacePath, '/cases/space')
   assert.equal(result.workspace.chosen, true)
-  // 氚云/钉钉/OSS 三项服务都在，且都有明确状态。
-  assert.deepEqual(result.services.map((service) => service.id), ['h3yun', 'dingtalk', 'oss'])
+
+  // 六块分区各就各位：插件包 / 运行时 / 授权（氚云+钉钉）/ 交付（OSS）/ 外部（iFinD）/ 工作空间。
+  assert.equal(result.packageIntegrity.ok, true)
+  assert.deepEqual(result.packageIntegrity.tools.map((tool) => tool.name), ['crwu', 'dws', 'ossutil'])
+  assert.equal(result.runtime.ok, true)
+  assert.equal(result.runtime.source, 'DSH 自带（bundled runtime）')
+  assert.deepEqual(result.services.map((service) => service.id), ['h3yun', 'dingtalk'])
   assert.equal(result.services[0].state, '正常')
   assert.equal(result.services[1].state, '已登录')
-  assert.equal(result.services[2].state, 'AK 正常')
-  assert.equal(result.ifindKey.ok, true)
-  assert.equal(result.ossCred.exists, false)
-  assert.equal(result.oss.ossutilReady, true)
+  assert.equal(result.delivery.probe.state, 'AK 正常')
+  assert.equal(result.delivery.oss.bucket, 'bkt')
+  assert.equal(result.delivery.oss.ossutilReady, true)
+  assert.equal(result.delivery.ossCred.exists, false)
+  assert.equal(result.external.ok, true)
+  // 旧的混装字段彻底消失：留着就说明还有一层「PATH 命令」的口径。
+  assert.equal('checks' in result, false)
+  assert.equal('oss' in result, false)
+  assert.equal('ifindKey' in result, false)
+})
+
+test('自检不执行 command -v python3，也不拿 /usr/bin/python3 当就绪依据', async () => {
+  // 替身**故意**让 PATH 与系统 python3 都「可用」：只要实现还去看它们，这条就会翻。
+  const ctx = healthyContext({
+    shellLines: {
+      'command -v': { stdout: '/usr/bin/python3\n' },
+      '/usr/bin/python3 --version': { stdout: 'Python 3.12.0\n' },
+      'h3yun session status': { stdout: JSON.stringify({ data: { expiresAt: '2099-01-01T00:00:00Z' } }) },
+      'dws auth status': { stdout: JSON.stringify({ authenticated: true }) },
+      ' ls ': { stdout: 'ok\n' },
+    },
+  })
+  // 不传 pythonRuntime：宿主还没接线 → 必须是能力缺口，不是「系统没装 python3」。
+  const { deps } = depsOf(ctx, { pythonRuntime: null })
+  const result = await loadEnvironment(deps, {})
+
+  const commands = ctx.specs.map((spec) => spec.command).join('\n')
+  assert.equal(commands.includes('command -v'), false, `不该跑 command -v：${commands}`)
+  assert.equal(commands.includes('python3'), false, `不该跑任何 python3 命令：${commands}`)
+  assert.equal(result.runtime.state, 'capability-gap')
+  assert.equal(result.runtime.ok, false)
+  assert.equal(JSON.stringify(result.runtime).includes('/usr/bin/python3'), false, '系统 python3 不能成为就绪依据')
+  assert.equal(JSON.stringify(result.runtime).includes('未安装'), false, 'capability gap 不能说成「未安装」')
+  assert.ok(result.blocked.includes('DSH 脚本运行时'), '运行时不可用要如实阻塞')
+})
+
+test('不对 dws 执行 version（会在二进制旁落 .dws/ 运行残留，pack:assert 会判成运行残留）', async () => {
+  const ctx = healthyContext()
+  const { deps } = depsOf(ctx)
+  await loadEnvironment(deps, {})
+
+  assert.equal(ctx.specs.length > 0, true, '自检本来就该问氚云/钉钉登录态')
+  for (const spec of ctx.specs) {
+    assert.equal(spec.command.includes('dws version'), false, `不该执行 dws version：${spec.command}`)
+    assert.equal(/\bversion\b/.test(spec.command), false, `内置组件一律不问版本：${spec.command}`)
+  }
+})
+
+test('DSH Python 缺失 → capability gap，并给出「不需要装系统 Python」的处置', async () => {
+  const ctx = healthyContext()
+  const { deps } = depsOf(ctx, {
+    pythonRuntime: async () => healthyPython({
+      ok: false, state: 'capability-gap', path: '', versionText: '', distributions: {},
+      error: 'DSH 自带 Python 运行时不可用（bundled runtime 缺失）',
+    }),
+  })
+  const result = await loadEnvironment(deps, {})
+
+  assert.equal(result.runtime.ok, false)
+  assert.equal(result.runtime.state, 'capability-gap')
+  assert.match(result.runtime.error, /capability|缺失|不可用/)
+  assert.equal(result.runtime.source, 'DSH 自带（bundled runtime）')
+  assert.equal(result.blocked.filter((item) => item === 'DSH 脚本运行时').length, 1, '运行时只算一个故障')
+  assert.equal(result.allOk, false)
+})
+
+test('openpyxl 缺失 → missing-package，点名缺哪个包，且只算一个运行时故障', async () => {
+  const ctx = healthyContext()
+  const { deps } = depsOf(ctx, {
+    pythonRuntime: async () => healthyPython({ ok: false, state: 'missing-package', missingPackages: ['openpyxl'], error: '' }),
+  })
+  const result = await loadEnvironment(deps, {})
+
+  assert.equal(result.runtime.ok, false)
+  assert.equal(result.runtime.state, 'missing-package')
+  assert.deepEqual(result.runtime.missingPackages, ['openpyxl'])
+  assert.match(result.runtime.error, /openpyxl/, 'Host 侧也要把缺的包名说出来')
+  assert.equal(result.blocked.filter((item) => item === 'DSH 脚本运行时').length, 1)
+})
+
+test('运行时解析抛错时如实报 failed，而不是假装就绪', async () => {
+  const ctx = healthyContext()
+  const { deps } = depsOf(ctx, { pythonRuntime: async () => { throw new Error('boom') } })
+  const result = await loadEnvironment(deps, {})
+  assert.equal(result.runtime.ok, false)
+  assert.equal(result.runtime.state, 'failed')
+  assert.match(result.runtime.error, /boom/)
+})
+
+test('env 的 refresh 参数原样转给运行时解析（由界面「重新自检」传）', async () => {
+  const ctx = healthyContext()
+  const calls = []
+  const { deps } = depsOf(ctx, { pythonRuntime: async (options) => { calls.push(options); return healthyPython() } })
+  await loadEnvironment(deps, { refresh: true })
+  await loadEnvironment(deps, {})
+  assert.deepEqual(calls, [{ refresh: true }, { refresh: false }])
+})
+
+test('插件包不完整只贡献一个阻塞项：三件组件不各占一项', async () => {
+  // 包内文件一个都没有（未装配 / 安装不完整），但清单文件在。
+  const ctx = healthyContext({ packaged: false })
+  const { deps } = depsOf(ctx)
+  const result = await loadEnvironment(deps, {})
+
+  assert.equal(result.packageIntegrity.ok, false)
+  const pluginBlockers = result.blocked.filter((item) => item.includes('插件内置组件'))
+  assert.equal(pluginBlockers.length, 1, `插件故障只能算一项，实际：${result.blocked.join(' / ')}`)
+  for (const name of ['crwu', 'dws', 'ossutil', 'python3', 'node']) {
+    assert.equal(result.blocked.includes(name), false, `${name} 不该再各自占一项`)
+  }
+  // 包内 ossutil 也因此不可用 → ⑤ 交付那条照旧阻塞（它是独立分区，不是「ossutil 命令」）。
+  assert.equal(result.delivery.oss.ossutilReady, false)
+  assert.match(result.delivery.probe.state, /插件包不完整|平台不受支持/)
+})
+
+test('平台不受支持时：插件包算一个故障，不是三件组件各占一项', async () => {
+  const ctx = healthyContext()
+  const { deps } = depsOf(ctx, { platform: 'linux-x64' })
+  const result = await loadEnvironment(deps, {})
+  assert.equal(result.packageIntegrity.supported, false)
+  assert.equal(result.blocked.filter((item) => item.includes('插件内置组件')).length, 1)
+  assert.equal(result.blocked.includes('运行平台未识别'), false, '识别出来了（linux-x64），只是不受支持')
 })
 
 test('a missing workspace blocks everything and is listed first', async () => {
-  const ctx = healthyContext()
-  // 注册表里没有命中清单偏好的工作空间。
-  const lonely = makeCtx({
-    shellLines: {
-      'curl': { stdout: MANIFEST_JSON },
-      'for b in': { stdout: 'node\t/usr/local/bin/node\nossutil\t/usr/local/bin/ossutil\n' },
-      '/usr/local/bin/node --version': { stdout: 'v22.19.0\n' },
-      '/usr/local/bin/ossutil --version': { stdout: 'Version: 1.7.19\n' },
-      'h3yun session status': { stdout: JSON.stringify({ data: { expiresAt: '2099-01-01T00:00:00Z' } }) },
-      'dws auth status': { stdout: JSON.stringify({ authenticated: true }) },
-      'command -v': { stdout: '/usr/local/bin/ossutil\n' },
-      ' ls ': { stdout: 'ok\n' },
-    },
-    files: {
-      '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}',
-      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
-    },
-  })
-  void ctx
+  const lonely = healthyContext({ entries: [] })
   const { deps } = depsOf(lonely)
   const result = await loadEnvironment(deps, {})
   assert.equal(result.allOk, false)
@@ -187,10 +324,8 @@ test('「我是谁」跟着自检一起回来：已授权才问一次，未授�
   // ② 未授权：**一次都不问**（受限沙箱下 dws 会假报「未登录」，问出来的姓名不可信）。
   const untrustedState = createWorkbenchState(CONFIG)
   untrustedState.trustCredentials = false
-  const untrustedCtx = makeCtx({
+  const untrustedCtx = healthyContext({
     shellLines: { 'dws auth status': { stdout: '{"authenticated":true}' } },
-    dirs: ['/cases/space'],
-    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
     files: {
       '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"token-123456"}',
       // 状态文件里写着未授权：自检会把它读回 state。
@@ -215,47 +350,18 @@ test('an unidentified platform is blocked instead of silently picking a wrong pa
   assert.ok(result.blocked.includes('运行平台未识别'))
 })
 
-test('a missing binary is blocked by name', async () => {
-  const ctx = makeCtx({
-    shellLines: {
-      'curl': { stdout: MANIFEST_JSON },
-      // 只找到 node，ossutil 既不在 PATH 也没有安装目标。
-      'for b in': { stdout: 'node\t/usr/local/bin/node\n' },
-      '/usr/local/bin/node --version': { stdout: 'v22.19.0\n' },
-      'h3yun session status': { stdout: JSON.stringify({ data: { expiresAt: '2099-01-01T00:00:00Z' } }) },
-      'dws auth status': { stdout: JSON.stringify({ authenticated: true }) },
-      'command -v': { stdout: '' },
-      ' ls ': { stdout: '' },
-    },
-    dirs: ['/cases/space'],
-    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}', '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
-  })
-  const { deps } = depsOf(ctx)
-  const result = await loadEnvironment(deps, {})
-  assert.ok(result.blocked.includes('ossutil'))
-})
-
 test('a sandbox that cannot run commands is reported as 探测失败, never as 未安装', async () => {
   // 真实事故（第 26 轮，真实 DSH 上）：这台机器的沙箱后端不可用（进程本身已在沙箱内，
   // `sandbox-exec` 无法套娃），所有 shell 调用直接报 SANDBOX_UNAVAILABLE。
   // 旧实现在这台机器上对 node / python3 / dws 报「未安装」—— 人会去装已经装好的东西。
-  const ctx = makeCtx({
-    shellLines: { 'curl': { stdout: MANIFEST_JSON } },
-    shellDown: ['for b in', 'h3yun session status', 'dws auth status', 'command -v'],
-    dirs: ['/cases/space'],
-    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
-  })
+  const ctx = healthyContext({ shellDown: ['h3yun session status', 'dws auth status', ' ls '] })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
 
-  // 二进制：一条都不能说「未安装」。
-  assert.equal(result.checks.length > 0, true)
-  for (const check of result.checks) {
-    assert.notEqual(check.reason, '未安装', `${check.name} 被误报成未安装`)
-    assert.match(check.reason, /^无法探测：/)
-  }
+  // 插件包完整性只 stat 文件、不跑命令，所以沙箱挂了它照样能给出真结论。
+  assert.equal(result.packageIntegrity.ok, true)
+  assert.equal(result.packageIntegrity.tools.every((tool) => tool.ok), true)
+  assert.equal(JSON.stringify(result.packageIntegrity).includes('未安装'), false, '组件不许被误报成「未安装」')
 
   // 服务：状态是「探测失败」，detail 里带真实原因（不是「未绑定 / 未知」）。
   const h3yun = result.services.find((service) => service.id === 'h3yun')
@@ -268,26 +374,29 @@ test('a sandbox that cannot run commands is reported as 探测失败, never as �
   assert.match(dingtalk.detail, /no sandbox backend is usable/)
   assert.ok(result.blocked.includes('钉钉认证'))
 
-  // OSS：不能报「ossutil 未安装」。
-  const oss = result.services.find((service) => service.id === 'oss')
-  assert.equal(oss.state, '无法探测')
+  // OSS 实测：命令没跑起来是「无法探测」，不能判成「AK 无效」。
+  assert.equal(result.delivery.probe.state, '无法探测')
+  assert.match(result.delivery.probe.detail, /no sandbox backend is usable/)
+})
+
+test('a missing packaged ossutil does not block as 「ossutil 未安装」 but as 插件包不完整', async () => {
+  const ctx = healthyContext({ packaged: false })
+  const { deps } = depsOf(ctx)
+  const result = await loadEnvironment(deps, {})
+  assert.match(result.delivery.probe.state, /插件包不完整|平台不受支持/)
+  assert.doesNotMatch(result.delivery.probe.detail, /请先安装/)
+  assert.equal(result.delivery.oss.ossutilReady, false)
+  assert.equal(result.delivery.oss.ossutilPath, '')
 })
 
 test('a logged-out service is blocked by its label, and a missing iFinD key too', async () => {
-  const ctx = makeCtx({
+  const ctx = healthyContext({
     shellLines: {
-      'curl': { stdout: MANIFEST_JSON },
-      'for b in': { stdout: 'node\t/usr/local/bin/node\nossutil\t/usr/local/bin/ossutil\n' },
-      '/usr/local/bin/node --version': { stdout: 'v22.19.0\n' },
-      '/usr/local/bin/ossutil --version': { stdout: 'Version: 1.7.19\n' },
       // 氚云没绑定、钉钉没登录
       'h3yun session status': { exitCode: 1, stderr: 'no session' },
       'dws auth status': { stdout: JSON.stringify({ authenticated: false }) },
-      'command -v': { stdout: '/usr/local/bin/ossutil\n' },
       ' ls ': { stdout: 'ok\n' },
     },
-    dirs: ['/cases/space'],
-    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
     files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
@@ -296,56 +405,25 @@ test('a logged-out service is blocked by its label, and a missing iFinD key too'
   assert.ok(result.blocked.includes('iFinD 密钥'))
   assert.equal(result.services[0].state, '未绑定')
   // 钉钉这条命令现在**自己带无沙箱权限**去问（员工零配置），所以它回的 `authenticated:false`
-  // 是真答案 → 如实报「未登录」并计入阻塞。谎报只可能出现在「命令没跑起来」那条路径
-  // （见上一条测试：那种情况报「本机凭据读取被拦住」，不阻塞）。
+  // 是真答案 → 如实报「未登录」并计入阻塞。谎报只可能出现在「命令没跑起来」那条路径。
   assert.equal(result.services[1].state, '未登录')
   assert.equal(result.services[1].required, true)
   assert.ok(result.blocked.includes('钉钉认证'), '确认没登录就要拦')
 })
 
 test('an expired h3yun session is reported as expired and blocked', async () => {
-  const ctx = makeCtx({
+  const ctx = healthyContext({
     shellLines: {
-      'curl': { stdout: MANIFEST_JSON },
-      'for b in': { stdout: 'node\t/n\nossutil\t/o\n' },
-      '/n --version': { stdout: 'v22.0.0\n' },
-      '/o --version': { stdout: 'Version: 1.7.19\n' },
       'h3yun session status': { stdout: JSON.stringify({ data: { userId: 'u', expiresAt: '2000-01-01T00:00:00Z' } }) },
       'dws auth status': { stdout: JSON.stringify({ authenticated: true }) },
-      'command -v': { stdout: '/o\n' },
       ' ls ': { stdout: 'ok\n' },
     },
-    dirs: ['/cases/space'],
-    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
-    files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}', '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
   assert.equal(result.services[0].state, '已过期')
   assert.equal(result.services[0].ok, false)
   assert.ok(result.blocked.includes('氚云（H3Yun）员工会话'))
-})
-
-test('a failed manifest fetch is surfaced with its reason while the page still renders', async () => {
-  const ctx = makeCtx({
-    shellLines: {
-      'curl': { exitCode: 22, stderr: 'curl: (22) 404' },
-      'for b in': { stdout: '' },
-      'h3yun session status': { exitCode: 1, stderr: 'no session' },
-      'dws auth status': { stdout: '' },
-      'command -v': { stdout: '' },
-    },
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
-  })
-  const { deps } = depsOf(ctx)
-  const result = await loadEnvironment(deps, {})
-  assert.equal(result.ok, true, '清单拉不到也要能渲染页面')
-  assert.equal(result.manifestLoaded, false)
-  assert.match(result.manifestError, /404/)
-  assert.equal(result.manifestSource, 'https://x.invalid/m.json')
-  // 回退到内置清单后，blocked 里必须出现内置清单要求的那些二进制。
-  assert.ok(result.blocked.includes('crwu'))
-  assert.ok(result.blocked.includes('dws'))
 })
 
 test('request arguments cannot replace the configured manifest and protected OSS config wins', async () => {
@@ -359,7 +437,6 @@ test('request arguments cannot replace the configured manifest and protected OSS
     autoUpload: false,
   } })
   const result = await loadEnvironment(deps, { source: 'https://other.invalid/m.json' })
-  assert.equal(result.manifestSource, 'https://x.invalid/m.json')
   assert.equal(state.manifest.oss.bucket, 'private-bucket')
   assert.equal(state.manifest.oss.prefix, 'private/audit')
   assert.equal(state.manifest.oss.endpoint, 'oss-cn-test.aliyuncs.com')
@@ -367,6 +444,7 @@ test('request arguments cannot replace the configured manifest and protected OSS
   assert.equal(state.manifest.oss.linkTtl, 7200)
   assert.equal(state.manifest.oss.autoUpload, false)
   assert.equal(state.manifest.oss.probeCommand, '', '远程清单不能向宿主注入探测命令')
+  assert.equal(result.delivery.oss.bucket, 'private-bucket')
 })
 
 test('the trust flag is echoed so the panel can render the switch state', async () => {
@@ -384,10 +462,10 @@ test('钉钉探测：未授权就说需要授权（绝不谎报未登录）；�
   ctx.get = (name) => {
     const value = originalGet(name)
     if (name !== 'shell' || value === undefined) return value
-    const inner = value.run
+    const inner = value.execute
     return {
       ...value,
-      run: async (spec) => {
+      execute: async (spec) => {
         specs.push(spec)
         return inner(spec)
       },
@@ -412,10 +490,10 @@ test('钉钉探测：未授权就说需要授权（绝不谎报未登录）；�
   assert.equal(dwsSpec.sandboxPolicy?.mode, 'danger-full-access', '读钥匙串的命令必须声明无沙箱（钥匙串在沙箱外）')
   assert.equal(result.services.find((service) => service.id === 'dingtalk').ok, true)
   assert.equal(result.blocked.includes('授权读取本机凭据（氚云 / 钉钉）'), false, '授权后授权项消失')
-  // 反向护栏：探二进制/版本这类命令**不能**跟着提权（能给最小权限就给最小）。
-  const versionSpec = specs.find((spec) => String(spec.command).includes('--version'))
-  assert.ok(versionSpec, '应当探过二进制版本')
-  assert.equal(versionSpec.sandboxPolicy, undefined, '探版本不需要无沙箱')
+  // 反向护栏：插件包核对与 OSS 实测这类命令**不能**跟着提权（能给最小权限就给最小）。
+  const ossSpec = specs.find((spec) => String(spec.command).includes(' ls '))
+  assert.ok(ossSpec, '应当实测过一次 OSS')
+  assert.equal(ossSpec.sandboxPolicy, undefined, 'OSS 实测不需要无沙箱')
 })
 
 /** 未授权的 ctx（配置文件里没有授权标记）+ 记录它发出的 shell 请求。 */
@@ -433,8 +511,8 @@ function makeUnauthorizedCtx() {
       }
       return value
     }
-    const inner = value.run
-    return { ...value, run: async (spec) => { specs.push(spec); return inner(spec) } }
+    const inner = value.execute
+    return { ...value, execute: async (spec) => { specs.push(spec); return inner(spec) } }
   })(ctx.get)
   makeUnauthorizedSpecs.specs = specs
   return ctx
@@ -443,19 +521,12 @@ function makeUnauthorizedSpecs() { return makeUnauthorizedSpecs.specs ?? [] }
 makeUnauthorizedSpecs.specs = []
 
 test('信任本机凭据后确实没登录，仍然如实报未登录并阻塞', async () => {
-  const ctx = makeCtx({
+  const ctx = healthyContext({
     shellLines: {
-      'curl': { stdout: MANIFEST_JSON },
-      'for b in': { stdout: 'node\t/n\nossutil\t/o\n' },
-      '/n --version': { stdout: 'v22.19.0\n' },
-      '/o --version': { stdout: 'Version: 1.7.19\n' },
       'h3yun session status': { stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) },
       'dws auth status': { stdout: JSON.stringify({ authenticated: false, message: '未登录' }) },
-      'command -v': { stdout: '/o\n' },
       ' ls ': { stdout: 'ok\n' },
     },
-    dirs: ['/cases/space'],
-    entries: [{ id: 'w1', path: '/cases/space', title: '中瑞世联工作空间' }],
     files: {
       '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}',
       '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',

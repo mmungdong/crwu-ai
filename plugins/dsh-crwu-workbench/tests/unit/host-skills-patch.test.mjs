@@ -132,3 +132,18 @@ test('解析不到包时直接抛错，不静默变成"没有技能"', async () 
     await rm(profile, { recursive: true, force: true })
   }
 })
+
+test('the patch never inserts a second dsh-tools instance (base bundle already mounts it)', async () => {
+  // 依据：DSH 的 base bundle（本机 `@deepseek-ai/dsh-base/cordis.patch.yml`）已经以**稳定 id**
+  // `tools` 挂载 `@deepseek-ai/dsh-tools`，而 profile 的 bundles 里就有 `@deepseek-ai/dsh-base`。
+  // 再插一行就是第二个实例 —— Cordis 的重复服务会直接抛，表现为「插件装上了、整个 profile 起不来」。
+  // 所以插件只声明 `inject: ['tools']`，**不**在补丁里装配它。
+  const { readFile } = await import('node:fs/promises')
+  const patch = await readFile(new URL('cordis.patch.yml', ROOT), 'utf8')
+  assert.equal(patch.includes('dsh-tools'), false, '补丁里不许出现 dsh-tools（重复实例）')
+  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
+  assert.equal(typeof pkg.peerDependencies['@deepseek-ai/dsh-tools'], 'string', 'dsh-tools 必须是直接 peer 依赖')
+  assert.equal(typeof pkg.devDependencies['@deepseek-ai/dsh-tools'], 'string', 'dsh-tools 必须是直接 dev 依赖（类型与测试都要用）')
+  const { PLUGIN_INJECT } = await import(new URL('src/host/consts.ts', ROOT).href)
+  assert.equal(PLUGIN_INJECT.includes('tools'), true, 'inject 必须声明 tools')
+})

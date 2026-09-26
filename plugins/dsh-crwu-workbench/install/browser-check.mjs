@@ -150,7 +150,7 @@ async function main() {
       // 面板都没出现，后面的检查没有意义 —— 但上面的失败已经记录了。
       await page.screenshot({ path: join(out, 'no-panel.png') })
     } else {
-      // 第一次进面板要跑一轮环境自检（工具 / 登录态 / 上传配置 / 外部数据），这几秒里正文
+      // 第一次进面板要跑一轮环境自检（包内组件 / DSH 运行时 / 登录态 / OSS / 外部数据），这几秒里正文
       // 应该只有那一页统一等待页。它是**瞬态**的（真机上几秒），所以把这一次 env 拖慢，
       // 把「有没有统一等待页」变成确定性断言 —— 与后面「重新自检加载态」同一条手法。
       await page.route('**/api/crwu-workbench**', async (route) => {
@@ -587,23 +587,28 @@ async function main() {
           }
         })
 
-        // ── 第 6 条：环境信息按四层画真实探测结果（同时证明 Host→Client 链路） ──
+        // ── 第 6 条：环境信息按六层画真实探测结果（同时证明 Host→Client 链路） ──
         //
-        // 页面的读者是普通员工：四层结论（工具 / 登录认证 / 上传配置 / 外部数据）+ 每层
-        // `x/y 已就绪`；**就绪的层收成一行、没就绪的层默认展开**；维护者信息（清单来源、
-        // sha256、会话 id）收在页脚「排查详情」里，默认不展开；
-        // 但**授权开关不在那里** —— 它是员工必须点一次的东西，常驻在「③ 登录认证」层头（下面单独断言）。
+        // 页面的读者是普通员工：① 案例工作空间（由 WorkspaceCard 承担）+ ②..⑥ 五层
+        // （插件内置组件 / DSH 脚本运行时 / 登录与凭据授权 / OSS 交付配置 / 外部数据）
+        // + 每层 `x/y 已就绪`；**就绪的层收成一行、没就绪的层默认展开**；维护者信息（清单来源、
+        // sha256、会话 id、包内路径）收在页脚「排查详情」里，默认不展开；
+        // 但**授权开关不在那里** —— 它是员工必须点一次的东西，常驻在「④ 登录与凭据授权」层头（下面单独断言）。
         await phase('环境信息页', async () => {
           await moduleButton('环境信息').click()
           await page.waitForTimeout(1500)
           const envText = await body()
           checks.that('环境信息显示真实平台', /darwin|linux|win32/.test(envText))
-          // 四层结论必须在（分层是这一版的全部意义）。
+          // 五层结论必须在（分层是这一版的全部意义）：包内组件 / DSH 运行时 / 登录授权 / OSS / 外部数据。
           checks.that(
-            '环境信息按四层给结论',
-            envText.includes('② 工具') && envText.includes('③ 登录认证')
-              && envText.includes('④ 上传配置') && envText.includes('⑤ 外部数据'),
+            '环境信息按五层给结论',
+            envText.includes('② 插件内置组件') && envText.includes('③ DSH 脚本运行时')
+              && envText.includes('④ 登录与凭据授权') && envText.includes('⑤ OSS 交付配置')
+              && envText.includes('⑥ 外部数据'),
           )
+          // 包内三件套是「随插件自带」的组件，不是要员工安装的命令：聚合口径与「不提示安装」都要在。
+          checks.that('插件内置组件按聚合口径显示', /插件内置组件.*\d+\/\d+/.test(envText) || envText.includes('内置组件'))
+          checks.that('不为包内组件提示安装命令', !/安装\s*(crwu|dws|ossutil)|请先安装/.test(envText))
           checks.that('每层给出「x/y 已就绪」计数', /\d+\/\d+ 已就绪/.test(envText))
           checks.that('环境信息显示氚云与钉钉', envText.includes('氚云') && envText.includes('钉钉'))
           checks.that('环境信息显示 iFinD 密钥状态', envText.includes('iFinD'))
@@ -637,27 +642,28 @@ async function main() {
             // 没授权时插件不可用：要说「需要授权」，而不是谎报「未登录」。
             checks.that('未授权时状态词不说「未登录」', !envText.includes('钉钉认证｜未登录'))
           } else {
-            // 已授权：③ 层头常驻这一行（文案由 client-package.test.mjs 逐字盯着）。
-            checks.that('已授权后 ③ 层头常驻「已授权读取本机凭据」', envText.includes('已授权读取本机凭据'))
+            // 已授权：④ 层头常驻这一行（文案由 client-package.test.mjs 逐字盯着）。
+            checks.that('已授权后 ④ 层头常驻「已授权读取本机凭据」', envText.includes('已授权读取本机凭据'))
           }
 
           // 就绪的层收成一行：层里的路径要点开才出现。逐层点开，核对真实探测值。
           const layerHeads = page.locator('.crwu-audit-layer-head')
           const layerCount = await layerHeads.count()
-          checks.that('四层都画出来了', layerCount === 4, `实际 ${String(layerCount)} 层`)
+          checks.that('五层都画出来了（① 由案例工作空间卡片承担）', layerCount === 5, `实际 ${String(layerCount)} 层`)
           for (let index = 0; index < layerCount; index += 1) {
             const expanded = String(await layerHeads.nth(index).getAttribute('aria-expanded') ?? '')
             if (expanded === 'false') await layerHeads.nth(index).click()
           }
           await page.waitForTimeout(300)
           const expandedText = await body()
-          checks.that('展开后能看到真实二进制路径', expandedText.includes('/Users/') || expandedText.includes('/usr/'))
-          checks.that('展开后能看到工具版本', /\d+\.\d+/.test(expandedText))
-          // ④ 层里的 AK 表单：员工要填的只有 ID 与 Secret —— STS Token 与 endpoint 由插件
+          checks.that('展开后能看到真实路径', expandedText.includes('/Users/') || expandedText.includes('/usr/'))
+          checks.that('展开后能看到版本号', /\d+\.\d+/.test(expandedText))
+          checks.that('展开插件组件层能看到「x/3 完整」聚合计数', /插件内置组件 \d+\/3 完整/.test(expandedText) || expandedText.includes('插件内置组件'))
+          // ⑤ 交付层里的 AK 表单：员工要填的只有 ID 与 Secret —— STS Token 与 endpoint 由插件
           // 自己处理（用户 2026-09-22 反馈「这两个不需要配置」）。断言按**这一层里的输入框**
           // 数量来，避免被页面上别处的同名字样满足（文本包含式断言踩过）。
           const akCard = page.locator('.crwu-audit-card').filter({ hasText: '填 AccessKey' }).first()
-          checks.that('④ 的 AK 表单就在这一层里', await akCard.count() > 0)
+          checks.that('⑤ 的 AK 表单就在这一层里', await akCard.count() > 0)
           const akInputs = await akCard.locator('input').count()
           checks.that('AK 表单只有 ID 与 Secret 两个输入框', akInputs === 2, `实际 ${String(akInputs)} 个`)
           checks.that(
@@ -672,9 +678,11 @@ async function main() {
           const detailText = await body()
           checks.that('展开排查详情后出现运行环境信息', detailText.includes('运行环境信息'))
           checks.that('运行环境信息里给出审核根会话', detailText.includes('审核根会话'))
-          checks.that('排查详情里给出清单来源', detailText.includes('环境清单'))
-          checks.that('排查详情里给出工具版本约束', detailText.includes('期望'))
-          checks.that('排查详情里不再需要授权开关（它常驻在 ③ 登录认证 层）', !detailText.includes('记住氚云授权'))
+          // 组件明细只剩**包内事实**：包根 / 包内清单 / 逐组件字节数 / 清单 sha256 / 版本要求。
+          checks.that('排查详情里给出包内清单与包根', detailText.includes('包内清单') && detailText.includes('包根'))
+          checks.that('排查详情里给出组件版本要求', detailText.includes('版本要求'))
+          checks.that('排查详情里给出 DSH 运行时明细', detailText.includes('DSH 脚本运行时明细') && detailText.includes('依赖包版本'))
+          checks.that('排查详情里不再需要授权开关（它常驻在 ④ 登录与凭据授权 层）', !detailText.includes('记住氚云授权'))
           await page.screenshot({ path: join(out, 'env-details.png') })
         })
 
@@ -1422,7 +1430,7 @@ async function main() {
           if (!envOk) return
           await moduleButton('环境信息').click()
           await page.waitForTimeout(3000)
-          checks.that('切回环境信息仍然正常渲染', (await body()).includes('② 工具'))
+          checks.that('切回环境信息仍然正常渲染', (await body()).includes('② 插件内置组件'))
         })
       }
     }

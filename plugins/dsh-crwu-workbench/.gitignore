@@ -8,3 +8,7 @@ lib/
 *.tgz
 # 打包前由 scripts/sync-common-skills.mjs 从 ../../common/skills 生成
 common/skills/
+# 打包前由 scripts/sync-binaries.mjs 装配（crwu 构建产物 + ossutil 官方包 + dws 上游归档）：
+# 二进制是构建输入，不进版本库；下载缓存同理。
+bin/
+.cache/

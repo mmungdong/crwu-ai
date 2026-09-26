@@ -84,7 +84,7 @@
 
 评估目的原文、评估方法、结论方法及其位置只能来自真实读取的文件：
 
-1. 源材料附件**只经单附件定向下载**取回：先 `crwu h3yun files list --schema <code> --id <ObjectId>` 取附件元数据，再对源材料件逐个 `crwu h3yun file get --id <FileId> --out <材料-源/…>`；复核件只记入《排除清单》、**永不下载**（阶段一门禁见 SKILL.md 步骤 2）。确认文件存在且字节数非零。
+1. 源材料附件**只经单附件定向下载**取回：先 `crwu_h3yun_files_list` 取附件元数据，再对源材料件逐个 `crwu_h3yun_file_get({fileId, caseDir, relativePath: '材料-源/<文件名>'})`；复核件只记入《排除清单》、**永不下载**（阶段一门禁见 SKILL.md 步骤 2）。确认 Tool 返回的 `ok:true` 且 `sizeBytes` 非零。记录本体用 `crwu_h3yun_record_get` 一次取全字段。**不得**改用任何批量/整单下载方式。
 2. 先用 `file` 识别格式：旧 `.doc` OLE 可用 `textutil -convert txt`；`.docx` 读 OOXML；`.pdf` 用文本提取工具；`.xlsx/.xls` 用相应表格工具。先探测现有工具，不得凭印象宣称不可读。
 3. 在文件中定位原文，为文件级字段回填数组 `source`、`evidence` 与 `location`。没有定位不得用于冲突定论。
 4. 文件未下载或不可读时，字段显式标记 `未抽验（文件未读取）`，不填定位。
@@ -209,7 +209,7 @@ router 只负责把五轴画像映射成轴标签并选出 available 叶子；�
   - **文件名编码**：zip 内中文名常为 GBK 且未置 UTF-8 标志位，默认按 cp437 解码会得到乱码文件名——**必须按 GBK 重解码**，否则连"这份材料是什么"都无法判断。
   - **不支持的格式**：`.rar/.7z` 等在本机无 `7z/unar` 时，记 capability gap「该件本次未核」并如实声明，**不得记作"材料缺失"，也不得静默跳过**；嵌套归档限深解压（默认 2 层）。
 - **实施（技能自带脚本，随技能安装）**：`scripts/prepare_materials.py`
-  （`python3 scripts/prepare_materials.py --case <案例目录>`）产出 `材料盘点.json` / `媒体索引.json` /
+  （`<DSH Python 绝对路径> scripts/prepare_materials.py --case <案例目录>`（解释器路径的口径见 SKILL.md「脚本运行时（Python）」））产出 `材料盘点.json` / `媒体索引.json` /
   `提取/` / `工作版/` / `媒体证据/`；媒体抽取通道在同目录 `scripts/media_extract.py`
   （xlsx 锚点、docx 段落序、`.doc` 经 `textutil` 中转、PDF 内嵌图、独立图片；H0 与 fail-closed 见上）。
   **阶段二复核件**用 `--src <案例>/复核-人工 --label 复核` 复跑（产出 `复核盘点.json` /

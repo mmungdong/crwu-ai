@@ -58,8 +58,11 @@ description: >-
 - 两条路径取的是**同一上游 iFinD 服务**，但调用方式与凭据来源不同：不要拿 WorkBuddy 的连接器声明
   去推断 DSH 可用，也不要在 DSH 里去找 WorkBuddy 的连接器目录。
 - **取数入口发现与调用细则**（发现顺序、降级、留痕契约、两条路径的探测结论）统一见
-  `references/01-connector-access.md`；机器可读预检：
-  `python3 scripts/connector_probe.py --format json`（只读，不读凭据值）。
+  `references/01-connector-access.md`；机器可读预检（只读，不读凭据值）：
+  `<DSH Python 绝对路径> scripts/connector_probe.py --format json`。
+  解释器口径：自动审核用启动指令注入的绝对路径；独立使用本技能时先调**一次**
+  `load_workspace_dependencies` 并复用其 `python` 字段。**禁止**裸 `python3` 名字、任何解释器查找、
+  以及静默降级到系统解释器（缺包就记 capability gap 并停下）。
 - **万得不参与本技能的取数**：库内表 B/C 的源统一为同花顺 iFinD；表 D 的双源复核条件不适用，
   按单源（D1–D4）降级执行。
 
@@ -99,7 +102,8 @@ description: >-
    表内未覆盖的数据项按库内 §9 员工补录机制登记后仍按默认规则核验，不跳过。
 3. **取数入口发现**：按 `references/01-connector-access.md` 的顺序探测可用取数路径（WorkBuddy 连接器 /
    DeepSeek Harness 的 `ifind-finance-data` 技能）；只读探测、不读凭据值。
-   可用 `python3 scripts/connector_probe.py --format json` 获得机器可读的可用性结论。
+   可用 `<DSH Python 绝对路径> scripts/connector_probe.py --format json` 获得机器可读的可用性结论
+   （解释器口径同上：用注入路径，或先调一次 `load_workspace_dependencies` 并复用）。
 4. **取数**：对每个数据项按报告声明的口径（期限、窗口、频率、基准、复权、单位）取数；
    报告**未声明口径**的参数，只做披露检查（输出"请说明"），不取数比对。
 5. **口径标准化后比对**：把外部取值与报告值归一到同一口径再比；**口径无法统一时禁止作数值判定**，

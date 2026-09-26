@@ -1,8 +1,16 @@
 /**
- * 第 1 层（环境清单 / 版本约束）的单元测试。
+ * 环境清单 / 版本约束 / shell 引用的单元测试。
  *
  * 这一层的规则很容易「看起来对但实际放行」：约束解析不出数字时按「无约束」通过、
- * 实际输出解析不出数字时反而必须失败、空列表必须回退内置而不是变成空。每条都反向验一遍。
+ * 实际输出解析不出数字时反而必须失败。每条都反向验一遍。
+ *
+ * 2026-09-25 起文件里少了两类测试：**远程清单的拉取与归一**、**按平台的下载表**
+ * （`normalizeManifest` / `loadManifest` / `resolveBinary` / `ossutilPlatforms`）。
+ * 它们测的是只读 OSS 那条链路，链路本身已删除 —— 留着它们的等价物才是假覆盖。
+ *
+ * 同一天的第二次改造又改了口径：清单从 `binaries[]`（packaged 工具与 system runtime 探针混装）
+ * 拆成 `packaged[]` + `runtime.python`，并删掉裸 `python3` 检查。所以这里的断言也从
+ * 「清单里有 crwu/dws/python3/ossutil 四条」变成「三件组件 + 一条 DSH 自带 Python 运行时」。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -10,20 +18,8 @@ import test from 'node:test'
 const ROOT = new URL('../../', import.meta.url)
 
 const { satisfies, parseVersion, compareVersion } = await import(new URL('src/host/environment/version.ts', ROOT).href)
-const {
-  DEFAULT_MANIFEST,
-  OSSUTIL_BASE,
-  crwuPlatforms,
-  ossutilPlatforms,
-} = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
-const {
-  quoteArg,
-  normalizeOss,
-  normalizeManifest,
-  loadManifest,
-  resolveBinary,
-  resolvePlatformEntry,
-} = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
+const { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
+const { quoteArg, normalizeOss } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
 
 // ── 版本 ────────────────────────────────────────────────────────────────────
 
@@ -67,44 +63,50 @@ test('satisfies fails when the installed version cannot be read', () => {
   // 「装了但读不到版本」不能算通过：那会让环境自检显示绿而实际不可用。
   const verdict = satisfies('command not found', '>=16.7')
   assert.equal(verdict.ok, false)
-  assert.match(verdict.reason, /无法从命令输出解析出版本号/)
+  assert.match(verdict.reason, /无法从命令版本输出解析出版本号|无法从命令输出解析出版本号/)
 })
 
-// ── 清单归一 ────────────────────────────────────────────────────────────────
+// ── 内置清单自洽 ────────────────────────────────────────────────────────────
 
-test('normalizeManifest falls back to the builtin list for empty sections', () => {
-  // 远程清单少写 binaries 时必须回退，否则「全部通过」是假的。
-  const manifest = normalizeManifest({ schema: 'x', binaries: [], services: [] })
-  assert.equal(manifest.binaries.length, DEFAULT_MANIFEST.binaries.length)
-  assert.equal(manifest.services.length, DEFAULT_MANIFEST.services.length)
-  assert.equal(manifest.schema, 'x')
+test('清单 v3：三件随包发布的组件只声明「叫什么、干什么、要求什么版本」', () => {
+  assert.equal(DEFAULT_MANIFEST.schema, 'crwu.env-manifest.v3')
+  assert.deepEqual(DEFAULT_MANIFEST.packaged.map((entry) => entry.name), ['crwu', 'dws', 'ossutil'])
+  for (const entry of DEFAULT_MANIFEST.packaged) {
+    // 这三件不由 PATH 解析、也不跑版本命令 —— 所以清单里根本不该再有 command / versionArgs / expect。
+    for (const banned of ['command', 'versionArgs', 'expect', 'url', 'sha256', 'target', 'platforms', 'archive', 'member']) {
+      assert.equal(banned in entry, false, `${entry.name} 不该再有 ${banned} 字段`)
+    }
+    assert.ok(entry.label.length > 0)
+    assert.ok(entry.note.length > 0)
+  }
+  // dws 的版本要求仍然要有个地方写下来：清单常量里的 expectedVersion（不执行二进制去问）。
+  assert.equal(DEFAULT_MANIFEST.packaged.find((entry) => entry.name === 'dws').expectedVersion, '>=0.2.14')
 })
 
-test('normalizeManifest keeps remote overrides and narrows external input', () => {
-  const manifest = normalizeManifest({
-    binaries: [{ name: 'crwu', expect: '>=1.0', versionArgs: 'nope', required: false, note: 7 }],
-    ifindKey: { path: '/custom/mcp.json' },
-    oss: { bucket: 'b', prefix: '/crwu/audit/', linkTtl: 'soon' },
-    workspace: { preferTitle: '别的空间' },
-  })
-  const [crwu] = manifest.binaries
-  assert.equal(crwu.name, 'crwu')
-  assert.equal(crwu.command, 'crwu', 'command 缺失时回落到 name')
-  assert.deepEqual(crwu.versionArgs, ['version'], 'versionArgs 不是数组时用默认')
-  assert.equal(crwu.required, false)
-  assert.equal(crwu.note, '7')
-  assert.equal(manifest.ifindKey.path, '/custom/mcp.json')
-  assert.equal(manifest.ifindKey.field, 'auth_token')
-  assert.equal(manifest.oss.prefix, '/crwu/audit', 'prefix 去掉尾斜杠')
-  assert.equal(manifest.oss.linkTtl, 3600, 'TTL 解析不出数字时回默认')
-  assert.equal(manifest.workspace.preferTitle, '别的空间')
-  assert.equal(manifest.workspace.preferPath, DEFAULT_MANIFEST.workspace.preferPath)
+test('清单里没有 binaries[]，也没有裸 python3 检查项', () => {
+  assert.equal('binaries' in DEFAULT_MANIFEST, false, '四类混装的 binaries[] 必须删掉')
+  const json = JSON.stringify(DEFAULT_MANIFEST)
+  assert.equal(json.includes('python3'), false, '清单里不该再出现裸 python3')
+  assert.equal(json.includes('"command"'), false, '清单里不该再有按名字调用的 command')
 })
 
-test('normalizeManifest drops entries without a name instead of inventing one', () => {
-  const manifest = normalizeManifest({ binaries: [{ command: 'ghost' }, { name: 'real' }] })
-  assert.deepEqual(manifest.binaries.map((entry) => entry.name), ['real'])
+test('Python 是 DSH 自带运行时，不是系统命令：来源、版本约束、必需包都要写清', () => {
+  const python = DEFAULT_MANIFEST.runtime.python
+  assert.equal(python.required, true)
+  assert.match(python.expect, /^>=3\./)
+  assert.ok(python.requiredPackages.includes('openpyxl'), 'openpyxl 是审核表格链路的必需包')
+  assert.equal(python.note.includes('DSH'), true, '用途必须说清是 DSH 自带')
+  assert.match(DSH_RUNTIME_SOURCE, /DSH 自带/)
 })
+
+test('清单的服务项：氚云与钉钉进 ④ 授权，oss 只喂 ⑤ 交付门禁', () => {
+  assert.deepEqual(
+    DEFAULT_MANIFEST.services.map((service) => service.id),
+    ['h3yun', 'dingtalk', 'oss'],
+  )
+})
+
+// ── OSS 归一 ────────────────────────────────────────────────────────────────
 
 test('normalizeOss only accepts the two documented link modes', () => {
   assert.equal(normalizeOss({ linkMode: 'public' }).linkMode, 'public')
@@ -113,80 +115,8 @@ test('normalizeOss only accepts the two documented link modes', () => {
   assert.equal(normalizeOss({ enabled: 'yes' }).enabled, false, 'enabled 只认严格 true')
   assert.equal(normalizeOss({ autoUpload: false }).autoUpload, false)
   assert.equal(normalizeOss({}).autoUpload, true)
-})
-
-// ── 平台选择 ────────────────────────────────────────────────────────────────
-
-test('resolveBinary picks the platform row and keeps the entry default otherwise', () => {
-  const ossutil = DEFAULT_MANIFEST.binaries.find((entry) => entry.name === 'ossutil')
-  assert.ok(ossutil)
-  const mac = resolveBinary(ossutil, 'darwin-arm64')
-  assert.match(mac.url, /mac-arm64\.zip$/)
-  assert.equal(mac.member, 'ossutil')
-  assert.equal(mac.target, '~/bin/ossutil')
-  // 没有该平台的行 → 清空下载信息，界面显示「暂无包」而不是给一个错的地址。
-  const solaris = resolveBinary(ossutil, 'sunos-sparc')
-  assert.equal(solaris.url, '')
-  assert.equal(solaris.sha256, '')
-})
-
-test('resolveBinary leaves a platform-less entry untouched', () => {
-  const node = DEFAULT_MANIFEST.binaries.find((entry) => entry.name === 'node')
-  assert.ok(node)
-  assert.equal(resolveBinary(node, 'darwin-arm64').name, 'node')
-  assert.equal(resolvePlatformEntry(node, 'darwin-arm64'), null)
-})
-
-test('the shipped download tables are complete for the platforms we claim', () => {
-  const ossutil = ossutilPlatforms()
-  for (const key of ['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64']) {
-    assert.ok(ossutil[key], `ossutil 缺少 ${key}`)
-    assert.equal(ossutil[key].sha256.length, 64, `${key} 的 sha256 长度不对`)
-    assert.ok(ossutil[key].url.startsWith(OSSUTIL_BASE), `${key} 的下载源不对`)
-  }
-  const crwu = crwuPlatforms()
-  assert.equal(crwu['darwin-arm64'].target, '~/bin/crwu')
-  assert.equal(crwu['win32-x64'].target, '~/bin/crwu.exe')
-})
-
-// ── 拉取清单 ────────────────────────────────────────────────────────────────
-
-function shellReturning(result) {
-  return { get: (name) => (name === 'shell' ? { resolve: (request) => request, async run() { return result } } : undefined) }
-}
-
-const OK = { exitCode: 0, timedOut: false, stdout: { text: '{"binaries":[{"name":"only"}]}', truncated: false }, stderr: { text: '', truncated: false } }
-
-test('loadManifest falls back to the builtin list when no source is configured', async () => {
-  const load = await loadManifest({ get: () => undefined }, '')
-  assert.equal(load.kind, 'builtin')
-  assert.equal(load.loaded, false)
-  assert.equal(load.manifest.binaries.length, DEFAULT_MANIFEST.binaries.length)
-})
-
-test('loadManifest refuses a local path and explains why', async () => {
-  const load = await loadManifest({ get: () => undefined }, '/etc/manifest.json')
-  assert.equal(load.kind, 'invalid')
-  assert.match(load.error, /必须是 http\(s\) 远程地址/)
-})
-
-test('loadManifest pulls and narrows a remote manifest', async () => {
-  const load = await loadManifest(shellReturning(OK), 'https://example.invalid/m.json')
-  assert.equal(load.loaded, true)
-  assert.equal(load.kind, 'url')
-  assert.deepEqual(load.manifest.binaries.map((entry) => entry.name), ['only'])
-  assert.equal(load.manifest.oss.prefix, 'crwu/audit', '远程没给 oss 时用默认')
-})
-
-test('loadManifest degrades to the builtin list and reports the reason', async () => {
-  const failed = await loadManifest(shellReturning({ ...OK, exitCode: 22, stderr: { text: 'curl: 404', truncated: false } }), 'https://x.invalid/m.json')
-  assert.equal(failed.loaded, false)
-  assert.match(failed.error, /404/)
-  assert.equal(failed.manifest.binaries.length, DEFAULT_MANIFEST.binaries.length)
-
-  const broken = await loadManifest(shellReturning({ ...OK, stdout: { text: '{oops', truncated: false } }), 'https://x.invalid/m.json')
-  assert.equal(broken.loaded, false)
-  assert.match(broken.error, /不是合法 JSON/)
+  assert.equal(normalizeOss({ prefix: '/crwu/audit/' }).prefix, '/crwu/audit', 'prefix 去掉尾斜杠')
+  assert.equal(normalizeOss({ linkTtl: 'soon' }).linkTtl, 3600, 'TTL 解析不出数字时回默认')
 })
 
 test('quoteArg only quotes when the value needs it', () => {

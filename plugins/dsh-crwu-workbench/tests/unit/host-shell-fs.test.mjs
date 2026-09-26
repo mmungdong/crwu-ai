@@ -32,9 +32,9 @@ function fakeShell({ result, throwOnRun, throwOnResolve } = {}) {
         resolved.push(request)
         return { ...request, workdir: request.workdir ?? '/default', timeoutMs: request.timeoutMs ?? 1, stdoutMaxBytes: request.stdoutMaxBytes ?? 1, sandboxPolicy: request.sandboxPolicy }
       },
-      async run() {
+      async execute() {
         if (throwOnRun) throw new Error(throwOnRun)
-        return result
+        return { result: async () => result }
       },
     },
   }
@@ -63,6 +63,7 @@ test('runShell reports success only for exit code zero', async () => {
     stderr: '',
     truncated: false,
     timedOut: false,
+    aborted: false,
   })
 })
 
@@ -192,8 +193,8 @@ test('world facts probe once and cache per plugin instance', async () => {
         probes += 1
         return request
       },
-      async run() {
-        return { ...OK_RESULT, stdout: { text: 'darwin-arm64\n', truncated: false } }
+      async execute() {
+        return { result: async () => ({ ...OK_RESULT, stdout: { text: 'darwin-arm64\n', truncated: false } }) }
       },
     },
     fs: {
@@ -206,12 +207,18 @@ test('world facts probe once and cache per plugin instance', async () => {
     },
   }
   const world = createWorldFacts(fakeContext(services))
-  assert.equal(await world.platform(), 'darwin-arm64')
-  assert.equal(await world.platform(), 'darwin-arm64')
-  assert.equal(probes, 1, '第二次调用不得重探')
+  // 平台探测的**次数**取决于 Host 事实：受支持平台上它是 `process.platform` + `arch`（不跑 shell），
+  // 只有事实不在受支持集合里时才跑一次 `uname -sm`。这里钉的是「按实例缓存」这条不变量，
+  // 所以不写死次数，只要求第二次调用不再增加探测。
+  const first = await world.platform()
+  const afterFirst = probes
+  assert.ok(first !== '', '平台事实必须能算出来')
+  assert.ok(probes <= 1, `最多探一次，实际 ${String(probes)} 次`)
+  assert.equal(await world.platform(), first)
+  assert.equal(probes, afterFirst, '第二次调用不得重探')
   assert.equal(await world.home(), (await import('node:os')).homedir())
   assert.equal(await world.workdir(), '/cases/session')
-  assert.deepEqual(world.cached().platform, 'darwin-arm64')
+  assert.deepEqual(world.cached().platform, first)
 })
 
 // ── 文件与路径 ──────────────────────────────────────────────────────────────

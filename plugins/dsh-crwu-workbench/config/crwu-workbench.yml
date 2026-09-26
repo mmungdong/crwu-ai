@@ -12,16 +12,11 @@ audit:
   autoUpload: true
 
 oss:
-  # 对员工匿名只读：环境清单、安装说明和插件 TGZ 都从这里分发。
-  readonly:
-    bucket: crwu-only-workspace
-    endpoint: oss-cn-beijing.aliyuncs.com
-    baseUrl: https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com
-    manifestKey: crwu-env-manifest.json
-    installDocKey: crwu-env-install.md
-    pluginPrefix: crwu-dsh-plugins
-
-  # 审核产物私有存储：匿名访问应返回 403，上传依赖员工机器上的 OSS 凭据。
+  # 这里只剩**审核产物**那一个私有 Bucket。
+  #
+  # 原来还有一个 `readonly`（crwu-only-workspace）用来分发环境清单、安装说明和插件 TGZ：
+  # 2026-09-25 整条下掉了 —— 二进制随插件发布在包内 `bin/<平台>/`，插件本身改从 npm 安装。
+  # 少一个远端数据源就少一条"别人能远程改你机器上的解释权"的通道。
   protected:
     bucket: crwu-workspace
     endpoint: oss-cn-beijing.aliyuncs.com

@@ -1,7 +1,7 @@
 import { rpc } from '../../api/client.ts'
 import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
-import type { AuditRootView, EnvCheckView, IfindCheckView, ServiceCheckView } from '../../../shared/types.ts'
+import type { AuditRootView, EnvResultView } from '../../../shared/types.ts'
 
 /**
  * 工作台的同源 RPC 门面。
@@ -59,34 +59,13 @@ export interface BootResult {
   ported: { done: string[]; todo: string[] }
 }
 
-export interface EnvResult {
-  ok: boolean
-  manifestSource: string
-  manifestKind: string
-  manifestLoaded: boolean
-  manifestError: string
-  manifestUpdatedAt: string
-  installDocUrl: string
-  checks: EnvCheckView[]
-  ifindKey: IfindCheckView
-  services: ServiceCheckView[]
-  blocked: string[]
-  allOk: boolean
-  home: string
-  platform: string
-  trust: { credentials: boolean }
-  workspace: BootResult['workspace']
-  /** 审核子代理的挂载点；老版本 Host 不带这个字段（见 BootResult.auditRoot）。 */
-  auditRoot?: AuditRootView
-  sessionWorkspace: { parentSessionId: string; sessionCwd: string; workspaceId: string; workspacePath: string; workspaceTitle: string }
-  oss: Record<string, unknown>
-  ossCred: { path: string; exists: boolean; endpoint: string; accessKeyIdMasked: string; hasSecret: boolean; hasSts: boolean; language: string }
-  /**
-   * 「我是谁」：面板头部那句「晚上好，某某某」的姓名，来自**同一次自检**里的钉钉 CLI。
-   * 三个字段都可能是空串（没授权 / 没登录 / 命令没跑起来）→ 界面**整句不展示**。
-   */
-  me: { name: string; org: string; userId: string }
-}
+/**
+ * `env` 的应答：**直接就是线协议类型**（`shared/types.ts` 的 `EnvResultView`）。
+ *
+ * 以前这里手写一份形状，于是「Host 加了字段、客户端没跟上」只能靠人对着改；现在两处是同一个声明，
+ * Host 侧的类型由 `shared/wire-contract.ts` 在 typecheck 阶段强制可赋值过来。
+ */
+export type EnvResult = EnvResultView
 
 export interface PendingResult {
   ok: boolean
@@ -183,7 +162,8 @@ export interface SimpleResult {
 /** 带类型的调用集合。每个方法对应 Host 的一个 `workbench:*` handler。 */
 export interface WorkbenchApi {
   boot: () => Promise<BootResult>
-  env: () => Promise<EnvResult>
+  /** `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存。 */
+  env: (args?: { refresh?: boolean }) => Promise<EnvResult>
   pending: (args: { query?: string; page?: number; size?: number; escalate?: boolean }) => Promise<PendingResult>
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
@@ -194,7 +174,7 @@ export interface WorkbenchApi {
   ossResult: (args: { key: string }) => Promise<OssResultResult>
   ossLink: (args: { key: string }) => Promise<OssLinkResult>
   ossUpload: (args: { key: string }) => Promise<{ ok: boolean; error: string }>
-  ossCred: () => Promise<{ ok: boolean; cred: EnvResult['ossCred'] }>
+  ossCred: () => Promise<{ ok: boolean; cred: EnvResult['delivery']['ossCred'] }>
   ossCredSave: (args: { accessKeyId: string; accessKeySecret: string; stsToken?: string; endpoint?: string }) => Promise<Record<string, unknown>>
   workspace: (args: { path: string; title?: string; id?: string }) => Promise<Record<string, unknown>>
   workspaceAuto: () => Promise<Record<string, unknown>>
@@ -202,8 +182,8 @@ export interface WorkbenchApi {
   trust: (args: { credentials: boolean }) => Promise<Record<string, unknown>>
   installPrompt: (args: { workspace?: string }) => Promise<{ ok: boolean; url: string; prompt: string }>
   session: () => Promise<{ ok: boolean; error: string; session: { userId: string; expiresAt: string; expiresIn: string } | null }>
-  relogin: () => Promise<SimpleResult & { stdoutTail?: string; stderrTail?: string }>
-  dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { stdoutTail?: string; stderrTail?: string }>
+  relogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
+  dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
   clipboard: (args: { text: string }) => Promise<SimpleResult>
   openPath: (args: { path: string }) => Promise<SimpleResult & { path: string }>
   crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number; escalate?: boolean }) => Promise<Record<string, unknown>>
@@ -216,7 +196,7 @@ async function call<T>(operation: string, args?: unknown): Promise<T> {
 
 export const workbenchApi: WorkbenchApi = {
   boot: () => call('boot'),
-  env: () => call('env'),
+  env: (args) => call('env', args),
   pending: (args) => call('pending', args),
   auditStatus: (args) => call('audit-status', args),
   auditStart: (args) => call('audit-start', args),
