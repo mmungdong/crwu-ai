@@ -4,6 +4,11 @@ import { text } from '../../shared/utils/value.ts'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { normalizeOss } from '../environment/manifest.ts'
 import { shellQuote } from '../environment/probe.ts'
+import { sanitizeOssError } from '../oss/sanitize.ts'
+
+// 兼容再导出：脱敏器搬到了 `host/oss/sanitize.ts`（环境探测与上传共用一份），
+// 但历史上它是从本模块导出的（Tool 层与测试按这个名字引用），所以这里保留出口。
+export { sanitizeOssError } from '../oss/sanitize.ts'
 import { requireBundledCommand } from '../platform/command.ts'
 import { parseLsEntries, type OssEntry } from '../oss/parse.ts'
 import { runShell } from '../shell/run.ts'
@@ -27,20 +32,6 @@ import { toolContext, type ToolDeps } from './types.ts'
 /** 默认交付件：HTML 必传，结果 JSON 存在就一并传。 */
 export const DEFAULT_HTML_NAME = (seqNo: string): string => `审核意见.${seqNo}.html`
 export const DEFAULT_JSON_NAME = (seqNo: string): string => `审核结果.${seqNo}.json`
-
-/**
- * 错误脱敏：签名 URL 的查询串、AK/SK/Token 一律不进模型上下文。
- *
- * 为什么必须做：`ossutil` 的报错里会带请求 URL（含 `Signature`/`OSSAccessKeyId`）甚至
- * 完整的临时凭据。这类文本一旦进会话记录，就等于把凭据写进了可回放的日志。
- */
-export function sanitizeOssError(value: unknown): string {
-  return text(value)
-    .replace(/(Signature|OSSAccessKeyId|security-token|AccessKeyId|AccessKeySecret|STS\w*Token)=[^&\s"']+/gi, '$1=<redacted>')
-    .replace(/(https?:\/\/[^\s"']*?)\?[^\s"']*/gi, '$1?<redacted>')
-    .replace(/\bLTAI[A-Za-z0-9]{8,}\b/g, '<redacted-access-key>')
-    .slice(0, 600)
-}
 
 interface UploadEntry {
   kind: string

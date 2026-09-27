@@ -68,8 +68,12 @@ test('satisfies fails when the installed version cannot be read', () => {
 
 // ── 内置清单自洽 ────────────────────────────────────────────────────────────
 
-test('清单 v3：三件随包发布的组件只声明「叫什么、干什么、要求什么版本」', () => {
-  assert.equal(DEFAULT_MANIFEST.schema, 'crwu.env-manifest.v3')
+test('清单 v4：三件随包发布的组件只声明「叫什么、干什么、要求什么版本」', () => {
+  // v3 → v4：iFinD 的 `ifindKey.path` 整组消失（凭据改由插件 Host 自己保管在插件状态目录，
+  // 见 `host/ifind/store.ts`）。地址不再有第二个事实源，是这一版的关键。
+  assert.equal(DEFAULT_MANIFEST.schema, 'crwu.env-manifest.v4')
+  assert.equal('ifindKey' in DEFAULT_MANIFEST, false, 'iFinD 的旧字段整组消失')
+  assert.equal('path' in DEFAULT_MANIFEST.ifind, false, '凭据位置由 store 推导，清单不再声明路径')
   assert.deepEqual(DEFAULT_MANIFEST.packaged.map((entry) => entry.name), ['crwu', 'dws', 'ossutil'])
   for (const entry of DEFAULT_MANIFEST.packaged) {
     // 这三件不由 PATH 解析、也不跑版本命令 —— 所以清单里根本不该再有 command / versionArgs / expect。
@@ -81,6 +85,15 @@ test('清单 v3：三件随包发布的组件只声明「叫什么、干什么�
   }
   // dws 的版本要求仍然要有个地方写下来：清单常量里的 expectedVersion（不执行二进制去问）。
   assert.equal(DEFAULT_MANIFEST.packaged.find((entry) => entry.name === 'dws').expectedVersion, '>=0.2.14')
+})
+
+test('iFinD 声明是必需项：required=true，且给出官方获取入口', () => {
+  // 2026-09-26 产品口径覆盖了旧的 OPT-006-R1 · F-008：iFinD 不再是条件能力。
+  const ifind = DEFAULT_MANIFEST.ifind
+  assert.equal(ifind.required, true, 'iFinD 未通过必须阻塞')
+  assert.equal(ifind.field, 'auth_token')
+  assert.match(ifind.applyUrl, /^https:\/\/mcp\.51ifind\.com/)
+  assert.ok(ifind.label.length > 0)
 })
 
 test('清单里没有 binaries[]，也没有裸 python3 检查项', () => {

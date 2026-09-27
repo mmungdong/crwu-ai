@@ -26,6 +26,9 @@ const { createWorkbenchState, workspaceView } = await import(new URL('src/host/s
 const { createCoreOperations } = await import(new URL('src/host/ops/core.ts', ROOT).href)
 const { WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { readJsonBody, writeJson } = await import(new URL('src/host/http/json.ts', ROOT).href)
+// 冻结清单只有一份（工具 / 操作的名字与数量），避免各测试各写一个裸数字。
+const { FROZEN_AUDIT_TOOLS, FROZEN_AUDIT_TOOL_COUNT, FROZEN_OPERATIONS, FROZEN_OPERATION_COUNT } =
+  await import(new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
 
 const YAML_CONFIG = new URL('config/crwu-workbench.yml', ROOT)
 const YAML_RUNTIME = resolveWorkbenchConfig({ configFile: YAML_CONFIG.pathname })
@@ -335,20 +338,16 @@ test('the declared ported lists match which operations actually run', async () =
   }
 })
 
-test('the Host half still registers the frozen inventory of 26 operations', async () => {
+test('the Host half still registers the frozen inventory of operations', async () => {
   // 旧形态退休后，原来「从它的源码读 handler 名单来对账」的来源没了。
-  // 保留它真正守住的东西：**操作清单不能悄悄变少或改名**。所以这里把它冻成字面量。
-  // 这份清单的来历是旧动态形态的 24 个 handler + 包形态新增的 ping（见 PORTING.md）。
-  const FROZEN = [
-    'ping', 'boot', 'workspace', 'workspace-auto', 'trust', 'bind-session', 'install-prompt', 'env', 'pending',
-    'crwu', 'audit-start', 'audit-stop', 'audit-status', 'audit-release', 'oss-index', 'oss-result', 'oss-link',
-    'oss-upload', 'oss-cred-save', 'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
-    // 第 26 个：一份报告的全部相关文件（只列举、不下载）—— 面板一打开就查。
-    'report-files',
-  ]
+  // 保留它真正守住的东西：**操作清单不能悄悄变少或改名**。名单与数量在
+  // `tests/helpers/frozen-inventory.mjs` 里只有一份（各测试共用，避免裸数字静默过期）。
   const { operations } = operationsFor()
-  assert.deepEqual(Object.keys(operations).sort(), [...FROZEN].sort())
-  assert.equal(FROZEN.length, 26, '旧形态 24 个 handler + 包形态新增 ping、whoami、report-files')
+  assert.deepEqual(Object.keys(operations).sort(), [...FROZEN_OPERATIONS].sort())
+  assert.equal(FROZEN_OPERATIONS.length, FROZEN_OPERATION_COUNT)
+  // 30 → 29：`install-prompt` 已删除（2026-09-26，「复制安装提示词」在环境页不再需要）。
+  // 同批协议号 13 → 14（旧客户端挂载时会调这个操作，必须靠协议号让"界面新、宿主旧"显形）。
+  assert.equal(FROZEN_OPERATION_COUNT, 29)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {
@@ -499,17 +498,6 @@ test('bind-session rejects an empty id and tolerates a missing sessions service'
   assert.equal(padded.state.parentSessionId, '   ')
 })
 
-test('install-prompt 整篇自述：没有 URL，规则逐条保留', () => {
-  // 旧口径是「清单优先（现拉的、随组织变），Config 兜底」——那条链路已随只读 OSS 一起删掉，
-  // 于是这里也少了一条「地址可被替换」的通道：`url` 恒为空，提示词里不许出现任何外链。
-  const result = operationsFor({}).operations['install-prompt']({ workspace: '/cases/x' })
-  assert.equal(result.url, '', '提示词不再有清单地址')
-  assert.equal(/https?:\/\//.test(result.prompt), false, '提示词必须是整篇自述，不带任何外链')
-  assert.match(result.prompt, /随包自带/)
-  assert.match(result.prompt, /不要尝试、不要兜底、不要试探连通性/)
-  assert.match(result.prompt, /密钥、令牌一律不要回显/)
-  assert.match(result.prompt, /\/cases\/x/)
-})
 test('audit-release clears the single-audit occupancy and reports what it released', async () => {
   const { state, operations } = operationsFor()
   state.activeKey = '2026-301705'
@@ -734,8 +722,8 @@ test('an installed tarball can actually be installed and imported', async () => 
 
     // `tools` 是硬依赖：`apply()` 会把 CRWU 工具注册进去（注册失败就抛）。
     // 这里的替身只做两件事：收集被注册的工具名、返回 disposer —— 这条测试要证的是
-    // 「装出来的包能从包内 YAML 激活，并且真的注册了 9 个工具」；
-    // 「注册进**真实**注册表后 schema/pipeline 的行为」由 `host-tools-register.test.mjs` 覆盖。
+    // 「装出来的包能从包内 YAML 激活，并且真的注册了必需工具集那么多工具」；
+    // 「注册进**真实**注册表后 schema/pipeline 的行为」由 `host-tools.test.mjs` 覆盖。
     const activate = [
       'import("dsh-crwu-workbench").then(m => {',
       'const routes = [];',
@@ -752,7 +740,12 @@ test('an installed tarball can actually be installed and imported', async () => 
     const [members, routes, toolCount] = stdout.trim().split(':')
     assert.equal(members, 'Config,ROUTE,apply,inject,name', '装出来的包必须导出 DSH 插件协议的成员')
     assert.equal(routes, '1', '装出来的包必须从包内 YAML 激活并注册路由')
-    assert.equal(toolCount, '9', '装出来的包必须把 9 个 CRWU 工具注册进真实注册表')
+    // 数量**与 `REQUIRED_AUDIT_TOOLS` 对账**，不再写死裸数字：
+    // 以前这里写 9，加进 iFinD 之后真实值是 10，而测试照样"通过"过一次（说明没人看注释）。
+    assert.equal(toolCount, String(FROZEN_AUDIT_TOOL_COUNT),
+      `装出来的包必须把 ${String(FROZEN_AUDIT_TOOL_COUNT)} 个 CRWU 工具注册进真实注册表`)
+    assert.equal(toolCount, '10', '必需工具集当前是 10 个（含 crwu_audit_ifind_query）')
+    assert.ok(FROZEN_AUDIT_TOOLS.includes('crwu_audit_ifind_query'))
   } finally {
     await rm(workdir, { recursive: true, force: true })
   }

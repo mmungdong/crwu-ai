@@ -2,6 +2,10 @@ import { rpc } from '../../api/client.ts'
 import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
 import type { AuditRootView, EnvResultView } from '../../../shared/types.ts'
+import {
+  blockerMessages, degradedMessages, primaryUserIssue, requiredTallyOf, statusProceedable,
+  type EnvironmentIssueView, type EnvironmentTally, type EnvironmentStateView,
+} from '../../../shared/environment/model.ts'
 
 /**
  * 工作台的同源 RPC 门面。
@@ -180,13 +184,59 @@ export interface WorkbenchApi {
   workspaceAuto: () => Promise<Record<string, unknown>>
   bindSession: (args: { sessionId: string }) => Promise<Record<string, unknown>>
   trust: (args: { credentials: boolean }) => Promise<Record<string, unknown>>
-  installPrompt: (args: { workspace?: string }) => Promise<{ ok: boolean; url: string; prompt: string }>
   session: () => Promise<{ ok: boolean; error: string; session: { userId: string; expiresAt: string; expiresIn: string } | null }>
   relogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
   dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
   clipboard: (args: { text: string }) => Promise<SimpleResult>
   openPath: (args: { path: string }) => Promise<SimpleResult & { path: string }>
   crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number; escalate?: boolean }) => Promise<Record<string, unknown>>
+  /** iFinD 凭据的脱敏状态（**没有明文**）。 */
+  ifindStatus: () => Promise<IfindStatusResult>
+  /** 保存 SK：Host 校验 → 写盘（0600）→ 收紧权限 → **立刻真实探测**。 */
+  ifindCredentialSave: (args: { secret: string }) => Promise<IfindSaveResult>
+  /** 清除 API-Key（不可撤销，界面必须二次确认）。 */
+  ifindCredentialClear: (args: { confirm: boolean }) => Promise<{ ok: boolean; error: string; cleared: boolean; path: string }>
+  /** 只做一次真实探测（保存之后的复检 / 界面上的「重新验证」）。 */
+  ifindProbe: (args?: { serverType?: string }) => Promise<IfindProbeResult>
+}
+
+/**
+ * 一次真实探测的结论。
+ *
+ * `state` 与 `errorKind` 是两件事：前者给界面说「现在处于哪一态」，后者给处置用
+ * （`credential` 要重填、`entitlement` 要找管理员、`infrastructure` 要查网络）。
+ */
+export interface IfindProbeResult {
+  ok: boolean
+  state: string
+  errorKind: string
+  error: string
+  toolCount: number
+  toolNames: string[]
+  protocolVersion: string
+  checkedAt: string
+  /** **真的取到数据了吗**（`tools/call` 成功返回内容）；`ok` 只代表认证通过。 */
+  dataVerified: boolean
+  /** 取数验证用的工具名。 */
+  dataTool: string
+  /** 取数结果的**脱敏**短摘要（最多 300 字符）。 */
+  dataSample: string
+  path?: string
+}
+
+export interface IfindStatusResult extends IfindProbeResult {
+  credential: { path: string; exists: boolean; state: string; length: number; reason: string }
+}
+
+export interface IfindSaveResult {
+  ok: boolean
+  error: string
+  errorKind: string
+  view: { path: string; exists: boolean; state: string; length: number; reason: string }
+  chmodOk: boolean
+  chmodError: string
+  mode: string
+  probe: IfindProbeResult
 }
 
 /** 把 Host 的应答转成声明的返回类型；失败信封（`ok: false`）交给调用方判断。 */
@@ -212,13 +262,16 @@ export const workbenchApi: WorkbenchApi = {
   workspaceAuto: () => call('workspace-auto'),
   bindSession: (args) => call('bind-session', args),
   trust: (args) => call('trust', args),
-  installPrompt: (args) => call('install-prompt', args),
   session: () => call('session'),
   relogin: () => call('relogin'),
   dwsLogin: (args) => call('dws-login', args),
   clipboard: (args) => call('clipboard', args),
   openPath: (args) => call('open-path', args),
   crwu: (args) => call('crwu', args),
+  ifindStatus: () => call('ifind-status'),
+  ifindCredentialSave: (args) => call('ifind-credential-save', args),
+  ifindCredentialClear: (args) => call('ifind-credential-clear', args),
+  ifindProbe: (args) => call('ifind-probe', args ?? {}),
 }
 
 /**
@@ -245,22 +298,83 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   workspaceAuto: 'workspace-auto',
   bindSession: 'bind-session',
   trust: 'trust',
-  installPrompt: 'install-prompt',
   session: 'session',
   relogin: 'relogin',
   dwsLogin: 'dws-login',
   clipboard: 'clipboard',
   openPath: 'open-path',
   crwu: 'crwu',
+  ifindStatus: 'ifind-status',
+  ifindCredentialSave: 'ifind-credential-save',
+  ifindCredentialClear: 'ifind-credential-clear',
+  ifindProbe: 'ifind-probe',
 }
 
-/** 报告页需要的门禁：氚云与钉钉都认证通过才能发起审核。 */
+/**
+ * 报告页需要的门禁。
+ *
+ * **判据来自统一环境模型**（`env.state.capabilities.auditCore`），不再由客户端自己拼
+ * 「氚云 ok && 钉钉 ok」—— 那样漏掉工作空间 / 授权 / 包 / 运行时 / Tool 中的任何一条，
+ * 界面就会放行一个 Host 必然拒绝的操作（用户看到的是"点了没反应"）。
+ *
+ * 旧宿主没有 `state`：退回「两个服务都 ok」这条较弱的判据（它至少不会比原来更松）。
+ */
 export function gatingOf(env: EnvResult | null, activeKey: string, patch: Partial<Gating> = {}): Gating {
-  const services = env?.services ?? []
-  const ready = (id: string): boolean => services.some((service) => service.id === id && service.ok)
+  const state = env === null ? null : environmentStateOf(env)
+  const canDispatch = state === null
+    ? (env?.services ?? []).filter((service) => service.ok).length === (env?.services ?? []).length
+      && (env?.services ?? []).length > 0
+    : state.capabilities.auditCore === true
   return {
-    canDispatch: ready('h3yun') && ready('dingtalk'),
+    canDispatch,
     canStart: activeKey === '',
     ...patch,
+  }
+}
+
+/**
+ * 取统一环境模型。
+ *
+ * 旧宿主不带 `state` 时返回 `null`（界面按"不认识 → 不放行"处理）—— 这正是协议号存在的意义：
+ * 界面是新的、宿主是旧的时，宁可拦下来让用户重启 profile，也不能按旧逻辑放行新操作。
+ */
+export function environmentStateOf(env: EnvResult | null | undefined): EnvironmentStateView | null {
+  if (env === null || env === undefined) return null
+  const state = env.state
+  if (state === null || state === undefined || typeof state !== 'object') return null
+  return state
+}
+
+/** 环境页顶部的结论卡需要的全部派生值（一处算清，组件只画）。 */
+export interface EnvironmentHeadline {
+  status: string
+  proceed: boolean
+  passed: number
+  total: number
+  ratio: number
+  blockers: string[]
+  degraded: string[]
+  /** 员工唯一该做的那一件事（系统/管理员故障不给员工派活）。 */
+  primary: EnvironmentIssueView | null
+}
+
+export function headlineOf(env: EnvResult | null | undefined): EnvironmentHeadline {
+  const state = environmentStateOf(env)
+  if (state === null) {
+    return {
+      status: 'unknown', proceed: false, passed: 0, total: 0, ratio: 0,
+      blockers: env?.blocked ?? [], degraded: [], primary: null,
+    }
+  }
+  const tally: EnvironmentTally = requiredTallyOf({ systemHealth: state.systemHealth, userSetup: state.userSetup })
+  return {
+    status: state.status,
+    proceed: statusProceedable(state.status),
+    passed: tally.passed,
+    total: tally.total,
+    ratio: tally.ratio,
+    blockers: blockerMessages(state),
+    degraded: degradedMessages(state),
+    primary: primaryUserIssue(state),
   }
 }

@@ -56,11 +56,23 @@ export interface ServiceSpec {
   required: boolean
 }
 
-export interface IfindKeySpec {
-  required: boolean
-  path: string
+/**
+ * iFinD（同花顺）SK 的声明。
+ *
+ * **没有 `path` 字段是刻意的**（2026-09-26 改造）：凭据不再读 `ifind-finance-data` 技能目录里的
+ * `mcp_config.json`，改由插件 Host 自己保管在**插件状态目录**
+ * （`<home>/.dsh/crwu-workbench/ifind-credential.json`，0600，见 `host/ifind/store.ts`）。
+ * 路径由那一处算，清单只声明"它是什么、是不是必需、入口在哪" —— 把路径塞回清单等于又开了
+ * 第二个事实源，而地址漂移正是这次要消灭的东西。
+ */
+export interface IfindSpec {
+  label: string
   field: string
   placeholder: string
+  /** **条件能力**：缺失只降级（`degraded`），不阻塞审核入口。 */
+  required: boolean
+  /** 「获取 SK」的官方入口（页面上的链接文案用；Host 不代填、不索取）。 */
+  applyUrl: string
 }
 
 export interface OssSpec {
@@ -83,7 +95,8 @@ export interface EnvManifest {
   packaged: PackagedToolSpec[]
   /** 运行时：DSH 自带 Python。 */
   runtime: { python: RuntimePythonSpec }
-  ifindKey: IfindKeySpec
+  /** ⑥ 外部数据：iFinD（同花顺）SK 的声明（凭据位置在 host/ifind/store.ts）。 */
+  ifind: IfindSpec
   /**
    * 需要「登录 / 授权」的服务。
    *
@@ -109,7 +122,7 @@ export const DSH_RUNTIME_SOURCE = 'DSH 自带（bundled runtime）'
  * 不能出现空字段让调用方去猜。
  */
 export const DEFAULT_MANIFEST: EnvManifest = {
-  schema: 'crwu.env-manifest.v3',
+  schema: 'crwu.env-manifest.v4',
   packaged: [
     {
       name: 'crwu',
@@ -140,11 +153,17 @@ export const DEFAULT_MANIFEST: EnvManifest = {
       requiredPackages: ['openpyxl', 'python-docx', 'python-pptx', 'Pillow', 'lxml', 'numpy', 'pandas', 'XlsxWriter'],
     },
   },
-  ifindKey: {
+  ifind: {
+    label: '同花顺 iFinD（外部数据）',
+    // **必需项**（2026-09-26 产品口径覆盖了旧的 OPT-006-R1 · F-008）：
+    // iFinD 不再是"可选外部数据能力"，而是环境必检、必通过项。未通过时：
+    // 记阻塞 issue（owner 按 credential / entitlement / infrastructure 分派给 user / admin / system）、
+    // 关闭 global / auditCore / externalData 能力、进必需项分母，并让统一导航拦回环境页。
+    // 判据是**真的取到一次数据**（`initialize → tools/list → tools/call`），不是"文件在、字段非空"。
     required: true,
-    path: '~/.agents/skills/ifind-finance-data/mcp_config.json',
     field: 'auth_token',
     placeholder: 'your ifind-mcp key',
+    applyUrl: 'https://mcp.51ifind.com/',
   },
   services: [
     { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true },

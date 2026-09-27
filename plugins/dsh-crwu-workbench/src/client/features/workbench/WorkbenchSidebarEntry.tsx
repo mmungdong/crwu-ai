@@ -7,6 +7,7 @@ import { buildTagOf, useBuild, type BuildStore } from './build-store.ts'
 import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
 import { envMarkTitle, isUnderDevelopment, MODULE_IDS, moduleLabel, type ModuleId } from './modules.ts'
 import { useModule, useModuleStore, type ModuleStore } from './module-store.ts'
+import { environmentStateOf } from '../report-audit/api.ts'
 
 /**
  * 侧栏底部（Settings 上方）常驻的工作台入口 —— 现在是一张**分组卡**。
@@ -109,7 +110,9 @@ export function WorkbenchSidebarEntry(props: WorkbenchSidebarEntryProps): React.
   // 点子项 = 记住这个子项（store）+ 打开面板。切换写进 store 而不是本地 state，
   // 否则面板拿不到「用户刚点了哪个子项」，就会出现侧栏高亮着 A、面板显示 B。
   const choose = (id: ModuleId): void => {
-    modules.select(id)
+    // **统一导航入口**：门禁在这一层判（子项元数据里声明了 `requiresEnvironment`），
+    // 不通过就落到环境页并记下 pendingTarget，而不是先把用户送进去再拦。
+    modules.navigate(id, { state: environmentStateOf(snapshot.env) })
     props.onOpen()
   }
 

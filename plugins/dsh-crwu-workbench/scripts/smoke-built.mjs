@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
+import { REQUIRED_AUDIT_TOOLS } from '../src/host/tools/consts.ts'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -50,7 +51,7 @@ function fakeHostContext() {
   const effects = []
   const logs = []
   const listeners = new Map()
-  // `tools` 是硬依赖：`apply()` 会把 9 个 CRWU 工具注册进去（缺注册表直接抛）。
+  // `tools` 是硬依赖：`apply()` 会把必需 CRWU 工具注册进去（缺注册表直接抛）。
   // 替身只收集注册名并返回 disposer；「注册进真实注册表后的 schema/pipeline 行为」
   // 由 `tests/unit/host-tools.test.mjs` 对着真实契约覆盖。
   const registeredTools = []
@@ -125,7 +126,11 @@ export async function smokeHost() {
   assert.equal(routes[0].path, module.ROUTE)
   // 没有这个订阅，ended / endReason 永远是空 → 「已中断」不出现、自动上传不触发。
   assert.equal(listeners.has('subagent/end'), true, 'apply() 必须订阅 subagent/end')
-  assert.equal(registeredTools.length, 9, `apply() 必须注册 9 个 CRWU 工具，实际 ${registeredTools.length}`)
+  assert.deepEqual(
+    [...registeredTools].sort(),
+    [...REQUIRED_AUDIT_TOOLS].sort(),
+    'apply() 注册的 CRWU 工具必须与 REQUIRED_AUDIT_TOOLS 逐字一致',
+  )
 
   // 走一遍真实的 HTTP 处理器：这是「装上去之后 RPC 到底通不通」的最小证据。
   const { req, res, response } = fakeExchange({ op: 'ping' })
@@ -269,21 +274,12 @@ await check('Client 半：经 __ModuleLoader__ 加载并注册四个槽位条目
   return `槽位条目 ${result.slots} 个 · 模块 id ${result.loaded}`
 })
 
-// 审核链路只走结构化 Tool：产物里必须能看到 9 个 `crwu_*` 工具名，而且**不许**再出现
+// 审核链路只走结构化 Tool：产物里必须能看到全部必需的 `crwu_*` 工具名，而且**不许**再出现
 // 插件二进制目录或 PATH 注入这类「让模型自己拼命令行」的指纹。
 // 真跑一次取数要连真实氚云/钉钉/OSS，只有用户点「AI 审核」才会发生（见 AGENTS.md §7.2）。
-await check('Host 产物：注册 9 个 CRWU 结构化 Tool，且不含路径注入指纹', async () => {
+await check(`Host 产物：包含 ${String(REQUIRED_AUDIT_TOOLS.length)} 个 CRWU 结构化 Tool，且不含路径注入指纹`, async () => {
   const bundle = await readFile(join(ROOT, 'lib', 'index.js'), 'utf8')
-  for (const name of [
-    'crwu_audit_capabilities',
-    'crwu_h3yun_record_get',
-    'crwu_h3yun_files_list',
-    'crwu_h3yun_file_get',
-    'crwu_audit_knowledge_materialize',
-    'crwu_audit_oss_publish',
-    'crwu_audit_dingtalk_archive',
-    'crwu_audit_dingtalk_notify_self',
-  ]) {
+  for (const name of REQUIRED_AUDIT_TOOLS) {
     assert.equal(bundle.includes(name), true, `产物里缺少工具：${name}`)
   }
   assert.equal(bundle.includes('~/.dsh/skills'), false, '产物里不许出现写死的 ~/.dsh/skills')
@@ -296,7 +292,7 @@ await check('Host 产物：注册 9 个 CRWU 结构化 Tool，且不含路径注
   // 「不再依赖 Python 回传脚本 / 不再有裸命令拼接」由 `tests/unit/host-tools.test.mjs` 与
   // `host-audit-prompt.test.mjs` 对着**源码**与**提示词**逐条断言：产物里这些词会出现在
   // 讲"为什么删掉它们"的注释中，对 bundle 做文本包含式断言只会得到假红。
-  return 'lib/index.js → 9 个 crwu_* 工具，无路径注入指纹'
+  return `lib/index.js → ${String(REQUIRED_AUDIT_TOOLS.length)} 个 crwu_* 工具，无路径注入指纹`
 })
 
 if (failures.length > 0) {

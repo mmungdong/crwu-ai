@@ -5,7 +5,7 @@ import { Button } from '../../components/primitives.tsx'
 import { SideDrawer } from '../../components/SideDrawer.tsx'
 import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
-import { gatingOf, workbenchApi } from '../report-audit/api.ts'
+import { environmentStateOf, gatingOf, workbenchApi } from '../report-audit/api.ts'
 import type { PendingResult } from '../report-audit/api.ts'
 import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
 import { openChildSession } from './open-session.ts'
@@ -19,9 +19,10 @@ import { openReportNotice, openSessionTarget, pendingArgs } from '../report-audi
 import { ReportEvalPane } from '../report-eval/ReportEvalPane.tsx'
 import { WorkbenchLoading } from './LoadingPane.tsx'
 import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
+import { moduleLabel, type ModuleId } from './modules.ts'
+import type { NavigateResult } from '../../../shared/environment/model.ts'
 import { buildTagOf, createBuildStore, hostIsStale, useBuild, type BuildStore } from './build-store.ts'
 import { greetingLine } from './greeting.ts'
-import { AuthorizationGate } from './AuthorizationGate.tsx'
 
 /**
  * 工作台外壳。
@@ -64,6 +65,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const envStatus = props.envStatus ?? fallback.current
   const snapshot = useEnvStatus(envStatus)
   const env = snapshot.env
+  const envState = environmentStateOf(env)
   const envOk = env !== null && env.allOk === true
   // 问候的姓名来自**环境自检**（`env.me`，钉钉 CLI 在同一次自检里取回），所以这里不额外发请求 ——
   // 用户口径（2026-09-22）：「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调」。
@@ -78,6 +80,21 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const modules = props.modules ?? moduleFallback.current
   const mod = useModule(modules)
   const module = mod.active
+  /**
+   * **统一导航入口的本地包装**。
+   *
+   * 每一次跳转（侧栏子项、环境页的「进入报告审核」、报告页内跳转、报告评估页的引导）
+   * 都走这一条：门禁判据只有一份（`module-store` → `shared/environment/model.ts` 的纯函数），
+   * 面板不再自己写"能不能进 audit"。
+   */
+  const go = React.useCallback((target: ModuleId): NavigateResult => {
+    const verdict = modules.navigate(target, { state: environmentStateOf(envStatus.get().env) })
+    if (verdict.blocked && mounted.current) {
+      // 被门禁拦下来：把原因留下来（环境页顶部会显示「进入【目标页】前…」）。
+      setNotice(verdict.reason)
+    }
+    return verdict
+  }, [modules, envStatus])
 
   const buildFallback = React.useRef<BuildStore | null>(null)
   if (buildFallback.current === null) buildFallback.current = createBuildStore()
@@ -87,7 +104,6 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
 
   /** 被门禁拦住的界面状态：running = 正在重新自检，blocked = 自检没过。 */
   const [gate, setGate] = React.useState<'idle' | 'running' | 'blocked'>('idle')
-  const [copied, setCopied] = React.useState(false)
   // 登录结果（成功/失败原因/CLI 打印的 URL 或设备码）。**不能丢**：命令跑不起来时
   // 它是用户唯一的线索 —— 实测「点了钉钉登录没有任何反应」就是因为它被丢掉了。
   const [loginMessage, setLoginMessage] = React.useState('')
@@ -123,11 +139,6 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [escalateAvailable, setEscalateAvailable] = React.useState(false)
   const [handoff, setHandoff] = React.useState<TaskRow | null>(null)
   const [handoffCopied, setHandoffCopied] = React.useState(false)
-  const [prompt, setPrompt] = React.useState('')
-  const [promptUrl, setPromptUrl] = React.useState('')
-  const [promptBusy, setPromptBusy] = React.useState(false)
-  const [promptCopied, setPromptCopied] = React.useState(false)
-  const [promptMessage, setPromptMessage] = React.useState('')
   // 请求序号：迟到的应答必须被丢弃，否则快速切换时会显示上一条的内容。
   const requestSeq = React.useRef(0)
   // 卸载标记：面板切走之后到达的应答**不得**再写状态。
@@ -165,20 +176,6 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
     if (mounted.current) await envStatus.refresh()
   }, [envStatus])
-
-  const loadPrompt = React.useCallback(async () => {
-    setPromptBusy(true)
-    try {
-      const result = await workbenchApi.installPrompt({})
-      if (!mounted.current) return
-      setPrompt(result.prompt ?? '')
-      setPromptUrl(result.url ?? '')
-    } catch (cause) {
-      if (mounted.current) setPromptMessage(describe(cause))
-    } finally {
-      if (mounted.current) setPromptBusy(false)
-    }
-  }, [])
 
   const loadCloud = React.useCallback(async (force: boolean) => {
     // **只在首次进入、显式刷新或上传成功后列举 OSS**：切模块、翻页、检索都不得重复列举。
@@ -262,7 +259,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
   }, [])
 
-  // 首次进入：boot（宿主版本 / 协议代数 / 已登记父级）+ 环境自检 + 安装提示词。
+  // 首次进入：boot（宿主版本 / 协议代数 / 已登记父级）+ 环境自检。
   // 侧栏入口也会 refresh 这两个 store，store 内部做并发去重，所以整页只发一次真实请求。
   React.useEffect(() => {
     void buildStore.refresh()
@@ -272,20 +269,21 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     // 要重跑有页面上的「重新自检」按钮，以及登录 / 授权成功后的那几次显式刷新。
     const current = envStatus.get()
     if (current.env === null && !current.busy) void envStatus.refresh()
-    void loadPrompt()
     return () => {
       mounted.current = false
     }
-  }, [envStatus, loadPrompt, buildStore])
+  }, [envStatus, buildStore])
 
-  // 自检直接通过 → 直接进报告审核。只自动进一次，用户手动切过模块之后不再弹走。
-  // 「自动进过没有」记在 store 里（不再是组件内的 ref）：面板关掉再打开也不该把用户弹走第二次。
+  // 环境结论落地 → 交给 store 决定两件事：首次自动落位一次；以及**检查通过后恢复**
+  // 最近一次被门禁拦下来的目标（没有 pendingTarget 时什么都不做，绝不无条件弹走用户）。
+  //
+  // 依赖用**统一模型的引用**：它是 Host 每次应答里的新对象，只在自检真的回来时变化。
+  // 只盯解出来的 `env` 会漏掉「重新检查通过了、但 active 已经被用户改过」的那次通知，
+  // 表现就是"检查通过了、人还卡在环境页"（实测踩到）。
   React.useEffect(() => {
-    if (!envOk) return
-    if (modules.get().autoEntered) return
-    modules.autoEnter(true)
-    setGate('idle')
-  }, [envOk, modules])
+    if (envState === null) return
+    modules.envChanged({ state: envState })
+  }, [modules, envState])
 
   // 从侧栏子项切模块时清掉上一次的拦截态：用户已经补好环境、再点回「报告审核」，
   // 不能还看到那张过期的「自检没过」拦截屏（以前由底部模块条的 onSelect 负责）。
@@ -307,24 +305,26 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   /**
    * 「进入报告审核」。
    *
-   * 不通过时**不是静默禁用按钮**，而是用 loading 状态拦住并当场重新自检一次：用户刚装完
-   * 二进制 / 刚登录完账号，最想做的就是再点一次，而不是先去别处找「重新自检」。
+   * 走统一导航：能进就进；不能进时**不是静默禁用按钮**，而是当场重新检查一次环境 ——
+   * 用户刚装完 / 刚登录完，最想做的就是再点一次，而不是先去别处找「重新检查」。
+   * 检查通过后由 store 恢复这个被拦下来的目标（`pendingTarget`）。
    */
   const enterReport = (): void => {
-    if (envOk) {
-      modules.select('audit')
-      setGate('idle')
-      return
-    }
+    const verdict = go('audit')
+    // 被拦时统一导航层已经记下 `blocked` + `gateReason`（上面那段 props 直接读它）；
+    // 通过时把它清回 idle。
+    setGate(verdict.blocked ? 'blocked' : 'idle')
+  }
+
+  /** 顶部结论卡与拦截屏共用的「重新检查环境」：跑完让 store 决定要不要恢复目标。 */
+  const recheck = (): void => {
     setGate('running')
-    void envStatus.refresh().then((result) => {
+    void envStatus.refresh({ refresh: true }).then((result) => {
       if (!mounted.current) return
-      if (result !== null && result.allOk) {
-        modules.select('audit')
-        setGate('idle')
-        return
-      }
-      setGate('blocked')
+      const state = environmentStateOf(result)
+      // 检查结论落地后由 store 统一决定"恢复还是继续留在环境页"。
+      modules.envChanged({ state })
+      setGate(result !== null && state?.proceed === true ? 'idle' : 'blocked')
     })
   }
 
@@ -376,8 +376,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   }
 
   // 授权态：Host 的 `env.trust.credentials` 是唯一判据（落盘后重启仍在）。
+  // 未授权**不再遮住整页**（用户口径：「不要让一个模态层遮住整个环境页」）：它变成
+  // 「账号连接」分组里的第一行，一步就能点完；真实门禁仍在 Host 侧（未授权一律拒绝）。
   const authorized = env !== null && env.trust.credentials === true
-  const showGate = env !== null && !authorized
   const grantCredentials = (): void => {
     setAuthBusy(true)
     setAuthError('')
@@ -452,24 +453,32 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     error={snapshot.error !== '' ? snapshot.error : bootError}
     busy={snapshot.busy}
     checkedAt={snapshot.checkedAt}
-    onRefresh={() => { void envStatus.refresh({ refresh: true }) }}
-    onCopyPrompt={() => { void loadPrompt() }}
-    copied={copied}
+    onRefresh={recheck}
     onRelogin={() => { void runLogin('氚云登录', workbenchApi.relogin) }}
     onDwsLogin={() => { void runLogin('钉钉登录', () => workbenchApi.dwsLogin({})) }}
     onDwsLoginDevice={() => { void runLogin('钉钉设备码登录', () => workbenchApi.dwsLogin({ device: true })) }}
     loginMessage={loginMessage}
-    onEnterReport={enterReport}
-    gate={gate}
+    // 拦截说明**直接读统一导航层记下来的结论**（`gate` + `pendingTarget` + `gateReason`）：
+    // 侧栏点子项被拦回来的那一刻就要说清"本来要去哪、为什么没进去"，
+    // 不能等用户自己再点一次「重新检查」才出现。
+    //
+    // `gate` 的优先级：界面自己刚点的动作（`running` / `blocked`）> 统一导航层的 `blocked`。
+    // 顺序不能反：用户刚点「重新检查」时要先看到 loading，而不是上一轮的拦截说明。
+    {...(gate !== 'idle' ? { gate } : (mod.blocked ? { gate: 'blocked' as const } : {}))}
+    {...(mod.pendingTarget === null ? {} : { gateTarget: moduleLabel(mod.pendingTarget) })}
+    {...(mod.gateReason === '' ? {} : { gateReason: mod.gateReason })}
     services={props.services}
     wsBusy={wsBusy}
     wsMessage={wsMessage}
     onWsBusy={setWsBusy}
     onWsMessage={setWsMessage}
-    prompt={prompt}
-    promptUrl={promptUrl}
-    promptBusy={promptBusy}
-    promptMessage={promptMessage}
+    // 授权（一次性、长期有效）**整合进配置流程**：不再用一个模态层遮住整页环境信息。
+    authorized={authorized}
+    authBusy={authBusy}
+    authError={authError}
+    authDeclined={authDeclined}
+    onGrantCredentials={grantCredentials}
+    onRegrant={() => { setAuthError(''); setAuthDeclined(false) }}
   />
 
   /**
@@ -485,7 +494,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     <div className={C.muted}>{gate === 'running' ? zhCN.gateRunningHint : zhCN.gateBlockedHint}</div>
     <div className={C.row} style={{ marginTop: '12px' }}>
       <Button label={zhCN.recheck} tone="primary" disabled={gate === 'running'} onClick={enterReport} />
-      <Button label={zhCN.moduleEnv} onClick={() => { modules.select('env') }} />
+      <Button label={zhCN.moduleEnv} onClick={() => { go('env') }} />
     </div>
     {env !== null && env.blocked.length > 0
       ? <ul className={C.blockers}>
@@ -513,19 +522,6 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       {greeting === '' ? null : <span className={C.greeting}>{greeting}</span>}
     </div>
 
-    {/* 未授权：整块面板被门槛盖住（Host 侧另有 blocked 兜底，绕过 UI 调操作也进不去）。
-        授权是一次落盘写，所以按钮期间禁用，失败如实显示（`persistError` 语义）。 */}
-    {showGate
-      ? <AuthorizationGate
-          declined={authDeclined}
-          busy={authBusy}
-          error={authError}
-          onAgree={grantCredentials}
-          onDecline={() => { setAuthDeclined(true) }}
-          onRegrant={() => { setAuthError(''); setAuthDeclined(false) }}
-        />
-      : null}
-
     <div className={C.body}>
       {bootError === '' ? null : <Notice tone="warn">{bootError}</Notice>}
 
@@ -542,7 +538,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
 
       {/* 「报告评估」还没开放：这一页是 Coming Soon，页内给一条去「报告审核」的路。 */}
       {!awaitingEnv && module === 'eval'
-        ? <ReportEvalPane onGoAudit={() => { modules.select('audit') }} />
+        ? <ReportEvalPane onGoAudit={() => { go('audit') }} />
         : null}
 
       {!awaitingEnv && (module === 'env' || env === null) ? envPane : null}

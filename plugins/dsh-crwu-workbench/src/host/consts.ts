@@ -32,7 +32,7 @@ export const PLUGIN_INJECT = ['webServer', 'shell', 'tools']
  * 还会让打包器的 JSON 插件成为隐式依赖。代价是升版本时要同时改这里 ——
  * `tests/unit/host-package.test.mjs` 有一条断言盯着它必须等于 `package.json` 的 version。
  */
-export const PLUGIN_VERSION = '0.0.8'
+export const PLUGIN_VERSION = '0.0.9'
 
 /**
  * `ping` / `boot` 应答里的版本指纹，形如 `pkg-0.0.5`。

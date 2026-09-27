@@ -8,6 +8,23 @@ export const WORKBENCH_ROUTE = '/api/crwu-workbench'
  * 于是很容易出现「界面是新的、逻辑是旧的」——审核挂错会话那次就是这么来的（用户看到新按钮、
  * 跑的是老代码，报障说「还是挂错位置」）。
  *
+ * 14：**删除 `install-prompt` 操作**（连同 `src/host/environment/install-prompt.ts` 与界面上的
+ *    「复制安装提示词」入口）。为什么这也算契约变更：旧客户端挂载时会调这个操作，新宿主没有它 ——
+ *    不靠协议号喊出来的话，用户会看到一条与真实原因无关的「未知 op」报错。同理，
+ *    环境信息页 ① 去掉了「在新会话中打开」按钮（纯界面删减，不涉及契约）。
+ *    操作清单 30 → 29（`tests/helpers/frozen-inventory.mjs` + `host-operations.test.mjs` 盯着）。
+ * 13：`env` 增加 `state`（**统一环境模型**，见 `shared/environment/model.ts`）—— 状态 / 阻塞 /
+ *    归属 / 通过率 / 能力 / 门禁结论改由 Host 推出一次，客户端不再自己算。语义上有四处
+ *    **行为变化**，必须靠协议号喊出来：
+ *    1. iFinD 的 `external.state` 变成五态（未配置 / 已保存未验证 / 已认证 / 认证失败 / 不可达），
+ *       且**只有真实探测成功**才是 `authenticated`；
+ *    2. iFinD 只在**单独缺失**时把总状态降到 `degraded`，不进 `blocked`、不拦导航
+ *       （氚云 / 钉钉 / OSS / 工作空间仍然阻塞）；
+ *    3. 「环境就绪」与通过率不再自相矛盾：通过率**只统计必需项**；
+ *    4. 导航门禁上提到统一导航层（`navigateModule(target)`），`env` 页永远可进。
+ *    另外新增 4 个 Host 操作（`ifind-status` / `ifind-credential-save` / `ifind-credential-clear`
+ *    / `ifind-probe`）与 iFinD 凭据改由插件 Host 自己保管。旧宿主回不出 `state`，
+ *    新界面会按「不认识 → 不放行」拦下所有需要环境的页面（提示重启 profile）。
  * 12：`env` 的返回从 `checks[]` 混装改成**语义分区**：`packageIntegrity`（② 插件内置组件，只按包内
  *    文件与包内清单字节数核对）/ `runtime`（③ DSH 自带 Python 运行时）/ `services`（④ 氚云 + 钉钉，
  *    **不再含 oss**）/ `delivery`（⑤ OSS 配置 + 凭据 + 连通性）/ `external`（⑥ iFinD），
@@ -24,9 +41,18 @@ export const WORKBENCH_ROUTE = '/api/crwu-workbench'
  *    界面于是显示「还差 node」—— 而磁盘上的新产物已经不看 node 了。
  *    实测踩到：宿主比产物旧一版时，客户端因为形状没变而不报警，安静地显示一个假阻塞项。
  *    所以这里必须 +1，让「界面是新的、宿主是旧的」由协议号自己喊出来（§7.12）。
+ * 15：**iFinD 从可选能力改成必需项**（2026-09-26 产品口径）。跨进程契约的语义变了三处：
+ *   ① `userSetup.ifind.required` 由 false 变 true、`IfindCheck.required` 同理（进必需项分母）；
+ *   ② iFinD 未通过时 `issues` 里有**阻塞项**（`id` = `ifind` / `ifind-external`），
+ *      归属按 credential→user / entitlement→admin / infrastructure→system 分派，
+ *      于是 `capabilities.global` / `auditCore` / `externalData` 都会跟着变 false
+ *      （旧口径里 `externalData` 恒为 true、iFinD 只产生非阻塞 issue、总状态是 degraded）；
+ *   ③ OSS 探测结果新增结构化 `errorKind`（`credential` / `permission` / `config` / `infrastructure`）
+ *      与 `target`（`oss://bucket/prefix/`，不含凭据），供界面按归因派活。
+ *    旧宿主仍在旧语义上工作（iFinD 缺失只降级、perm 与网络不区分），所以必须靠协议号喊出来。
  * 10：`env` 的**清单来源字段整组消失**（`manifestSource` / `manifestKind` / `manifestLoaded` /
  *    `manifestError` / `manifestUpdatedAt` / `installDocUrl`），换成 `configSource`（部署 YAML 路径）；
- *    `EnvCheckView` 去掉 `url` / `sha256` / `target`，`install-prompt` 的 `url` 恒为空。
+ *    `EnvCheckView` 去掉 `url` / `sha256` / `target`（该代还有 `install-prompt`，14 代已删除）。
  *    原因见 CHANGELOG：只读 OSS 分发桶整体下掉，二进制随包发布、插件改从 npm 安装。
  *    旧宿主仍会回那六个字段（客户端不读即可），但**新宿主回的字段旧客户端不认** ——
  *    所以这一代必须靠协议号把「界面是新的、宿主是旧的」挡在门外。
@@ -40,7 +66,7 @@ export const WORKBENCH_ROUTE = '/api/crwu-workbench'
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 12
+export const WORKBENCH_PROTOCOL = 15
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

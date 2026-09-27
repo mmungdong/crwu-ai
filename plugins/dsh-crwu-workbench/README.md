@@ -52,7 +52,7 @@ AI 审核子会话 → 盯住它的运行状态、可随时停止/重启 → 交
 | 4d | 客户端产物**真的被 DSH 服务并登记进 web 启动清单**（`id` / `url` / `rev` / `inject`） | 装一次后取页面里的 `__DSH_BOOT__` | ✅ |
 | 4e | **npm 分发路径**也能用：把 `npm pack` 的 tarball 装进干净 profile，Host 能应答、客户端产物被登记并服务 | `dsh plugin --profile tgz add ./dsh-crwu-workbench-<ver>.tgz` 后照 4d 验一遍 | ✅ |
 | 5 | 面板在侧栏出现，且标签显示「中瑞世联工作台」 | `node install/browser-check.mjs --url …`（真实浏览器，见下） | ✅ |
-| 6 | 环境自检页能真的探测到平台/插件内置组件/DSH 运行时/OSS/氚云会话 | `env` 操作 + 同一脚本在页面上核对 | ✅ |
+| 6 | 环境信息页能真的探测到平台 / 包内组件 / DSH 运行时 / OSS / 氚云会话 / iFinD | `env` 操作 + 同一脚本在页面上核对 | ✅ |
 | 7a | 报告页能拉到氚云待办 | `pending` 操作 + 同一脚本在页面上核对 | ✅ |
 | 7b | **真的**发起一次审核能起子会话 | 在**顶层会话**里点「AI 审核」 | ⏳ 需人点 |
 
@@ -77,7 +77,7 @@ node <仓库>/install/browser-check.mjs \
 |---|---|
 | `ping` | `{"ok":true,"rev":"pkg-0.0.1"}` —— 说明 `apply()` 在真实 DSH 里跑完并注册了同源路由 |
 | `boot` | `platform=darwin-arm64`、`caseRoot=/Users/mungdong/中瑞世联工作空间`、`source=manifest-workspace` —— 真实 fs 与清单解析 |
-| `env` | `allOk: true`：② `packageIntegrity` 三件组件在包内且字节数与包内清单一致；③ `runtime` 是 **DSH 自带** Python（含 `openpyxl` 版本）；④ 氚云 `正常`（真实 userId 与到期时间）、钉钉 `已登录`；⑤ OSS `AK 正常`（真实 bucket 可列）；⑥ iFinD 只回长度 |
+| `env` | 事实分区照旧（`packageIntegrity` / `runtime` / `services` / `delivery` / `external`），**新增 `state`（统一环境模型）**：状态、阻塞项归属（user / admin / system）、通过率（只统计必需项）与能力开关。裸 `python3` 仍不是检查项；**iFinD 是必需项**（`required=true`，未通过即阻塞） |
 | `pending` | `total: 8608`，返回真实氚云待办（项目名、复核级次、当前节点） |
 | `oss-index` | 真实列举 bucket `crwu-workspace` 的 `crwu/audit` 前缀：8 个案例，每个都带 `审核意见.*.html` + `审核结果.*.json`，`truncated: false` |
 | `oss-result` | 读一个真实对象（97KB）并只回摘要（2716 字节）：`projectId` / `schemaVersion 1.6` / `stage` / `summary.counts`（13 条问题）全部正确 |
@@ -99,9 +99,12 @@ node <仓库>/install/browser-check.mjs \
 | 版本标签 | 名字后面标出**跑的是哪一份**：`dev`（本地源码检出，琥珀色）或 `v0.0.4`（装好的包）；悬停给形态与构建时间 |
 | 点进面板 | 自检期间是 loading，出结论后**通过就直接落在报告审核**；不通过停在环境信息 |
 | 入口上的环境标记 | 通过 = **绿色对勾**、不通过 = 红点，颜色与自检结论一致，悬停文案给出结论 |
-| 侧栏子项切换模块 | 点卡上的「报告评估」进占位说明、点「环境信息」进五层页；点过的子项变成选中态（浅底 + 左侧 3px 强调条）。面板里的**底部模块条已经撤掉**：全页 `.crwu-audit-module` 只有卡上那三行（脚本数出来的），面板与侧栏共用同一份模块状态 |
-| 环境自检页 | ① 案例根目录（工作空间卡片）+ 五层结论（② 插件内置组件 / ③ DSH 脚本运行时 / ④ 登录与凭据授权 / ⑤ OSS 交付配置 / ⑥ 外部数据）各带 `x/y 已就绪`；② 是一个聚合项（`插件内置组件 3/3 完整`），失败时只说「插件包不完整 / 平台不受支持」——**不提示**安装 `crwu`/`dws`/`ossutil`；③ 明写来源是 DSH 自带并列出 `openpyxl` 等包版本；展开后是真实路径与版本、氚云 `正常`、钉钉 `已登录`、iFinD `已配置`（只显示长度）；就绪的层默认收起；⑤ 里的 AK 表单只要 ID 与 Secret（STS Token / endpoint 由插件自己处理）；包根 / 包内清单 / 逐组件字节数与 sha256 / 运行时路径 / 审核根会话在页脚「排查详情」里（默认不展开）|
-| **未授权** | 没授权时整块面板被一个弹框挡住：「同意并继续」/「拒绝」；拒绝后换成一段说明 + 「再次授权」，随时可以回头授权（授权前插件不可用，Host 侧同样阻塞）|
+| 侧栏子项切换模块 | 点卡上的「报告评估」进占位说明、点「环境信息」进环境信息页；点过的子项变成选中态（浅底 + 左侧 3px 强调条）。面板里的**底部模块条已经撤掉**：全页 `.crwu-audit-module` 只有卡上那三行（脚本数出来的），面板与侧栏共用同一份模块状态 |
+| 环境信息页 | 按**"是谁的事"**分四组：顶部紧凑状态卡（结论 + 通过率 + 最近检查时间 + **唯一**主动作）→ **账号连接**（一次性授权 + 氚云扫码 + 钉钉登录 / 设备码）→ **交付与外部数据**（阿里云 AK 表单 + iFinD **API-Key** 表单）→ **工作空间**（就绪时压成一行摘要）→ **维护者诊断**（默认收起）。员工视野里**不出现**「安装 crwu / dws / ossutil」「装 Python」「改 PATH」这些话；包内路径、清单、sha256、运行时路径、审核根会话只在维护者诊断里 |
+| **未授权** | 授权是「账号连接」里的**第一行**（「同意并继续」），**不再用模态层遮住整页**；未授权时进不去报告审核（Host 侧同样拒绝），但环境页始终可进 |
+| 全局环境门禁 | 所有入口（侧栏子项 / 报告页内跳转 / 环境页「进入报告审核」）走同一个 `navigateModule`：环境不通过时不进入目标页、落到环境页并显示「进入【目标页】前，请先完成环境配置」；检查通过后**只恢复最近一次被拦的目标**，用户中途改去别处就不恢复 |
+| **iFinD API-Key 未通过** | **阻塞项**（2026-09-26 产品口径：iFinD 从可选能力改为必检、必通过项）。没填 / 无效 → 员工重填；无数据权益 → 找管理员；网络超时 → 稍后重试。未通过时 `global` / `auditCore` / `externalData` 三项能力一起关闭，统一导航把受保护页面拦回环境页，提示「进入【报告审核】前，请先完成 iFinD API-Key 验证」 |
+| 全页面没有 `audit-start` | 除了人自己点「AI 审核」，验收脚本全程不发这个操作 |
 | ① 案例根目录 | **只讲插件选定的那个目录**，不拿"当前会话"说事 —— 从哪个工作空间的会话点进来都一样（会话事实在 ⑧ 里如实展示） |
 | 待审核报告页 | 画出真实氚云待办：`共 8610 条`、六列（报告名 / 流水号 / **风险等级** / 人工复核 / 氚云更新时间 / 操作）、真实项目名与流水号、**风险等级徽章 A/B/C**（A 红、B 黄）、复核级次「初审」、行内「已停止 / 已完成·已上云」徽章与「查看会话 / 审核信息 / 本机 HTML」入口；窄列不换行、整表无横向溢出 |
 | AI审核结果页 | 画出 4 个真实云端案例及其 `审核意见.*.html` + `审核结果.*.json` 交付件；**这一页自己的工具条**可以按流水号查交付件（输入 → 「查找」→ 只列那一个流水号；没命中就说「OSS 上没有这个流水号的交付件」；「清空」回到全量且不重新列举 OSS；输入过程不发任何请求）|
@@ -112,7 +115,7 @@ node <仓库>/install/browser-check.mjs \
 | 切回环境信息 | 点侧栏卡上的「环境信息」仍然正常渲染，说明来回切换没有把状态弄坏 |
 | 面板滚动 | 面板自己拥有滚动（正文区 `overflow:auto`，头部不随滚动）：环境信息与报告审核两页的长内容都能滚到底，横向零溢出 |
 | 浏览器控制台 | **零报错** |
-| 只读保证 | 全程只发出 `boot env install-prompt audit-status pending oss-index`，**没有 `audit-start`** |
+| 只读保证 | 全程只发出 `boot env audit-status pending oss-index`（及新增的 iFinD 只读探测 `ifind-probe`），**没有 `audit-start`** |
 
 这个脚本本身也**证伪过**：拿它去跑一个**没装插件**的 profile，它报出唯一一条 FAIL
 （「侧栏出现…入口」超时）、跳过后续依赖阶段、退出码 1，而不是崩掉 —— 所以它不是「跑起来就算过」。
@@ -136,7 +139,8 @@ node <仓库>/install/browser-check.mjs \
 员工侧**不需要**改启动参数（不需要 `DSH_PERMISSION_MODE`，也不需要动 profile 里的
 `dsh-sandbox-policy`）。但插件要读本机凭据（氚云会话、钉钉登录态），这需要员工**点一次授权**：
 
-> 插件面板上的授权弹框（「同意并继续」）—— 授权前整块面板被挡住，插件也不可用。
+> 环境信息页「账号连接」里的「同意并继续」—— 授权前进不去报告审核，插件也不可用
+> （**不再用模态层遮住整页**）。
 
 - **这是一次性授权、长期有效**：写进工作台状态文件 `~/.dsh/crwu-workbench.json` 的
   `trustCredentials`，重启 profile 后仍然生效。
@@ -157,8 +161,21 @@ node <仓库>/install/browser-check.mjs \
 
 - **不要**把插件的 `bin/<平台>/` 目录 export 进 shell 的 PATH，**不要**往 `~/bin` 或系统目录放副本 ——
   那只会制造「模型手工拼命令行看起来可用」的假象（绕开沙箱与审批），并在插件升级后指向不存在的路径；
-- **登录也由面板发起**：环境自检页「④ 登录与凭据授权」里的「氚云登录」/「钉钉登录」按钮（首次需先点
-  「同意并继续」完成插件授权）。安装提示词里**不再**让 agent 手工跑登录命令，也禁止它去找命令路径。
+- **登录也由面板发起**：环境信息页「账号连接」里的「氚云登录」/「钉钉登录」按钮（首次先点
+  「同意并继续」完成插件授权）。插件**不再有**「复制安装提示词」入口（2026-09-26 删除）：
+  二进制随包发布、登录与密钥都在界面上填完之后，那段提示词没有运行时用途，只会把员工指去绕路。
+- **iFinD 的 API-Key 也由插件 Host 自己保管**（2026-09-26；界面上一律叫 API-Key，不再叫 SK）：
+  早先要求员工把 `auth_token` 写进
+  `~/.agents/skills/ifind-finance-data/mcp_config.json` —— 那是**上游技能**的私有文件，既让运行时
+  依赖一个随时会被改写的第三方文件，也把"交给 Agent 代填"变成唯一路径。现在 API-Key 保存在
+  插件状态目录（`<home>/.dsh/crwu-workbench/ifind-credential.json`，0600），员工只在
+  「交付与外部数据」里填一次（界面上叫 **API-Key**）。**每次环境校验都真的取一次 iFinD 数据**
+  （`initialize` → `tools/list` → `tools/call`），取到数据才显示「已认证」；认证通过但没取到数据时
+  会明确说「认证通过，但这次没有取到数据」并区分**权益 / 凭据 / 服务不可达**三种原因
+  （分别对应"找管理员 / 重填 / 稍后重试"）。`describe_tool` 可以取到
+  单个工具的脱敏参数 schema；MCP `protocolVersion` 跟随官方 1.4.0 客户端的 `2025-03-26` 并做显式协商。
+  上游指引里的「把密钥发给 Agent」「SSL 失败用 `curl -k`」「跑 `call.py` / `call-node.js`」
+  **一律不采用**。
 - **环境自检也不再碰 PATH**：旧的探针（`command -v crwu|dws|python3|ossutil` + 跑 `--version`）整组删掉，
   所以「主机 PATH 里有没有这些命令」不再影响自检结论；③ 的运行时只认 **DSH 自带 Python**，
   系统 `python3` 既不是依赖也不参与判断。
@@ -189,9 +206,11 @@ dsh plugin --profile web add dsh-crwu-workbench   # 从 npm 取预构建产物�
 装完**重启该 profile**（插件随 profile 启动加载）。然后：
 
 1. 点**左侧栏底部**（设置上方）常驻的「中瑞世联工作台」；
-2. 若这一页停在「环境信息」，先把环境配齐：`crwu h3yun session login` 扫码登录氚云、
-   `dws auth login` 授权钉钉，OSS 的 AccessKey 在自检页④的表单里自己填
-   —— `crwu` / `dws` / `ossutil` 三个命令**随插件自带**，不需要安装；
+2. 若这一页停在「环境信息」，就把上面那几项配齐：先点「同意并继续」完成插件授权，
+   再在「账号连接」里点「氚云登录」（扫码）与「钉钉登录」（浏览器打不开时用设备码），
+   然后到「交付与外部数据」里填**向管理员获取**的阿里云 AccessKey（iFinD API-Key 同页填写，
+   是必需项，未通过会拦住受保护页面）—— `crwu` / `dws` / `ossutil` 三个命令**随插件自带**，
+   不需要安装；**密钥只在这个页面上填**，不要贴进对话、也不要让 Agent 代填；
 3. 要发起审核，先在**顶层会话**的会话头点「登记为子会话父级」——审核只允许挂在顶层会话下
    （只挂一层，嵌套会导致状态跟丢）。
 
@@ -203,8 +222,9 @@ dsh plugin --profile web add dsh-crwu-workbench   # 从 npm 取预构建产物�
 > 插件目录的 rank 比用户目录高，留着只会造成两处漂移（`make skills-install AGENT_DIR=…` 是给
 > 非 DSH 宿主用的）。分层口径与 `dws` 层的升级方式见 [`skills/README.md`](skills/README.md)。
 
-> **权限**：不需要任何启动参数；但**首次必须授权一次**（面板上的授权弹框，点「同意并继续」），
-> 否则插件读不到氚云会话与钉钉登录态、环境自检会拦住它。授权一次长期有效（存在本机状态文件里）。
+> **权限**：不需要任何启动参数；但**首次必须授权一次**（环境信息页「账号连接」里的
+> 「同意并继续」），否则插件读不到氚云会话与钉钉登录态、环境门禁会拦住它。
+> 授权一次长期有效（存在本机状态文件里）。
 > 详见「权限」一节。
 
 ### 更新版本
@@ -232,7 +252,7 @@ dsh plugin --profile web remove dsh-crwu-workbench
 
 - `oss.protected` 是审核产物的私有 Bucket，匿名访问应返回 403，上传继续使用员工机器上的 OSS
   凭据，查看链接默认由 `ossutil` 生成签名 URL；
-- YAML 只保存地址和行为参数，不保存 AK、SK 或 STS Token。
+- YAML 只保存地址和行为参数，不保存 AccessKey、API-Key 或 STS Token。
 
 > **没有 `oss.readonly`**：2026-09-25 起那个匿名只读分发桶整体下掉了（原来装环境清单、安装说明和
 > 插件 TGZ）。现在二进制随插件发布在包内 `bin/<平台>/`，环境清单只有内置一份，插件从 npm 安装 ——
@@ -431,11 +451,15 @@ DSH API 仍是 developer preview，升级 DSH 时**必须**同步核对这几个
 ## 六、依赖（不在本仓）
 
 - **技能族**：`crwu-audit` 及其资产/业务/公共子技能、`crwu-dws`、`crwu-h3yun-login` 随本插件包发布；
-  `dingtalk-*`（`skills/dws/` 层）是随包 vendored 的上游技能；`ifind-finance-data` 不在本仓，
-  由安装清单负责安装。
+  `dingtalk-*`（`skills/dws/` 层）是随包 vendored 的上游技能。`ifind-finance-data`（上游技能）
+  **不是本插件运行时依赖**：iFinD 取数走结构化 Tool `crwu_audit_ifind_query`，API-Key 由插件 Host
+  自己保管在插件状态目录（不读技能目录里的 `mcp_config.json`）。
 - **CLI**：`crwu`（审核编排）、`dws`（钉钉）、`ossutil`（OSS 上传）。
-- **账号**：氚云员工会话（钉钉扫码）、钉钉认证、阿里云 OSS AccessKey、iFinD 密钥。
-  凭据分别落在 `~/.dsh/…`、`~/.ossutilconfig`（权限 600）、技能自己的配置里，**都不进本仓**。
+- **账号**：氚云员工会话（钉钉扫码）、钉钉认证、阿里云 OSS AccessKey、iFinD **API-Key**
+  （每次环境校验都会真的取一次 iFinD 数据，取到数据才算验证通过）。
+  凭据分别落在 `~/.dsh/crwu-workbench.json`、`~/.ossutilconfig`（权限 600）与
+  `~/.dsh/crwu-workbench/ifind-credential.json`（权限 600），**都不进本仓**；
+  它们只在环境信息页上填写，**不进对话、不由 Agent 代填**。
 
 ---
 
@@ -445,7 +469,7 @@ DSH API 仍是 developer preview，升级 DSH 时**必须**同步核对这几个
 AGENTS.md          DSH 插件架构、目录、代码风格与测试规范
 SECURITY.md        安全模型：插件能碰到什么、凭据在哪、漏洞怎么报
 LICENSE            内部使用授权（不对外分发）
-install/INSTALL-PROMPT.md  安装提示词（把插件装进别人 DSH 时发给对方 agent）
+install/INSTALL-PROMPT.md  「装插件」提示词（把插件装进别人 DSH 时发给对方 agent）
 install/browser-check.mjs  真实浏览器验收（第 5 / 6 / 7a 条判据，见第一节）
 scripts/sync-version.mjs   版本号一致性（npm run version:set / version:check）
 scripts/assert-pack.mjs    发布产物自检（npm run pack:assert / pack:assert:strict）

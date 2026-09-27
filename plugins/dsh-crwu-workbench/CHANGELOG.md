@@ -7,6 +7,158 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.9 · 2026-09-26（续：iFinD 改为必检 + 两项真实外部验证 + 环境页引导式重排）
+
+**协议号 15**（见 `src/shared/consts.ts` 的版本注：iFinD 语义 + 阻塞项 + `externalData` 不再恒真 +
+OSS 探测归因字段）。
+
+1. **iFinD 从"可选外部数据能力"改成环境必检、必通过项**（产品口径覆盖了旧的 OPT-006-R1 · F-008）：
+   - `DEFAULT_MANIFEST.ifind.required = true`；`IfindCheck.required` / `userSetup.ifind.required`
+     随之为 true，**进必需项分母**（必需项 8 → 9）；
+   - 未通过即**阻塞**，归属按原因分派：没填 / API-Key 无效或过期 → `user`；
+     账号无数据权益 → `admin`；网络 / 超时 / 协议 / 上游不可达 → `system`；
+   - issue 双写 `global` + `external-data` 两个 scope：`global` 让统一导航把受保护页面拦回环境页，
+     `external-data` 让 `auditCore` 一起关掉（光关外部数据却放行审核是自相矛盾的）；
+   - `capabilities.externalData` 不再恒为 true；`degraded` 只留给将来真正的可选能力，
+     **不再由"只有 iFinD 缺失"产生**；
+   - 门禁提示**整句**就是「进入【报告审核】前，请先完成 iFinD API-Key 验证。」
+     （`environmentGate` 算好整句，`navigateModuleIn` 不再往外套一层通用模板 ——
+     套起来会变成「请先完成环境配置。（…iFinD API-Key 验证。）」，第一眼仍是笼统的话）；
+   - 拦截说明**当场出现**：环境页直接读统一导航层记下的 `blocked` / `pendingTarget` / `gateReason`，
+     不再需要用户自己再点一次「重新检查」才看到"为什么没进去"。
+2. **两项凭据都改成真实外部请求验证**（不允许"文件在 / 字段非空 / 命令能启动"就算过）：
+   - OSS：用**包内绝对路径**的 `ossutil` 对 `oss://<bucket>/<配置前缀>/` 做一次只读列举
+     （`--limited-num 1`，**空目录也算成功**，不再打桶根），并把失败**结构化归因**为
+     `credential` / `permission` / `config` / `infrastructure`（`ServiceCheck.errorKind` + `target`）；
+   - iFinD：判定标准钉死为 `tools/call` 返回非错误、非空内容（`dataVerified`），
+     只有它才能让必检项通过；四个阶段（会话初始化 / 工具清单 / 取数 RPC / 取数内容）归因一致；
+   - 两者都是：保存后**立刻**验证；点「重新检查」传 `force` **绕过缓存**再验一次；
+     界面显示"最近真实验证时间"，不把缓存命中说成刚刚重新请求。
+   - 脱敏收敛到一处：`src/host/oss/sanitize.ts` 的 `sanitizeOssError`（AK / Secret / STS Token /
+     Signature / 签名 URL），环境探测与上传共用。
+3. **环境页重排为"紧凑状态摘要 + 引导式配置工作区"**：
+   - 顶部只有一条结论、完成数量、最近检查 / 最近真实验证时间，和**唯一**主动作「重新检查」；
+     **删掉「进入报告审核」按钮**（连 `onEnterReport` 属性、处理函数与相关断言一起），
+     就绪时只写一句「配置已完成。你可以从左侧进入报告审核。」；
+   - 删除三块技术指标卡（平台移入维护者诊断、最近检查压成一行辅助文案、数量与进度合并成一条摘要）；
+   - 主区改成**左侧步骤导航 + 右侧当前步骤**：1 账号连接 / 2 阿里云 OSS / 3 iFinD / 4 工作空间，
+     默认停在第一项未完成，**用户手动选过之后后台刷新不得抢焦点**；窄屏（≤860px）改成顶部横向
+     步骤条，375px 无横向滚动；
+   - OSS 表单：真实 `<label>`、两个字段纵向排布、主按钮「保存并验证」、
+     保存中「正在连接 OSS 并验证权限…」、成功「验证成功，可以访问交付目录。」，
+     失败按凭据 / 权限 / 配置 / 网络分别给人话；
+   - iFinD 卡：统一叫 **API-Key**（不再出现「SK」「auth_token」「MCP 配置文件」），
+     明说用途、从哪里获得、怎么填、不要把 API-Key 发到对话里；验证中
+     「正在连接 iFinD，并读取一条测试数据…」，成功「验证成功，已读取到测试数据。」；
+   - 技术信息（工具名、数据样本、协议版本、凭据路径、Bucket / Endpoint / 前缀）**只在维护者诊断里**。
+4. 文档与测试同批更新：`AGENTS.md` §4.5 / §4.6 / §4.7、`README.md`、`README.en.md`、
+   `docs/ui-design-guidelines.md`、`docs/development-notes.md`、`docs/PRD-workbench-sidebar-modules.md`；
+   新增 `tests/unit/client-env-steps.test.mjs`（步骤模型纯函数），
+   `install/browser-check.mjs` 的环境阶段按新结构重写（四个步骤 + 无「进入报告审核」按钮 +
+   375px 无横向溢出），仍**不触发** `audit-start`。
+
+## package · 0.0.9 · 2026-09-26
+
+**环境配置体验重做：插件自带运行能力，员工只处理账号与密钥；门禁上提到统一导航层。**
+
+协议号 12 → 14（13 增加 `env.state`；14 删除 `install-prompt` 操作）。
+
+### 一、环境领域模型（新增 `src/shared/environment/model.ts`）
+
+旧的 `allOk + blocked[]` 一个数组要同时承担四种语义（谁该处理 / 拦不拦 / 拦哪一块 / 怎么修），
+于是同一屏能同时出现「环境就绪」与「7/8 通过」。现在事实与解释分开：
+
+- `userSetup`（workspace / credentialsConsent / h3yun / dingtalk / aliyunOss / ifind）、
+  `systemHealth`（packageIntegrity / dshRuntime / platform / toolRegistry）、
+  `capabilities`（global / auditCore / delivery / externalData）、`issues[]`
+  （`id` / `owner: user|admin|system` / `blocking` / `scope` / `action` / `message`）；
+- 总状态 `unknown` / `checking` / `ready` / `degraded` / `action-required` / `admin-required`
+  / `system-blocked` / `check-failed` 由 issues **推出来**（纯函数，可单测）；
+- **只有 iFinD 缺失 = `degraded`**，不进 `blocked`、不拦任何导航；氚云 / 钉钉 / OSS / 工作空间
+  缺失仍是阻塞；
+- 包内组件 / DSH Runtime / 平台故障归 `system`，员工页面**不提示**安装二进制、装系统 Python
+  或改 PATH；
+- **通过率只统计必需项** —— 「环境就绪」与「N/N 通过」永远同时成立；
+- iFinD 与 OSS 都区分「未填写 / 已保存未验证 / 已认证 / 认证失败 / 网络不可达」五态。
+
+### 二、iFinD 由插件 Host 集成（不再读技能目录）
+
+- **删除**对 `~/.agents/skills/ifind-finance-data/mcp_config.json` 的运行时依赖；
+- SK 改由插件 Host 保存在**插件状态目录**（`<home>/.dsh/crwu-workbench/ifind-credential.json`），
+  原子写入 + `chmod 600` 并回读核对；优先 DSH 凭据服务，当前版本没有该服务时落到插件自有文件；
+- 新增 4 个 Host 操作：`ifind-status` / `ifind-credential-save`（保存后**立刻真实探测**）/
+  `ifind-credential-clear`（要求显式 `confirm`）/ `ifind-probe`；
+- `crwu_audit_ifind_query` 增加 `describe_tool`：对单个真实工具返回**脱敏、限深、限长**的
+  `inputSchema`（此前只回工具名与描述，模型知道有这个工具却不知道怎么填参数）；
+- MCP `protocolVersion` 跟随官方 1.4.0 客户端改为 **`2025-03-26`**，并做**显式协商**
+  （服务端回受支持集合内的版本就用它；回不认识的版本按协议错误失败，**不再静默假设**
+  `2024-11-05` 永远有效）；
+- 401 归 `credential`、403 权益受限归 `entitlement`、网络 / 超时 / 协议错误归 `infrastructure`，
+  三者不混；探测结论里不回显 token / session / Authorization（净化器覆盖 schema 出口）。
+
+### 三、统一全局环境门禁
+
+- 模块元数据新增 `requiresEnvironment` / `requirement`（`modules.ts`）；
+- **所有入口**都走同一个 `navigateModule(target)`：侧栏子项、报告页内跳转、环境页
+  「进入报告审核」、以后新增的页；
+- 目标需要环境且当前不是 `ready/degraded` 时：不进入目标页 → 记 `pendingTarget` → 落到 `env`
+  → 显示「进入【目标页】前，请先完成环境配置」→ 给「重新检查」；
+- 检查通过后**只恢复最近一次被拦的目标**；用户中途主动改去别处即取消自动恢复
+  （绝不无条件把用户弹走）；`env` 页始终可进；
+- **Host 侧也有能力门禁**（`src/host/environment/gate.ts`）：`audit-start` 等敏感操作复用
+  workspace / 授权 / 包内能力 / Runtime / 必需 Tool 的统一判据；用**带 60s 失效策略的快照**
+  而不是每个操作重跑一遍完整自检；拿不到快照或自检失败一律 fail closed。
+  停止审核与释放占用锁**不判门禁**（它们是安全出口）。
+
+### 四、环境信息页重排
+
+页面顺序改成员工的操作顺序（旧版是维护者排查顺序，员工第一眼看到的是自己修不了的东西）：
+
+1. 顶部**紧凑状态卡**：一句结论 + 通过率 + 最近检查时间 + **唯一**主动作；
+2. **账号连接**：一次性授权整合进配置流程（**不再用模态层遮住整页**）+ 氚云扫码 + 钉钉登录
+   （保留设备码备用）；
+3. **交付与外部数据**：阿里云 AK 表单（向管理员获取）+ **新增 `IfindAuthCard.tsx`**
+   （password 输入、保存中禁用、提交后清空本地、保存即真实验证、只显示「已认证」或脱敏摘要、
+   可替换 SK、错误就地显示且不回显、给官方入口但不代填不索取）；
+4. **工作空间**：自动识别成功时压成一行摘要，缺失 / 失效 / 要更换时才展开；
+5. **维护者诊断**（默认收起）：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 包路径、清单、哈希；
+6. 「复制安装提示词」整块**删除**（同日追加）：`install-prompt` 宿主操作、
+   `src/host/environment/install-prompt.ts` 与 `InstallPromptBlock.tsx` 一并删除，
+   对应的 8 条单测（`host-install-prompt.test.mjs`）也随之删除 —— 二进制随包发布、
+   登录与密钥都在界面上完成之后，那段提示词没有运行时用途，只把员工指去绕路。
+   ① 工作空间的「在新会话中打开」按钮同样删除（多余：选目录那一步已经在案例根目录里打开了工作台）。
+   操作清单 30 → 29；`boot.ported.done`、客户端门面与 `tests/helpers/frozen-inventory.mjs` 同步。
+7. **iFinD 改名 API-Key，并把「环境校验」升级成真实取数验证**：
+   - 界面与文案统一叫 **API-Key**（不再是"SK"）：输入框标签、状态词、错误提示、官方入口链接；
+   - **每次环境校验都真的取一次 iFinD 数据**（`initialize` → `tools/list` → `tools/call`），
+     不再是"只认证不看数据"；`dataVerified` / `dataTool` / `dataSample` 三个字段进线协议，
+     `dataSample` 是**脱敏后**的短摘要（上游回显的 token 会被净化掉）；
+   - 两截结论分开：`ok`（认证）与 `dataVerified`（取数）。认证通过但没取到数据时状态是
+     `unverified` + 明确的 `errorKind`，界面说「认证通过，但这次没有取到数据」并给处置，
+     **绝不显示成「已认证」**；
+   - 失败归因在**四个阶段**一致（会话初始化 / 工具清单 / 取数 RPC / 取数内容）：先看 401/403，
+     再看消息指纹；`credential` / `entitlement` / `infrastructure` 给三种不同的员工动作文案；
+   - 试取工具由 `pickProbeTool` 从真实 `inputSchema` 挑（只读、必填 ≤ 1、无开关参数），
+     写/批量/导入导出类一律不碰；挑不出来就如实报"权益可能未开通"；
+   - **30s TTL 探测缓存**（按凭据指纹作键）避免面板反复刷新打上游，"重新检查"传 `force` 绕过缓存。
+
+`AuthorizationGate` 模态层、`layers.ts`（五层规则）、`OssAuthCard.tsx` 随之下线。
+
+### 五、测试与交付
+
+- 新增 `tests/unit/client-env-model.test.mjs`（状态 / 通过率 / 门禁纯函数）、
+  `client-module-gate.test.mjs`（统一导航）、`client-ifind-card.test.mjs`（SK 卡片）、
+  `tests/helpers/ifind-fixture.mjs`（内存凭据 + MCP 传输替身）、
+  `tests/helpers/frozen-inventory.mjs`（Tool / 操作名单只此一份）；
+- `host-environment-env.test.mjs` 改为对着**模型**断言（degraded vs blocked、owner、
+  通过率自洽）；`host-ifind-tool.test.mjs` 重写并覆盖保存 / 清除 / 探测五态；
+- `install/browser-check.mjs`：环境页阶段改成新的四分组结构，并新增**全局门禁**阶段
+  （人为降级环境应答 → 点报告审核 → 断言落到环境页且出现目标页名 → 恢复后自动继续），
+  仍不触发 `audit-start`；
+- `host-package.test.mjs` 的工具数量断言改为与 `REQUIRED_AUDIT_TOOLS` / 冻结清单对账
+  （此前写死 9，实际 10 —— 裸数字已经漂移过一次）。
+- `WORKBENCH_PROTOCOL` 12 → 13；插件版本 0.0.8 → 0.0.9。
+
 ## package · 0.0.8 · 2026-09-25
 
 **自研审核链路改为结构化 Tool 优先：审核子代理不再查找、拼接或执行任何业务 CLI。**

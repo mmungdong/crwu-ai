@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import { environmentStateOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import { requiredTallyOf, type EnvironmentTally } from '../../../shared/environment/model.ts'
 
 /**
  * 环境自检的**共享状态**。
@@ -111,36 +112,21 @@ export function envLampOf(snapshot: EnvSnapshot): EnvLampTone {
   // 有一次自检在跑时先亮黄：结论还没出来就继续显示上一次的绿/红会骗人
   // （重新自检的那几秒里，界面上到底是不是「现在这个结论」必须看得出来）。
   if (snapshot.busy) return 'busy'
-  return snapshot.env.allOk === true ? 'ok' : 'bad'
+  // 判据优先走统一环境模型（`state.status`），旧宿主没有 `state` 时才回落到 `allOk` ——
+  // 「就绪」必须与门禁（`statusProceedable`）说同一件事，否则灯是绿的而页面进不去。
+  const state = snapshot.env.state
+  if (state === undefined) return snapshot.env.allOk === true ? 'ok' : 'bad'
+  return state.status === 'ready' ? 'ok' : 'bad'
 }
 
-export interface EnvTally {
-  /** 参与计数的检查项总数（插件包 + 运行时 + 授权 + 交付 + 外部数据 + 工作空间 + 平台）。 */
-  total: number
-  passed: number
-  /** 通过率，0~1；没有检查项时是 0。 */
-  ratio: number
-}
-
-/** 通过率只用于展示；**门禁判断一律看 `env.allOk`**（那是 Host 给的权威结论）。 */
-export function envTally(env: EnvResult | null): EnvTally {
-  if (env === null) return { total: 0, passed: 0, ratio: 0 }
-  const cred = env.delivery.ossCred
-  const results = [
-    // ② 插件包完整性：**一项**（三件组件是同一个包的事实，不按组件数计数）。
-    env.packageIntegrity.ok === true,
-    // ③ DSH 自带脚本运行时：**一项**。
-    env.runtime.ok === true,
-    // ④ 登录与凭据授权：氚云 / 钉钉。
-    ...env.services.map((service) => service.ok === true),
-    // ⑤ OSS 交付：凭据写好了还不行，实测通过才算。
-    env.delivery.probe.ok === true && cred.exists === true && cred.hasSecret === true,
-    // ⑥ 外部数据。
-    env.external.ok === true,
-    // ① 案例根目录与平台事实。
-    env.workspace.chosen === true,
-    env.platform !== '',
-  ]
-  const passed = results.filter((ok) => ok).length
-  return { total: results.length, passed, ratio: results.length === 0 ? 0 : passed / results.length }
+/**
+ * 通过率：**只有必需项**参与（唯一口径在 `shared/environment/model.ts` 的 `requiredTallyOf`）。
+ *
+ * 这里保留一个同名包装是为了让界面只认识 store 这一层；实现不再自己数 —— 以前界面各算一套，
+ * 于是出现过「环境已就绪」与「7/8 通过」同屏这种自相矛盾的画面。
+ */
+export function envTally(env: EnvResult | null): EnvironmentTally {
+  const state = environmentStateOf(env)
+  if (state === null) return { total: 0, passed: 0, ratio: 0 }
+  return requiredTallyOf({ systemHealth: state.systemHealth, userSetup: state.userSetup })
 }

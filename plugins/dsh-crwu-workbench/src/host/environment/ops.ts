@@ -10,12 +10,18 @@ import { shellQuote } from './probe.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import type { EnvManifest } from '../environment/manifest-default.ts'
 import {
-  probePackageIntegrity, probeIfindKey, probeOss,
+  probePackageIntegrity, probeOss,
   type IfindCheck, type PackageIntegrityCheck, type ServiceCheck,
 } from '../environment/probe.ts'
+import { ifindEnvCheck, type IfindProbeCache } from '../ifind/env.ts'
+import type { IfindTransport } from '../ifind/mcp.ts'
+import { buildEnvironmentState, checkErrorOf, PACKAGE_BLOCKER, RUNTIME_BLOCKER } from './state.ts'
+// 兼容再导出：`blocked` 的这两条文案以前从这里导出，宿主测试与诊断脚本仍按这个名字引用。
+export { PACKAGE_BLOCKER, RUNTIME_BLOCKER }
 import { runShell, shellUnavailable } from '../shell/run.ts'
 import { ossConfigPath, readOssCred, type OssCredView } from '../oss/cred.ts'
 import type { WorkbenchState } from '../state/types.ts'
+import type { EnvironmentStateView } from '../../shared/environment/model.ts'
 import type { OssConfigView, RuntimeView, WorkspaceView } from '../../shared/types.ts'
 import { ensureRegistry } from '../state/registry.ts'
 import { readWorkbenchConfig } from '../state/persist.ts'
@@ -40,11 +46,6 @@ import { bundledBinaryPath } from '../platform/bin-dir.ts'
  * 2. **没有工作空间也算 blocked 且排在最前**：没有它审核产物没有落地目录，
  *   而这条正是为了避免「照搬父会话工作区、把产物写进源码仓库」。
  */
-
-/** 插件包不完整时的**唯一**一条阻塞文案（三件组件不许各占一项）。 */
-export const PACKAGE_BLOCKER = '插件内置组件'
-/** DSH 自带运行时不可用时的**唯一**一条阻塞文案。 */
-export const RUNTIME_BLOCKER = 'DSH 脚本运行时'
 
 /** 主 agent 提供的 DSH 自带 Python 运行时解析结果；本模块只消费它。 */
 export interface PythonRuntimeResult {
@@ -71,10 +72,17 @@ export interface EnvResult {
   services: ServiceCheck[]
   /** ⑤ OSS 交付配置：配置视图 + 凭据脱敏视图 + 一次真实连通性探测。 */
   delivery: { oss: OssConfigView; ossCred: OssCredView; probe: ServiceCheck }
-  /** ⑥ 外部数据：iFinD 的 auth_token。 */
+  /** ⑥ 外部数据：iFinD 的 **API-Key**（插件自有凭据存储、五态）。 */
   external: IfindCheck
   blocked: string[]
   allOk: boolean
+  /**
+   * 统一环境模型（协议 13）：状态 / 阻塞 / 归属 / 通过率 / 能力。
+   *
+   * `blocked` 与 `allOk` 保留给旧调用方，但**由它派生**（`blocked` 就是这里的阻塞项文案，
+   * `allOk` 就是"没有阻塞项"）—— 两套结论不可能再打架。
+   */
+  state: EnvironmentStateView
   home: string
   platform: string
   /**
@@ -126,6 +134,23 @@ export interface EnvDeps {
    * 本插件的技能脚本用的是 DSH 自带运行时，系统那一份不是依赖。缺这个函数 = 能力缺口，不是「没装」。
    */
   pythonRuntime?: (options: { refresh: boolean }) => Promise<PythonRuntimeResult>
+  /**
+   * 必需 Tool 是否对当前 Agent 可见（`missingAuditTools`）。
+   *
+   * 可选：没有这个来源时 `toolRegistry` 是「未验证」而不是「故障」—— 自检页不该因为
+   * 拿不到 Agent 就报一个员工看不懂的阻塞项；真正的硬门禁在 `audit-start` 与能力预检里。
+   */
+  auditTools?: (options: { refresh: boolean }) => Promise<{ missing: string[]; checked: boolean }>
+  /**
+   * iFinD 的真实校验传输（测试替身用）。
+   *
+   * **默认就验**（`host/ifind/env.ts`：每次环境校验都真的取一次数据）；`refresh: true`
+   * （界面「重新检查」）会**绕过 30s 缓存**再验一次。缓存只用来兜住面板的反复刷新，
+   * 不是"默认不探"——那是 2026-09-26 之前的旧口径。
+   */
+  ifindTransport?: IfindTransport
+  /** iFinD 探测结果的短 TTL 缓存（插件实例级）；不传就不缓存。 */
+  ifindProbeCache?: IfindProbeCache
 }
 
 /**
@@ -212,8 +237,17 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const packageIntegrity = await probePackageIntegrity(ctx, manifest, platform)
   // ③ DSH 自带运行时：`refresh` 由界面「重新自检」传 true（刷新运行时缓存）。
   const runtime = await probePythonRuntime(deps, manifest, args.refresh === true)
-  // ⑥ 外部数据。
-  const external = await probeIfindKey(ctx, manifest, { home, platform })
+  // ⑥ 外部数据：凭据在插件状态目录（五态）。**每次环境校验都真的验一次**
+  // （initialize + tools/list + 真取一次数据）；`refresh`（用户点「重新检查」）绕过 30s 缓存。
+  const external = await ifindEnvCheck(ctx, home, {
+    probe: true,
+    force: args.refresh === true || args.probeIfind === true,
+    // 必需与否只由清单一处决定（现为 true）：未通过就是阻塞项。
+    required: manifest.ifind.required === true,
+    applyUrl: manifest.ifind.applyUrl,
+    ...(deps.ifindTransport === undefined ? {} : { transport: deps.ifindTransport }),
+    ...(deps.ifindProbeCache === undefined ? {} : { cache: deps.ifindProbeCache }),
+  })
   const services: ServiceCheck[] = []
 
   // 氚云会话：只有 crwu 能回答，所以直接问它。
@@ -319,28 +353,46 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     probe: { ...ossProbe, required: serviceRequired(manifest, 'oss', true) },
   }
 
-  const blocked: string[] = []
-  if (state.workspaceMissing) {
-    // 用户选过的那个目录没了：必须说清是哪一个，并且**不许**悄悄换成清单偏好里的另一个。
-    blocked.push(`已选定的工作空间不存在：${state.workspacePath}，请重新选择（插件不会自动换到别的工作空间）`)
-  } else if (!state.workspaceChosen) {
-    const prefer = manifest.workspace
-    blocked.push(`未找到工作空间「${text(prefer.preferTitle)}」，请手动选择`)
-  }
-  if (platform === '') blocked.push('运行平台未识别')
-  // 授权是**硬前置**：没它就读不到本机凭据（氚云待办 / 钉钉登录态 / 结果回传），插件不可用。
-  // 放在平台之后、具体检查项之前 —— 它不是一个"某项没配好"，而是"整条链路还没被允许"。
-  if (!state.trustCredentials) blocked.push('授权读取本机凭据（氚云 / 钉钉）')
-  // 插件包不完整**只算一个**故障：旧口径把 crwu / dws / ossutil 各报一项，
-  // 界面于是出现三条「未安装」，而它其实只需要重装插件。
-  if (!packageIntegrity.ok) blocked.push(PACKAGE_BLOCKER)
-  // 运行时同理：一个运行时故障，不是「python3 未安装 + openpyxl 缺失」两条命令问题。
-  if (manifest.runtime.python.required && !runtime.ok) blocked.push(RUNTIME_BLOCKER)
-  for (const service of services) {
-    if (service.required && !service.ok) blocked.push(service.label)
-  }
-  if (delivery.probe.required && !delivery.probe.ok) blocked.push(delivery.probe.label)
-  if (external.required && !external.ok) blocked.push('iFinD 密钥')
+  // 必需 Tool 的可见性：拿不到来源就是「未验证」，不编造故障。
+  const toolRegistry = deps.auditTools === undefined
+    ? { missing: [] as string[], checked: false }
+    : await deps.auditTools({ refresh: args.refresh === true })
+
+  // 事实 → 统一环境模型。**所有**结论（状态 / 阻塞 / 归属 / 通过率 / 能力）都在这一处推出，
+  // 调用方不再各自拼 `blocked`。
+  const workspace = workspaceView(state)
+  const envState = buildEnvironmentState({
+    // 主目录探测不到 = 连"凭据/状态文件在哪"都不知道，自检**本身**没完成：总状态落到 check-failed，
+    // 门禁一律不放行，页面只说「重新检查 / 找维护者」，绝不给员工派活。
+    // 平台探测不到是另一回事：它是一个**具体的系统事实缺失**（systemHealth.platform），
+    // 有自己的检查项与说明。
+    checkError: checkErrorOf([home === '' ? '主目录探测失败' : '']),
+    platform,
+    workspace,
+    preferWorkspaceTitle: config.preferWorkspaceTitle || manifest.workspace.preferTitle,
+    trustCredentials: state.trustCredentials,
+    h3yun: services[0] ?? { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: false, state: '', detail: '' },
+    dingtalk: services[1] ?? { id: 'dingtalk', label: '钉钉认证', required: true, ok: false, state: '', detail: '' },
+    packageIntegrity,
+    runtime,
+    runtimeRequired: manifest.runtime.python.required,
+    oss: {
+      configured: oss.bucket !== '' && oss.enabled,
+      probe: { ...ossProbe, required: serviceRequired(manifest, 'oss', true) },
+      cred: { exists: delivery.ossCred.exists, hasSecret: delivery.ossCred.hasSecret,
+        accessKeyIdMasked: delivery.ossCred.accessKeyIdMasked, path: delivery.ossCred.path },
+    },
+    ifind: {
+      required: manifest.ifind.required === true,
+      ok: external.ok,
+      dataVerified: external.dataVerified === true,
+      state: external.state,
+      errorKind: external.errorKind,
+      reason: external.reason,
+      tokenLength: external.tokenLength,
+    },
+    toolRegistry,
+  })
 
   // 「我是谁」：**只有员工已授权**才去读（受限沙箱下 dws 会假报「未登录」，问出来的姓名不可信）。
   // 它是钉钉那条链路的副产品，所以直接跟在服务探测之后，失败就是三个空串。
@@ -354,12 +406,13 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     services,
     delivery,
     external,
-    blocked,
-    allOk: blocked.length === 0,
+    blocked: envState.blocked,
+    allOk: envState.allOk,
+    state: envState,
     home,
     platform,
     trust: { credentials: state.trustCredentials },
-    workspace: workspaceView(state),
+    workspace,
     auditRoot: auditRootView(ctx, state),
     sessionWorkspace: sessionWorkspaceInfo(ctx, state),
     me: {

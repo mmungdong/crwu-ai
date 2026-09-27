@@ -20,9 +20,11 @@ const ROOT = new URL('../../', import.meta.url)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const {
-  shellQuote, checkIfindToken, probePackageIntegrity, packageIntegrityPaths,
-  probeOss, resolveOssutil, ossutilMissingMessage, probeIfindKey, serviceChecks,
+  shellQuote, probePackageIntegrity, packageIntegrityPaths,
+  probeOss, resolveOssutil, ossutilMissingMessage, serviceChecks,
 } = await import(new URL('src/host/environment/probe.ts', ROOT).href)
+const { checkIfindSecret, readIfindSecret, writeIfindSecret, clearIfindSecret, ifindCredentialPath, ifindStateDir } =
+  await import(new URL('src/host/ifind/store.ts', ROOT).href)
 const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
 
 /**
@@ -60,16 +62,58 @@ function shellStub(handler = () => ({ stdout: '' })) {
   }
 }
 
-/** fs 替身：`infos` 给 stat 结果，`files` 给 readText 内容。两者分开，混在一张表里会假绿。 */
-function fsStub({ infos = {}, files = {} } = {}) {
+/**
+ * fs 替身：`infos` 给 stat 结果，`files` 给 readText 内容。两者分开，混在一张表里会假绿。
+ *
+ * `written` 记录每次 `writeText`（路径 / 内容 / 传入的 sandboxPolicy）—— 权限与沙箱声明
+ * 只有真的写下去才看得出来，所以这一层必须留痕。
+ */
+function fsStub({ infos = {}, files = {}, failWrite = false } = {}) {
+  const written = []
+  const live = { ...files }
+  const liveInfos = { ...infos }
   return {
+    written,
     get: (name) => (name === 'fs'
       ? {
           async resolve(path) { return { targetKey: path, displayPath: path } },
-          async stat(target) { return infos[target.targetKey] },
-          async readText(target) { return files[target.targetKey] },
+          async stat(target) { return liveInfos[target.targetKey] },
+          async readText(target) { return live[target.targetKey] },
+          async writeText(target, content, _expected, _signal, sandboxPolicy) {
+            if (failWrite) throw new Error('disk full')
+            written.push({ path: target.targetKey, content, sandboxPolicy })
+            live[target.targetKey] = content
+            liveInfos[target.targetKey] = { type: 'file' }
+            return { operation: 'update', version: 'v', before: null, after: content }
+          },
         }
       : undefined),
+  }
+}
+
+/**
+ * 给 fs 替身配一个 shell 替身（`writeIfindSecret` 用 shell 建目录 + chmod + stat 核对权限）。
+ *
+ * `{ runs: false }` 走 DSH 契约里「命令根本没执行」的形状：`execute` 抛错。
+ */
+function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '' } = {}) {
+  const commands = []
+  const shell = {
+    resolve: (request) => request,
+    async execute(spec) {
+      commands.push(spec.command)
+      if (failOn !== '' && spec.command.includes(failOn)) throw new Error(error)
+      if (!runs) throw new Error(error)
+      return { result: async () => ({
+        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
+        stdout: { text: stdout, truncated: false }, stderr: { text: '', truncated: false },
+      }) }
+    },
+  }
+  return {
+    written: fs.written,
+    commands,
+    get: (name) => (name === 'shell' ? shell : fs.get(name)),
   }
 }
 
@@ -279,33 +323,55 @@ test('probeOss refuses to probe without enabled/bucket/ossutil', async () => {
   assert.match(unreachable.detail, /no sandbox backend is usable/)
 })
 
-test('probeOss classifies the AK failures the CLI actually reports', async () => {
+test('probeOss 四类失败分开归因（凭据 / 权限 / 配置 / 基础设施）', async () => {
   const cases = [
-    ['AccessDenied: no permission', 'AK 无权限'],
-    ['InvalidAccessKeyId', 'AK 无效'],
-    ['SignatureDoesNotMatch', 'AK 无效'],
-    ['NoSuchBucket', 'bucket 不存在'],
-    ['AK and SK are both empty', 'AK 未配置'],
-    ['something else entirely', 'AK 配置有误或不可用'],
+    ['AccessDenied: no permission', 'AccessKey 没有目标权限', 'permission'],
+    ['Forbidden: denied', 'AccessKey 没有目标权限', 'permission'],
+    ['InvalidAccessKeyId', 'AccessKey 无效', 'credential'],
+    ['SignatureDoesNotMatch', 'AccessKey 无效', 'credential'],
+    ['InvalidSecurityToken', 'AccessKey 无效', 'credential'],
+    ['NoSuchBucket', 'Bucket 或 Endpoint 配置有误', 'config'],
+    ['unknown endpoint oss-cn-nope.aliyuncs.com', 'Bucket 或 Endpoint 配置有误', 'config'],
+    // 网络 / 超时 / 上游 5xx 一律归基础设施：说成 AK 问题会把人指去换一份好密钥。
+    ['dial tcp: lookup b.oss-cn-x.aliyuncs.com: no such host', '连接 OSS 失败', 'infrastructure'],
+    ['something else entirely', '连接 OSS 失败', 'infrastructure'],
   ]
-  for (const [stderr, expected] of cases) {
+  for (const [stderr, expected, kind] of cases) {
     const shell = shellStub(() => ({ exitCode: 1, stderr }))
     const check = await probeOss(withBundledOssutil(shell.ctx), { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64')
     assert.equal(check.state, expected, `${stderr} 应判为 ${expected}`)
+    assert.equal(check.errorKind, kind, `${stderr} 应归为 ${kind}`)
     assert.equal(check.ok, false)
     assert.ok(check.detail.length > 0)
   }
 })
 
-test('probeOss passes when the AK can list the bucket, and never echoes credentials', async () => {
-  const shell = shellStub(() => ({ stdout: 'oss://b/obj\n' }))
-  const check = await probeOss(withBundledOssutil(shell.ctx), { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64')
-  assert.equal(check.ok, true)
+test('probeOss 验证的是**业务前缀**（空目录也算成功），且命令是只读 ls', async () => {
+  const shell = shellStub(() => ({ stdout: '' }))
+  const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'b', prefix: 'crwu/audit', enabled: true }
+  const check = await probeOss(withBundledOssutil(shell.ctx), oss, 'darwin-arm64')
+  // 空 stdout（目录里没有对象）仍然是成功：判据是"请求成功且有权访问该目标"。
+  assert.equal(check.ok, true, '空目录必须算验证成功')
   assert.equal(check.state, 'AK 正常')
-  const listing = shell.calls.find((command) => command.includes(' ls ')) ?? ''
-  assert.match(listing, /--limited-num 1/, '探测只看一个对象，不拉整个 bucket')
-  // 用的必须是**包内绝对路径**，不是裸命令名。
-  assert.match(listing, /bin\/darwin-arm64\/ossutil/)
+  assert.equal(check.errorKind, '')
+  const command = shell.calls[0] ?? ''
+  assert.match(command, /oss:\/\/b\/crwu\/audit\//, '必须打业务前缀而不是桶根')
+  assert.match(command, /--limited-num 1/)
+  assert.match(command, / ls /, '只允许只读列举')
+  assert.equal(/\b(rm|cp|mkdir|create|sync|appendfromfile|set-acl|put)\b/.test(command), false, '不得用写操作验证')
+  // 归因目标只用于诊断，且不含凭据。
+  assert.equal(check.target, 'oss://b/crwu/audit/')
+})
+
+test('probeOss 失败详情里即使上游回显密钥 / 签名 URL，也不会带到界面', async () => {
+  const noisy = 'error: GET https://b.oss-cn-x.aliyuncs.com/?Signature=abc123&OSSAccessKeyId=LTAI5tabcdefghijkl&security-token=STS.xyz'
+  const shell = shellStub(() => ({ exitCode: 1, stderr: noisy }))
+  const check = await probeOss(withBundledOssutil(shell.ctx), { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64')
+  assert.equal(check.ok, false)
+  for (const secret of ['LTAI5tabcdefghijkl', 'Signature=abc123', 'STS.xyz', 'security-token=STS']) {
+    assert.equal(check.detail.includes(secret), false, `详情泄露了 ${secret}：${check.detail}`)
+  }
+  assert.match(check.detail, /<redacted>|redacted/, '要留下脱敏标记而不是把整句删掉')
 })
 
 test('probeOss honours a manifest-provided probe command template', async () => {
@@ -318,52 +384,122 @@ test('probeOss honours a manifest-provided probe command template', async () => 
   assert.match(call, /oss-cn-x\.aliyuncs\.com/)
 })
 
-// ── iFinD 配置 ──────────────────────────────────────────────────────────────
+// ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
 
-test('checkIfindToken distinguishes empty, placeholder and untrimmed values', () => {
-  assert.equal(checkIfindToken('', 'your ifind-mcp key').reason, 'auth_token 为空')
-  assert.equal(checkIfindToken('   ', 'your ifind-mcp key').reason, 'auth_token 为空')
-  assert.match(checkIfindToken('your ifind-mcp key', 'your ifind-mcp key').reason, /仍是占位符/)
-  assert.match(checkIfindToken('YOUR IFIND-MCP KEY', 'your ifind-mcp key').reason, /仍是占位符/)
-  assert.match(checkIfindToken(' abc ', 'ph').reason, /首尾空白/)
-  assert.equal(checkIfindToken('  abc  '.trim(), 'ph').ok, true)
+test('checkIfindSecret 区分空值 / 占位符 / 首尾空白 / 换行 / 过短', () => {
+  assert.equal(checkIfindSecret('').reason, 'API-Key 为空，请填写你自己的 iFinD API-Key')
+  assert.equal(checkIfindSecret('   ').reason, 'API-Key 为空，请填写你自己的 iFinD API-Key')
+  assert.match(checkIfindSecret('your ifind-mcp key').reason, /仍是占位符/)
+  assert.match(checkIfindSecret('YOUR IFIND-MCP KEY').reason, /仍是占位符/)
+  assert.match(checkIfindSecret('abcdefgh ').reason, /多余空白/)
+  assert.match(checkIfindSecret('abcdefgh\n').reason, /不能包含换行/)
+  assert.match(checkIfindSecret('abcdefgh\r\nxyz').reason, /不能包含换行/)
+  assert.equal(checkIfindSecret('abcdefgh').ok, true)
+  // 空/占位符/空白/换行是"输入没填好"，过短是"看着不像有效 SK" —— 两类处置不同。
+  assert.equal(checkIfindSecret('').errorKind, 'input')
+  assert.equal(checkIfindSecret('abc').errorKind, 'invalid')
 })
 
-test('checkIfindToken reports the length but never the token itself', () => {
-  const verdict = checkIfindToken('s3cret-token', 'ph')
-  assert.deepEqual(verdict, { ok: true, reason: '', tokenLength: 12 })
-  assert.equal(JSON.stringify(verdict).includes('s3cret'), false, '结果里绝不能带出密钥内容')
+test('checkIfindSecret 只回长度，绝不回显密钥本体', () => {
+  const verdict = checkIfindSecret('s3cret-token')
+  assert.deepEqual(verdict, { ok: true, reason: '', value: 's3cret-token', length: 12, errorKind: '' })
+  // 面向界面 / 模型的那一份（view）里没有 value 字段。
+  assert.equal('value' in verdict === true, true, '内部判定需要明文给 Host 用')
 })
 
-test('probeIfindKey reads the configured field and reports only the length', async () => {
-  const fs = fsStub({ files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"abcdef"}' }, infos: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': { type: 'file' } } })
-  const check = await probeIfindKey(fs, DEFAULT_MANIFEST, { home: '/Users/x', platform: 'darwin-arm64' })
+test('凭据文件落在插件状态目录，不在技能目录、也不在插件包目录', () => {
+  const path = ifindCredentialPath('/Users/x')
+  assert.equal(path, '/Users/x/.dsh/crwu-workbench/ifind-credential.json')
+  assert.equal(ifindStateDir('/Users/x'), '/Users/x/.dsh/crwu-workbench')
+  for (const banned of ['.agents', 'skills', 'ifind-finance-data', 'node_modules', 'plugins/']) {
+    assert.equal(path.includes(banned), false, `凭据不得落在 ${banned} 下：${path}`)
+  }
+})
+
+test('readIfindSecret 读配置字段、写回后能再读出来（明文只在 Host 内部）', async () => {
+  const path = ifindCredentialPath('/Users/x')
+  const fs = fsStub({ files: { [path]: '{"auth_token":"abcdefghij"}' }, infos: { [path]: { type: 'file' } } })
+  const check = await readIfindSecret({ get: (name) => fs.get(name) }, '/Users/x')
   assert.equal(check.ok, true)
-  assert.equal(check.tokenLength, 6)
-  assert.equal(check.path, '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json')
-  assert.equal(JSON.stringify(check).includes('abcdef'), false)
+  assert.equal(check.secret, 'abcdefghij')
+  assert.equal(check.view.length, 10)
+  assert.equal(check.view.state, 'unverified', '只读文件不等于已认证')
+  assert.equal(JSON.stringify(check.view).includes('abcdefghij'), false, '脱敏视图里绝不能带出密钥')
 })
 
-test('probeIfindKey explains missing file, bad JSON and missing fs', async () => {
-  const missing = await probeIfindKey(fsStub({}), DEFAULT_MANIFEST, { home: '/Users/x', platform: 'darwin-arm64' })
-  assert.match(missing.reason, /配置文件不存在/)
+test('readIfindSecret 解释未配置 / 坏 JSON / 占位符 / 无 fs', async () => {
+  const missing = await readIfindSecret({ get: (name) => fsStub({}).get(name) }, '/Users/x')
+  assert.equal(missing.ok, false)
+  assert.equal(missing.state, 'unconfigured')
+  assert.match(missing.reason, /还没有保存/)
 
-  const badJson = await probeIfindKey(
-    fsStub({ files: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{oops' }, infos: { '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': { type: 'file' } } }),
-    DEFAULT_MANIFEST,
-    { home: '/Users/x', platform: 'darwin-arm64' },
-  )
+  const path = ifindCredentialPath('/Users/x')
+  const badFs = fsStub({ files: { [path]: '{oops' }, infos: { [path]: { type: 'file' } } })
+  const badJson = await readIfindSecret({ get: (name) => badFs.get(name) }, '/Users/x')
+  assert.equal(badJson.state, 'invalid')
   assert.match(badJson.reason, /不是合法 JSON/)
 
-  const noFs = await probeIfindKey({ get: () => undefined }, DEFAULT_MANIFEST, { home: '/Users/x' })
+  const placeholderFs = fsStub({ files: { [path]: '{"auth_token":"your ifind-mcp key"}' }, infos: { [path]: { type: 'file' } } })
+  const placeholder = await readIfindSecret({ get: (name) => placeholderFs.get(name) }, '/Users/x')
+  assert.equal(placeholder.state, 'invalid')
+  assert.match(placeholder.reason, /占位符/)
+
+  const noFs = await readIfindSecret({ get: () => undefined }, '/Users/x')
+  assert.equal(noFs.state, 'unreachable')
   assert.match(noFs.reason, /文件服务不可用/)
 })
 
-test('serviceChecks normalizes the manifest service list without inventing status', () => {
-  const checks = serviceChecks(DEFAULT_MANIFEST.services)
-  assert.deepEqual(checks.map((check) => check.id), ['h3yun', 'dingtalk', 'oss'])
-  for (const check of checks) {
-    assert.equal(check.ok, false, '未探测前不得假装通过')
-    assert.equal(check.state, '待探测')
+test('空值 / 占位符 / 首尾空白 / 换行在**写盘之前**就被拒绝（不留坏文件）', async () => {
+  for (const bad of ['', '   ', 'your ifind-mcp key', ' abcdefgh', 'abcdefgh\n']) {
+    const ctx = asShellCtx(fsStub({}), { runs: true })
+    const result = await writeIfindSecret(ctx, '/Users/x', bad, { platform: 'darwin-arm64' })
+    assert.equal(result.ok, false, JSON.stringify(bad))
+    assert.equal(result.errorKind, 'input', JSON.stringify(bad))
+    assert.deepEqual(ctx.written, [], `坏值不得触发任何写盘：${JSON.stringify(bad)}`)
   }
+})
+
+test('写入失败与权限设置失败都要如实上报（不假装成功、也不删掉已保存的凭据）', async () => {
+  // ① 写盘抛错 → infrastructure。
+  const failing = fsStub({ failWrite: true })
+  const writeFailed = await writeIfindSecret(asShellCtx(failing, { runs: true }), '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  assert.equal(writeFailed.ok, false)
+  assert.equal(writeFailed.errorKind, 'infrastructure')
+  assert.match(writeFailed.error, /写入/)
+
+  // ② chmod 失败 → 凭据仍然保存成功，但 chmodOk=false + 原因带出来。
+  const ctx = asShellCtx(fsStub({}), { failOn: 'chmod 600', error: 'chmod: Operation not permitted' })
+  const chmodFailed = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  assert.equal(chmodFailed.ok, true, '权限没收紧不该作废已保存的凭据')
+  assert.equal(chmodFailed.chmodOk, false)
+  assert.match(chmodFailed.chmodError, /Operation not permitted/)
+  assert.equal(ctx.written.length, 1, '文件确实写下去了')
+})
+
+test('成功保存：文件内容只有那一个字段、权限收紧到 0600、并回脱敏视图', async () => {
+  const ctx = asShellCtx(fsStub({}), { runs: true })
+  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  assert.equal(result.ok, true)
+  assert.equal(result.chmodOk, true)
+  assert.equal(result.mode, 'file')
+  assert.equal(result.view.exists, true)
+  assert.equal(result.view.length, 8)
+  assert.equal(JSON.stringify(result).includes('abcdefgh'), false, '返回值里不得出现明文')
+  const path = ifindCredentialPath('/Users/x')
+  assert.deepEqual(JSON.parse(ctx.written[0].content), { auth_token: 'abcdefgh' })
+  assert.equal(ctx.written[0].path, path)
+  // 写 `~/.dsh/` 必须显式声明无沙箱，否则受限沙箱下写不进去（实测踩过）。
+  assert.equal(ctx.written[0].sandboxPolicy?.mode, 'danger-full-access')
+  assert.equal(ctx.commands.some((command) => command.includes('chmod 600')), true, '必须真的收紧权限')
+})
+
+test('清除凭据走显式命令，失败要如实报', async () => {
+  const ok = asShellCtx(fsStub({}), { runs: true })
+  assert.equal((await clearIfindSecret(ok, '/Users/x', { platform: 'darwin-arm64' })).ok, true)
+  assert.equal(ok.commands.some((command) => command.startsWith('rm -f ')), true)
+
+  const down = asShellCtx(fsStub({}), { runs: false, error: 'no sandbox backend' })
+  const failed = await clearIfindSecret(down, '/Users/x', { platform: 'darwin-arm64' })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.errorKind, 'infrastructure')
 })

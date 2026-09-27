@@ -10,6 +10,7 @@
  * - Host 的内部类型必须**可赋值**给这里的类型（由 `wire-contract.ts` 在 typecheck 阶段强制）；
  * - Client 只 import 这里的类型。
  */
+import type { EnvironmentStateView } from './environment/model.ts'
 
 /** 一行氚云待审核记录。 */
 export interface TaskRow {
@@ -168,15 +169,50 @@ export interface ServiceCheckView {
   ok: boolean
   state: string
   detail: string
+  /**
+   * OSS 探测的结构化归因（2026-09-26 收紧）：
+   * `credential`（AK 无效）/ `permission`（凭据有效但无 Bucket/Prefix 权限）/
+   * `config`（Bucket 或 Endpoint 配错）/ `infrastructure`（网络、超时、包内 ossutil 或执行环境）。
+   * 氚云 / 钉钉没有归因，留空。
+   */
+  errorKind?: string
+  /** 探测目标（`oss://bucket/prefix/`），**不含凭据**；只用于维护者诊断。 */
+  target?: string
 }
 
-/** iFinD 密钥检查结果（**只回长度，不回显**）。 */
+/**
+ * iFinD 凭据检查结果（**只回长度与状态，绝不回显**）。
+ *
+ * 2026-09-26 起凭据由插件 Host 自己保管（`~/.dsh/crwu-workbench/ifind-credential.json`，0600），
+ * 不再读 `ifind-finance-data` 技能目录里的 `mcp_config.json` —— 那既让运行时依赖一个
+ * 随时可能被上游改写的第三方文件，也把「员工机器上必须有那个技能」变成了隐含前提。
+ *
+ * `state` 必须是五态之一（`unconfigured` / `unverified` / `authenticated` / `invalid` /
+ * `unreachable`），界面才能把「没填」与「填了连不上」分开处置。
+ */
 export interface IfindCheckView {
+  /** 凭据文件路径（插件状态目录内）；只用于维护者详情。 */
   path: string
   required: boolean
   ok: boolean
+  /** `unconfigured` | `unverified` | `authenticated` | `invalid` | `unreachable`。 */
+  state: string
+  /** `credential`（401/签名）| `entitlement`（403 权益）| `infrastructure` | `''`。 */
+  errorKind: string
   reason: string
   tokenLength: number
+  /** 最近一次真实探测的时刻（ISO 串）；没探过是空串。 */
+  checkedAt: string
+  /** 这次真实探测拿到了几个工具（认证成功的旁证）；没探过是 0。 */
+  toolCount: number
+  /** **真的取到数据了吗**（`tools/call` 成功返回内容）。`ok` 只代表认证通过。 */
+  dataVerified: boolean
+  /** 取数用的工具名（没取数时空串）。 */
+  dataTool: string
+  /** 取数结果的**脱敏**短摘要（最多 300 字符）；绝不回传 token。 */
+  dataSample: string
+  /** 「获取 API-Key」的官方入口（页面上的链接）；Host 不代填、不索取。 */
+  applyUrl: string
 }
 
 /** 工作空间视图。 */
@@ -234,6 +270,9 @@ export interface SessionWorkspaceView {
  * ⑤ OSS 交付配置 / ⑥ 外部数据，加上 ① 工作空间。旧线协议把它们混在 `checks[]` 里，
  * 于是界面只能平铺成一列命令清单。
  *
+ * 协议号 13 追加 `state`（统一环境模型，见 `shared/environment/model.ts`）：事实分区不变，
+ * 但"这些事实意味着什么"（状态 / 阻塞 / 归属 / 通过率 / 门禁）改由 Host 推出一次，客户端不再自己算。
+ *
  * Host 侧的内部类型（`host/environment/ops.ts` 的 `EnvResult`）由 `wire-contract.ts` 强制
  * 可赋值给这里 —— 少字段或类型漂移在 typecheck 阶段就会红。
  */
@@ -258,4 +297,14 @@ export interface EnvResultView {
   sessionWorkspace: SessionWorkspaceView
   /** 「我是谁」：三个字段都可能是空串，界面整句不展示。 */
   me: { name: string; org: string; userId: string }
+  /**
+   * **统一环境模型**（协议 13）。
+   *
+   * 上面那些分区是「探测事实」，这一块是「这些事实意味着什么」：状态、阻塞与否、归属于谁、
+   * 通过率、以及门禁结论。旧客户端不读它（照旧按 `allOk` 判断），新客户端只读它 ——
+   * 一侧负责事实、一侧负责解释，避免两边各推一套结论（`allOk` 说就绪、通过率说 7/8 那种）。
+   *
+   * 可选是刻意的：宿主是旧构建时没有它，界面走「不认识 → 不放行」的失败关闭路径（§7.12）。
+   */
+  state?: EnvironmentStateView
 }

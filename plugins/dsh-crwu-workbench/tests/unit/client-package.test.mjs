@@ -71,6 +71,7 @@ function resolve(node) {
 const { rpc } = await import(new URL('src/client/api/client.ts', ROOT).href)
 const { apply } = await import(new URL('src/client/apply.ts', ROOT).href)
 const { WorkbenchPanel } = await import(new URL('src/client/features/workbench/WorkbenchPanel.tsx', ROOT).href)
+const { environmentStateOf } = await import(new URL('src/client/features/report-audit/api.ts', ROOT).href)
 const { BrandMark } = await import(new URL('src/client/components/BrandMark.tsx', ROOT).href)
 const { buildTagOf, createBuildStore } = await import(
   new URL('src/client/features/workbench/build-store.ts', ROOT).href
@@ -83,6 +84,18 @@ function fakeBuildStore(patch = {}) {
     builtAt: '', protocol: WORKBENCH_PROTOCOL, parentSessionId: '', ...patch,
   }
   return { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot }
+}
+
+/**
+ * `boot` 的就绪应答。
+ *
+ * **协议号必须跟着源码走**：客户端拿 `WORKBENCH_PROTOCOL` 与宿主回的 `protocol` 比对，
+ * 不一致就按「宿主是旧构建」拦下所有发起类操作。协议号 +1 之后仍然手写
+ * `{ ok: true }` 的夹具会**静默**变成"旧宿主"路径 —— 那时测试看起来还在跑，
+ * 断言却落在"请重启 profile"那一屏上。
+ */
+function bootOk(patch = {}) {
+  return { ok: true, protocol: WORKBENCH_PROTOCOL, parentSessionId: '', ...patch }
 }
 
 /** 深度查找第一个满足条件的宿主元素。 */
@@ -685,7 +698,7 @@ test('头部右侧永远是那句问候：姓名来自自检结果，拿不到�
   // 姓名跟着**环境自检**一起回来（`env.me`），不再单独发一次请求 —— 用户口径：
   // 「这个钉钉 cli 环境监测一遍就可以了，不需要每次切换页面都去调」。
   const ops = stubOps({
-    boot: { body: { ok: true } },
+    boot: { body: bootOk() },
     env: { body: okEnvBody({ me: { name: '杨凡宾', org: '中瑞世联资产评估集团有限公司', userId: '1' } }) },
   })
   const services = fakeServices()
@@ -706,7 +719,7 @@ test('头部右侧永远是那句问候：姓名来自自检结果，拿不到�
   }
 
   // 钉钉 CLI 没有登录信息 / 没授权：`me.name` 是空串 → **整句都不展示**（连问候语也不留）。
-  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const blankStatus = createEnvStatusStore()
   await blankStatus.refresh()
   const empty = render(WorkbenchPanel, { services, envStatus: blankStatus })
@@ -761,7 +774,7 @@ test('before the environment answers the shell shows the self-check loading copy
 
 test('after boot and env the shell renders the self-check result', async () => {
   stubOps({
-    boot: { body: { ok: true, parentSessionId: '', workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false }, active: { key: '', childId: '', since: 0 }, ported: { done: [], todo: [] } } },
+    boot: { body: bootOk({ workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false }, active: { key: '', childId: '', since: 0 }, ported: { done: [], todo: [] } }) },
     env: {
       body: {
         ok: true, platform: 'darwin-arm64',
@@ -773,91 +786,110 @@ test('after boot and env the shell renders the self-check result', async () => {
         delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
+        state: stateBody(),
       },
     },
   })
   const { tree } = await mount()
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.loadingEnv), false, '拿到数据后不该还显示加载中')
-  assert.equal(text.includes(zhCN.envHeroOk), true, '环境就绪要有明确结论')
-  // ②..⑥ 五层都在（① 是工作空间卡片，不属于层），且全就绪的层收成一行 `x/y 已就绪`。
-  for (const title of [zhCN.envLayerPackages, zhCN.envLayerRuntime, zhCN.envLayerAuth, zhCN.envLayerDelivery, zhCN.envLayerExternal]) {
-    assert.equal(text.includes(title), true, `缺了分层「${title}」`)
+  // 顶部**紧凑状态卡**：一句结论 + 通过率 + 最近检查时间。
+  assert.equal(text.includes(zhCN.envStatusReady), true, '环境就绪要有明确结论')
+  assert.equal(text.includes('9/9'), true, '通过率与结论必须自洽（只统计必需项，iFinD 在分母里）')
+  // 页面按"我接下来要做什么"分四步（新结构：左侧步骤导航 + 右侧当前步骤）；
+  // 技术细节收进默认收起的「维护者诊断」。
+  for (const title of [
+    zhCN.envStepAccounts, zhCN.envStepOss, zhCN.envStepIfind, zhCN.envStepWorkspace,
+    zhCN.envGroupMaintenance,
+  ]) {
+    assert.equal(text.includes(title), true, `缺了步骤/折叠区「${title}」`)
   }
-  assert.equal(text.includes(`1/1 ${zhCN.envLayerReady}`), true, '就绪的层要显示 x/y 已就绪')
-  assert.equal(text.includes('AKID****7890'), false, '全就绪的层默认收起，路径与 AK 掩码要点开才看')
-  assert.equal(text.includes('https://x.invalid/m.json'), false, '排查详情默认不展开（维护者信息）')
+  // 四步都在导航上，而且这一段是全通过的部署。
+  for (const id of ['accounts', 'oss', 'ifind', 'workspace']) {
+    assert.equal(stepStateOf(tree, id), 'done', `「${id}」这一步应当是已完成`)
+  }
+  // **员工视野里只有他能做的事**：包内组件 / DSH Runtime / 平台 / Tool 可见性只在维护者诊断里，
+  // 默认收起 —— 所以正文里看不到技术细节（收起时连它们的行标签都不渲染）。
+  assert.equal(text.includes(zhCN.envDiagToolsOk), false, 'Tool 可见性只在维护者诊断里')
+  assert.equal(text.includes(zhCN.envPackagesManifest), false, '包内清单路径只在维护者诊断里')
+  assert.equal(text.includes(zhCN.envRuntimeExpect), false, '运行时技术细节只在维护者诊断里')
+  assert.equal(text.includes(zhCN.envLayerPackages), false, '旧的"五层"标题不该再出现')
+  // AK 掩码是**许可**出现的（它就是脱敏摘要，员工要用来核对是哪一份 AK）；
+  // 不许出现的是 Secret 与 SK 明文 —— 那两条在各自卡片的用例里逐字钉住。
+  assert.equal(text.includes('TOPSECRET'), false, 'Secret 绝不出现在页面上')
 })
 
-test('a blocked environment lists exactly what is missing', async () => {
+test('a blocked environment names the first thing still missing instead of a second checklist', async () => {
+  // 新结构（2026-09-26）：顶部**只给第一条**员工能修的下一步，不再把 `blocked[]` 罗列一遍
+  // （哪里不对由左侧步骤导航回答）；技术类故障的原文只在默认收起的维护者诊断里。
   stubOps({
-    boot: { body: { ok: true } },
+    boot: { body: bootOk() },
     env: {
       body: {
         ok: true, platform: '',
         packageIntegrity: packagesOk({ ok: false, supported: false, tools: packagesOk().tools.map((tool) => ({ ...tool, present: false, sizeBytes: 0, ok: false, reason: '插件包不完整 / 平台不受支持' })) }),
         runtime: runtimeOk({ ok: false, state: 'capability-gap', error: '宿主没有接线 DSH 自带 Python 运行时的解析' }),
-        external: externalOk({ path: '/cfg', ok: false, reason: 'auth_token 为空', tokenLength: 0 }),
+        external: externalOk({ path: '/cfg', ok: false, state: 'unconfigured', dataVerified: false, dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0 }),
         services: [], blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
         allOk: false, home: '/Users/x', trust: { credentials: true },
         delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
+        state: stateBody({
+          status: 'action-required', proceed: false, allOk: false, passed: 7, total: 9,
+          capabilities: { global: false, auditCore: false, delivery: true, externalData: false },
+          userSetup: {
+            ...stateBody().userSetup,
+            workspace: { state: 'unconfigured', value: '', reason: '未找到工作空间「中瑞世联工作空间」，请手动选择', required: true },
+            ifind: { state: 'unconfigured', value: '', reason: '还没有保存 iFinD API-Key', required: true },
+          },
+          issues: [
+            { id: 'workspace', owner: 'user', blocking: true, scope: 'global', action: '选择案例根目录', message: '未找到工作空间「中瑞世联工作空间」，请手动选择' },
+            { id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据暂不可用：还没有保存 iFinD API-Key' },
+          ],
+          blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
+        }),
       },
     },
   })
   const { tree } = await mount()
   const text = textOf(tree)
-  assert.equal(text.includes('未找到工作空间「中瑞世联工作空间」，请手动选择'), true)
-  assert.equal(text.includes('运行平台未识别'), true)
-  assert.equal(text.includes(zhCN.allOk), false, '有 blocked 就不能显示「环境就绪」')
+  // 第一条员工能修的下一步（归属是 user 的那条）。
+  assert.equal(text.includes('未找到工作空间「中瑞世联工作空间」，请手动选择'), true, '要说清第一条该修什么')
+  assert.match(text, new RegExp(`${zhCN.envStatusAction}2${zhCN.envStatusActionTail}`), '只说还差几项，不罗列全部阻塞项')
+  // 旧的 `blocked[]` 只是兼容派生字段：页面读统一模型的 `issues`，不再把它当清单画出来。
+  assert.equal(text.includes('运行平台未识别'), false, '页面不许再罗列 blocked[] 里的原文')
+  assert.equal(text.includes(zhCN.envStatusReady), false, '有阻塞就不能显示「环境就绪」')
 })
 
 test('a failing env call surfaces the reason instead of an empty panel', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { status: 503 } })
+  stubOps({ boot: { body: bootOk() }, env: { status: 503 } })
   const { tree } = await mount()
   assert.match(textOf(tree), /HTTP 503/)
 })
 
-test('the self-check never shows the iFinD token itself, only its length', async () => {
-  stubOps({
-    boot: { body: { ok: true } },
-    env: {
-      body: {
-        ok: true, platform: 'darwin-arm64',
-        packageIntegrity: packagesOk(),
-        runtime: runtimeOk(),
-        external: externalOk({ path: '/cfg.json' }),
-        services: [], blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
-        delivery: deliveryOk(),
-        workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
-        sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-      },
-    },
-  })
+test('the self-check never shows the iFinD API-Key itself, only its length', async () => {
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const env = {
-    ok: true, platform: 'darwin-arm64',
-    packageIntegrity: packagesOk(),
-    runtime: runtimeOk(),
-    external: externalOk({ path: '/cfg.json' }),
-    services: [], blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
-    delivery: deliveryOk(),
-    workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
-    sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
+  const env = okEnvBody()
+  const paneProps = envPaneProps(env)
+  const { tree } = render(EnvironmentPane, paneProps)
+  // 一次只渲染**当前步骤**的正文：就绪时默认停在最后一步（工作空间），所以先切到 iFinD 那一步。
+  assert.equal(
+    findAll(tree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 0,
+    '别的步骤的卡片不常驻（只渲染当前步骤）',
+  )
+  findStep(tree, 'ifind').props.onClick()
+  const after = rerender(EnvironmentPane, paneProps)
+  const text = textOf(after)
+  // iFinD 卡片只回**脱敏摘要**（长度），绝不回显 API-Key 本身。
+  assert.equal(text.includes(`${zhCN.ifindConfigured}12`), true, '只回长度')
+  assert.equal(text.includes('your ifind-mcp key'), false, '不得出现占位符或任何密钥内容')
+  assert.equal(text.includes(zhCN.envIfindNeverAsk), true, '要明说不要把 API-Key 贴进对话')
+  // 输入框永远是空的（已保存的 API-Key 不会回填到输入框）。
+  for (const input of collectInputs(after)) {
+    assert.notEqual(input.props?.value, 'abcdefghijkl', 'API-Key 绝不回填到输入框')
   }
-  const paneProps = {
-    env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {},
-    services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptMessage: '',
-  }
-  const first = render(EnvironmentPane, paneProps)
-  assert.equal(textOf(first.tree).includes('长度 12'), false, '全就绪的层默认收起，摘要要点开才看')
-  expandLayer(first.tree, zhCN.envLayerExternal)
-  const text = textOf(rerender(EnvironmentPane, paneProps))
-  assert.equal(text.includes('长度 12'), true)
-  assert.equal(text.includes('your ifind-mcp key'), false)
 })
 
 test('an unmounted self-check never writes late state', async () => {
@@ -948,16 +980,17 @@ function findByClass(node, className) {
 }
 
 /**
- * 点开某一层的卡片头（`title` 是层标题的一部分，如 zhCN.envLayerPackages）。
+ * 点开维护者诊断（新结构里**唯一**的收起区；账号 / 交付 / 工作空间三块常驻可见）。
  *
- * 全就绪的层默认收成一行 `x/y 已就绪`，所以想断言层里的路径/版本，得先像用户那样点开。
+ * 旧版是"点开某一层"，新版把技术细节收进一个「维护者诊断」折叠区，所以断言里要展开的是它。
  */
-function expandLayer(tree, title) {
+function expandMaintenance(tree) {
   const head = find(tree, (node) => node.type === 'button'
-    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.layerHead)
-    && textOf(node).includes(title))
-  assert.ok(head, `找不到「${title}」这层的卡片头`)
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.detailsHead)
+    && textOf(node).includes(zhCN.envGroupMaintenance))
+  assert.ok(head, '环境信息页要有「维护者诊断」折叠区')
   head.props.onClick()
+  return head
 }
 
 /** 点开页脚的「排查详情」（维护者信息默认收起）。 */
@@ -971,8 +1004,18 @@ function expandDetails(tree) {
 function countButtonsLike(node, label) {
   if (node === null || typeof node !== 'object') return 0
   if (Array.isArray(node)) return node.reduce((sum, child) => sum + countButtonsLike(child, label), 0)
-  const self = node.type === 'button' && textOf(node) === label ? 1 : 0
+  // 按钮里可能是**多个子节点**（图标 + 文案 / 两段文案），`textOf` 只取第一个子节点，
+  // 用它当判据会漏掉「展开 / 收起」这种双段按钮 —— 这里取整棵子树的文本。
+  const self = node.type === 'button' && textOfAll(node).trim().includes(label) ? 1 : 0
   return self + countButtonsLike(node.props?.children, label)
+}
+
+/** 整棵子树的文本（`textOf` 只取第一个子节点，做"按钮里写了什么"的判据时不够）。 */
+function textOfAll(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOfAll).join('')
+  return textOfAll(node.props?.children)
 }
 
 function findButtonLike(node, label) {
@@ -986,6 +1029,24 @@ function findButtonLike(node, label) {
   }
   if (node.type === 'button' && textOf(node) === label) return node
   return findButtonLike(node.props?.children, label)
+}
+
+/**
+ * 按 `data-crwu-env-step` 找一个步骤导航按钮。
+ *
+ * 不能用 `findButtonLike(tree, zhCN.envStepOss)`：导航按钮里除了步骤标题还有状态词
+ * （已完成 / 待处理 / 进行中），整段文本是「阿里云 OSS已完成」，与纯标题不相等。
+ * 步骤导航自己给了稳定的 `data-crwu-env-step`，按它找最可靠（也是它存在的理由）。
+ */
+function findStep(tree, id) {
+  const node = find(tree, (item) => item.props?.['data-crwu-env-step'] === id)
+  assert.ok(node, `环境页要有「${id}」这一步的导航按钮`)
+  return node
+}
+
+/** 步骤导航上某一步的状态（`done` / `todo` / `doing`）。 */
+function stepStateOf(tree, id) {
+  return findStep(tree, id).props['data-state']
 }
 
 // ── ① 工作空间卡片（案例根目录是发起审核的前置条件）──────────────────────────
@@ -1023,7 +1084,7 @@ test('a stale host build is called out and blocks starting audits', async () => 
   // 客户端随页面刷新就换新，宿主只有重启 profile 才换。不同代时必须**明说 + 停发起审核**：
   // 否则界面是新的、逻辑是旧的（审核会按老规则挂到「当前会话」下），用户只会看到「还是挂错位置」。
   stubOps({
-    boot: { body: { ok: true, protocol: 1, parentSessionId: '' } },
+    boot: { body: bootOk({ protocol: 1 }) },
     env: { body: okEnvBody() },
     pending: { body: { ok: true, error: '', rows: [PENDING_TASK], formName: '报告审核', page: 1, size: 20, total: 1, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
     'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { key: '', childId: '', since: 0 } } },
@@ -1061,7 +1122,7 @@ test('点「查看报告」送的是交付件的 htmlKey，而且「没打开」
   //    点下去毫无反应。两半都要闭住。
   let sentKey = ''
   stubOps({
-    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, parentSessionId: '' } },
+    boot: { body: bootOk({ parentSessionId: '' }) },
     env: { body: okEnvBody() },
     pending: { body: { ok: true, error: '', rows: [PENDING_TASK], formName: '报告审核', page: 1, size: 20, total: 1, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
     'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { key: '', childId: '', since: 0 } } },
@@ -1208,6 +1269,7 @@ test('the workspace card does not react to which session you came from', async (
   assert.equal(text.includes('/cases/a'), true, '选定后要显示案例根目录')
   assert.equal(text.includes('不是同一个'), false, '① 不再拿当前会话说事')
   assert.equal(text.includes('的会话中打开工作台'), false, '那个「在 X 的会话中打开」按钮也一起删掉了')
+  assert.equal(text.includes('在新会话中打开'), false, '「在新会话中打开」按钮也已删除')
   assert.equal(text.includes(zhCN.wsChange), true, '「更换工作空间」仍在')
 })
 
@@ -1242,17 +1304,29 @@ test('the workspace card offers 恢复自动识别 only after a manual choice', 
   assert.equal(textOf(manifest.tree).includes(zhCN.wsAuto), false)
 })
 
-// ── ⑥ OSS 授权表单（Host 有实现但一直没有入口 = 等于不存在）──────────────────
+// ── ⑤ 阿里云 AK 表单（Host 有实现但一直没有入口 = 等于不存在）──────────────────
 
 test('the AK form refuses an incomplete credential pair before calling the Host', async () => {
   const ops = stubOps({})
-  const { OssAuthCard } = await import(new URL('src/client/features/environment/OssAuthCard.tsx', ROOT).href)
-  const { tree } = render(OssAuthCard, { cred: null, defaultEndpoint: '', onRefresh: () => {} })
-  const saveButton = findButtonLike(tree, zhCN.ossCredSave)
-  assert.ok(saveButton, '要有「保存并实测」按钮')
-  saveButton.props.onClick()
+  const { OssCredCard } = await import(new URL('src/client/features/environment/OssCredCard.tsx', ROOT).href)
+  // 没保存过 AK 时卡片才画表单（已保存时只给掩码 + 「替换 AccessKey」）。
+  const { tree } = render(OssCredCard, { delivery: deliveryUnsaved(), onSaved: () => {} })
+  const saveButton = findButtonLike(tree, zhCN.envOssSubmit)
+  assert.ok(saveButton, '要有「保存并验证」按钮')
+  assert.equal(saveButton.props.disabled, true, '两个字段都空时按钮必须禁用')
+  // 两个字段各有**真实 label**（窄窗口里纵向排布，不靠 placeholder 认字段）。
+  const labels = findAll(tree, (node) => node.type === 'label').map((node) => textOf(node))
+  assert.deepEqual(labels, [zhCN.envOssAkLabel, zhCN.envOssSkLabel], 'AK 表单要有 AccessKey ID / AccessKey Secret 两个带 label 的字段')
   for (let i = 0; i < 4; i += 1) await settle()
   assert.deepEqual(ops, [], '两个字段都空时不该发请求')
+  // 只填一半也不许发（半份凭据写下去会让 ossutil 报一个与根因无关的错）。
+  const { instance } = render(OssCredCard, { delivery: deliveryUnsaved(), onSaved: () => {} })
+  instance.state[0] = 'AKID1234567890'
+  instance.cursor = 0
+  const half = findButtonLike(rerender(OssCredCard, { delivery: deliveryUnsaved(), onSaved: () => {} }), zhCN.envOssSubmit)
+  assert.equal(half.props.disabled, true, '只填 ID 时按钮仍必须禁用')
+  for (let i = 0; i < 4; i += 1) await settle()
+  assert.deepEqual(ops, [], '半份凭据不该发请求')
 })
 
 test('the AK form posts the credential and never keeps the secret in state', async () => {
@@ -1268,18 +1342,20 @@ test('the AK form posts the credential and never keeps the secret in state', asy
       },
     }
   }
-  const { OssAuthCard } = await import(new URL('src/client/features/environment/OssAuthCard.tsx', ROOT).href)
+  const { OssCredCard } = await import(new URL('src/client/features/environment/OssCredCard.tsx', ROOT).href)
   let refreshed = 0
-  const { tree, instance } = render(OssAuthCard, { cred: null, onRefresh: () => { refreshed += 1 } })
+  const props = { delivery: deliveryUnsaved(), onSaved: () => { refreshed += 1 } }
+  const { tree, instance } = render(OssCredCard, props)
   // 填表：直接改 state（替身没有真实 DOM 事件）。
   const inputs = collectInputs(tree)
   // 表单**只有** ID / Secret：STS 与 endpoint 已从员工视野删掉（endpoint 由 Host 回落部署配置）。
   assert.equal(inputs.length, 2, 'AK 表单只有 AccessKey ID 与 AccessKey Secret 两个输入框')
+  assert.deepEqual(inputs.map((input) => input.props.name), ['crwu-oss-ak', 'crwu-oss-sk'])
   instance.state[0] = 'AKID1234567890'
   instance.state[1] = 'TOPSECRET'
   instance.cursor = 0
-  const filled = rerender(OssAuthCard, { cred: null, onRefresh: () => { refreshed += 1 } })
-  findButtonLike(filled, zhCN.ossCredSave).props.onClick()
+  const filled = rerender(OssCredCard, props)
+  findButtonLike(filled, zhCN.envOssSubmit).props.onClick()
   for (let i = 0; i < 6; i += 1) await settle()
   assert.equal(posts.length, 1)
   assert.equal(posts[0].op, 'oss-cred-save')
@@ -1306,33 +1382,32 @@ test('the AK form shows the probe result instead of claiming success on a mere f
       },
     }
   }
-  const { OssAuthCard } = await import(new URL('src/client/features/environment/OssAuthCard.tsx', ROOT).href)
-  const { tree, instance } = render(OssAuthCard, { cred: null, defaultEndpoint: '', onRefresh: () => {} })
+  const { OssCredCard } = await import(new URL('src/client/features/environment/OssCredCard.tsx', ROOT).href)
+  const props = { delivery: deliveryUnsaved(), onSaved: () => {} }
+  const { tree, instance } = render(OssCredCard, props)
   instance.state[0] = 'AK'
   instance.state[1] = 'SK'
   instance.cursor = 0
-  const filled = rerender(OssAuthCard, { cred: null, defaultEndpoint: '', onRefresh: () => {} })
-  findButtonLike(filled, zhCN.ossCredSave).props.onClick()
+  const filled = rerender(OssCredCard, props)
+  findButtonLike(filled, zhCN.envOssSubmit).props.onClick()
   for (let i = 0; i < 6; i += 1) await settle()
-  const after = rerender(OssAuthCard, { cred: null, defaultEndpoint: '', onRefresh: () => {} })
-  const text = textOf(after)
-  assert.equal(text.includes(zhCN.ossCredProbeFailed), true, '实测没过就必须说没过')
-  assert.equal(text.includes('AccessDenied'), true)
+  const text = textOf(rerender(OssCredCard, props))
+  // 「写进文件了」不算成功：实测失败时界面必须显示失败原因（Host 的原文）。
+  assert.equal(text.includes('AccessDenied'), true, '实测没过就必须说没过')
+  assert.equal(text.includes(zhCN.envOssSaved), false, '不得在实测失败时说"已保存并验证通过"')
   void tree
 })
 
 test('the AK card shows only masked credentials from the Host', async () => {
   stubOps({})
-  const { OssAuthCard } = await import(new URL('src/client/features/environment/OssAuthCard.tsx', ROOT).href)
-  const { tree } = render(OssAuthCard, {
-    cred: { path: '/Users/x/.ossutilconfig', exists: true, endpoint: 'oss-cn-x.aliyuncs.com', accessKeyIdMasked: 'AKID****7890', hasSecret: true, hasSts: false, language: 'CH' },
-    defaultEndpoint: 'oss-cn-x.aliyuncs.com',
-    onRefresh: () => {},
-  })
+  const { OssCredCard } = await import(new URL('src/client/features/environment/OssCredCard.tsx', ROOT).href)
+  const { tree } = render(OssCredCard, { delivery: deliveryOk(), onSaved: () => {} })
   const text = textOf(tree)
   assert.equal(text.includes('AKID****7890'), true, '只展示掩码后的 AK ID')
-  assert.equal(text.includes(zhCN.ossCredWritten), true)
-  assert.equal(text.includes(zhCN.ossCredConfigured), true)
+  assert.equal(text.includes('TOPSECRET'), false, '绝不回显 Secret')
+  // 输入框永远是空的（已保存的密钥只以掩码呈现，不会再填回输入框）。
+  const inputs = collectInputs(tree)
+  assert.equal(inputs.every((input) => input.props?.value === ''), true, '输入框不得带出已保存的密钥')
 })
 
 /** 收集树里所有表单控件（input 与 textarea）。 */
@@ -1349,20 +1424,38 @@ function collectInputs(node, found = []) {
 
 // ── 氚云授权开关与免沙箱重试（Host 的提权链路要有人能开）──────────────────────
 
-test('未授权时插件被授权弹框挡住：拒绝 → 说明与「再次授权」；同意 → 落盘并重检', async () => {
-  // 口径（用户 2026-09-22）：授权是**插件级硬前置** —— 不是环境自检里的一行勾选框。
-  // 未授权先弹框挡住整个面板；拒绝后给一屏说明 + 「再次授权」；同意才落盘（持久）。
+test('未授权时不再用模态遮罩，而是「账号连接」里的第一行：同意 → 落盘并重检', async () => {
+  // 口径（2026-09-26 改）：授权**仍然**是插件级硬前置（Host 侧未授权一律拒绝），
+  // 但界面上不再用一个模态层遮住整个环境页 —— 员工口径是「不要让一个模态层遮住整个环境页」。
+  // 现在它是「账号连接」分组里的第一行，一步就能点完。
   const posts = []
   let granted = false
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body)
     posts.push(body)
-    const envBody = { ...okEnvBody(), trust: { credentials: granted } }
+    const envBody = { ...okEnvBody(), trust: { credentials: granted },
+      state: stateBody({
+        status: granted ? 'ready' : 'action-required',
+        proceed: granted,
+        allOk: granted,
+        passed: granted ? 8 : 7,
+        userSetup: {
+          ...stateBody().userSetup,
+          credentialsConsent: granted
+            ? { state: 'ok', value: '', reason: '', required: true }
+            : { state: 'unconfigured', value: '', reason: '还没有授权读取本机凭据', required: true },
+        },
+        issues: granted ? [] : [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '授权读取本机凭据', message: '授权读取本机凭据（氚云 / 钉钉）' }],
+        blocked: granted ? [] : ['授权读取本机凭据（氚云 / 钉钉）'],
+      }) }
     return {
       ok: true,
       status: 200,
       async json() {
         if (body.op === 'trust') { granted = true; return { ok: true, trust: { credentials: true } } }
+        // `boot` 必须回当前协议号：否则客户端会按「宿主是旧构建」拦下一切发起类操作，
+        // 断言就会落在"请重启 profile"那一屏上（这正是协议号存在的意义）。
+        if (body.op === 'boot') return bootOk()
         return envBody
       },
     }
@@ -1370,44 +1463,71 @@ test('未授权时插件被授权弹框挡住：拒绝 → 说明与「再次授
   const services = fakeServices()
   const { tree } = await mountChecked(services)
   const before = textOf(tree)
-  assert.equal(before.includes(zhCN.authTitle), true, '未授权必须先弹授权框')
-  assert.equal(before.includes(zhCN.authWhat), true, '要讲清「要什么」')
-  assert.equal(before.includes(zhCN.authWhy), true, '要讲清「为什么需要」')
-  assert.equal(before.includes(zhCN.authNo), true, '要讲清「不会做什么」')
+  // 未授权时**不进入**报告审核（Host 侧也会拒绝），停在环境页并说清为什么。
+  assert.equal(before.includes(zhCN.tabPending), false, '未授权不该进报告审核')
+  assert.equal(before.includes(zhCN.envConsentTitle), true, '授权必须是「账号连接」里可见的一行')
+  assert.equal(before.includes(zhCN.envConsentWhy), true, '要讲清为什么需要授权')
+  assert.equal(before.includes(zhCN.envConsentAgree), true, '要有「同意并继续」')
 
-  const decline = findButtonLike(tree, zhCN.authDecline)
-  assert.ok(decline, '弹框要有「拒绝」')
-  decline.props.onClick()
-  const declined = rerender(WorkbenchPanel, { services })
-  assert.equal(textOf(declined).includes(zhCN.authDeclinedTitle), true, '拒绝后要有说明屏')
-  const regrant = findButtonLike(declined, zhCN.authRegrant)
-  assert.ok(regrant, '说明屏要有「再次授权」')
-  assert.equal(posts.some((post) => post.op === 'trust'), false, '拒绝不落盘')
-
-  regrant.props.onClick()
-  assert.equal(textOf(rerender(WorkbenchPanel, { services })).includes(zhCN.authAgree), true, '再次授权要能回到弹框')
-
-  const agree = findButtonLike(rerender(WorkbenchPanel, { services }), zhCN.authAgree)
-  assert.ok(agree, '弹框要有「同意并继续」')
+  const agree = findButtonLike(tree, zhCN.envConsentAgree)
+  assert.ok(agree, '授权行要有「同意并继续」')
   agree.props.onClick()
   await new Promise((resolve) => { setTimeout(resolve, 0) })
   const trustPost = posts.find((post) => post.op === 'trust')
   assert.ok(trustPost, '同意要真的发 trust 操作')
   assert.deepEqual(trustPost.args, { credentials: true })
+  // 授权成功会再跑一次自检；替身不会按依赖重跑 effect，所以这里显式再跑一轮
+  // （真实 React 里由 store 通知 + 依赖变化自己触发）。
+  await flushEffects(globalThis.__crwuTestInstance)
   const after = textOf(rerender(WorkbenchPanel, { services }))
-  assert.equal(after.includes(zhCN.authTitle), false, '授权后弹框消失')
-  // 授权后照既定门禁走：环境本来就是好的，于是直接落到报告审核页（③ 层那行「已授权…」
-  // 只在环境页出现，环境页自己的用例断言它）。
-  assert.equal(after.includes(zhCN.tabPending), true, '授权后要继续走到报告审核')
+  assert.equal(after.includes(zhCN.envConsentAgree), false, '授权后不再显示「同意并继续」')
+  // 授权后环境转为就绪；「恢复被拦下来的目标」这条行为由
+  // `client-module-gate.test.mjs` 的「重新检查通过后只恢复最近一次被拦的目标」逐条钉住
+  // （替身 React 不按依赖重跑 effect，这里断言的是环境结论本身已经翻过来了）。
+  assert.equal(after.includes(zhCN.envStatusReady), true, '授权后环境结论要翻成「已就绪」')
+  // 「已授权」那一句在**账号连接**步骤里；四项都完成时页面默认停在最后一步，
+  // 所以直接渲染环境页并切到那一步再断言（一次只渲染当前步骤的正文）。
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const paneProps = envPaneProps({ ...okEnvBody(), trust: { credentials: true } })
+  const paneTree = render(EnvironmentPane, paneProps).tree
+  findStep(paneTree, 'accounts').props.onClick()
+  const paneText = textOf(rerender(EnvironmentPane, paneProps))
+  assert.equal(paneText.includes(zhCN.envConsentAgree), false, '授权后不再显示「同意并继续」')
+  assert.equal(paneText.includes(zhCN.envConsentDone), true, '要显示已授权')
 })
 
-test('已授权的部署不弹框，认证层显示已满足的前置条件', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+test('已授权的部署不再显示授权入口，直接按环境结论进面板', async () => {
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
   const { tree } = await mountChecked(services)
   const shown = textOf(tree)
-  assert.equal(shown.includes(zhCN.authTitle), false, '已授权不该再弹框')
+  assert.equal(shown.includes(zhCN.envConsentAgree), false, '已授权不该再显示「同意并继续」')
   assert.equal(shown.includes(zhCN.tabPending), true, '已授权就直接按环境结论进面板')
+})
+
+test('授权被拒绝：说明 + 「重新授权」，且拒绝不落盘', async () => {
+  let posts = 0
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body)
+    if (body.op === 'trust') posts += 1
+    return { ok: true, status: 200, async json() {
+      if (body.op === 'boot') return bootOk()
+      // 未授权：模型必须**如实**说需要员工先授权（Host 侧也会拒绝发起审核）。
+      return { ...okEnvBody(), trust: { credentials: false }, state: stateBody({
+        status: 'action-required', proceed: false, allOk: false, passed: 7, total: 9,
+        userSetup: { ...stateBody().userSetup, credentialsConsent: { state: 'unconfigured', value: '', reason: '还没有授权读取本机凭据', required: true } },
+        issues: [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '授权读取本机凭据', message: '授权读取本机凭据（氚云 / 钉钉）' }],
+        blocked: ['授权读取本机凭据（氚云 / 钉钉）'],
+      }) }
+    } }
+  }
+  const services = fakeServices()
+  const { tree } = await mountChecked(services)
+  const consent = find(tree, (node) => node.props?.['data-crwu-env-item'] === 'consent')
+  assert.ok(consent, '未授权要有那一行（账号连接里的一行，不是模态层）')
+  // 未授权时进不去报告审核（Host 侧也会拒绝）。
+  assert.equal(textOf(tree).includes(zhCN.tabPending), false)
+  assert.equal(posts, 0, '没点同意就不该发 trust')
 })
 
 test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是「没挂到我的工作空间里」）', async () => {
@@ -1421,21 +1541,20 @@ test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是�
     delivery: deliveryOk(),
     workspace: { chosen: true, path: '/Users/mungdong/中瑞世联工作空间', title: '中瑞世联工作空间', id: 'w1', source: 'manifest-workspace', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
+    state: stateBody(),
   }
   const props = (env) => ({
-    env, error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
+    env, error: '', busy: false, onRefresh: () => {},
     onRelogin: () => {}, onDwsLogin: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
-    onPromptRefresh: () => {}, onPromptCopied: () => {},
   })
   const ROOT_WORKSPACE = '/Users/mungdong/中瑞世联工作空间'
-  /** 审核根会话属于维护者信息（在页脚「排查详情」里）：先点开，再重渲染同一实例。 */
+  /** 审核根会话属于**维护者诊断**（默认收起）：先像用户那样点开，再重渲染同一实例。 */
   const rooted = (env) => {
     const paneProps = props(env)
     const collapsed = render(EnvironmentPane, paneProps)
-    assert.equal(rowValueOf(collapsed.tree, zhCN.envAuditRoot), null, '排查详情默认不展开时不该出现这一行')
-    expandDetails(collapsed.tree)
+    assert.equal(rowValueOf(collapsed.tree, zhCN.envAuditRoot), null, '维护者诊断默认不展开时不该出现这一行')
+    expandMaintenance(collapsed.tree)
     return rerender(EnvironmentPane, paneProps)
   }
 
@@ -1795,7 +1914,7 @@ test('点小鲸鱼从面板一路跳到会话：uiWorkspace.openSession 收到�
   const sessions = new FakeSessionsService()
   const opened = []
   stubOps({
-    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, parentSessionId: '' } },
+    boot: { body: bootOk({ parentSessionId: '' }) },
     env: { body: okEnvBody() },
     pending: { body: { ok: true, error: '', rows: [PENDING_TASK], formName: '报告审核', page: 1, size: 20, total: 1, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
     'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { key: '', childId: '', since: 0 } } },
@@ -1804,7 +1923,7 @@ test('点小鲸鱼从面板一路跳到会话：uiWorkspace.openSession 收到�
   })
   const services = fakeServices({ sessions, uiWorkspace: { openSession: (id) => { opened.push(id) } } })
   const modules = createModuleStore()
-  modules.select('audit')
+  modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
   const noTimer = { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval }
   globalThis.setInterval = () => 0
   globalThis.clearInterval = () => {}
@@ -1901,73 +2020,103 @@ test('the report page shows the handoff block only when a start failed', async (
 
 // ── ⑤ 安装提示词块与 ④ iFinD 卡片 ───────────────────────────────────────────
 
-test('the prompt block shows the instruction verbatim instead of embedding the checklist', async () => {
-  stubOps({})
-  const { InstallPromptBlock } = await import(new URL('src/client/features/environment/InstallPromptBlock.tsx', ROOT).href)
-  const { tree } = render(InstallPromptBlock, {
-    prompt: '请完成本机 crwu 审核环境的安装。',
-    url: 'https://doc.invalid/install.md',
-    busy: false, message: '',
-  })
-  // 复制入口全页只有 Hero 那一枚；块里不许再有按钮（用户反馈"按钮太多且没用"）。
-  assert.equal(findButtonLike(tree, zhCN.copyPrompt), null, '提示词块不该再有复制按钮')
-  assert.equal(findButtonLike(tree, zhCN.promptRegenerate), null, '提示词块不该再有重生成按钮')
-  const inputs = collectInputs(tree)
-  assert.equal(inputs.length, 1, '提示词要放在只读输入框里，剪贴板被拒时还能手动全选')
-  assert.equal(inputs[0].props.readOnly, true)
-  assert.equal(inputs[0].props.value.includes('请完成本机 crwu 审核环境的安装'), true)
-  const text = textOf(tree)
-  assert.equal(text.includes('doc.invalid/install.md'), true, '要显示清单地址')
-  assert.equal(text.includes('可公开读取'), true, '403 是最常见的失败原因，要说明')
-})
-
-test('复制入口只有一处：Hero 上的「复制安装提示词」恰好一枚', async () => {
+test('环境页不再有「复制安装提示词」入口（那套做法已删）', async () => {
+  // 用户口径（2026-09-26）：环境页不需要这个按钮，那段提示词也不再需要。
+  // 二进制随包发布、登录与密钥都在界面上完成之后，它没有任何运行时用途，
+  // 留在页面上只会把员工指去绕路（让 Agent 代做本机的事）。
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  // 未就绪：它是主按钮（最该做的就是把它交给 Agent）。
-  const missing = render(EnvironmentPane, envPaneProps(blockedEnvBody()))
-  assert.equal(countButtonsLike(missing.tree, zhCN.envCopyInstallPrompt), 1, '未就绪时全页只该有一枚复制入口')
-  // 就绪：降为次要按钮，仍然只有一枚。
-  const ok = render(EnvironmentPane, envPaneProps(okEnvBody()))
-  assert.equal(countButtonsLike(ok.tree, zhCN.envCopyInstallPrompt), 1, '就绪时也只该有一枚复制入口')
-  // 工具项里的复制按钮、底部块的复制/重生成按钮都已删除。
-  assert.equal(countButtonsLike(ok.tree, zhCN.copyPrompt), 0, '旧的「复制提示词」按钮不该再出现')
-  assert.equal(countButtonsLike(missing.tree, zhCN.promptRegenerate), 0, '重生成按钮已删')
+  for (const env of [okEnvBody(), blockedEnvBody()]) {
+    const text = textOf(render(EnvironmentPane, envPaneProps(env)).tree)
+    for (const gone of ['复制安装提示词', '安装提示词', '重新生成', '复制提示词']) {
+      assert.equal(text.includes(gone), false, `环境页不该再出现「${gone}」`)
+    }
+  }
 })
 
 test('the iFinD card never echoes the token and points at the source when missing', async () => {
   stubOps({})
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const base = {
-    error: '', busy: false, onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
+    error: '', busy: false, onRefresh: () => {},
     onRelogin: () => {}, onDwsLogin: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
-    onPromptRefresh: () => {}, onPromptCopied: () => {},
   }
   const envBase = {
-    ok: true, platform: 'darwin-arm64', services: [], blocked: ['iFinD 密钥'], allOk: false,
+    ok: true, platform: 'darwin-arm64', services: [], blocked: [], allOk: true,
     home: '/Users/x', trust: { credentials: true },
     packageIntegrity: packagesOk(),
     runtime: runtimeOk(),
-    external: externalOk({ path: '/cfg.json', ok: false, reason: 'auth_token 为空', tokenLength: 0 }),
+    external: externalOk({
+      path: '/cfg.json', ok: false, state: 'unconfigured', dataVerified: false,
+      dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0,
+    }),
     delivery: deliveryOk(),
-    workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
+    state: stateBody(),
+    // 其它必需环境（含工作空间）保持健康，避免"workspace 未选择却 allOk=true"的自相矛盾。
+    workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
     sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
   }
-  const missing = render(EnvironmentPane, { ...base, env: envBase })
-  const text = textOf(missing.tree)
-  // ⑤ 外部数据层没就绪 → 默认展开，员工一眼看到"为什么 + 怎么配"。
-  assert.equal(text.includes(zhCN.envLayerExternal), true, '要有「⑤ 外部数据」这一层')
-  assert.equal(text.includes('auth_token 为空'), true, '要说清为什么没过')
-  assert.equal(text.includes('mcp.51ifind.com'), true, '要给出密钥来源地址')
-  assert.equal(text.includes(zhCN.envFixIfind), true, '要给出"怎么配"')
-  assert.equal(text.includes('<你的令牌>'), true, '要给字段示例')
+  // iFinD 是**必需项**（2026-09-26 产品口径）：没填就是阻塞，不再有"只有它缺失 = degraded"那一档。
+  const missingProps = { ...base, env: { ...envBase, state: stateBody({
+    status: 'action-required',
+    proceed: false,
+    allOk: false,
+    passed: 7,
+    total: 9,
+    capabilities: { global: false, auditCore: false, delivery: true, externalData: false },
+    userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '还没有保存 iFinD API-Key', required: true } },
+    issues: [{ id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据暂不可用：还没有保存 iFinD API-Key' }],
+  }) } }
+  const missingTree = render(EnvironmentPane, missingProps).tree
+  const text = textOf(missingTree)
+  assert.equal(text.includes(zhCN.envStatusReady), false, 'iFinD 没通过就不能说「环境就绪」')
+  assert.match(text, new RegExp(`${zhCN.envStatusAction}1${zhCN.envStatusActionTail}`), '要说清还差 1 项')
+  assert.equal(text.includes('还没有保存 iFinD API-Key'), true, '要说清为什么没过')
+  // 默认停在第一项未完成的步骤 —— 就是 iFinD 这一步，卡片随即可见（一次只渲染当前步骤）。
+  assert.equal(stepStateOf(missingTree, 'ifind'), 'doing', '默认停在 iFinD 这一步')
+  assert.equal(
+    findAll(missingTree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 1,
+    'iFinD 卡片在当前步骤里可见',
+  )
+  // 官方入口是**链接**（href 是属性，不在文本里）：断言链接本身与它的地址。
+  assert.equal(text.includes(zhCN.envIfindGet), true, '要给出「获取 iFinD API-Key」入口')
+  assert.equal(text.includes(zhCN.envIfindNeverAsk), true, '要明说不要让 Agent 代填')
+  const missingLink = find(missingTree, (node) => node.type === 'a')
+  assert.equal(missingLink.props.href, 'https://mcp.51ifind.com/', '链接地址必须来自 Host 下发的 applyUrl')
 
-  const okProps = { ...base, env: { ...envBase, blocked: [], allOk: true, external: externalOk({ path: '/cfg.json' }) } }
-  const okCollapsed = render(EnvironmentPane, okProps)
-  expandLayer(okCollapsed.tree, zhCN.envLayerExternal)
-  const okText = textOf(rerender(EnvironmentPane, okProps))
-  assert.equal(okText.includes(`${zhCN.ifindConfigured}12`), true, '只回长度')
+  // 认证通过 + 真的取到数据：就绪时默认停在最后一步，先切到 iFinD 那一步。
+  const okProps = { ...base, env: { ...envBase,
+    external: externalOk({ path: '/cfg.json' }),
+    state: stateBody({
+      userSetup: { ...stateBody().userSetup, ifind: { state: 'authenticated', value: '已保存（长度 12，不回显）', reason: '', required: true } },
+    }),
+  } }
+  const okTree = render(EnvironmentPane, okProps).tree
+  assert.equal(textOf(okTree).includes(zhCN.envIfindStateAuthenticated), false, '没切过去时看不到 iFinD 卡片')
+  findStep(okTree, 'ifind').props.onClick()
+  const okAfter = rerender(EnvironmentPane, okProps)
+  const okText = textOf(okAfter)
+  // 已认证 + 真的取到数据：卡片上显示「已认证」这一句结论（输入框收起）。
+  assert.equal(okText.includes(zhCN.envIfindStateAuthenticated), true, '认证通过要显示「已认证」')
+  assert.equal(okText.includes(zhCN.envIfindDataAt.trim()), true, '要显示最近真实验证时间')
+  // 状态已经验过时**不**再说「没取到数据」。
+  assert.equal(okText.includes(zhCN.envIfindNoData), false)
+  assert.equal(okText.includes('abcdefghijkl'), false, '任何情况下都不回显 API-Key')
+  assert.equal(okText.includes('你的令牌'), false, '绝不回显任何 SK 内容')
+  assert.equal(okText.includes(zhCN.envIfindGet), true, '要有「获取 iFinD API-Key」链接')
+  const link = find(okAfter, (node) => node.type === 'a')
+  assert.equal(link.props.href, 'https://mcp.51ifind.com/')
+  // 工具名与取数样本是**技术证据**：用户视图看不到，只在默认收起的「维护者诊断」里。
+  assert.equal(okText.includes('get_stock_summary'), false, '验证工具名不进用户视野')
+  assert.equal(okText.includes(zhCN.envDiagIfindSample), false, '取数样本不进用户视野')
+  const verifiedTree = render(EnvironmentPane, okProps).tree
+  expandMaintenance(verifiedTree)
+  const verifiedText = textOf(rerender(EnvironmentPane, okProps))
+  assert.equal(verifiedText.includes(zhCN.envDiagIfindTool), true, '维护者诊断里要给出验证用的工具名')
+  assert.equal(verifiedText.includes('get_stock_summary'), true, '要显示验证用的工具名')
+  assert.equal(verifiedText.includes(zhCN.envDiagIfindSample), true, '维护者诊断里要给出取数样本')
+  assert.equal(verifiedText.includes('{"value":42}'), true, '取数摘要要显示（脱敏后的人工核对证据）')
+  assert.equal(verifiedText.includes('abcdefghijkl'), false, '任何情况下都不回显 API-Key')
 })
 
 // ── 环境自检的门禁与右上角指示灯 ────────────────────────────────────────────
@@ -2013,7 +2162,16 @@ function runtimeOk(patch = {}) {
 
 /** ⑥ 外部数据（iFinD）的就绪形状。 */
 function externalOk(patch = {}) {
-  return { path: '/Users/x/cfg.json', required: true, ok: true, reason: '', tokenLength: 12, ...patch }
+  // `applyUrl` 是 Host 下发的官方入口（协议 13 新增）：界面上的「获取 iFinD API-Key」链接用它，
+  // 插件不自己拼地址、更不代填。
+  // `dataVerified` 是**真的取到数据**（协议 14 起每次环境校验都做一次取数验证）——
+  // 夹具默认按"验过了"给，专门测"没取到数据"的用例显式覆盖它。
+  return {
+    path: '/Users/x/cfg.json', required: false, ok: true, state: 'authenticated', errorKind: '',
+    reason: '', tokenLength: 12, checkedAt: '2026-09-26T10:00:00.000Z', toolCount: 3,
+    dataVerified: true, dataTool: 'get_stock_summary', dataSample: '{"value":42}',
+    applyUrl: 'https://mcp.51ifind.com/', ...patch,
+  }
 }
 
 /** ⑤ OSS 交付配置的就绪形状：AK 写好且实测通过。 */
@@ -2033,7 +2191,61 @@ function deliveryOk(patch = {}) {
   }
 }
 
-/** 一份全通过的 env 应答（真实字段名取自 Host 的 `EnvResult`：六个分区 + 工作空间）。 */
+/**
+ * ⑤ 还没保存过 AK 的交付形状（`OssCredCard` 只在**没保存**或点了「替换」时才画表单）。
+ *
+ * 3 条表单用例测的是「填表 → 提交」这条链，所以夹具必须让输入框真的出现；
+ * 已保存态由 `deliveryOk()` 覆盖（那时只给掩码，没有输入框）。
+ */
+function deliveryUnsaved(patch = {}) {
+  return deliveryOk({
+    ossCred: {
+      path: '/Users/x/.ossutilconfig', exists: false, endpoint: '', accessKeyIdMasked: '',
+      hasSecret: false, hasSts: false, language: '',
+    },
+    probe: { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true, ok: false, state: '未配置', detail: '' },
+    ...patch,
+  })
+}
+
+/**
+ * 统一环境模型（协议 13 的 `env.state`）。
+ *
+ * 界面**只读它**做结论（结论 / 通过率 / 门禁），所以测试夹具必须带上它 —— 缺了它界面会按
+ * 「旧宿主」处理（不放行），那正是协议号存在的意义。
+ */
+function stateBody(patch = {}) {
+  const item = (state, extra = {}) => ({ state, value: '', reason: '', required: true, ...extra })
+  return {
+    status: 'ready',
+    proceed: true,
+    userSetup: {
+      workspace: item('ok', { value: '/cases/a' }),
+      credentialsConsent: item('ok'),
+      h3yun: item('ok', { value: 'userId u1' }),
+      dingtalk: item('ok'),
+      aliyunOss: item('ok', { value: 'AKID****7890 · AK 正常' }),
+      // iFinD 自 2026-09-26 起是必需项（`required: true`，进必需项分母）。
+      ifind: item('authenticated', { value: 'API-Key 已保存（长度 12，不回显）' }),
+    },
+    systemHealth: {
+      packageIntegrity: item('ok'),
+      dshRuntime: item('ok'),
+      platform: item('ok'),
+      toolRegistry: item('unverified', { required: false }),
+    },
+    capabilities: { global: true, auditCore: true, delivery: true, externalData: true },
+    issues: [],
+    passed: 9,
+    total: 9,
+    blocked: [],
+    allOk: true,
+    checkError: '',
+    ...patch,
+  }
+}
+
+/** 一份全通过的 env 应答（真实字段名取自 Host 的 `EnvResult`：六个分区 + 工作空间 + state）。 */
 function okEnvBody(patch = {}) {
   return {
     ok: true, configSource: '/tmp/test-crwu-workbench.yml', platform: 'darwin-arm64',
@@ -2047,15 +2259,26 @@ function okEnvBody(patch = {}) {
     sessionWorkspace: { parentSessionId: 'p1', sessionCwd: '/cases/a', workspaceId: 'w1', workspacePath: '/cases/a', workspaceTitle: 'A' },
     // 「我是谁」跟着自检一起回来；默认空姓名 = 头部那句问候整句不展示。
     me: { name: '', org: '', userId: '' },
+    state: stateBody(),
     ...patch,
   }
 }
 
-/** 一份不通过的 env 应答：平台没识别、工作空间没选定。 */
+/** 一份不通过的 env 应答：工作空间没选定（员工要处理的那一类）。 */
 function blockedEnvBody(patch = {}) {
+  const state = stateBody({
+    status: 'action-required', proceed: false, allOk: false,
+    passed: 7, total: 8,
+    capabilities: { global: false, auditCore: false, delivery: true, externalData: true },
+    userSetup: { ...stateBody().userSetup, workspace: { state: 'unconfigured', value: '', reason: '未找到工作空间「中瑞世联工作空间」，请手动选择', required: true } },
+    issues: [{ id: 'workspace', owner: 'user', blocking: true, scope: 'global', action: '选择案例根目录', message: '未找到工作空间「中瑞世联工作空间」，请手动选择' }],
+    blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择'],
+  })
   return okEnvBody({
-    allOk: false, platform: '',
-    blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
+    allOk: false,
+    blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择'],
+    workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
+    state,
     ...patch,
   })
 }
@@ -2078,13 +2301,15 @@ async function mountChecked(services = fakeServices()) {
   const modules = createModuleStore()
   const rendered = render(WorkbenchPanel, { services, modules })
   await flushEffects(rendered.instance)
+  // 自检落地 → 再跑一轮 effect（`envChanged` 那一支依赖已就绪的 env；
+  // 替身不会按依赖自动重跑，所以这里显式多跑一轮），然后才渲染出最终形态。
   rerender(WorkbenchPanel, { services, modules })
   await flushEffects(rendered.instance)
   return { tree: rerender(WorkbenchPanel, { services, modules }), instance: rendered.instance, modules }
 }
 
 test('a passing self-check goes straight into the report page', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const { tree } = await mountChecked()
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.tabPending), true, '自检通过就直接进报告审核')
@@ -2098,7 +2323,7 @@ test('标题旁的小标签：装好的包显示具体版本（悬停看形态�
   stubOps({
     boot: {
       body: {
-        ok: true, protocol: WORKBENCH_PROTOCOL, rev: 'pkg-9.9.9', version: '9.9.9',
+        rev: 'pkg-9.9.9', version: '9.9.9',
         buildKind: 'installed', builtAt: '2026-09-20T10:00:00.000Z',
       },
     },
@@ -2116,7 +2341,7 @@ test('标题旁的小标签：装好的包显示具体版本（悬停看形态�
 
 test('dev 形态在标题旁标 dev（琥珀色），而不是假装成某个版本', async () => {
   stubOps({
-    boot: { body: { ok: true, protocol: WORKBENCH_PROTOCOL, rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'dev' } },
+    boot: { body: bootOk({ rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'dev' }) },
     env: { body: okEnvBody() },
   })
   const { tree } = await mountChecked()
@@ -2128,7 +2353,7 @@ test('dev 形态在标题旁标 dev（琥珀色），而不是假装成某个版
 })
 
 test('旧宿主不报版本时退回 rev，仍有标签而不是留空', async () => {
-  stubOps({ boot: { body: { ok: true, rev: 'pkg-1.2.3' } }, env: { body: okEnvBody() } })
+  stubOps({ boot: { body: bootOk({ rev: 'pkg-1.2.3' }) }, env: { body: okEnvBody() } })
   const { tree } = await mountChecked()
   const chip = find(tree, (node) => typeof node.props?.className === 'string'
     && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
@@ -2137,39 +2362,93 @@ test('旧宿主不报版本时退回 rev，仍有标签而不是留空', async (
 })
 
 test('旧宿主什么都不报时显示「未知」，而不是空标签', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const { tree } = await mountChecked()
   const chip = find(tree, (node) => typeof node.props?.className === 'string'
     && node.props.className.includes(`${WORKBENCH_CLASSES.version} `))
   assert.equal(textOf(chip), zhCN.buildTagUnknown)
 })
 
-test('a failing self-check blocks the report page behind a loading state', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { body: blockedEnvBody() } })
+test('a failing self-check blocks the report page and lands on the environment page', async () => {
+  stubOps({ boot: { body: bootOk() }, env: { body: blockedEnvBody() } })
   const services = fakeServices()
-  const { tree } = await mountChecked(services)
-  assert.equal(textOf(tree).includes(zhCN.tabPending), false, '没通过就不能进报告审核')
-  assert.equal(textOf(tree).includes(zhCN.envHeroBad), true, '要明说没通过')
+  const { tree, modules } = await mountChecked(services)
+  const text = textOf(tree)
+  assert.equal(text.includes(zhCN.tabPending), false, '没通过就不能进报告审核')
+  // 结论卡必须说清"还差几项"，并且**唯一**主动作是「重新检查」（而不是把用户送去别处找按钮）。
+  assert.match(text, new RegExp(`${zhCN.envStatusAction}1${zhCN.envStatusActionTail}`), '要说清还差 1 项')
+  assert.equal(text.includes(zhCN.envActionRecheck), true, '主动作是重新检查')
+  // 环境页上**没有**「进入报告审核」按钮（统一导航负责跳转，就绪时也只留一句提示）。
+  assert.equal(countButtonsLike(tree, '进入报告审核'), 0, '不通过时更不该有「进入报告审核」按钮')
+  assert.equal(text.includes('进入报告审核'), false, '环境页正文里不许出现这个动作')
+  assert.equal(text.includes('未找到工作空间「中瑞世联工作空间」，请手动选择'), true, '要说清差什么')
 
-  const entry = findButtonLike(tree, zhCN.enterReport)
-  assert.ok(entry, '环境自检页要留「进入报告审核」入口 —— 不通过时由 loading 拦住，而不是把按钮藏掉')
-  entry.props.onClick()
-  const running = rerender(WorkbenchPanel, { services })
-  assert.equal(textOf(running).includes(zhCN.gateRunningTitle), true, '点下去先用 loading 拦住')
+  // 用户从任意入口想去报告审核：**不进入**目标页，落到环境页并记下被拦的目标。
+  const verdict = modules.navigate('audit', { state: environmentStateOf(blockedEnvBody()) })
+  assert.equal(verdict.blocked, true, '自检没过时统一导航必须拦住')
+  assert.equal(textOf(rerender(WorkbenchPanel, { services, modules })).includes(zhCN.tabPending), false, '报告页不许出来')
+  assert.equal(modules.get().pendingTarget, 'audit', '要记下被拦下来的目标')
 
+  // 在环境页点「重新检查」：先用 loading 拦住；这次仍然不通过 → 留在环境页，
+  // 状态摘要里给出「进入【报告审核】前…」这条轻提示（不再是一张独立大卡）。
+  findButtonLike(tree, zhCN.envActionRecheck).props.onClick()
+  const running = rerender(WorkbenchPanel, { services, modules })
+  assert.equal(textOf(running).includes(zhCN.envGateRunningTitle), true, '点下去先用 loading 拦住')
   for (let i = 0; i < 6; i += 1) await settle()
-  const after = rerender(WorkbenchPanel, { services })
-  const text = textOf(after)
-  assert.equal(text.includes(zhCN.gateBlockedTitle), true, '自检没过就停在这一页并说明被拦住了')
-  assert.equal(text.includes(zhCN.tabPending), false, '报告页不许出来')
+  const after = rerender(WorkbenchPanel, { services, modules })
+  assert.equal(textOf(after).includes(zhCN.tabPending), false, '报告页不许出来')
+  const blockedNote = find(after, (node) => node.props?.['data-crwu-env-gate'] === 'blocked')
+  assert.ok(blockedNote, '要说明被拦住了（状态摘要里的一条轻提示）')
+  assert.equal(textOf(blockedNote).includes(zhCN.moduleAudit), true, '要说清拦的是哪一页')
 })
 
+test('iFinD 未通过时：侧栏点报告审核立刻被拦回环境页，并当场给出指名 API-Key 的说明', async () => {
+  // 这条盯的是"拦截说明不用等用户再点一次重新检查"：
+  // 说明直接读统一导航层记下的 `gateReason`（`mod.blocked` + `pendingTarget`）。
+  stubOps({ boot: { body: bootOk() }, env: { body: ifindBlockedEnvBody() } })
+  const services = fakeServices()
+  const { tree, modules } = await mountChecked(services)
+  assert.equal(textOf(tree).includes(zhCN.tabPending), false, '没通过就不能进报告审核')
+  assert.equal(find(tree, (node) => node.props?.['data-crwu-env-gate'] === 'blocked'), null, '还没被拦过就不该有说明')
+  // 模拟"从侧栏子项点报告审核"：统一导航层是**唯一**入口，面板自己不做页面内特判。
+  modules.navigate('audit', { state: environmentStateOf(ifindBlockedEnvBody()) })
+  const after = rerender(WorkbenchPanel, { services, modules })
+  const note = find(after, (node) => node.props?.['data-crwu-env-gate'] === 'blocked')
+  assert.ok(note, '被拦的那一刻就要有拦截说明')
+  // 指名到项：iFinD 未通过时门禁把话说具体，页面不许把它换成通用文案。
+  assert.match(textOf(note), /进入【报告审核】前，请先完成 iFinD API-Key 验证/, textOf(note))
+  assert.equal(textOf(after).includes(zhCN.tabPending), false, '报告页不许出来')
+})
+
+/** iFinD 未通过（必检项阻塞）的环境应答：其它必需项都过，只有 API-Key 没填。 */
+function ifindBlockedEnvBody() {
+  const state = stateBody({
+    status: 'action-required', proceed: false, allOk: false,
+    passed: 8, total: 9,
+    capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
+    userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '还没有保存 iFinD API-Key', required: true } },
+    issues: [
+      { id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD API-Key 未通过验证：还没有保存 iFinD API-Key' },
+      { id: 'ifind-external', owner: 'user', blocking: true, scope: 'external-data', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据不可用：还没有保存 iFinD API-Key' },
+    ],
+    blocked: ['iFinD API-Key 未通过验证：还没有保存 iFinD API-Key'],
+  })
+  return okEnvBody({
+    allOk: false,
+    blocked: ['iFinD API-Key 未通过验证：还没有保存 iFinD API-Key'],
+    external: externalOk({
+      path: '/cfg.json', ok: false, state: 'unconfigured', dataVerified: false,
+      dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0, checkedAt: '',
+    }),
+    state,
+  })
+}
+
 test('after the environment is fixed the blocked entry lets the user through', async () => {
-  // 挂载时那次自检不通过（面板现在**只在还没有结论时**补跑一次，见 WorkbenchPanel 的挂载 effect），
-  // 用户修好之后再点「进入报告审核」应当现场重检并放行。
+  // 挂载时那次自检不通过，用户修好之后再点「重新检查」应当现场重检并放行。
   let calls = 0
   stubOps({
-    boot: { body: { ok: true } },
+    boot: { body: bootOk() },
     env: () => {
       calls += 1
       return { body: calls <= 1 ? blockedEnvBody() : okEnvBody() }
@@ -2179,10 +2458,14 @@ test('after the environment is fixed the blocked entry lets the user through', a
   const { tree } = await mountChecked(services)
   assert.equal(textOf(tree).includes(zhCN.tabPending), false)
 
-  findButtonLike(tree, zhCN.enterReport).props.onClick()
+  findButtonLike(tree, zhCN.envActionRecheck).props.onClick()
   for (let i = 0; i < 6; i += 1) await settle()
-  const after = rerender(WorkbenchPanel, { services })
-  assert.equal(textOf(after).includes(zhCN.tabPending), true, '修好后再点一次就直接进报告审核')
+  // 真实 React 会在依赖变化后再跑一轮 effect（`envState` 变了 → `modules.envChanged` 恢复目标）；
+  // 替身不自动跑，所以这里显式模拟：rerender → 冲 effect → 再取树。
+  rerender(WorkbenchPanel, { services })
+  await flushEffects(globalThis.__crwuTestInstance)
+  const after = textOf(rerender(WorkbenchPanel, { services }))
+  assert.equal(after.includes(zhCN.tabPending), true, '修好后再点一次就直接进报告审核')
 })
 
 test('自检只跑一次：面板重新挂载不重跑，显式重检仍然要跑', async () => {
@@ -2191,7 +2474,7 @@ test('自检只跑一次：面板重新挂载不重跑，显式重检仍然要�
   // 而一次自检要探二进制、问氚云与钉钉、列一次 OSS —— 所以重新挂载必须复用已有结论。
   const { createEnvStatusStore } = await import(new URL('src/client/features/environment/status.ts', ROOT).href)
   let calls = 0
-  stubOps({ boot: { body: { ok: true } }, env: () => { calls += 1; return { body: okEnvBody() } } })
+  stubOps({ boot: { body: bootOk() }, env: () => { calls += 1; return { body: okEnvBody() } } })
   const services = fakeServices()
   const envStatus = createEnvStatusStore()
 
@@ -2261,14 +2544,27 @@ test('the sidebar entry mark is a red dot when the env fails and a green check w
   const head = find(tree, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.sideCardHead))
   assert.equal(head.props.onClick, undefined)
   assert.equal(opened, 0, '渲染本身不该打开任何东西')
+  // 环境不通过时点「报告审核」：**不进入**那一页，落到环境页并记下 pendingTarget。
+  // （门禁上提到统一导航层之后的行为；能不能恢复由 client-module-gate.test.mjs 逐条钉住。）
   const auditRow = find(tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleAudit)
   auditRow.props.onClick()
   assert.equal(opened, 1, '点子项要能打开面板')
-  assert.equal(modules.get().active, 'audit', '点子项必须真的把模块切过去（侧栏与面板同一份状态）')
+  assert.equal(modules.get().active, 'env', '环境不通过就不进入目标页')
+  assert.equal(modules.get().pendingTarget, 'audit', '要记下被拦的目标')
+  assert.equal(modules.get().blocked, true)
+  // 环境恢复之后，同一个子项点下去就真的切过去（侧栏与面板同一份状态）。
+  stubOps({ env: { body: okEnvBody() } })
+  await store.refresh()
+  const ready = render(WorkbenchSidebarEntry, {
+    store, build, modules, wide: true, onOpen: () => { opened += 1 },
+  })
+  const auditReady = find(ready.tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleAudit)
+  auditReady.props.onClick()
+  assert.equal(modules.get().active, 'audit', '环境就绪后点子项要真的把模块切过去')
   // 再点一次同一个子项：仍然要打开面板（用户从别的页面回到工作台就靠这一下）。
-  const auditRowAgain = find(tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleAudit)
+  const auditRowAgain = find(ready.tree, (node) => node.type === 'button' && node.props?.title === zhCN.moduleAudit)
   auditRowAgain.props.onClick()
-  assert.equal(opened, 2, '点当前子项也要把面板叫出来')
+  assert.equal(opened, 3, '点当前子项也要把面板叫出来')
 
   // 换成通过的结果：同一枚标记变成绿勾（用户要的就是「通过就在后面打个绿色的 check」）。
   stubOps({ env: { body: okEnvBody() } })
@@ -2336,7 +2632,7 @@ test('工作台面板切走之后不许再高亮：选中态只属于"面板正�
   const className = (node) => String(node.props?.className ?? '').split(/\s+/)
   const rows = (tree) => findAll(tree, (node) => node.type === 'button' && className(node).includes(WORKBENCH_CLASSES.module))
 
-  modules.select('audit')
+  modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
   // 面板切到别处（选中会话）：整张卡不选中，三行也不许有一行是选中态。
   const away = render(WorkbenchSidebarEntry, {
     store, build, modules, wide: true, onOpen: () => {}, usePanelInfo: () => false,
@@ -2369,14 +2665,17 @@ test('envLampOf and envTally derive the light and the pass rate from the snapsho
   assert.equal(envLampOf({ env: okEnvBody(), busy: true, error: '', checkedAt: '' }), 'busy')
   assert.equal(envLampOf({ env: blockedEnvBody(), busy: true, error: '', checkedAt: '' }), 'busy')
 
-  // 参与计数的是：插件包(1) + 运行时(1) + 授权服务(1) + 交付(1) + 外部数据(1) + 工作空间 + 平台 = 7。
+  // 参与计数的**只有必需项**：包(1) + 运行时(1) + 平台(1) + 工作空间(1) + 授权(1)
+  // + 氚云(1) + 钉钉(1) + OSS(1) + **iFinD(1)** = 9。
+  // iFinD 自 2026-09-26 起是必需项，所以它在分母里 —— 这正是"环境就绪"与"N/N 通过"
+  // 必须同时成立的原因（旧口径把它当可选，才会出现"就绪 + 8/9"这种自相矛盾）。
   const tally = envTally(okEnvBody())
-  assert.equal(tally.total, 7)
-  assert.equal(tally.passed, 7)
+  assert.equal(tally.total, 9)
+  assert.equal(tally.passed, 9)
   assert.equal(tally.ratio, 1)
   const partial = envTally(blockedEnvBody())
-  assert.equal(partial.passed, 6, '平台没识别那一项没过')
-  assert.equal(partial.total, 7)
+  assert.equal(partial.passed, 8, '工作空间那一项没过；iFinD 也没配')
+  assert.equal(partial.total, 9)
   assert.equal(envTally(null).ratio, 0)
 })
 
@@ -2385,140 +2684,215 @@ function envPaneProps(env, patch = {}) {
   return {
     env,
     error: '', busy: false, checkedAt: '2026-09-20T10:00:00.000Z',
-    onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onEnterReport: () => {},
+    onRefresh: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
-    onPromptRefresh: () => {}, onPromptCopied: () => {},
     ...patch,
   }
 }
 
-test('环境自检页给员工看的是五层结论：分层标题 + x/y 已就绪 + 就绪的层收起', async () => {
+test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作区 + 折叠的维护者诊断', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const { tree } = render(EnvironmentPane, envPaneProps(okEnvBody()))
+  const paneProps = envPaneProps(okEnvBody())
+  const { tree } = render(EnvironmentPane, paneProps)
   const text = textOf(tree)
   for (const expected of [
-    zhCN.envHeroOk,
-    zhCN.wsSectionTitle,
-    zhCN.envLayerPackages,
-    zhCN.envLayerRuntime,
-    zhCN.envLayerAuth,
-    zhCN.envLayerDelivery,
-    zhCN.envLayerExternal,
-    zhCN.promptTitle,
-    'darwin-arm64',
-    '/cases/a',
-  ]) assert.equal(text.includes(expected), true, `自检页缺了「${expected}」`)
-  assert.equal(text.includes(`1/1 ${zhCN.envLayerReady}`), true, '就绪的层要给出 x/y 已就绪')
-  assert.equal(text.includes('AKID****7890'), false, '全就绪的层默认收起，路径与 AK 掩码要点开才看')
-  assert.equal(text.includes(zhCN.envDetailsTitle), true, '页脚要有「排查详情」入口')
-  // 授权开关是**员工要能一眼看到并点**的东西，所以它不在排查详情里（维护者明细仍默认收起，
-  // 由「维护者信息收在排查详情里」那条盯着）。
-  assert.equal(text.includes(zhCN.authGrantedLine), true, '④ 层要显示已授权这一行')
+    zhCN.envStatusReady,           // 顶部紧凑状态摘要
+    zhCN.envStepAccounts,          // 四步导航（顺序固定，不按状态重排）
+    zhCN.envStepOss,
+    zhCN.envStepIfind,
+    zhCN.envStepWorkspace,
+    zhCN.envStepDone,              // 每一步的状态词
+    zhCN.envGroupMaintenance,      // 维护者诊断（默认收起）
+    zhCN.envStatusProceedHint,     // 就绪时唯一一句"接下来去哪"
+    '/cases/a',                    // 四项都完成 → 默认停在最后一步（工作空间）
+  ]) assert.equal(text.includes(expected), true, `环境页缺了「${expected}」`)
+  // 摘要态也要能更换工作空间（用户要换的时候不用先猜怎么展开）。
+  assert.equal(text.includes(zhCN.wsChange), true)
+  // 一次只有**一个**步骤正文：别的步骤的卡片 / 表单不在页面上（旧版是全部平铺）。
+  assert.equal(
+    findAll(tree, (node) => node.props?.['data-crwu-env-step-panel'] !== undefined).length, 1,
+    '一次只渲染当前步骤',
+  )
+  assert.equal(findAll(tree, (node) => node.props?.['data-crwu-oss-card'] !== undefined).length, 0, 'OSS 卡片不在当前步骤里')
+  assert.equal(findAll(tree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 0, 'iFinD 卡片不在当前步骤里')
+  assert.equal(text.includes(zhCN.envConsentTitle), false, '账号连接的正文也不常驻')
+  // 四项都完成：一句完成摘要（而不是"还需完成 0 项"）。
+  assert.equal(findAll(tree, (node) => node.props?.['data-crwu-env-alldone'] !== undefined).length, 1, '四项都完成要给一句完成摘要')
+  assert.equal(text.includes(zhCN.envStepDoneSummary), true)
+  // 顶部只允许**一枚**主动作：重新检查。**没有**「进入报告审核」按钮 ——
+  // 就绪时只写一句提示（跳转交给左侧栏的统一导航门禁）。
+  assert.equal(countButtonsLike(tree, zhCN.envActionRecheck), 1, '顶部唯一主动作是重新检查')
+  assert.equal(countButtonsLike(tree, '进入报告审核'), 0, '环境页不再有「进入报告审核」按钮')
+  assert.equal(
+    findAll(tree, (node) => node.type === 'button' && textOfAll(node).includes('报告审核')).length, 0,
+    '「进入报告审核」不许被做成按钮',
+  )
+  // 通过率与结论自洽：只统计必需项。
+  assert.equal(text.includes('9/9'), true)
+  // 技术细节默认看不到（包路径 / 清单 / 平台值 / 运行时版本都在收起的维护者诊断里）。
+  for (const hidden of [zhCN.envPackagesManifest, 'darwin-arm64', zhCN.envRuntimeExpect]) {
+    assert.equal(text.includes(hidden), false, `「${hidden}」默认不该出现`)
+  }
+
+  // 切到「账号连接」：授权行 + 氚云 / 钉钉都在这一步里，上一步的正文不在页面上。
+  findStep(tree, 'accounts').props.onClick()
+  const accountsTree = rerender(EnvironmentPane, paneProps)
+  assert.equal(
+    findAll(accountsTree, (node) => node.props?.['data-crwu-env-step-panel'] !== undefined)[0].props['data-crwu-env-step-panel'],
+    'accounts',
+  )
+  const accountsText = textOf(accountsTree)
+  for (const expected of [zhCN.envConsentTitle, zhCN.envConsentDone, zhCN.envLoginH3yun, zhCN.dwsLogin]) {
+    assert.equal(accountsText.includes(expected), true, `账号连接步骤缺了「${expected}」`)
+  }
+  assert.equal(
+    findAll(accountsTree, (node) => node.props?.['data-crwu-oss-card'] !== undefined).length, 0,
+    '切走之后上一步的正文不在页面上',
+  )
+  // 四步都完成时导航上每一步都是 done（步骤名恒定、状态跟着环境模型走）。
+  for (const id of ['accounts', 'oss', 'ifind', 'workspace']) {
+    assert.equal(stepStateOf(accountsTree, id), 'done', `四步都完成时「${id}」应当是 done`)
+  }
+
+  // 还没保存 AK 的部署：默认停在第一项未完成的步骤（OSS），那一步才画表单。
+  const ossProps = envPaneProps(okEnvBody({
+    state: stateBody({
+      status: 'action-required', proceed: false, allOk: false,
+      userSetup: { ...stateBody().userSetup, aliyunOss: { state: 'unconfigured', value: '', reason: '还没有保存 AccessKey', required: true } },
+    }),
+    delivery: deliveryUnsaved(),
+  }))
+  const ossTree = render(EnvironmentPane, ossProps).tree
+  assert.equal(stepStateOf(ossTree, 'oss'), 'doing', '默认停在第一项未完成的步骤')
+  assert.equal(
+    findAll(ossTree, (node) => node.props?.['data-crwu-env-step-panel'] !== undefined)[0].props['data-crwu-env-step-panel'],
+    'oss',
+  )
+  assert.equal(findAll(ossTree, (node) => node.props?.['data-crwu-oss-card'] !== undefined).length, 1)
+  assert.equal(textOf(ossTree).includes(zhCN.envOssAkLabel), true)
+  assert.deepEqual(collectInputs(ossTree).map((input) => input.props.name), ['crwu-oss-ak', 'crwu-oss-sk'])
 })
 
-test('没就绪的层默认展开：状态词 + 原因 + 怎么配都在（不再有下载地址）', async () => {
+test('工作空间就绪时压缩成摘要；缺失/失效时才展开', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const ready = textOf(render(EnvironmentPane, envPaneProps(okEnvBody())).tree)
+  // 摘要里仍然给出路径与「更换」入口（用户要换的时候不需要先猜怎么展开）。
+  assert.equal(ready.includes('/cases/a'), true)
+  assert.ok(ready.includes(zhCN.wsChange), '摘要态也要能更换')
+
+  const missing = textOf(render(EnvironmentPane, envPaneProps(blockedEnvBody())).tree)
+  // 缺失/失效：展开完整卡片 —— 给出选目录 / 新建 / 恢复自动识别。
+  assert.equal(missing.includes(zhCN.wsPick), true, '没选定时要能手动选')
+  assert.equal(missing.includes(zhCN.wsCreate), true)
+  assert.equal(missing.includes(zhCN.wsMissingDirHint) || missing.includes(zhCN.wsMissing), true)
+})
+
+test('没就绪时：说清"还差 N 项"与怎么修，且不出现"请安装二进制/装 Python/改 PATH"', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const base = okEnvBody()
   const brokenPackage = {
     ...base,
-    allOk: false,
-    blocked: ['插件内置组件'],
-    packageIntegrity: packagesOk({
-      ok: false,
-      tools: base.packageIntegrity.tools.map((tool) => (tool.name === 'dws'
-        ? { ...tool, present: false, sizeBytes: 0, ok: false, reason: '插件包不完整：包内缺少 dws' }
-        : tool)),
+    blocked: ['插件内置组件：插件包不完整 / 平台不受支持'],
+    state: stateBody({
+      status: 'system-blocked', proceed: false, allOk: false, passed: 7, total: 9,
+      capabilities: { global: false, auditCore: false, delivery: false, externalData: true },
+      systemHealth: { ...stateBody().systemHealth, packageIntegrity: { state: 'invalid', value: '', reason: '插件包不完整：包内缺少 dws', required: true } },
+      issues: [{ id: 'package', owner: 'system', blocking: true, scope: 'global', action: '重新安装插件或联系管理员', message: '插件内置组件：插件包不完整 / 平台不受支持' }],
+      blocked: ['插件内置组件：插件包不完整 / 平台不受支持'],
     }),
   }
-  const { tree } = render(EnvironmentPane, envPaneProps(brokenPackage))
+  const paneProps = envPaneProps(brokenPackage)
+  const { tree } = render(EnvironmentPane, paneProps)
   const text = textOf(tree)
-  assert.equal(text.includes(zhCN.envHeroBad), true, '结论要明说未通过')
-  assert.equal(text.includes(`${zhCN.envHeroTodo}1${zhCN.envHeroTodoTail}`), true, '要说"还有 1 项要处理"')
-  assert.equal(text.includes(zhCN.envPackagesBroken), true, '没就绪项要有状态词')
-  assert.equal(text.includes('插件包不完整：包内缺少 dws'), true, '要说清原因')
-  assert.equal(text.includes(zhCN.envFixPackages), true, '要给出怎么配')
-  // 组件随插件发布：界面**不该**出现「请安装 crwu / dws / ossutil」这类文案，也不该有下载地址。
-  assert.equal(/https?:\/\//.test(text), false, '没就绪的组件项不该出现下载地址')
+  assert.equal(text.includes(zhCN.envStatusSystem), true, '结论要明说系统故障')
+  assert.equal(text.includes(zhCN.envStatusReady), false, '系统故障不能同时显示「环境就绪」')
+  // 系统故障的技术原因**不进员工视野**（它不是员工能修的）：只在维护者诊断里。
+  assert.equal(text.includes('插件包不完整'), false, '员工页不出现包内组件故障的技术细节')
+  assert.equal(text.includes('插件内置组件'), false, '旧的 blocked[] 文案也不许再画到页面上')
+  // 系统故障**不给员工派活**：没有"下一步：装点什么"。
   assert.equal(/请安装\s*(crwu|dws|ossutil)/i.test(text), false, '不该提示员工安装这三个命令')
-  assert.equal(text.includes(zhCN.envCopyInstallPrompt), true, '组件层要给"复制安装提示词"的入口')
-  assert.equal(text.includes(zhCN.envLoginH3yun), false, '氚云已就绪，不该给登录按钮')
+  assert.equal(/安装系统 ?Python|export PATH|command -v/i.test(text), false, '不该提示装 Python 或改 PATH')
+  // 系统故障时主动作仍然是「重新检查」（唯一动作），不是"复制安装提示词"。
+  assert.ok(findButtonLike(tree, zhCN.envActionRecheck), '系统故障时主动作是重新检查')
+  // 技术原因在「维护者诊断」里能看到（默认收起，展开一次即可）。
+  expandMaintenance(tree)
+  const expanded = textOf(rerender(EnvironmentPane, paneProps))
+  assert.equal(expanded.includes('插件包不完整'), true, '系统故障的技术原因要在维护者诊断里可查')
 })
 
-test('维护者信息（工具/OSS 明细、运行环境信息、氚云授权）收在「排查详情」里', async () => {
+test('维护者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节都在里面', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const paneProps = envPaneProps(okEnvBody())
   const collapsed = render(EnvironmentPane, paneProps)
-  assert.equal(textOf(collapsed.tree).includes(zhCN.envDetailsInfo), false, '排查详情默认不展开')
-  expandDetails(collapsed.tree)
+  const collapsedText = textOf(collapsed.tree)
+  for (const hidden of [zhCN.envDiagToolsOk, zhCN.envPackagesManifest, zhCN.envRuntimeExpect, zhCN.envRuntimeDistributions]) {
+    assert.equal(collapsedText.includes(hidden), false, `「${hidden}」默认不该出现`)
+  }
+  expandMaintenance(collapsed.tree)
   const text = textOf(rerender(EnvironmentPane, paneProps))
   for (const expected of [
-    zhCN.envDetailsTools,
-    zhCN.envDetailsRuntime,
-    zhCN.envDetailsOss,
-    zhCN.envDetailsInfo,
-    // 组件明细：包根 / 包内清单 / 逐组件字节数与清单 sha256 / 版本要求（都只在维护者详情里）。
+    zhCN.envDiagPackages, zhCN.envDiagRuntime, zhCN.envDiagPlatform, zhCN.envDiagTools,
+    // 包路径、清单与字节数这些技术细节也只在维护者诊断里。
     '/Users/x/.dsh/plugins/dsh-crwu-workbench',
-    'sha-ossutil',
-    '>=0.2.14',
-    // 运行时明细：路径、来源与依赖包版本（至少 openpyxl）。
+    zhCN.envPackagesManifest,
+    zhCN.envPackagesSize,
     '/opt/dsh/python/bin/python3',
     'DSH 自带（bundled runtime）',
     'openpyxl 3.1.2',
-    'AKID****7890',
-    'crwu/audit',
     zhCN.envConfigSource,
-  ]) assert.equal(text.includes(expected), true, `排查详情里缺了「${expected}」`)
-  // 这条测试只管维护者明细；授权开关已在 ③ 层默认可见（上面那条测试盯着），这里核对它
-  // **不是**靠展开排查详情才出现的。
-  assert.equal(textOf(collapsed.tree).includes(zhCN.authGrantedLine), true, '这一行不该依赖展开排查详情')
+  ]) assert.equal(text.includes(expected), true, `维护者诊断里缺了「${expected}」`)
 })
 
-test('a blocked self-check lists the blockers and still offers the install prompt', async () => {
+test('a blocked self-check names the missing item and still offers the maintainer fallback', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const { tree } = render(EnvironmentPane, {
-    env: blockedEnvBody(),
-    error: '', busy: false, checkedAt: '',
-    onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onEnterReport: () => {},
-    services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
-    onPromptRefresh: () => {}, onPromptCopied: () => {},
-  })
+  const { tree } = render(EnvironmentPane, envPaneProps(blockedEnvBody()))
   const text = textOf(tree)
-  assert.equal(text.includes(zhCN.envBlockedTitle), true)
-  assert.equal(text.includes('运行平台未识别'), true)
+  // 顶部只给结论与条数，以及**第一条**员工能修的下一步。
+  assert.match(text, new RegExp(`${zhCN.envStatusAction}1${zhCN.envStatusActionTail}`), '说清还差 1 项')
+  assert.equal(text.includes(zhCN.envStatusReady), false, '有阻塞就不能显示「环境就绪」')
   assert.equal(text.includes('未找到工作空间「中瑞世联工作空间」，请手动选择'), true)
-  assert.equal(text.includes(zhCN.promptTitle), true, '不通过时最需要安装提示词')
+  // 「进入报告审核」不再是环境页上的按钮（跳转交给左侧栏的统一导航门禁），
+  // 安装提示词那条兜底路径也已整体删除。
+  assert.equal(countButtonsLike(tree, '进入报告审核'), 0)
+  assert.equal(text.includes('进入报告审核'), false)
+  assert.equal(text.includes('安装提示词'), false, '旧的「复制安装提示词」兜底不该再出现')
+  assert.equal(countButtonsLike(tree, zhCN.envActionRecheck) >= 1, true, '主动作是重新检查')
+  // 维护者兜底（默认收起的诊断区）仍在同一页上。
+  assert.ok(
+    find(tree, (node) => node.type === 'button' && textOf(node).includes(zhCN.envGroupMaintenance)),
+    '维护者兜底入口要留着（默认收起）',
+  )
 })
 
 test('侧栏分组卡上的子项就是模块切换：报告审核 ⇄ 环境信息', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
   const { tree, modules } = await mountChecked(services)
   assert.equal(textOf(tree).includes(zhCN.tabPending), true, '通过之后面板停在报告审核页')
 
   // 侧栏子项点下去写的就是这个 store（那条断言在上面的侧栏卡测试里），
   // 这里验另一半：store 一改，面板就停在对应的那一页。
-  modules.select('env')
+  modules.navigate('env', { state: environmentStateOf(okEnvBody()) })
   const after = rerender(WorkbenchPanel, { services, modules })
-  assert.equal(textOf(after).includes(zhCN.envLayerPackages), true, '切到环境信息要看到五层')
+  // 环境页的四个步骤名在左侧导航上**恒定可见**（不随状态重排）。
+  assert.equal(textOf(after).includes(zhCN.envStepAccounts), true, '切到环境信息要看到步骤导航')
+  assert.equal(textOf(after).includes(zhCN.envStepWorkspace), true)
   assert.equal(textOf(after).includes(zhCN.tabPending), false)
 
   // 再切回报告审核：双向的，不是一次性跳转。
-  modules.select('audit')
+  modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
   const back = rerender(WorkbenchPanel, { services, modules })
   assert.equal(textOf(back).includes(zhCN.tabPending), true)
 })
 
 test('报告评估 是 Coming Soon 页：说清是什么/将来做什么/现在能不能用/下一步去哪', async () => {
-  stubOps({ boot: { body: { ok: true } }, env: { body: okEnvBody() } })
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
   const { modules } = await mountChecked(services)
 
   // 入口在侧栏分组卡上（那里是一枚「开发中」小图标，见侧栏卡那条测试）；这里只验面板这一页。
-  modules.select('eval')
+  modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
   const after = rerender(WorkbenchPanel, { services, modules })
   const pane = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.eval))
   assert.ok(pane, 'Coming Soon 页的容器要在')
@@ -2757,11 +3131,9 @@ test('paging and refreshing dim the table and draw a progress bar', async () => 
 test('the self-check page draws a progress bar and dims the body while re-checking', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const props = {
-    error: '', checkedAt: '', onRefresh: () => {}, onCopyPrompt: () => {}, copied: false,
-    onRelogin: () => {}, onDwsLogin: () => {}, onEnterReport: () => {},
+    error: '', checkedAt: '', onRefresh: () => {},
+    onRelogin: () => {}, onDwsLogin: () => {},
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-    prompt: '', promptUrl: '', promptBusy: false, promptCopied: false, promptMessage: '',
-    onPromptRefresh: () => {}, onPromptCopied: () => {},
   }
   const busy = render(EnvironmentPane, { ...props, env: okEnvBody(), busy: true })
   assert.equal(hasClass(busy.tree, WORKBENCH_CLASSES.loadBar), true, '重新自检时要有进度条')
@@ -2802,7 +3174,7 @@ test('the side drawer closes on the backdrop and on Escape', async () => {
 
 test('the audit info opens in a right-side drawer, loads, and closes back to the list', async () => {
   stubOps({
-    boot: { body: { ok: true } },
+    boot: { body: bootOk() },
     env: { body: okEnvBody() },
     pending: {
       body: {
@@ -3703,7 +4075,9 @@ test('Drawer 第一屏：命中率最大，其次是 AI 检出与已提未改，
     return cls.includes(WORKBENCH_CLASSES.km) || cls.includes(WORKBENCH_CLASSES.sec) || cls.includes(WORKBENCH_CLASSES.fold)
   })
   assert.ok(order.indexOf(km) >= 0)
-  assert.equal(textOf(header).includes(zhCN.auditSecSummary), false)
+  // 抽屉头里不许出现「审核摘要」这种结论小标题（`auditSecSummary` 这个键早已不存在，
+  // 用 `zhCN.<缺失键>` 断言是 `includes(undefined)` —— 永远为 false 的假通过，所以写字面量）。
+  assert.equal(textOf(header).includes('审核摘要'), false)
 })
 
 test('Drawer：AI 检出问题列表直接给标题与简述，点开才给位置与建议', async () => {

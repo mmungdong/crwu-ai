@@ -1,6 +1,6 @@
 {
   "name": "dsh-crwu-workbench",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "中瑞世联工作台 / CRWU audit workbench for DeepSeek Harness: pick a pending audit report, dispatch one AI audit subagent, watch and stop/restart it, auto-upload deliverables to Aliyun OSS.",
   "keywords": [
     "deepseek-harness",

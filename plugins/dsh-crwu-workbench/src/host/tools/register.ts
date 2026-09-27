@@ -5,6 +5,7 @@ import { bootstrapTools } from './bootstrap.ts'
 import { capabilitiesTool } from './capabilities.ts'
 import { dingtalkTools } from './dingtalk.ts'
 import { h3yunTools } from './h3yun.ts'
+import { ifindTool } from './ifind.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { ossTools } from './oss.ts'
 import { REQUIRED_AUDIT_TOOLS } from './consts.ts'
@@ -34,6 +35,7 @@ export function registerCrwuTools(ctx: Context, deps: ToolDeps): () => void {
     ...bootstrapTools(deps),
     ...h3yunTools(deps),
     ...knowledgeTools(deps),
+    ifindTool(deps),
     ...ossTools(deps),
     ...dingtalkTools(deps),
   ]

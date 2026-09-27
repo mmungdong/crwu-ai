@@ -128,10 +128,12 @@ tests/
 - 部署可变的值必须进入 `config/crwu-workbench.yml`；开发与 TGZ 运行共用这一份配置，不能再写进
   `cordis.patch.yml` 或伪装成 `DEFAULT_*` 常量。
 - 固定路由、字段代码、协议版本、状态枚举等不可配置的协议值可以进入 `consts.ts`。
-- **环境清单按语义分区，不许再混装**（`crwu.env-manifest.v3`，2026-09-25）：`packaged[]` 是**随插件
+- **环境清单按语义分区，不许再混装**（`crwu.env-manifest.v4`，2026-09-26）：`packaged[]` 是**随插件
   发布**的组件（`crwu` / `dws` / `ossutil`，只有 `name` / `label` / `note` / `expectedVersion`），
-  `runtime.python` 是 **DSH 自带**的脚本运行时。清单里**没有** `binaries[]`，也**没有**裸 `python3`
-  检查项 —— 混装的直接后果是界面把两类东西平铺成一列命令清单，员工于是去装 Python、去找 ossutil 安装包。
+  `runtime.python` 是 **DSH 自带**的脚本运行时，`ifind` 只声明「是什么、是不是必需、官方入口在哪」。
+  清单里**没有** `binaries[]`、**没有**裸 `python3` 检查项、v4 起也**没有** `ifindKey.path` ——
+  混装或第二份路径的直接后果是界面把两类东西平铺成一列命令清单（员工于是去装 Python、去找 ossutil
+  安装包），或者凭据位置出现两个事实源。iFinD 凭据位置由 `host/ifind/store.ts` 推导（见 §4.7）。
 - **自检只读事实，不跑命令**：② 只 `stat` 包内 `bin/<平台>/<文件>` 并与包内 `bin/manifest.json`
   比对**字节数**（sha256 从清单读出来进维护者详情，**不**每次自检重算 —— 三个二进制一百多 MB）；
   **不得** `command -v`、**不得**回退 PATH 上的同名命令、**不得**执行 `dws version`（会在二进制旁落
@@ -287,11 +289,12 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 ### 4.5 CRWU 结构化 Tool 层（`src/host/tools/` + `src/host/dws/`）
 
 **iFinD 取数也是结构化 Tool，不是脚本例外**（2026-09-26 · OPT-006）：同花顺 iFinD 的取数入口是
-`crwu_audit_ifind_query`（`operation` = `list_tools` / `query`），走 `defineTool` + `ctx.tools.register`，
+`crwu_audit_ifind_query`（`operation` = `list_tools` / `describe_tool` / `query`），
+走 `defineTool` + `ctx.tools.register`，
 纳入既有审批、超时、取消与脱敏链路。技能**不得**再授权"在 `ifind-finance-data` 技能目录写临时脚本、
 执行其 `call.py` / `call-node.js`、读取其 `mcp_config.json`"，也**不得**搜索 `~/.agents` / `~/.dsh` /
 `~/.codebuddy` / `~/.claude` 等技能根。服务地址与 `serverType` 映射是 Host 内部固定表（模型不能提交 URL），
-令牌由 Host 从环境清单声明的固定位置读取（模型不可见），TLS 正常校验（不接受任何"关校验"开关）。
+SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），TLS 正常校验（不接受任何"关校验"开关）。
 
 **这是本次改造的核心口径，不是可选风格。**
 
@@ -341,6 +344,106 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 （2）通过 `ctx.tools.execute()` 真调一次零副作用的能力自检，证明注册表与 policy pipeline 通得过；
 （3）子代理发布后按**它自己的 scope** 复查一次（provider 可能进一步收窄）。
 任何一步不过都在**创建子代理之前**失败并列出缺失的工具名 —— 提示词是请求，这里才是门禁。
+
+### 4.6 环境领域模型与统一门禁（2026-09-26 · 协议 15）
+
+**`allOk + blocked[]` 不再承担所有语义。** 环境结论拆成三层，判据只有一份（纯函数在
+`src/shared/environment/model.ts`，Host 与 Client 共用、可单测）：
+
+| 层 | 字段 | 说明 |
+| --- | --- | --- |
+| 事实 | `userSetup`（workspace / credentialsConsent / h3yun / dingtalk / aliyunOss / ifind）、`systemHealth`（packageIntegrity / dshRuntime / platform / toolRegistry） | 每项一个 `state` + 脱敏 `value` + `reason` + `required`。iFinD 与 OSS **必须是五态**（`unconfigured` / `unverified` / `authenticated` / `invalid` / `unreachable`）—— 压成一个布尔就会把"网络不通"说成"密钥错误" |
+| 解释 | `issues[]`（`id` / `owner: user\|admin\|system` / `blocking` / `scope: global\|audit\|delivery\|external-data` / `action` / `message`） | 总状态、能力开关、通过率、门禁结论**全部从它推出来** |
+| 结论 | `status`（`unknown` / `checking` / `ready` / `degraded` / `action-required` / `admin-required` / `system-blocked` / `check-failed`）、`capabilities`、`passed/total` | `ready` 与 `degraded` 才放行需要环境的页面 |
+
+五条不许退回去的口径：
+
+1. **iFinD 是必需项**（2026-09-26 产品口径，覆盖了旧的 OPT-006-R1 · F-008）：清单
+   `ifind.required=true` ⇒ `userSetup.ifind.required=true`、**进必需项分母**、未通过即**阻塞**，
+   并按原因分派归属：没填 / API-Key 无效或过期 → `user`；账号无数据权益 → `admin`；
+   网络 / 超时 / 协议 / 上游不可达 → `system`。issue 双写 `global` + `external-data` 两个 scope ——
+   前者让统一导航拦回环境页，后者让 `auditCore` 一起关掉（**光关外部数据却放行审核是自相矛盾的**，
+   审核装配里本来就要取外部数据）。
+   `degraded` 这个枚举为将来真正的可选能力保留，但**不得**再由"只有 iFinD 缺失"产生。
+2. **判据是"真的取到一次数据"**：`ok`（认证通过 `initialize + tools/list`）与
+   `dataVerified`（`tools/call` 返回非错误、非空内容）分开；只有后者为真才通过。没有可安全试取的
+   只读工具时如实报权益问题，**不许**去调写 / 批量 / 导入导出类工具，也不许伪装成功。
+3. **包 / 运行时 / 平台 / Tool 故障归 `system`**：员工页面（账号连接 + 交付与外部数据）
+   **不得**出现「请安装 crwu / dws / ossutil」「未安装 python3」「export PATH」这类话 ——
+   它们不是员工能修的。技术细节（包根、清单、sha256、运行时路径、凭据路径、验证工具名、
+   数据样本、协议版本、审核根会话）只在「维护者诊断」里、且默认收起。
+4. **通过率只统计必需项**：`passed/total` 与 `status` 永远自洽 —— 「环境就绪」旁边不会出现
+   「7/8 通过」。"未查询"的 Tool 注册表**不进分母**。
+5. **`blocked` / `allOk` 只作为兼容派生字段**（供审核提示词与旧客户端），必须与模型一致；
+   不许再出现"各处自己拼 blocked"的实现。
+
+**统一导航门禁（不许再有第二个判断处）**：
+
+- 模块元数据在 `features/workbench/modules.ts` 声明 `requiresEnvironment` / `requirement`；
+- **所有入口**都调 `module-store.ts` 的 `navigate(target)`：侧栏子项、报告页内跳转、以后新增的页。
+  `WorkbenchPanel` **不得**再写"能不能进 audit"这种特判；**环境页里也不再放"进入报告审核"按钮**
+  （2026-09-26 口径：就绪时只写一句「你可以从左侧进入报告审核」，跳转交给左侧栏的统一入口）；
+- 被拦时不进入目标页 → 记 `pendingTarget` → 落到 `env` → 把「进入【目标页】前…」带出来；
+  iFinD 未通过时那句话**指名 API-Key**（「进入【报告审核】前，请先完成 iFinD API-Key 验证」）；
+  检查通过后**只恢复最近一次**被拦的目标；用户中途主动改去别处即取消自动恢复
+  （`navigate('env')` 也取消，且**不得**把 active 改回旧目标）；`env` 页始终可进；
+- **Host 侧另有能力门禁**（`src/host/environment/gate.ts`）：界面门禁负责体验，Host 门禁负责
+  真实性与绕过防护（同源路由是公开契约）。判据是**同一份环境快照**（60s TTL，`invalidate()`
+  在授权 / 换工作空间 / 存凭据 / 登录之后调用），**不为每个操作重跑一遍昂贵自检**；
+  拿不到快照或自检失败一律 fail closed。`audit-start` 判 `auditCore`（iFinD 未过时它就是 false）；
+  **停止审核与释放占用锁不判门禁**（它们是安全出口）。
+
+**真实外部验证（两项都必须打真请求，不许只看文件在不在）**：
+
+| 项 | 真实请求 | 归因 |
+| --- | --- | --- |
+| OSS | 包内 `ossutil ls oss://<bucket>/<configured-prefix>/ --endpoint <配置> --limited-num 1`（**只读**；空目录也算成功；不打桶根） | `credential` / `permission` / `config` / `infrastructure` 四类（`probeOss` 的 `errorKind`） |
+| iFinD | `initialize → notifications/initialized → tools/list → 选安全只读工具 → tools/call` | `credential`（401）/ `entitlement`（403）/ `infrastructure`（网络超时协议）；四个阶段**判据一致**（`classifyFailure` 先看状态码再看消息指纹） |
+
+两者都：保存后**立刻**真验证；用户点「重新检查」传 `force` **绕过缓存**再验一次；
+自动 / 被动刷新可以复用短 TTL（iFinD 30s，按凭据指纹作键）以免被上游限流，
+但界面**不得**把缓存命中说成"刚刚重新请求"（显示最近真实验证时间）。
+所有 stderr / stdout 在返回界面或写日志前必须过 `host/oss/sanitize.ts` 的 `sanitizeOssError`
+（AK / Secret / STS Token / Signature / 签名 URL）与 iFinD 的脱敏器。
+
+### 4.7 iFinD 凭据：插件自己的状态文件（2026-09-26）
+
+- **不许再读技能目录**：`~/.agents/skills/ifind-finance-data/mcp_config.json` 那条运行时依赖已删除。
+  凭据落在**插件状态目录**：`<home>/.dsh/crwu-workbench/ifind-credential.json`，原子写入 + `chmod 600`
+  + **回读核对**（`src/host/ifind/store.ts`）。优先 DSH 凭据服务（`ctx.get('credentials')` 形状），
+  当前版本没有该服务时落文件 —— 判断只在 `resolveIfindStore()` 一处。
+- **返回值只允许是成功状态、错误分类与脱敏信息**：`readIfindSecret` 是唯一能拿到明文的出口且只给
+  Host 内部。空值 / 占位符 / 首尾空白 / 换行在**写盘之前**拒绝。用户视图只给"验证成功/失败 +
+  最近验证时间 + 已保存（含长度）"；**工具名、数据样本、协议版本**一律移入维护者诊断；
+  凭据文件路径与 OSS 的 Bucket / Endpoint / 前缀同属维护者信息，可以只在诊断里展开。
+- **结论会变，界面结论必须跟着清**：卡片上的"验证成功 / 失败"是**组件状态**，而后台自检随时可能
+  把同一项变成 `invalid`（密钥被撤销、权益到期、被限流）。`IfindAuthCard` 按"结论指纹"
+  （state + errorKind + ok + dataVerified + checkedAt + reason）在变化时清掉上一次的提示，
+  否则同一张卡上会同时出现「验证成功」与「API-Key 无效」两句互相矛盾的话。
+- **名字与口径**：界面上一律叫 **API-Key**（不是"SK"）—— 员工的输入框标签、状态词、错误提示都用它。
+  `auth_token` 只是上游 MCP 的字段名，**不得**出现在任何面向用户的文案里。
+- **每次环境校验都真的验一次，且验证 = 真的取一次数据**（2026-09-26 改）：
+  `probe` 默认 **true**；`initialize` → `tools/list` 之后**真的 `tools/call` 取一次数据**。
+  两截结论分开：`ok`（认证）与 `dataVerified`（取到数据）—— 认证通过但没取到数据时，
+  状态必须是 `unverified` + 明确的 `errorKind`（权益 → 找管理员；凭据 → 重填；网络 → 稍后重试），
+  **绝不显示成「已认证」**，而且是**阻塞项**（见 §4.6 第 1 条）。
+  面板反复刷新由 **30s TTL 缓存**兜住（按凭据指纹作键，换 key 自然失效），
+  用户点「重新检查」传 `force: true` **必须绕过缓存**重新真探。
+- **试取工具的选择**（`pickProbeTool`）：只挑只读、必填 ≤ 1、无 boolean/数组/对象参数的工具，
+  名字命中写/批量/导入导出词表的一律不碰；一个都挑不出来时如实报"权益可能未开通"，
+  **不许**把"没挑到工具"当成取数成功，也**不许**真去调一个可能写数据的工具。
+- **失败归因四阶段一致**（`classifyFailure`）：会话初始化 / 工具清单 / 取数 RPC / 取数内容
+  都要**先看 HTTP 状态码（401/403）再看消息指纹**。只在前一阶段区分，员工在后置失败时
+  就只会看到"取数失败"这种既不能重填也不能找管理员的笼统提示。
+- **Host 操作**：`ifind-status` / `ifind-credential-save`（保存后**立刻真实探测**）/
+  `ifind-credential-clear`（要求显式 `confirm: true`）/ `ifind-probe`。**不是模型可见的 Tool**。
+- **协议**：`crwu_audit_ifind_query` 的 `operation` 增加 `describe_tool`（对单个真实工具返回
+  **脱敏、限深、限长**的 `inputSchema`）；MCP `protocolVersion` = `2025-03-26`（官方 1.4.0 客户端）
+  并做**显式协商**：服务端回受支持集合内的版本就用它，回不认识的版本按协议错误失败 ——
+  **不许静默假设** `2024-11-05` 永远有效。401 → `credential`、403 → `entitlement`、
+  网络 / 超时 / 协议 → `infrastructure`，三者不许混。
+- **不上游打包**：官方 `call.py` / `call-node.js` / `mcp_config.json` **不进运行包**，也不得把
+  「把密钥发给 Agent」「SSL 失败用 `curl -k`」「跑官方脚本」写进任何指引或提示词。
 
 ## 5. 代码风格
 
@@ -426,7 +529,7 @@ tests/unit/                         # 配置 / 路由 / 操作表 / 包清单 + 
 | 审核生命周期 / 子代理（`host/audit/`） | 单元测试 + `host-audit-spawn.test.mjs` 那套（请求形状对照已安装的 DSH 类型声明） | 没人拦（**真机盲区**）；真机验证只能由用户点「AI 审核」 |
 | 状态持久化（`host/state/`） | 单元测试（读-改-写、跨重启恢复、占用锁自愈） | 没人拦；真机前**先备份** `~/.dsh/crwu-workbench.json` |
 | **构建 / 交付配置**（tsdown、`package.json` 的 `exports`/`files`/`dsh.client`、`prepare.mjs`、新依赖） | `npm run build` + `smoke:built` + `pack:assert` | `pack:assert`（缺入口 / `require` 只允许 react 与 react/jsx-runtime / ModuleLoader id 必须等于包名）；`host-package.test.mjs`（peer、`dsh.client.inject`、真跑 `npm pack` + `npm install` 的回归） |
-| 用户可见文案（UI 中文 / 安装提示词） | **逐条**断言的测试，模板见 `host-install-prompt.test.mjs` | 没人拦 —— 但「意思差不多地改写」真的丢过安全指令 |
+| 用户可见文案（UI 中文） | **逐条**断言的测试，模板见 `host-install-prompt.test.mjs`（已随 `install-prompt` 删除；现存模板看 `host-environment-env.test.mjs` 的"员工可见结论"那条） | 没人拦 —— 但「意思差不多地改写」真的丢过安全指令 |
 | 新增部署可变的值 | YAML Schema 边界测试，并写进 `config/crwu-workbench.yml` | `host-yaml-config.test.mjs` + `host-package.test.mjs` 的真实 pack/install/激活测试 |
 | **新增 / 改名一个 CRWU Tool**（`host/tools/`） | 工具名的**逐字**断言（`host-tools.test.mjs` 的注册清单与 `REQUIRED_AUDIT_TOOLS` 对照）+ 参数无逃生字段 + 输出 schema 能过 `validateJsonSchemaValue` + 命令走包内绝对路径 + `exec.signal` 透传 + 沙箱/提权断言 | `host-tools.test.mjs`（注册清单、封禁字段、工具名）；`smoke:built`（产物里 8 个工具名）；改名的工具还要同步 `host-audit-prompt.test.mjs`（提示词逐字列 Tool 名） |
 | **审核提示词 / 审核链路**（`host/audit/`） | 逐条断言（`host-audit-prompt.test.mjs`）：必需 Tool 名、**不含**插件 bin 路径 / `export PATH` / `which` / `command -v` / 裸命令 / Python 回传脚本；能力门禁（`host-audit-lifecycle.test.mjs`：缺 Tool 或能力缺失时**不得创建子代理**） | `host-audit-prompt.test.mjs`（删一步就红）；`skills:cli-guard`（技能侧的对应约束） |
@@ -437,7 +540,8 @@ tests/unit/                         # 配置 / 路由 / 操作表 / 包清单 + 
 
 1. `src/host/ops/core.ts` 的操作表加一项；
 2. 同一文件的 `boot.ported.done` 加名字（漏了 → 「操作表 ↔ ported 声明一一对应」红）；
-3. `tests/unit/host-package.test.mjs` 的 `FROZEN` 清单加名字并改掉数量注释（漏了 → 冻结清单红）；
+3. `tests/helpers/frozen-inventory.mjs` 的 `FROZEN_OPERATIONS` 加名字（漏了 → 冻结清单红；
+   删操作也要在这里显式改小，并有 `host-operations.test.mjs` 的独立护栏）；
 4. 客户端要调用它 → `src/client/features/report-audit/api.ts` 加门面方法 + `OPERATION_OF`；
    不打算给客户端用 → 加进 `client-rpc-facade.test.mjs` 的 `HOST_ONLY`（漏了 → 双向核对红）；
 5. 补单元测试；6. 走 §7 的循环让用户在真机上点一下。
@@ -560,7 +664,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile smoke --port 3099 --no-open
   且只在员工授权（`trustCredentials`）之后才提权；没授权时环境自检把它当阻塞项。上面这条
   `DSH_PERMISSION_MODE` 只是**开发自测**临时 profile 的用法。
 - 只读操作可以随便调：`ping` / `boot` / `env` / `pending` / `audit-status` / `workspace` /
-  `oss-index` / `oss-result` / `oss-cred` / `session` / `install-prompt` / `oss-link`
+  `oss-index` / `oss-result` / `oss-cred` / `session` / `ifind-probe` / `oss-link`
   （`oss-link` 返回签名 URL：**只看结构，不要把 URL 本体回显或落日志**）。
 - **写操作与交互操作不要在真机上乱试**：`audit-start`（会在真实案例上起一次真实审核、写真实工作空间、
   可能自动传真实 OSS）、`oss-upload`、`oss-cred-save`、`workspace-auto`、`trust`、`bind-session`、
@@ -581,9 +685,12 @@ node <repo>/install/browser-check.mjs --url 'http://127.0.0.1:3099/?token=<token
 断言覆盖：**侧栏分组卡**（几何位置 + 卡内三行子项、三行都在同一张卡的范围内且自上而下、
 报告评估占位、点过的子项是选中态、全页只有这三行 —— 面板里不再有模块条 + 子项右侧环境标记：
 通过 = 绿勾）、**自检通过就直接进报告审核**、
-**未授权时的授权弹框**（挡住整页 + 「同意并继续」/「拒绝」）或已授权时 ③ 层头那一行、
-环境自检页的真实数据（四层结论、④ 里的 AK 表单**只要 ID 与 Secret**）、
-**重新自检与翻页的加载态**（进度条 + 正文压暗）、待审核报告页
+**未授权时的授权行**（在「账号连接」里，不是遮住整页的模态层；Host 侧同样拒绝发起审核）、
+**全局环境门禁**（`page.route` 把环境应答人为降级 → 点报告审核 → 断言不进入目标页、
+落到环境页且出现「进入【报告审核】前」→ 撤掉改写后自动继续；`env` 页始终可进）、
+环境信息页的真实数据（四个分组 + 顶部状态卡 + AK 表单**只要 ID 与 Secret** +
+iFinD **API-Key** 卡片的官方入口与「不要让 Agent 代填」）、
+**重新检查与翻页的加载态**（进度条 + 正文压暗）、待审核报告页
 （含**风险等级列**与「窄列不换行」的排版断言、**没有**流水号查找框）、**审核根会话**的可见性、
 **「审核信息」右侧抽屉**（读真实 JSON 对象，断言它固定贴在视口右侧、占满高度、带遮罩、能关掉）、
 **「查看会话」真实点一次**（断言不再出现「客户端 sessions 服务不可用」，且真把会话打开）、

@@ -98,7 +98,15 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 6. 真机上点一下（依赖 `shell` / `fs` / `subagents` / `slots` / `webServer` 或真实外部行为的，
    替身证明不了）。
 
-当前操作清单 = **25 个**（`ping` / `boot` / `env` / `pending` / 审核生命周期 / OSS / 零碎操作…）。
+当前操作清单 = **30 个**（`ping` / `boot` / `env` / `pending` / 审核生命周期 / OSS /
+iFinD 凭据四条 / 零碎操作…）。名字与数量只在 `tests/helpers/frozen-inventory.mjs` 写一份 ——
+各测试各写一个裸数字的结果是：加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
+
+**协议号当前 = 15**（13：`env` 增加 `state` 统一环境模型、iFinD 凭据改由插件 Host 保管（五态 +
+真实探测）、导航门禁上提到统一导航层；14：**删除 `install-prompt` 操作**；15：**iFinD 从可选改为必需项**
+—— `ifind.required=true`、未通过即阻塞（双 scope）、`externalData` 不再恒为 true，
+OSS 探测结果新增结构化 `errorKind` 与 `target`）。
+当前操作清单 = **29 个**，见 §11.3。
 
 ## 8. 本地开发循环与两道人工关卡
 
@@ -204,6 +212,78 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 | 点了 DeepSeek 直接建会话，把半个月前的审核结论当成"当前问题" | 没有做版本检查 | 先 `freshnessOf()`（`digest → version → etag → mtime → 时间退化`）；**纯时间差只给 possibly_stale**，`stale` 必须有 digest/version/etag 证据；缺原始报告要进 Limited 并如实写进上下文 |
 | | 抽屉/浮层里的菜单项点了没反应（脚本里 `getByRole('button', { name })` 超时） | 菜单项挂的是 `role="menuitem"`，可访问角色不是 button | 用类名 + 文案定位（`.crwu-audit-float-item` + hasText）；`install/browser-check.mjs` 里已经踩过两次 |
 | 用户报「界面颜色不对」，但自己本地看是对的 | 主题是**服务端设置**（`~/.dsh/settings.yaml` 的 `ui-theme.preference`），用户切到 dark 之后整页观感全变（主操作会从深色实心翻成近白实心） | 改配色先在**当前真实主题**下量一遍：读 `~/.dsh/settings.yaml` 或用浏览器会话里 `document.body.hasAttribute('data-ds-dark-theme')` 确认，不要默认浅色 |
+
+## 11.1 环境领域模型与统一门禁（2026-09-26）
+
+**一句话**：`allOk + blocked[]` 不再承担所有语义 —— 事实（`userSetup` / `systemHealth`）、
+解释（`issues[]` 带 owner / blocking / scope / action）、结论（`status` / `capabilities` /
+`passed·total`）三层分离，判据只有一份纯函数（`src/shared/environment/model.ts`）。
+界面**只读** `env.state`，不再自己算结论。
+
+为什么必须这么改（都是实测出来的自相矛盾）：
+
+- 一个 `blocked[]` 里同时住着「员工该做的」与「员工做不了的」（包不完整 / 无系统 Python /
+  改 PATH），界面只能平铺，于是员工被指去装一份插件根本不会用的解释器；
+- iFinD 当时是**条件能力**，却与"氚云没登录"长得一模一样 —— 于是 2026-09-26 的产品口径把它
+  改成了必需项（见 §11.1 的表格与 §11.2）；
+- 顶部说「环境就绪」（`allOk`），旁边的通过率说「7/8 通过」（分母把可选项也算进去了）。
+
+四条判据（改这块前先读，测试逐条盯着）：
+
+| 情形 | 结论 |
+| --- | --- |
+| iFinD API-Key 未通过 | **阻塞**（2026-09-26 起它是必需项）：owner 按 credential→user / entitlement→admin / infrastructure→system 分派；`global` + `auditCore` + `externalData` 一起关；进必需项分母 |
+| 氚云 / 钉钉 / OSS / 工作空间缺失 | 阻塞（`action-required`，owner=user） |
+| 包 / 运行时 / 平台 / Tool 故障 | 阻塞（`system-blocked`，owner=system，**不派给员工**） |
+| 部署配置缺 bucket | `admin-required`（owner=admin） |
+| 通过率 | 只统计必需项，`passed/total` 与 `status` 永远自洽 |
+
+**统一导航门禁**：`features/workbench/modules.ts` 的 `requiresEnvironment` / `requirement` +
+`module-store.ts` 的 `navigate(target)` 是**唯一**入口（侧栏子项、报告页内跳转、环境页
+「进入报告审核」、以后新增的页）。被拦时不进入目标页 → 记 `pendingTarget` → 落到 `env` →
+显示「进入【目标页】前…」；检查通过后**只恢复最近一次**被拦的目标；用户中途改去别处即取消
+自动恢复。**踩过的坑**：面板里那条 `envChanged` effect 的依赖一开始写的是解出来的 `env`，
+两次刷新之间 `env.state` 的引用不变时它就不跑 —— 表现是「重新检查通过了、人还卡在环境页」。
+依赖要用**模型对象的引用**（Host 每次应答都是新对象）。
+
+**Host 侧另有能力门禁**（`src/host/environment/gate.ts`）：界面门禁管体验，Host 门禁管真实性与
+绕过防护（同源路由是公开契约）。`audit-start` 判 `auditCore`，判据是**同一份 60s 快照**
+（授权 / 换工作空间 / 存凭据 / 登录之后 `invalidate()`），**不为每个操作重跑一遍完整自检**；
+拿不到快照或自检失败一律 fail closed。**停止审核与释放占用锁刻意不判门禁** —— 它们是安全出口，
+环境刚坏时更要能停能放。
+
+**两个踩过的坑（2026-09-26）**：
+
+1. **拦截理由只能拼一层**。`environmentGate` 已经把整句算好了（iFinD 未通过时是
+   「进入【报告审核】前，请先完成 iFinD API-Key 验证。」），而 `navigateModuleIn` 当时又套了一层
+   通用模板，结果是「请先完成环境配置。（…请先完成 iFinD API-Key 验证。）」——
+   员工第一眼看到的仍然是一句笼统的话，而"指名到项"正是这条需求要的东西。
+   现在 `navigateModuleIn` 只在门禁**没给理由**时兜底。
+2. **拦截说明要当场出现**。环境页原来只在 `gate === 'blocked'` **且** `gateTarget` 存在时画那条提示，
+   而 `gate` 只在面板自己点过「重新检查 / 进入报告审核」之后才会变成 `blocked` ——
+   于是"侧栏点子项被拦回来"这条最常走的路径上，页面**什么都不说**。
+   现在 `WorkbenchPanel` 把统一导航层的 `blocked` / `pendingTarget` / `gateReason` 直接下发给
+   环境页（`gate` 的优先级：界面刚点的动作 > 导航层结论），页面原样显示 `gateReason`。
+
+### 11.2 iFinD 凭据：插件自己的状态文件（2026-09-26）
+
+- 凭据在 `<home>/.dsh/crwu-workbench/ifind-credential.json`（原子写入 + `chmod 600` + 回读核对）；
+  优先 DSH 凭据服务（`ctx.get('credentials')` 形状），当前版本没有时落文件，判断只在
+  `resolveIfindStore()` 一处。**不再读 `~/.agents/skills/…/mcp_config.json`**。
+- 空值 / 占位符 / 首尾空白 / 换行在**写盘之前**拒绝；明文只有 `readIfindSecret` 一个出口且只给
+  Host 内部；面向界面与模型的视图**只有长度**。
+- 界面上叫 **API-Key**（不是"SK"）。**每次环境校验都真的取一次数据**
+  （`initialize` → `tools/list` → `tools/call`）：`ok`（认证）与 `dataVerified`（取数）是两个结论，
+  认证过了但没取到数据时状态是 `unverified` + 明确的 `errorKind`，**不许显示成「已认证」**。
+  面板反复刷新由 30s TTL 缓存兜住（按凭据指纹作键），「重新检查」传 `force` 绕过缓存。
+  试取工具由 `pickProbeTool` 从真实 `inputSchema` 挑（只读、必填 ≤ 1、无开关参数），写/批量类不碰。
+- 保存后**立刻真实探测**（同上，含取数）；失败归因**四个阶段一致**（`classifyFailure`）：
+  先看 401/403 再看消息指纹。401 → `credential`、
+  403 → `entitlement`、网络 / 超时 / 协议 → `infrastructure`，三者不许混。
+- `describe_tool` 返回**脱敏、限深、限长**的 `inputSchema`（净化器接在 schema 出口的**每一层**上 ——
+  只在最外层净化会漏掉 `properties` 嵌套里的示例值）。
+- MCP `protocolVersion` = `2025-03-26`（官方 1.4.0 客户端）并**显式协商**；回不认识的版本按
+  协议错误失败，不许静默假设 `2024-11-05` 永远有效。
 
 ## 12. 自研审核链路：结构化 Tool 优先（2026-09-25）
 

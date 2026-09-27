@@ -703,3 +703,114 @@ Drawer 交互 / 时间格式；不重算命中率与复核算法，不发明字�
   需重启 profile 真机验证、业务会话将完全没有工具（只做上下文分析）。
   **用户 2026-09-23 当场确认：采用方案 B（只保留上下文 + Prompt 边界），工具层不做。**
 - 判据：新增 3 条断言 + 5/5 证伪；`npm run check` 548 通过。
+
+### 9.20 环境信息页重排 + 全局门禁上提（2026-09-26 · 插件 0.0.9 · 协议 14）
+
+用户口径：「把环境配置体验改成『插件自带运行能力，员工只处理账号与密钥』，并增加真正统一的全局环境门禁」。
+
+#### 一、页面顺序 = 员工的操作顺序（不再按维护者排查顺序）
+
+旧版按 ② 插件内置组件 → ③ DSH 运行时 → ④ 登录授权 → ⑤ OSS → ⑥ iFinD 排五层，员工第一眼看到的
+是自己既看不懂也修不了的东西。新版：
+
+1. 顶部**紧凑状态卡**：一句结论 + 通过率（只统计必需项）+ 最近检查时间 + **唯一**主动作；
+2. **账号连接**：一次性授权 + 氚云扫码 + 钉钉登录（含设备码备用）；
+3. **交付与外部数据**：阿里云 AK 表单 + `IfindAuthCard.tsx`（新组件）；
+4. **工作空间**：就绪时压成一行摘要（`WorkspaceCard` 新增 `collapsed`），缺失 / 失效 / 要更换才展开；
+5. **维护者诊断**（默认收起）：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 包根、清单、字节数、
+   运行时路径、审核根会话；
+6. 「复制安装提示词」整块**删除**（同日追加：二进制随包发布、登录与密钥都在界面上完成之后，
+   那段提示词没有运行时用途，只把员工指去绕路）；`install-prompt` 宿主操作与
+   `src/host/environment/install-prompt.ts` 一并删除。
+7. ① 工作空间的「在新会话中打开」按钮**删除**（多余：选目录那一步已经在案例根目录里打开了工作台）。
+
+已下线：`AuthorizationGate.tsx`（模态层）、`environment/layers.ts`（五层规则）、`OssAuthCard.tsx`
+（被 `OssCredCard.tsx` 取代）、「复制安装提示词」整块（`install-prompt` 操作一并删除）、
+① 的「在新会话中打开」按钮。
+
+#### 一之二、iFinD 改名 API-Key + 每次校验真取一次数据（同日追加）
+
+用户口径：「看下 iFinD SK 在环境校验时有没有真实的测试一次，改名叫 API-Key，需要准确点，
+每次环境校验都要做一次真实拉取数据的校验，校验不通过要给出明确提示」。改动：
+
+- 界面与文案统一 **API-Key**；
+- 环境校验从"只认证"升级为 **`initialize` → `tools/list` → `tools/call` 真取一次数据**，
+  `dataVerified` / `dataTool` / `dataSample`（脱敏摘要）进线协议；
+- `ok`（认证）与 `dataVerified`（取数）**分开显示**：认证过了但没取到数据时是 `unverified` +
+  明确 `errorKind`，界面说「认证通过，但这次没有取到数据」，绝不显示成「已认证」；
+- 失败归因四阶段一致（会话 / 工具清单 / 取数 RPC / 取数内容），三类给三种动作；
+- 试取工具 `pickProbeTool` 从真实 schema 挑只读单参数工具，挑不出来如实报权益问题；
+- 30s TTL 探测缓存 +「重新检查」`force` 绕过。
+
+#### 二、iFinD 卡片：密码输入、保存即验证、永不回显
+
+`features/environment/IfindAuthCard.tsx` 的行为逐条被 `tests/unit/client-ifind-card.test.mjs` 钉住：
+password 输入、保存中禁用、提交后**立刻清空本地**那一份（Client 不保留已保存的 SK）、
+保存成功立即真实验证（结论来自 Host 的探测，不是"文件写下去了"）、只显示「已认证」或长度摘要、
+可替换 SK、清除要二次确认、错误就地显示且不回显、官方入口只给链接（明说不要让 Agent 代填）。
+
+#### 三、门禁上提：所有入口走同一个 `navigate`
+
+`modules.ts` 声明 `requiresEnvironment` / `requirement`；`module-store.ts` 的 `navigate(target)`
+是唯一入口。被拦时不进入目标页 → 记 `pendingTarget` → 落到 `env` → 显示「进入【目标页】前，
+请先完成环境配置」+「重新检查」；检查通过后**只恢复最近一次**被拦的目标；用户中途主动改去别处
+即取消自动恢复（`navigate('env')` 也取消）；`env` 页始终可进。Host 侧另有 60s 快照的能力门禁
+（`src/host/environment/gate.ts`），`audit-start` 复用 workspace + 授权 + 包内能力 + Runtime +
+必需 Tool 的统一判据。
+
+#### 四、判据与证伪
+
+- 新增单测：`client-env-model.test.mjs`（13 条：状态 / 通过率 / 门禁纯函数）、
+  `client-module-gate.test.mjs`（12 条：统一导航与 pendingTarget 生命周期）、
+  `client-ifind-card.test.mjs`（12 条：SK 卡片行为）；
+- 重写：`host-ifind-tool.test.mjs`（45 条：Tool + 凭据五态 + 探测分类 + 净化）、
+  `host-environment-env.test.mjs`（28 条：事实 → 模型）；
+- `install/browser-check.mjs`：环境页阶段重写（四分组 + 状态卡 + 两张表单的密钥边界），
+  新增**全局门禁**阶段（人为降级环境应答 → 点报告审核 → 断言不进入目标页且出现目标页名 →
+  撤掉改写后自动继续），仍不触发 `audit-start`；
+- `host-package.test.mjs` 的工具数断言改成与冻结清单对账（此前写死 9，实际 10）。
+
+### 9.21 iFinD 改为必检 + 两项真实外部验证 + 环境页引导式重排（2026-09-26 · 协议 15）
+
+用户口径（原话要点）：「iFinD 不再是可选能力，而是环境必检、必通过项」「只有 iFinD 未配置时不再允许
+degraded 放行」「环境页顶部不再提供『进入报告审核』按钮」「iFinD 在所有用户可见位置统一称为 API-Key」
+「OSS AccessKey 和 iFinD API-Key 都必须通过一次真实外部请求验证，不能只检查文件存在、字段非空或格式正确」
+「不要继续使用当前『多个大卡片从上到下堆叠』的页面结构」。
+
+#### 一、iFinD 必检：改动贯穿清单 / 事实 / issues / 能力 / 计数 / 页面 / 测试
+
+| 层 | 改动 |
+| --- | --- |
+| 清单 | `DEFAULT_MANIFEST.ifind.required = true`（旧注释里那条 OPT-006-R1 · F-008 已被覆盖） |
+| 事实 | `ifindEnvCheck({ required })` 从清单传入 → `IfindCheck.required` → `userSetup.ifind.required` |
+| 解释 | 未通过即 `blocking` issue（`id=ifind` / `ifind-external`），owner 按 credential / entitlement / infrastructure 分派 user / admin / system |
+| 能力 | issue 双写 `global` + `external-data` scope ⇒ `global` / `auditCore` / `externalData` 一起 false |
+| 计数 | 必需项分母 8 → 9；通过率与结论仍自洽 |
+| 门禁 | 拦截文案指名：「进入【报告审核】前，请先完成 iFinD API-Key 验证」 |
+| 页面 | 顶部摘要说「还需完成 N 项」；iFinD 步骤显示「待处理」 |
+| 测试 | 旧口径断言逐条改写（"只有 iFinD 缺失时是 degraded" / "iFinD 不拦导航" / "required=false" / "externalData 永远为 true" / "就绪时显示进入报告审核按钮"） |
+
+`degraded` 枚举保留给将来真正的可选能力，但**不再由"只有 iFinD 缺失"产生**。
+
+#### 二、真实外部验证：OSS 与 iFinD 各打一次真请求
+
+- **OSS**：`ossutil ls oss://<bucket>/<配置前缀>/ --endpoint <配置> --limited-num 1`，只读、空目录也算
+  成功、不再打桶根（只验桶根证明不了"能写交付件"）。失败结构化归因四类
+  （`credential` / `permission` / `config` / `infrastructure`），四类给四种不同的员工动作。
+  探测输出与上传错误共用 `host/oss/sanitize.ts` 的脱敏器。
+- **iFinD**：`initialize → notifications/initialized → tools/list → 选安全只读工具 → tools/call`。
+  只有 `tools/call` 返回非错误、非空内容才 `dataVerified=true`；`ok`（认证）与 `dataVerified`（取数）
+  分开显示。四阶段归因一致（`classifyFailure` 先看 401/403 再看消息指纹）。
+- 两者：保存后立刻验；「重新检查」传 `force` 绕过缓存再验一次；界面显示最近真实验证时间，
+  **不把缓存命中说成刚刚重新请求**。
+
+#### 三、页面：紧凑状态摘要 + 引导式配置工作区
+
+旧结构是"状态卡 + 多个 Section 大卡片从上到下堆叠，每个再展开一长行"，本轮改成主从式双栏：
+左 260px 步骤导航（1 账号连接 / 2 阿里云 OSS / 3 iFinD / 4 工作空间，各带已完成 / 待处理），
+右侧当前步骤的用途说明 + 表单。默认停在第一项未完成；**用户手动选过之后后台刷新不得抢焦点**。
+窄屏 ≤860px 改成顶部横向步骤条。
+
+同批删除：顶部「进入报告审核」按钮（含 `onEnterReport` 属性、处理函数与断言）、三块技术指标卡、
+顶部对全部阻塞项的罗列（只留第一条明确下一步）；「维护者诊断」仍是默认收起，
+技术信息（工具名、数据样本、协议版本、凭据路径、Bucket / Endpoint / 前缀）全部收进它。

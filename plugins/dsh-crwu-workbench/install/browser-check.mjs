@@ -573,6 +573,64 @@ async function main() {
           await page.screenshot({ path: join(out, 'brand.png') })
         })
 
+        // ── **全局环境门禁**：所有入口走同一条导航，被拦时落到环境页 ────────
+        //
+        // 用户口径：「把门禁从 WorkbenchPanel 的 audit 页面特判上提到统一导航层」。
+        // 这里用 `page.route` 把环境应答**人为降级**（只有 iFinD 缺失 → degraded），
+        // 再把环境应答本身也改写成"阻塞"，把瞬态的门禁行为变成确定性断言。
+        // 全程**不点「AI 审核」**，末尾那条「没有 audit-start」的断言照旧成立。
+        await phase('全局环境门禁', async () => {
+          const blockedEnv = (body) => {
+            const json = JSON.parse(body)
+            if (json.state === undefined) return body
+            json.state = {
+              ...json.state,
+              status: 'action-required',
+              proceed: false,
+              allOk: false,
+              capabilities: { global: false, auditCore: false, delivery: true, externalData: true },
+              issues: [{ id: 'workspace', owner: 'user', blocking: true, scope: 'global', action: '选择案例根目录', message: '未找到工作空间，请手动选择' }],
+              blocked: ['未找到工作空间，请手动选择'],
+            }
+            return JSON.stringify(json)
+          }
+          await page.route('**/api/crwu-workbench**', async (route) => {
+            const payload = route.request().postData() ?? ''
+            if (!payload.includes('"op":"env"')) { await route.continue(); return }
+            const response = await route.fetch()
+            const body = await response.text()
+            await route.fulfill({ response, body: blockedEnv(body) })
+          })
+          // 触发一次重新检查，让被改写的应答生效。
+          const recheck = page.getByRole('button', { name: /重新检查|重新自检/ }).first()
+          if (await recheck.count() > 0) await recheck.click()
+          await page.waitForTimeout(1500)
+          // 环境不通过时点「报告审核」：不许进入目标页。
+          await moduleButton('报告审核').click()
+          await page.waitForTimeout(800)
+          const afterBlocked = await body()
+          checks.that('环境不通过时点报告审核，不进入报告页', !afterBlocked.includes('报告列表'), afterBlocked.slice(0, 120))
+          checks.that('被拦住时落到环境页', afterBlocked.includes('账号连接'))
+          checks.that('被拦住时显示目标页名', /进入【报告审核】前/.test(afterBlocked), afterBlocked.slice(0, 160))
+          checks.that('被拦住时给出「重新检查」', await page.getByRole('button', { name: /重新检查|重新自检/ }).count() > 0)
+          await page.screenshot({ path: join(out, 'env-gate-blocked.png') })
+          // 环境页**始终可进**。
+          await moduleButton('环境信息').click()
+          await page.waitForTimeout(500)
+          checks.that('环境页始终可进', (await body()).includes('账号连接'))
+          // 撤掉改写：再检查一次就该恢复（并通过 pendingTarget 自动回到报告审核）。
+          await page.unroute('**/api/crwu-workbench**')
+          const recheckAgain = page.getByRole('button', { name: /重新检查|重新自检/ }).first()
+          if (await recheckAgain.count() > 0) await recheckAgain.click()
+          await page.waitForFunction(
+            () => document.body.innerText.includes('报告列表'),
+            undefined,
+            { timeout: 60_000 },
+          ).catch(() => undefined)
+          checks.that('检查通过后自动继续到刚才被拦的目标页', (await body()).includes('报告列表'))
+          await page.screenshot({ path: join(out, 'env-gate-recovered.png') })
+        })
+
         // ── 门禁：通过就直接进报告审核；不通过必须停在环境信息 ────────────
         await phase('自检门禁', async () => {
           // 上一步把模块切到了「报告评估」，这里按结论回到该在的那一页再断言。
@@ -582,115 +640,140 @@ async function main() {
           if (envOk) {
             checks.that('自检通过就直接进报告审核', text.includes('报告列表'))
           } else {
-            checks.that('自检不通过时停在环境信息', text.includes('环境未通过'))
+            // 不通过时的文案在顶部状态卡里（「还需完成 N 项」/ 系统故障那句），不再有旧的
+            // 「环境未通过」大标题。
+            checks.that('自检不通过时停在环境信息', /还需完成 \d+ 项|发现系统故障|环境检查没有完成/.test(text), text.slice(0, 160))
             checks.that('自检不通过时报告审核不出现', !text.includes('报告列表'))
           }
         })
 
-        // ── 第 6 条：环境信息按六层画真实探测结果（同时证明 Host→Client 链路） ──
+        // ── 第 6 条：环境信息 = 紧凑状态摘要 + 引导式配置工作区（证明 Host→Client 链路） ──
         //
-        // 页面的读者是普通员工：① 案例工作空间（由 WorkspaceCard 承担）+ ②..⑥ 五层
-        // （插件内置组件 / DSH 脚本运行时 / 登录与凭据授权 / OSS 交付配置 / 外部数据）
-        // + 每层 `x/y 已就绪`；**就绪的层收成一行、没就绪的层默认展开**；维护者信息（清单来源、
-        // sha256、会话 id、包内路径）收在页脚「排查详情」里，默认不展开；
-        // 但**授权开关不在那里** —— 它是员工必须点一次的东西，常驻在「④ 登录与凭据授权」层头（下面单独断言）。
+        // 页面结构（2026-09-26 重排，读者是普通员工）：
+        // 1. 顶部**状态摘要**：一句结论 + 已完成 N/N + 最近检查 / 最近**真实验证**时间 +
+        //    **唯一**主动作「重新检查」（**没有**「进入报告审核」按钮）；
+        // 2. **配置工作区**：左侧步骤导航（1 账号连接 / 2 阿里云 OSS / 3 iFinD / 4 工作空间，
+        //    各带已完成 / 待处理），右侧当前步骤的用途说明 + 表单；
+        // 3. **维护者诊断**（默认收起）：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节。
+        //
+        // 三条不许回退的边界：员工视野里没有「安装二进制 / 装 Python / 改 PATH」；
+        // 技术细节只在维护者诊断里；密钥只提交、不回显。
         await phase('环境信息页', async () => {
           await moduleButton('环境信息').click()
           await page.waitForTimeout(1500)
           const envText = await body()
-          checks.that('环境信息显示真实平台', /darwin|linux|win32/.test(envText))
-          // 五层结论必须在（分层是这一版的全部意义）：包内组件 / DSH 运行时 / 登录授权 / OSS / 外部数据。
-          checks.that(
-            '环境信息按五层给结论',
-            envText.includes('② 插件内置组件') && envText.includes('③ DSH 脚本运行时')
-              && envText.includes('④ 登录与凭据授权') && envText.includes('⑤ OSS 交付配置')
-              && envText.includes('⑥ 外部数据'),
-          )
-          // 包内三件套是「随插件自带」的组件，不是要员工安装的命令：聚合口径与「不提示安装」都要在。
-          checks.that('插件内置组件按聚合口径显示', /插件内置组件.*\d+\/\d+/.test(envText) || envText.includes('内置组件'))
-          checks.that('不为包内组件提示安装命令', !/安装\s*(crwu|dws|ossutil)|请先安装/.test(envText))
-          checks.that('每层给出「x/y 已就绪」计数', /\d+\/\d+ 已就绪/.test(envText))
-          checks.that('环境信息显示氚云与钉钉', envText.includes('氚云') && envText.includes('钉钉'))
-          checks.that('环境信息显示 iFinD 密钥状态', envText.includes('iFinD'))
-          checks.that('环境信息显示 OSS 上传配置', envText.includes('OSS'))
-          checks.that('环境信息显示通过率与阻塞计数', envText.includes('已通过') && envText.includes('未通过'))
-          // 复制入口全页只留一处（用户反馈：环境页上的「复制提示词 / 复制」按钮太多且没用）。
-          // 授权弹框挡在前面时整页不可达，这时跳过（弹框本身由「授权弹框」那段单独断言）。
-          if (!envText.includes('需要一项授权')) {
-            const copyEntry = page.getByRole('button', { name: '复制安装提示词' })
-            const copyCount = await copyEntry.count()
-            checks.that('全页只有一枚「复制安装提示词」按钮', copyCount === 1, `找到 ${copyCount} 个`)
-            checks.that('旧的「复制提示词」按钮已删除', await page.getByRole('button', { name: '复制提示词' }).count() === 0)
-            checks.that('旧的重生成按钮已删除', await page.getByRole('button', { name: '重新生成' }).count() === 0)
+          checks.that('顶部状态摘要给出结论', /环境已就绪|还需完成 \d+ 项|需要管理员处理|发现系统故障|环境检查没有完成|正在检查环境/.test(envText))
+          checks.that('摘要给出完成数量与最近验证时间', /\d+\/\d+/.test(envText) && /最近检查|最近真实验证/.test(envText))
+          // **顶部没有「进入报告审核」按钮**（用户口径：只做提示，跳转走左侧栏）。
+          const enterButtons = await page.getByRole('button', { name: '进入报告审核' }).count()
+          checks.that('顶部不再有「进入报告审核」按钮', enterButtons === 0, `实际 ${String(enterButtons)} 个`)
+          // 就绪时只给一句提示（那句话里允许出现"报告审核"四个字，但不是一个按钮）。
+          if (envText.includes('环境已就绪')) {
+            checks.that('就绪时提示可以从左侧进入报告审核', envText.includes('配置已完成。你可以从左侧进入报告审核。'))
           }
-          // ① 只讲插件选定的案例根目录：不该因为"你从哪个会话点进来"而变样。
+          // 四个步骤都在左侧导航里，且**顺序**固定（用页面文本下标核对）。
+          const steps = ['账号连接', '阿里云 OSS', 'iFinD', '工作空间']
+          for (const step of steps) checks.that(`步骤导航有「${step}」`, envText.includes(step))
+          const stepIndex = steps.map((step) => envText.indexOf(step))
+          checks.that('步骤顺序 = 用户操作顺序', stepIndex.every((value, index) => value >= 0 && (index === 0 || value > stepIndex[index - 1])),
+            JSON.stringify(stepIndex))
+          const navItems = await page.locator('[data-crwu-env-step]').count()
+          checks.that('左侧步骤项恰好四个', navItems === 4, `实际 ${String(navItems)} 个`)
+          const states = await page.locator('[data-crwu-env-step]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-state')))
+          checks.that('每个步骤都带状态（done / todo / doing）', states.every((state) => state === 'done' || state === 'todo' || state === 'doing'), JSON.stringify(states))
+          const activeStep = await page.locator('[data-crwu-env-step][aria-current="step"]').count()
+          checks.that('默认有一项是当前步骤', activeStep === 1, `实际 ${String(activeStep)} 个`)
+          checks.that('当前步骤的面板画出来了', await page.locator('[data-crwu-env-step-panel]').count() === 1)
+          // 员工视野里**不许**出现他修不了的处置。
+          checks.that('不为包内组件提示安装命令', !/安装\s*(crwu|dws|ossutil)|请先安装/.test(envText))
+          checks.that('不提示员工安装系统 Python 或改 PATH', !/安装(系统)?\s*Python|export\s+PATH|command -v/.test(envText))
+          checks.that('技术细节（包根 / 清单）默认不可见', !envText.includes('包内清单') && !envText.includes('包根'))
           checks.that('① 不拿当前会话说事（换会话不会变）', !envText.includes('不是同一个') && !envText.includes('的会话中打开工作台'))
           await page.screenshot({ path: join(out, 'env.png') })
 
-          // 员工视野里不该出现维护者信息：那些只在「排查详情」里。
-          const detailsHead = page.locator('.crwu-audit-details-head').first()
-          checks.that('页脚有「排查详情」入口', await detailsHead.count() > 0)
-          checks.that('排查详情默认不展开', !envText.includes('运行环境信息'), envText.slice(0, 120).replace(/\s+/g, ' '))
-          // 授权是**插件级门槛**：没有授权，氚云待办取不到、钉钉也回传不了，所以它用一个弹框
-          // 把整页挡住（「同意并继续」/「拒绝」→ 拒绝屏 + 「再次授权」），不再是 ③ 里一个可以
-          // 悄悄忽略掉的勾选框（用户 2026-09-22 明确要这种形式）。
-          if (envText.includes('需要一项授权')) {
-            // 未授权：弹框必须挡住整页（报告页的入口一个都不许露出来），并给出两个明确动作。
-            checks.that('未授权时弹框挡住整页（报告页不出现）', !envText.includes('报告列表'))
-            checks.that('未授权弹框给出「同意并继续」', envText.includes('同意并继续'))
-            checks.that('未授权弹框给出「拒绝」', envText.includes('拒绝'))
-            // 没授权时插件不可用：要说「需要授权」，而不是谎报「未登录」。
-            checks.that('未授权时状态词不说「未登录」', !envText.includes('钉钉认证｜未登录'))
+          // 切换步骤：手动选过之后（这里点 OSS 与 iFinD）各自的表单必须出来。
+          const pick = async (id) => {
+            const item = page.locator(`[data-crwu-env-step="${id}"]`).first()
+            await item.click()
+            await page.waitForTimeout(220)
+            return page.locator(`[data-crwu-env-step-panel="${id}"]`).first()
+          }
+
+          // 账号连接：一次性授权**不使用模态层**，是这一步里可见的一行。
+          const accounts = await pick('accounts')
+          const consent = accounts.locator('[data-crwu-env-item="consent"]').first()
+          checks.that('授权是「账号连接」步骤里可见的一行（不是模态层）', await consent.count() > 0)
+          checks.that('页面上没有遮住整页的授权弹框', await page.locator('.crwu-audit-auth-mask').count() === 0)
+          const accountsText = await accounts.innerText()
+          if (accountsText.includes('同意并继续')) {
+            checks.that('未授权时给「同意并继续」', accountsText.includes('同意并继续'))
           } else {
-            // 已授权：④ 层头常驻这一行（文案由 client-package.test.mjs 逐字盯着）。
-            checks.that('已授权后 ④ 层头常驻「已授权读取本机凭据」', envText.includes('已授权读取本机凭据'))
+            checks.that('已授权后给出「已授权读取本机凭据」', accountsText.includes('已授权读取本机凭据'))
           }
+          checks.that('账号步骤里给出氚云与钉钉', accountsText.includes('氚云') && accountsText.includes('钉钉'))
 
-          // 就绪的层收成一行：层里的路径要点开才出现。逐层点开，核对真实探测值。
-          const layerHeads = page.locator('.crwu-audit-layer-head')
-          const layerCount = await layerHeads.count()
-          checks.that('五层都画出来了（① 由案例工作空间卡片承担）', layerCount === 5, `实际 ${String(layerCount)} 层`)
-          for (let index = 0; index < layerCount; index += 1) {
-            const expanded = String(await layerHeads.nth(index).getAttribute('aria-expanded') ?? '')
-            if (expanded === 'false') await layerHeads.nth(index).click()
-          }
-          await page.waitForTimeout(300)
-          const expandedText = await body()
-          checks.that('展开后能看到真实路径', expandedText.includes('/Users/') || expandedText.includes('/usr/'))
-          checks.that('展开后能看到版本号', /\d+\.\d+/.test(expandedText))
-          checks.that('展开插件组件层能看到「x/3 完整」聚合计数', /插件内置组件 \d+\/3 完整/.test(expandedText) || expandedText.includes('插件内置组件'))
-          // ⑤ 交付层里的 AK 表单：员工要填的只有 ID 与 Secret —— STS Token 与 endpoint 由插件
-          // 自己处理（用户 2026-09-22 反馈「这两个不需要配置」）。断言按**这一层里的输入框**
-          // 数量来，避免被页面上别处的同名字样满足（文本包含式断言踩过）。
-          const akCard = page.locator('.crwu-audit-card').filter({ hasText: '填 AccessKey' }).first()
-          checks.that('⑤ 的 AK 表单就在这一层里', await akCard.count() > 0)
-          const akInputs = await akCard.locator('input').count()
-          checks.that('AK 表单只有 ID 与 Secret 两个输入框', akInputs === 2, `实际 ${String(akInputs)} 个`)
-          checks.that(
-            'AK 表单不再要 STS Token / endpoint',
-            await akCard.getByText(/STS|endpoint/i).count() === 0,
-          )
-          await page.screenshot({ path: join(out, 'env-layers.png') })
+          // OSS 步骤：两个字段各自有真实 <label>、Secret 是 password、不要 STS / endpoint。
+          const ossPanel = await pick('oss')
+          const ossCard = ossPanel.locator('[data-crwu-oss-card="1"]').first()
+          checks.that('OSS 凭据表单在 OSS 步骤里', await ossCard.count() > 0)
+          const ossInputs = await ossCard.locator('input').count()
+          checks.that('OSS 表单只有 ID 与 Secret 两个输入框', ossInputs === 2, `实际 ${String(ossInputs)} 个`)
+          const ossLabels = await ossCard.locator('label').allInnerTexts()
+          checks.that('OSS 字段用真实 <label> 而不是只用 placeholder',
+            ossLabels.length === 2 && ossLabels.join('|').includes('AccessKey ID') && ossLabels.join('|').includes('AccessKey Secret'),
+            JSON.stringify(ossLabels))
+          checks.that('OSS 表单不再要 STS Token / endpoint', await ossCard.getByText(/STS Token|endpoint/i).count() === 0)
+          checks.that('OSS 表单的 Secret 输入是 password', await ossCard.locator('input[type="password"]').count() === 1)
+          checks.that('OSS 主按钮是「保存并验证」', (await ossCard.innerText()).includes('保存并验证'))
+          checks.that('OSS 说明向管理员获取 AK', (await ossCard.innerText()).includes('向管理员获取'))
 
-          // 排查详情：点开后才是维护者信息（清单来源、运行环境信息、审核根会话）。
-          await detailsHead.click()
+          // iFinD 步骤：只用「API-Key」这个词，且明说不要让 Agent 代填。
+          const ifindPanel = await pick('ifind')
+          const ifindCard = ifindPanel.locator('[data-crwu-ifind-card="1"]').first()
+          checks.that('iFinD 卡片在 iFinD 步骤里', await ifindCard.count() > 0)
+          const ifindText = await ifindCard.innerText()
+          checks.that('iFinD 卡片给出状态结论（已认证 / 未通过验证 / 未填写 / 无效 / 不可达）',
+            /已认证|未通过验证|未填写|API-Key 无效|服务不可达/.test(ifindText), ifindText.slice(0, 120))
+          checks.that('iFinD 统一叫 API-Key', ifindText.includes('API-Key'))
+          checks.that('iFinD 面向用户的文案里不再出现「SK」', !/(^|[^A-Za-z])SK([^A-Za-z]|$)/.test(ifindText), ifindText.slice(0, 120))
+          checks.that('iFinD 卡片明说不要让 Agent 代填', ifindText.includes('不要让 Agent 代填'))
+          checks.that('iFinD 卡片说明从哪里获得', ifindText.includes('从哪里获得'))
+          checks.that('iFinD 卡片不展示验证工具名与数据样本（已移入维护者诊断）',
+            !ifindText.includes('验证工具') && !ifindText.includes('取数样本') && !ifindText.includes('取数摘要'))
+          const ifindLink = ifindCard.locator('a').first()
+          checks.that('iFinD 官方入口是链接', await ifindLink.count() > 0)
+          checks.that('官方入口指向 mcp.51ifind.com',
+            String(await ifindLink.getAttribute('href') ?? '').includes('mcp.51ifind.com'))
+          const ifindPassword = await ifindCard.locator('input[type="password"]').count()
+          const ifindInputs = await ifindCard.locator('input').count()
+          checks.that('iFinD 输入框是 password 类型或已保存时收起', ifindInputs === 0 || ifindPassword === 1)
+
+          // 工作空间步骤：就绪时是一行摘要（有「更换」入口）。
+          const wsPanel = await pick('workspace')
+          checks.that('工作空间步骤里有案例根目录', (await wsPanel.innerText()).includes('案例根目录'))
+          checks.that('工作空间就绪时压成摘要（有「更换」入口）', (await wsPanel.innerText()).includes('更换'))
+          await page.screenshot({ path: join(out, 'env-config.png') })
+
+          // 维护者诊断：点开后才是技术细节（包根、清单、字节数、运行时、Tool 可见性、验证工具名）。
+          await pick('ifind')
+          const maintenanceHead = page.locator('.crwu-audit-details-head').filter({ hasText: '维护者诊断' }).first()
+          checks.that('有「维护者诊断」折叠区', await maintenanceHead.count() > 0)
+          await maintenanceHead.click()
           await page.waitForTimeout(300)
           const detailText = await body()
-          checks.that('展开排查详情后出现运行环境信息', detailText.includes('运行环境信息'))
-          checks.that('运行环境信息里给出审核根会话', detailText.includes('审核根会话'))
-          // 组件明细只剩**包内事实**：包根 / 包内清单 / 逐组件字节数 / 清单 sha256 / 版本要求。
-          checks.that('排查详情里给出包内清单与包根', detailText.includes('包内清单') && detailText.includes('包根'))
-          checks.that('排查详情里给出组件版本要求', detailText.includes('版本要求'))
-          checks.that('排查详情里给出 DSH 运行时明细', detailText.includes('DSH 脚本运行时明细') && detailText.includes('依赖包版本'))
-          checks.that('排查详情里不再需要授权开关（它常驻在 ④ 登录与凭据授权 层）', !detailText.includes('记住氚云授权'))
+          checks.that('维护者诊断展开后有包内组件 / DSH Runtime / 平台 / Tool 可见性',
+            ['包内组件', 'DSH Runtime', '平台', 'Tool 可见性'].every((item) => detailText.includes(item)))
+          checks.that('技术细节里有包根与包内清单', detailText.includes('包根') && detailText.includes('包内清单'))
+          checks.that('技术细节里有 DSH 运行时路径', detailText.includes('运行时路径') || detailText.includes('/'))
+          checks.that('维护者诊断里不再需要授权开关', !detailText.includes('记住氚云授权'))
           await page.screenshot({ path: join(out, 'env-details.png') })
         })
 
         // ── 重新自检也要有加载态（用户点下去到结论出来有好几秒）────────────────
         await phase('重新自检加载态', async () => {
-          const recheck = page.getByRole('button', { name: '重新自检' }).first()
+          const recheck = page.getByRole('button', { name: /重新检查|重新自检/ }).first()
           if (await recheck.count() === 0) {
-            checks.that('环境信息页有「重新自检」按钮', false)
+            checks.that('环境信息页有「重新检查」按钮', false)
             return
           }
           // 同翻页那条：把这一次 env 拖慢，让瞬态加载态变成确定性断言。
@@ -718,25 +801,21 @@ async function main() {
         // ── 第 7a 条：报告页画出真实氚云待办 ──────────────────────────────
         await phase('待审核报告页', async () => {
           if (!envOk) {
-            // 不通过时的门禁：点「进入报告审核」应当被 loading 拦住，报告页不许出来。
-            const entryButton = page.getByRole('button', { name: '进入报告审核' }).first()
-            if (await entryButton.count() > 0) {
-              await entryButton.click()
-              await page.waitForTimeout(8000)
-              const blockedText = await body()
-              checks.that('不通过时点进去会被拦住（报告页不出现）', !blockedText.includes('报告列表'))
-              checks.that('拦住时给出明确说明', blockedText.includes('环境自检未通过'))
-              await page.screenshot({ path: join(out, 'gate.png') })
-            } else {
-              checks.that('环境信息页存在「进入报告审核」入口', false, '按钮都没渲染出来')
-            }
+            // 不通过时的门禁：环境页**没有**「进入报告审核」按钮（2026-09-26 口径），
+            // 所以从**侧栏子项**进报告审核 —— 它必须被统一导航拦回来，并当场给出拦截说明
+            // （说明读的是导航层记下的 `gateReason`，不是等用户再点一次「重新检查」）。
+            await moduleButton('报告审核').click()
+            await page.waitForTimeout(1200)
+            const blockedText = await body()
+            checks.that('不通过时点侧栏「报告审核」被拦住（报告页不出现）', !blockedText.includes('报告列表'))
+            checks.that('拦住后停在环境信息页', /环境已就绪|还需完成|需要管理员处理|发现系统故障|环境检查没有完成/.test(blockedText))
+            checks.that('拦截说明当场出现（不用再点一次重新检查）',
+              await page.locator('[data-crwu-env-gate="blocked"]').count() > 0)
+            const gateText = await page.locator('[data-crwu-env-gate="blocked"]').first().innerText()
+            checks.that('拦截说明指向被拦的那一页', gateText.includes('报告审核'), gateText.slice(0, 120))
+            checks.that('环境页仍然可进（它自己就是修复入口）', await page.locator('[data-crwu-env-stepnav="1"]').count() > 0)
+            await page.screenshot({ path: join(out, 'gate.png') })
             return
-          }
-          // 从环境信息页回到报告审核（通过时这个按钮就是放行的）。
-          const back = page.getByRole('button', { name: '进入报告审核' }).first()
-          if (await back.count() > 0) {
-            await back.click()
-            await page.waitForTimeout(2000)
           }
           await page.getByRole('button', { name: /报告列表/ }).last().click()
           // 氚云查询真机上十几秒是常态：等真正画出流水号（或明确报错）再断言，别用固定等待。

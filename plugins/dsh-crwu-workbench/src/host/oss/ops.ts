@@ -387,12 +387,16 @@ export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>):
   })
   if (!written.ok) return failed(written.error)
 
+  // 保存后**立刻**用这份凭据打一次真实请求（只读 ls，走业务前缀）——**不查缓存**：
+  // "文件写下去了"不等于"能用"，所以 `ok` 必须由这次探测的真实结果决定。
   const probe = await probeOss(deps.ctx, deps.manifest.oss, deps.platform, {
     workdir: await shellWorkdir(deps),
   })
   return {
-    ok: true,
-    error: '',
+    // 探测失败 = 这次保存没有成功（凭据已落盘，员工可以改完再存）。
+    // 旧口径回 `ok: true` + `probe.ok: false`，界面得自己再判一次，漏判就会谎报成功。
+    ok: probe.ok,
+    error: probe.ok ? '' : (probe.detail || probe.state || 'OSS 验证未通过'),
     path: written.path,
     operation: written.operation,
     chmodOk: written.chmodOk,

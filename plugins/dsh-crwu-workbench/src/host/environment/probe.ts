@@ -2,10 +2,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { text } from '../../shared/utils/value.ts'
+import { sanitizeOssError, OSS_OUTPUT_LIMIT } from '../oss/sanitize.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { binPlatformDir, bundledBinaryPath, binaryFileName } from '../platform/bin-dir.ts'
 import { isWindowsPlatform } from '../platform/detect.ts'
-import { expandLocal } from '../platform/home.ts'
 import { packageRootFrom } from '../platform/package-root.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
 import type { EnvManifest, OssSpec, PackagedToolSpec, ServiceSpec } from './manifest-default.ts'
@@ -30,7 +30,6 @@ import { quoteArg } from './manifest.ts'
  * 放进维护者详情，用来做人工对账。
  */
 
-/** 单个随包组件的检查结果。 */
 export interface PackagedToolCheck {
   name: string
   label: string
@@ -61,7 +60,14 @@ export interface PackageIntegrityCheck {
   note: string
 }
 
-/** 单个服务的探测结果（氚云 / 钉钉登录态，以及 OSS 交付探测）。 */
+/**
+ * 单个服务的探测结果（氚云 / 钉钉登录态，以及 OSS 交付探测）。
+ *
+ * `errorKind` 是给 OSS 的**结构化归因**（2026-09-26）：`credential`（AK 无效）/
+ * `permission`（没有目标 Bucket/Prefix 权限）/ `config`（Bucket 或 Endpoint 配错）/
+ * `infrastructure`（网络、超时、包内 ossutil 或执行环境故障）。四类的处置完全不同，
+ * 压成一句「OSS 连接不可用」会让员工与管理员互相踢皮球。
+ */
 export interface ServiceCheck {
   id: string
   label: string
@@ -69,38 +75,47 @@ export interface ServiceCheck {
   ok: boolean
   state: string
   detail: string
+  /** 归因；不需要归因的服务（氚云 / 钉钉）留空串。 */
+  errorKind?: string
+  /** 探测目标（`oss://bucket/prefix/` 这类），**不含凭据**；只用于维护者诊断。 */
+  target?: string
 }
 
+/**
+ * iFinD 凭据检查结果（**只回长度与状态，绝不回显**）。
+ *
+ * `ok` 与 `dataVerified` 必须分开：`ok` 只代表认证通过（`initialize + tools/list`），
+ * `dataVerified` 代表**真的取到了一次数据**（`tools/call` 返回非错误、非空内容）。
+ * 环境校验的判据是后者 —— 认证过了却取不到数是常见的后置失败（权益 / 配额 / 参数）。
+ */
 export interface IfindCheck {
   path: string
   required: boolean
   ok: boolean
+  /** `unconfigured` | `unverified` | `authenticated` | `invalid` | `unreachable`。 */
+  state: string
+  /** `credential` | `entitlement` | `infrastructure` | `unconfigured` | `''`。 */
+  errorKind: string
   reason: string
   tokenLength: number
+  /** 最近一次真实探测的时刻（ISO 串）；没探过是空串。 */
+  checkedAt: string
+  /** 这次真实探测拿到了几个工具；没探过是 0。 */
+  toolCount: number
+  /** **真的取到数据了吗**（`tools/call` 成功返回内容）。 */
+  dataVerified: boolean
+  /** 取数验证用的工具名（没取数时空串）。 */
+  dataTool: string
+  /** 取数结果的**脱敏**短摘要（最多 300 字符）。 */
+  dataSample: string
+  /** 「获取 API-Key」的官方入口（界面上的链接）；Host 不代填、不索取。 */
+  applyUrl: string
 }
 
-/**
- * 按平台选择引用方式。
- *
- * `quoteArg` 产出 POSIX 单引号，在 `cmd.exe` 下无效 —— 版本探测命令会带路径参数，
- * 所以 Windows 上必须换成双引号 + `""` 转义，否则 `ossutil --version` 一定探测失败。
- */
 export function shellQuote(value: unknown, platform: string): string {
   if (!isWindowsPlatform(text(platform))) return quoteArg(value)
   const raw = String(value)
   return `"${raw.replace(/"/g, '""')}"`
-}
-
-/** 把 `iFinD` 密钥的检查拆出来，便于单测：空值/占位符/首尾空白三种失败都要能分辨。 */
-export function checkIfindToken(raw: unknown, placeholder: unknown): { ok: boolean; reason: string; tokenLength: number } {
-  const value = text(raw)
-  const expected = text(placeholder) || 'your ifind-mcp key'
-  if (value.trim() === '') return { ok: false, reason: 'auth_token 为空', tokenLength: 0 }
-  if (value.trim().toLowerCase() === expected.toLowerCase()) {
-    return { ok: false, reason: `auth_token 仍是占位符 ${expected}`, tokenLength: 0 }
-  }
-  if (value !== value.trim()) return { ok: false, reason: 'auth_token 含首尾空白，需要清洗', tokenLength: 0 }
-  return { ok: true, reason: '', tokenLength: value.length }
 }
 
 /**
@@ -174,7 +189,9 @@ export async function probePackageIntegrity(
   ctx: Context,
   manifest: EnvManifest,
   platform: string,
+  options: { url?: string } = {},
 ): Promise<PackageIntegrityCheck> {
+  void options
   const { packageRoot, manifestPath } = packageIntegrityPaths()
   const supported = binPlatformDir(platform) !== ''
   const fs = fileSystem(ctx)
@@ -210,7 +227,7 @@ export async function probePackageIntegrity(
     tools,
     note: ok
       ? `插件内置组件 ${String(tools.length)}/${String(tools.length)} 完整：`
-        + `字节数与包内 bin/manifest.json 一致（sha256 见明细，不在自检里重算）。`
+        + '字节数与包内 bin/manifest.json 一致（sha256 见明细，不在自检里重算）。'
       : (failed[0]?.reason ?? packageGapMessage(platform, '插件内置组件不可用')),
   }
 }
@@ -329,102 +346,145 @@ export async function resolveOssutil(
   return { path: '', error: packageGapMessage(platform, `包内缺少 ${bundled}`) }
 }
 
-/** 探测 OSS 的 AK 是否真的能列对象 —— 这是「AK 配好了吗」唯一可信的证据。 */
+// ── OSS 真实能力验证（2026-09-26 收紧）─────────────────────────────────────
+
+/** OSS 探测的归因分类。 */
+export type OssProbeKind = '' | 'credential' | 'permission' | 'config' | 'infrastructure'
+
+/**
+ * 一次真实 OSS 只读验证的请求形状（**完全由受信配置推出，模型与员工都不能提交**）。
+ *
+ * 导出它有两个目的：① 单测可以对命令字符串逐字断言；② 维护者诊断里能显示"验的是哪个目标"，
+ * 而目标里**不含任何凭据**。
+ */
+export function ossProbeTarget(oss: OssSpec): { bucket: string; prefix: string; target: string } {
+  const prefix = oss.prefix.replace(/^\/+|\/+$/g, '')
+  const path = prefix === '' ? '' : `${prefix}/`
+  return { bucket: oss.bucket, prefix: path, target: `oss://${oss.bucket}/${path}` }
+}
+
+/**
+ * 端到端唯一的 OSS 真实验证：**用包内 ossutil 对配置好的 bucket + 业务前缀做一次只读列举**。
+ *
+ * 判据（2026-09-26 收紧）：
+ * - 必须打**业务前缀**（`oss://<bucket>/<prefix>/`）而不是桶根：只验桶根证明不了"能写交付件"；
+ * - `--limited-num 1`：只要一次请求，空目录也算成功（判据是"请求成功且凭据有权访问该目标"，
+ *   不是"一定列到对象"）；
+ * - 只用只读 `ls`：**不**为了验证去上传、删除或创建对象；
+ * - 只认包内绝对路径（`resolveOssutil`），不回退 PATH、不要员工装 ossutil；
+ * - 所有 stdout / stderr 在返回或写日志之前过 `sanitizeOssError`（AK / STS / Signature / 签名 URL）。
+ *
+ * 归因顺序是刻意的：**先看命令有没有跑起来**（沙箱 / 审批 / 包内缺文件），
+ * 再看 HTTP / 服务端错误码。把"命令根本没跑起来"说成"AK 无效"会把员工指去换一份好密钥。
+ */
 export async function probeOss(
   ctx: Context,
   oss: OssSpec,
   platform: string,
   options: { workdir?: string } = {},
 ): Promise<ServiceCheck> {
-  const base = { id: 'oss', label: '阿里云 OSS（AK 权限）', required: true }
-  if (!oss.enabled) return { ...base, ok: false, state: '未启用', detail: '清单 oss.enabled 为 false' }
-  if (oss.bucket === '') return { ...base, ok: false, state: '缺 bucket', detail: '清单 oss.bucket 为空' }
+  const { target, prefix } = ossProbeTarget(oss)
+  const base: ServiceCheck = {
+    id: 'oss', label: '阿里云 OSS（AK 权限）', required: true,
+    ok: false, state: '', detail: '', errorKind: '', target,
+  }
+  if (!oss.enabled) {
+    return { ...base, ok: false, state: '未启用', errorKind: 'config', detail: '清单 oss.enabled 为 false' }
+  }
+  if (oss.bucket === '') {
+    return { ...base, ok: false, state: '缺 bucket', errorKind: 'config', detail: '清单 oss.bucket 为空（由管理员在部署配置里设置）' }
+  }
 
   const lookup = await resolveOssutil(ctx, oss, platform, options)
   if (lookup.path === '') {
     // 包内没有 ossutil / 平台不受支持：这是**插件包**的问题，不是「员工没装」。
-    return { ...base, ok: false, state: '插件包不完整 / 平台不受支持', detail: lookup.error }
+    return { ...base, ok: false, state: '插件包不完整 / 平台不受支持', errorKind: 'infrastructure', detail: lookup.error }
   }
   const ossutil = lookup.path
 
-  const endpointArg = oss.endpoint === '' ? '' : ` --endpoint ${shellQuote(oss.endpoint, platform)}`
-  const command = oss.probeCommand !== ''
-    ? oss.probeCommand
-      .split('{ossutil}').join(shellQuote(ossutil, platform))
-      .split('{bucket}').join(oss.bucket)
-      .split('{endpoint}').join(oss.endpoint)
-    : `${shellQuote(ossutil, platform)} ls ${shellQuote(`oss://${oss.bucket}/`, platform)}${endpointArg} --limited-num 1`
-
+  const command = buildOssProbeCommand(oss, ossutil, platform)
   const run = await runShell(ctx, command, {
     timeoutMs: 60_000,
     ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
   })
-  const raw = (text(run.stderr) || text(run.stdout) || text(run.error) || '探测失败').trim()
 
-  // 「命令根本没跑起来」（沙箱后端不可用 / 审批被拒）与「跑完了报 AK 错」是两件事：
-  // 前者说成「AK 无效」会把人指去换 AK，而真正的问题是执行环境。
-  if (shellUnavailable(run)) return { ...base, ok: false, state: '无法探测', detail: raw }
-
-  let state = 'AK 配置有误或不可用'
-  if (run.ok) state = 'AK 正常'
-  else if (raw.includes('AccessDenied') || raw.includes('denied')) state = 'AK 无权限'
-  else if (raw.includes('InvalidAccessKeyId') || raw.includes('SignatureDoesNotMatch')) state = 'AK 无效'
-  else if (raw.includes('NoSuchBucket')) state = 'bucket 不存在'
-  else if (raw.toLowerCase().includes('both empty')) state = 'AK 未配置'
-
-  return {
-    ...base,
-    ok: run.ok,
-    state,
-    detail: run.ok
-      ? `AK 可访问 oss://${oss.bucket}/${oss.endpoint === '' ? '' : ` @ ${oss.endpoint}`}`
-      : raw.slice(0, 400),
+  // 「命令根本没跑起来」（沙箱后端不可用 / 审批被拒）与「跑完了报 AK 错」是两件事。
+  if (shellUnavailable(run)) {
+    return {
+      ...base, ok: false, state: '无法探测', errorKind: 'infrastructure',
+      detail: sanitizeOssError(text(run.error) || text(run.stderr) || '探测命令没有执行'),
+    }
   }
+
+  const verdict = classifyOssFailure(
+    run.ok,
+    sanitizeOssError(text(run.stderr) || text(run.stdout) || text(run.error)),
+  )
+  if (run.ok) {
+    return {
+      ...base, ok: true, state: 'AK 正常', errorKind: '',
+      detail: `已验证可访问 ${target}${oss.endpoint === '' ? '' : ` @ ${oss.endpoint}`}（只读列举，空目录也算通过）`,
+    }
+  }
+  return { ...base, ok: false, state: verdict.state, errorKind: verdict.kind, detail: verdict.detail }
 }
 
-/** 读取 iFinD 技能自己的配置文件里的 `auth_token`；只回长度，不回显。 */
-export async function probeIfindKey(
-  ctx: Context,
-  manifest: EnvManifest,
-  options: { home?: string; platform?: string },
-): Promise<IfindCheck> {
-  const spec = manifest.ifindKey
-  const platform = options.platform ?? ''
-  const path = spec.path.startsWith('~')
-    ? expandLocal(spec.path, options.home ?? '', isWindowsPlatform(platform))
-    : spec.path
-  const out: IfindCheck = { path, required: spec.required, ok: false, reason: '', tokenLength: 0 }
-  const fs = fileSystem(ctx)
-  if (fs === undefined) {
-    out.reason = 'Host 文件服务不可用'
-    return out
+/**
+ * 探测命令：**只读 `ls` + 业务前缀 + `--limited-num 1`**。
+ *
+ * `oss.probeCommand` 仍被尊重（部署方可以换成等价的只读命令），但 `{prefix}` 占位符与默认分支
+ * 都指向业务前缀 —— 旧默认（列桶根）证明不了"能写交付件"。跑之前不检查、跑之后才看错误码，
+ * 所以它必须自身只读。
+ */
+export function buildOssProbeCommand(oss: OssSpec, ossutil: string, platform: string): string {
+  const { bucket, prefix, target } = ossProbeTarget(oss)
+  const endpointArg = oss.endpoint === '' ? '' : ` --endpoint ${shellQuote(oss.endpoint, platform)}`
+  const extra = oss.extraArgs.map((arg) => ` ${shellQuote(arg, platform)}`).join('')
+  if (oss.probeCommand !== '') {
+    return oss.probeCommand
+      .split('{ossutil}').join(shellQuote(ossutil, platform))
+      .split('{bucket}').join(bucket)
+      .split('{prefix}').join(prefix)
+      .split('{target}').join(target)
+      .split('{endpoint}').join(oss.endpoint)
   }
-  try {
-    const target = await resolveTarget(ctx, path)
-    const info = await fs.stat(target)
-    if (info?.type !== 'file') {
-      out.reason = '配置文件不存在（技能可能尚未安装）'
-      return out
-    }
-    const raw = await fs.readText(target)
-    let doc: unknown
-    try {
-      doc = JSON.parse(raw)
-    } catch (error) {
-      void error
-      out.reason = '配置文件不是合法 JSON'
-      return out
-    }
-    const record = doc !== null && typeof doc === 'object' ? doc as Record<string, unknown> : {}
-    const verdict = checkIfindToken(record[spec.field] ?? record.auth_token, spec.placeholder)
-    out.ok = verdict.ok
-    out.reason = verdict.reason
-    out.tokenLength = verdict.tokenLength
-    return out
-  } catch (error) {
-    out.reason = `读取失败：${error instanceof Error ? error.message : String(error)}`
-    return out
+  // `--limited-num 1` = 最多一次请求；空目录（0 个对象）仍然是成功的列举。
+  return `${shellQuote(ossutil, platform)} ls ${shellQuote(target, platform)}${endpointArg} --limited-num 1${extra}`
+}
+
+/**
+ * OSS 失败 → 人话归因。
+ *
+ * 四类分开（用户口径：错误要"按凭据、权限、配置、网络分别给人话提示"）：
+ * - `credential`：`InvalidAccessKeyId` / `SignatureDoesNotMatch` / `InvalidSecurityToken` / `AccessKeyId is disabled`
+ *   → 员工重填 AK；
+ * - `permission`：`AccessDenied` / `Forbidden` / `no permission`
+ *   → 凭据有效但没有这个 Bucket/Prefix 的权限，找管理员开权限；
+ * - `config`：`NoSuchBucket` / `InvalidBucketName` / `Endpoint` 解析失败 / `unknown endpoint`
+ *   → 部署配置错了，找管理员；
+ * - `infrastructure`：上面都不匹配（网络、DNS、超时、TLS、上游 5xx）
+ *   → 稍后重试 / 找管理员排查连通性，**不是** AK 的问题。
+ */
+export function classifyOssFailure(ok: boolean, raw: string): { state: string; kind: OssProbeKind; detail: string } {
+  const detail = clampOssText(raw)
+  if (ok) return { state: 'AK 正常', kind: '', detail }
+  const lower = raw.toLowerCase()
+  if (/invalidaccesskeyid|signaturedoesnotmatch|invalidsaccesskeyid|invalidsecuritytoken|accesskeyid is disabled|accesskeyidisdisabled|invalidaccesskeyid\.notfound/i.test(raw)) {
+    return { state: 'AccessKey 无效', kind: 'credential', detail: detail || 'OSS 认为这份 AccessKey 无效或已禁用' }
   }
+  if (/accessdenied|forbidden|no permission|denied/i.test(raw)) {
+    return { state: 'AccessKey 没有目标权限', kind: 'permission', detail: detail || '凭据有效，但没有该 Bucket / 前缀的访问权限' }
+  }
+  if (/nosuchbucket|invalidbucketname|unknown endpoint|invalidendpoint|no such host.*oss|endpoint/i.test(lower)) {
+    return { state: 'Bucket 或 Endpoint 配置有误', kind: 'config', detail: detail || 'Bucket 或 Endpoint 配置有误（由管理员在部署配置里设置）' }
+  }
+  return { state: '连接 OSS 失败', kind: 'infrastructure', detail: detail || '无法连接 OSS（网络 / 超时 / 服务不可达）' }
+}
+
+/** 探测输出的截断 + 脱敏（**唯一**出口，见 `oss/sanitize.ts`）。 */
+function clampOssText(raw: string): string {
+  const clean = sanitizeOssError(raw).trim()
+  return clean.length <= OSS_OUTPUT_LIMIT ? clean : `${clean.slice(0, OSS_OUTPUT_LIMIT)}…`
 }
 
 /** 服务清单本身不探测（氚云/钉钉的登录态由各自的 CLI 决定），这里只做形状归一。 */

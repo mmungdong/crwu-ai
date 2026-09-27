@@ -4,6 +4,7 @@ import type { WorkbenchConfig } from '../config/config.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import type { H3yunFormResolver } from '../h3yun/form.ts'
+import type { IfindTransport } from '../ifind/mcp.ts'
 
 /**
  * 所有 CRWU Tool 的共享依赖。
@@ -25,6 +26,15 @@ export interface ToolDeps {
    * 已缓存则零成本，未缓存时全插件只发现一次（并发共享同一个 in-flight Promise）。
    */
   form: H3yunFormResolver
+  /**
+   * iFinD 取数的**可注入传输**（OPT-006）。
+   *
+   * 生产形态缺省用 `defaultIfindTransport()`（全局 `fetch` + 正常 TLS 校验）；
+   * 测试注入内存替身，**永不访问真实网络**。
+   */
+  ifind?: IfindTransport
+  /** iFinD 单次请求超时（毫秒）；缺省 60s。测试注入短超时验证超时分支。 */
+  ifindTimeoutMs?: number
 }
 
 /**
