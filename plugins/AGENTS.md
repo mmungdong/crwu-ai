@@ -315,21 +315,30 @@
 
 ### 5.6 非 vendored 技能的 CLI 静态守卫（2026-09-25）
 
-DSH 的自研审核链路只走结构化 Tool。为了让这条约束**不靠自觉**，非 vendored 技能的正文受一条
-静态守卫约束：`npm --prefix plugins/dsh-crwu-workbench run skills:cli-guard`
+DSH 的自研审核链路只走结构化 Tool。为了让这条约束**不靠自觉**，非 vendored 技能的**正文与自带脚本**
+受同一条静态守卫约束：`npm --prefix plugins/dsh-crwu-workbench run skills:cli-guard`
 （`scripts/check-skill-cli-guard.mjs`，已接进插件的 `check`、`make plugin-check` 与 CI）。
 
 - **扫**：`plugins/dsh-crwu-workbench/skills/crwu/**` 与 `plugins/common/skills/**`（源仓那一份；
-  包内 `common/skills/` 是同步产物，不重复扫）。
+  包内 `common/skills/` 是同步产物，不重复扫）里的 `.md` / `.py` / `.js` / `.mjs`。
 - **不扫**：`plugins/dsh-crwu-workbench/skills/dws/**` —— vendored 上游正文，冲突时以上游为准，
   由 `npm run dws:check` 按 provenance 守。
-- **活跃指令里禁止**：裸 `crwu` / `dws` / `ossutil` 命令；`which <命令>`、`command -v <命令>`；
-  `export PATH=`；包内 `bin/<平台>/` 路径；`~/bin/<命令>` 副本。
+- **正文（`.md`）活跃指令里禁止**：裸 `crwu` / `dws` / `ossutil` 命令；`which <命令>`、`command -v <命令>`；
+  `export PATH=`；包内 `bin/<平台>/` 路径与 `bin/…/<业务 CLI>` 形式；相对路径调用（`./crwu`、`../bin/…/dws`）；
+  `~/bin/<命令>` 副本。
+- **脚本（`.py` / `.js` / `.mjs`）里禁止**：用 `subprocess` / `os.system` / `os.popen` / `child_process` /
+  `execSync` / `spawn` 等执行原语驱动 `crwu` / `dws` / `ossutil`。守卫既抓同一调用实参里的直接写法，
+  也抓「可执行字面量写在常量/默认参数里、执行原语在别处」的间接写法（2026-09-25 真实漏检形态：
+  `DwsClient(binary="dws")` + `subprocess.run(command)`）。归档与通知**只能**经
+  `crwu_audit_dingtalk_archive` / `crwu_audit_dingtalk_notify_self`。守卫只禁止业务 CLI，
+  **不**禁止一般子进程（`textutil`、`7z`、`sys.executable`、`soffice` 等照常）。
 - **窄范围豁免**（三种，都必须显式写在文档里）：
   1. `<!-- crwu-cli-guard:legacy-compat-start -->` … `<!-- crwu-cli-guard:legacy-compat-end -->`：
-     技能的**非 DSH 宿主兼容章节**（`crwu-dws`、`crwu-h3yun-*` 各有一段）；
+     技能的**非 DSH 宿主兼容章节**（`crwu-dws` 有三段，`crwu-h3yun-*` 各一段）；
   2. `<!-- crwu-cli-guard:exempt-next -->`：豁免紧随其后的**一行**（历史说明、负面示例）；
   3. 文件级豁免：`examples/`、`fixtures/` 目录（脚本里逐条写了理由）。
+     豁免**不得**按整个 `scripts/` 目录或整个文件类型放行（`host-skills-guard.test.mjs` 有断言钉住）。
+     前两种标记**只对 `.md` 生效**：脚本里不认它们，否则就等于给出一条「用注释关掉检查」的规避通道。
 - **禁止整层/整文件豁免**：区块标记必须在文件中间收尾，守卫在区块结束后立刻恢复检查
   （`tests/unit/host-skills-guard.test.mjs` 有用例钉住这一点）。
 - **自动审核主路径不许引用兼容层**：`crwu-audit` 的 `SKILL.md` 与 `references/00`、`references/13`
@@ -349,9 +358,20 @@ DSH 的自研审核链路只走结构化 Tool。为了让这条约束**不靠自
   - `01-kb-assembly.md`：只记录 RULE/CHK 与库内路径键；先写一级根映射
     `source_key`/`owner_axis`/`canonical_label`/`kb_root`/`request_kind`/`recursive`/`required`，再写
     `expected_structure`、二级选择索引和其它轴共享依赖。目录或文件名变化时必须同步更新；
-  - `02-review-focus.md`：基于真实资料归纳的审核要点，每项回指 RULE/CHK 和库内路径。
-- 公共规则只写一份，统一放在 `crwu-audit/references/12-leaf-common-contract.md`。叶子只引用它并保留
-  本轴、本标签的特有内容；新建叶子以任一 `crwu-audit-biz-*` 四件套为版式基线。
+  - `02-review-focus.md`：基于真实资料归纳的审核要点，每项回指 RULE/CHK 和库内路径；
+  - `03-common-contract.md`：**公共契约本地副本**（由 `kb_tool.py sync-leaf-common-contract` 生成，勿手改）。
+- **公共规则：一个规范源 + 各叶子本地副本，不是多个事实源。** 轴边界、输入、一级根装配、二级选择返回、
+  执行顺序、条目状态、来源优先级、证据出处与 capability gap 维护在**一个规范源**
+  `crwu-audit/references/12-leaf-common-contract.md`，由
+  `python3 <maintainer>/scripts/kb_tool.py sync-leaf-common-contract --skill-root <层> --write`
+  确定性同步为每个资产/业务叶子的本地副本 `references/03-common-contract.md`（逐字节相同）。
+  运行时**只读取本 Skill 内副本**，不读取 sibling Skill；`kb_tool.py validate` 与 `--check` 阻止缺失、漂移
+  与目标集合变化。改口径只改规范源再同步，**不得手改副本**。
+  - 叶子 `SKILL.md` 用 `[共同约束](references/03-common-contract.md)`、叶子 `references/*.md` 用
+    `[共同约束](03-common-contract.md)` 引用本地副本；**不得**写 `../crwu-audit/...` 这一类逃出技能目录的链接。
+  - 新建叶子以任一 `crwu-audit-biz-*` 四件套为版式基线，再同步出 `03-common-contract.md`。
+  - `public` 轴横切能力（如 `crwu-audit-public-general-standards`）**不复制**叶子契约（轴边界/一级根/
+    二级选择对它不适用），改为自持一份聚焦的本地执行契约 `references/03-execution-contract.md`。
 - 可以增加其它 reference，但每个文件只承担一个职责，且不得成为知识库正文副本。
 - 实际审核仍须通过 `crwu-dws` 重新下载正文。最终出处至少包含本次下载文件、实际行号、库内路径、运行时
   `nodeId` 和 `exportedAt`；reference 映射不能替代本次下载证据。
@@ -368,7 +388,8 @@ DSH 的自研审核链路只走结构化 Tool。为了让这条约束**不靠自
 - 映射检查器基于本次最新目录运行且 error=0，覆盖一级根精确匹配、轴前缀、registry/classification 一致性、
   遗留命名和库内路径键存在性（包括公共轴）；warning 必须逐条判断并注明理由。
 - 使用 `--emit-map` 刷新 `references/07-kb-skill-map.md`，并如实填写内容级核对结论与 gap；未下载正文时写“未核”。
-- 新叶子引用 `12-leaf-common-contract.md` 且未复述公共规则。
+- 新叶子引用**同步生成的本地副本** `references/03-common-contract.md` 且未复述公共规则；
+  `kb_tool.py sync-leaf-common-contract --check` 无 missing / drifted / unexpected。
 - `git diff --check` 通过，提交范围仅包含获授权改动。
 
 不得为了占位创建空的 pending Skill。凭据、知识库下载正文、临时清单、缓存和运行时文件不得提交；Skill 与

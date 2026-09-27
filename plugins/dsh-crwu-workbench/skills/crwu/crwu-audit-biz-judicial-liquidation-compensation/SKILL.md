@@ -9,7 +9,7 @@ description: Use when crwu-audit has selected the canonical 司法清算与补�
 
 仅经 `crwu-audit` router 编排调用，禁止单独调用。本技能只审一级业务 `司法清算与补偿` 的场景规则（评估目的、经济行为、场景对口径/材料/判断的影响），不查询报告记录、不重新获取材料、不重新下载规则正文。
 
-共同约束见 [共同约束](../crwu-audit/references/12-leaf-common-contract.md)：轴边界、输入、一级根装配、二级选择、执行顺序、条目状态、来源优先级、证据出处与 capability gap 均按该文件执行，本文件只写本业务特有内容。
+共同约束见 [共同约束](references/03-common-contract.md)：轴边界、输入、一级根装配、二级选择、执行顺序、条目状态、来源优先级、证据出处与 capability gap 均按该文件执行，本文件只写本业务特有内容。
 
 不决定对象专业事项（房地产权属、实物与经济特征、对象特有方法前提等由资产轴 Skill 处理），不替代 method/overlay/public 轴，不创建资产×业务组合 Skill。
 

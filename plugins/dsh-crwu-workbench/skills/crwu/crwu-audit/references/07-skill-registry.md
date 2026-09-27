@@ -46,7 +46,7 @@
 | public | 通用准则 | crwu-audit-public-general-standards | available | load always |
 | public | 审核意见屏蔽 | crwu-audit-output-filter | available | load always; postprocess before phase1 freeze |
 | public | 表格勾稽 | crwu-audit-datacheck | available | load when tabular materials exist |
-| public | 外部数据核验 | crwu-audit-external-data | available | load when methods include 收益法/市场法 |
+| public | 外部数据核验 | crwu-audit-external-data | available | 触发语义见 `08-union-dispatch-rules.md`（`methods[]` 命中 收益法/市场法）；本表不复述 |
 
 ## 维护约束
 

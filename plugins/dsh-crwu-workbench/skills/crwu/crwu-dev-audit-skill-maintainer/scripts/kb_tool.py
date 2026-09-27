@@ -21,7 +21,12 @@
 装配清单不再由本工具生成：下载清单 = 命中资产/业务子技能的 `01-kb-assembly.md`
 （一级目录根或单文件路径）＋ 执行契约路径并集，由 `crwu-dws` M2 实时下载。
 
-子命令：validate
+叶子公共契约（2026-09-25 架构裁定）：公共规则一个规范源
+（`crwu-audit/references/12-leaf-common-contract.md`），由 `sync-leaf-common-contract --write`
+确定性同步为各资产/业务叶子的本地副本 `references/03-common-contract.md`；运行时只读本 Skill 内副本。
+`validate` 自动执行同等检查（缺失/漂移/目标集合变化 → error；非完整源仓技能层 → skip 且不阻断）。
+
+子命令：validate | sync-leaf-common-contract
 用法示例见同目录 README.md。
 """
 from __future__ import annotations
@@ -30,6 +35,7 @@ import argparse
 import os
 import re
 import sys
+from urllib.parse import unquote
 
 TOOL_VERSION = "0.2.0"
 
@@ -207,10 +213,72 @@ _REPO_REF_PATTERNS = [(name, re.compile(_REPO_PREFIX + re.escape(name) + r"/"))
                       for name in _REPO_ROOT_FILES] + \
                      [("skills/<层>/", re.compile(_REPO_PREFIX + r"skills/(?:crwu|dws)/")),
                       ("skills/<skill>/", re.compile(_REPO_PREFIX + r"skills/crwu-[a-z0-9]+[a-z0-9-]*/"))]
-# 逃出技能目录的相对链接（技能目录之外的上级路径）  # lint-self: 规则定义本身
-_ESCAPE_LINK_RE = re.compile(r"\]\((?:\.\./){2,}")
+# 逃出技能目录的本地 Markdown 链接：按**规范化后的相对路径**判定（见 `escaping_links`）。
+# 不能按「`../` 出现次数」判定：`references/sub/deep.md → ../../SKILL.md` 有 2 个 `../` 却仍在技能内，
+# 而 `SKILL.md → ../sibling/x.md` 只有 1 个 `../` 却已逃逸。两条都是真实反例。
+# 本地链接：`[text](target)` / `![alt](target)`；target 可被 `<>` 包裹，可带 fragment/query。  # lint-self: 规则定义本身
+_MD_LINK_RE = re.compile(r"!?\[[^\]]*\]\(\s*(<[^>\n]*>|[^)\s]+)")  # lint-self: 规则定义本身
+# 外部 URI / 协议相对 URL / 纯锚点：不是本地相对路径。  # lint-self: 规则定义本身
+_EXTERNAL_URI_RE = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//|#)")  # lint-self: 规则定义本身
 # 源仓契约测试：只在源仓维护时运行，允许定位源仓；文件头 30 行内声明即可豁免。
 _SOURCE_REPO_TEST_MARKERS = ("源仓契约测试", "源仓维护工具")
+
+
+def _local_link_target(raw: str):
+    """从 Markdown 链接目标里取出本地相对路径；外部 URI / 锚点 / 绝对路径返回 None。"""
+    target = raw.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    if not target or _EXTERNAL_URI_RE.match(target):
+        return None
+    if target.startswith(("/", "\\")):
+        return None  # 绝对路径由仓库引用 lint 负责，不计入"逃出技能目录"
+    for separator in ("#", "?"):
+        cut = target.find(separator)
+        if cut != -1:
+            target = target[:cut]
+    target = unquote(target.strip())
+    return target or None
+
+
+def escaping_links(document: str, skill_dir: str):
+    """返回 `document` 中所有**逃出 `skill_dir`** 的本地 Markdown 链接。
+
+    判定算法（只依赖路径边界，**不依赖目标文件当前是否存在**）：
+    1. 逐行解析 Markdown 本地链接目标（含 `<>` 包裹与 fragment/query）；
+    2. 跳过外部 URI（`http:`/`https:`/`mailto:`/其它 scheme、`//`）与纯 `#anchor`、绝对路径；
+    3. 去 fragment/query、URL 解码后，相对**当前文件所在目录**解析并 `normpath`；
+    4. 规范化结果必须仍位于 `skill_dir` 之内，否则即逃逸。
+
+    这样 `references/01.md → ../SKILL.md`（在内）与 `SKILL.md → ../sibling/x.md`（逃逸）
+    都能得到正确结论。
+    """
+    escapes = []
+    skill_root = os.path.abspath(skill_dir)
+    document = os.path.abspath(document)
+    base = os.path.dirname(document)
+    try:
+        with open(document, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return escapes
+    for lineno, line in enumerate(lines, start=1):
+        if "# lint-self:" in line:
+            continue
+        for match in _MD_LINK_RE.finditer(line):
+            target = _local_link_target(match.group(1))
+            if target is None:
+                continue
+            resolved = os.path.normpath(os.path.join(base, target))
+            if resolved == skill_root or resolved.startswith(skill_root + os.sep):
+                continue
+            escapes.append({
+                "line": lineno,
+                "target": match.group(1),
+                "resolved": resolved,
+                "skill_root": skill_root,
+            })
+    return escapes
 
 
 def _is_source_repo_test(lines) -> bool:
@@ -249,6 +317,11 @@ def repo_reference_lint(skill_root: str):
                 lines = fh.read().splitlines()
             if fn.endswith(".py") and _is_source_repo_test(lines):
                 continue
+            # 逃逸判定按规范化路径逐文件算一次（行级正则做不到：是否逃逸取决于文件位置 + 目标）。
+            escape_by_line = {}
+            if fn.endswith(".md"):
+                for escape in escaping_links(p, skill_dir):
+                    escape_by_line.setdefault(escape["line"], escape)
             for lineno, line in enumerate(lines, start=1):
                 if "# lint-self:" in line:
                     continue
@@ -257,8 +330,11 @@ def repo_reference_lint(skill_root: str):
                 scrubbed = line
                 for safe_rx, replacement in _SAFE_BEFORE_MATCH:
                     scrubbed = safe_rx.sub(replacement, scrubbed)
-                if _ESCAPE_LINK_RE.search(line):
-                    errors.append(f"{rel}:{lineno} 技能内不得出现逃出技能目录的相对链接")
+                escape = escape_by_line.get(lineno)
+                if escape is not None:
+                    errors.append(
+                        f"{rel}:{lineno} 技能内不得出现逃出技能目录的链接：{escape['target']}"
+                        "（技能以副本安装时该目标不存在；改为本 Skill 内 references/ 的相对路径）")
                     continue
                 for label, rx in _REPO_REF_PATTERNS:
                     if rx.search(scrubbed):
@@ -266,6 +342,149 @@ def repo_reference_lint(skill_root: str):
                             f"{rel}:{lineno} 技能不得引用代码仓库目录/文件：{label}"
                             "（技能以副本安装时不存在；改用技能内 references、同技能 scripts/，"
                             "或 $SKILLS_ROOT/<技能>/scripts/… 形式的跨技能引用）")
+    return errors, warns
+
+
+# ---------------- 叶子公共契约：规范源 → 各叶子本地副本（源仓维护） ----------------
+#
+# 口径（2026-09-25 架构裁定「方案 A 的受控版本」）：公共规则维护**一个规范源**，
+# 通过确定性工具同步为各叶子的**本地副本**；运行时只读取本 Skill 内副本，源码门禁阻止漂移。
+# 规范源与各副本逐字节相同 —— 它们是同一内容的多个副本，**不是多个独立事实源**。
+#
+# 规范源、目标相对路径与目标选择规则**只在这里定义一次**，避免多处各写一份。
+
+LEAF_COMMON_CONTRACT = {
+    "source_skill": "crwu-audit",
+    "source": "crwu-audit/references/12-leaf-common-contract.md",
+    "target": "references/03-common-contract.md",
+    "leaf_prefixes": ("crwu-audit-asset-", "crwu-audit-biz-"),
+    "skip_note": "未发现 router 技能或资产/业务叶子集合；按「只安装了技能族子集」处理，跳过源码维护检查",
+}
+
+
+def discover_leaf_skills(skill_root: str):
+    """按目录发现资产/业务叶子：前缀匹配 **且** 实际存在 `SKILL.md`。
+
+    数量不是事实源 —— 目录即名单，新增/改名的叶子会被自动收进同步集合。
+    """
+    root = os.path.abspath(skill_root)
+    if not os.path.isdir(root):
+        return []
+    prefixes = LEAF_COMMON_CONTRACT["leaf_prefixes"]
+    return sorted(
+        name for name in os.listdir(root)
+        if name.startswith(prefixes) and os.path.isfile(os.path.join(root, name, "SKILL.md"))
+    )
+
+
+def leaf_common_contract_report(skill_root: str):
+    """叶子公共契约的缺失 / 漂移 / 目标集合变化报告（**只读**）。
+
+    返回 dict：
+      - `status`：`ok`（已检查）或 `skip`（非完整源仓技能层，不报错）；
+      - `skip_reason` / `source` / `target` / `leaves`；
+      - `missing`：缺本地副本的叶子（规范源本身缺失时为 `["__source__"]`）；
+      - `drifted`：副本与规范源不一致的叶子；
+      - `unexpected`：目标集合**以外**却持有该副本的目录（改名/删除留下的残留，不得静默漏同步）。
+    """
+    root = os.path.abspath(skill_root)
+    cfg = LEAF_COMMON_CONTRACT
+    report = {
+        "status": "ok",
+        "skip_reason": "",
+        "skill_root": root,
+        "source": os.path.join(root, cfg["source"]),
+        "target": cfg["target"],
+        "leaves": 0,
+        "missing": [],
+        "drifted": [],
+        "unexpected": [],
+    }
+    router_entry = os.path.join(root, cfg["source_skill"], "SKILL.md")
+    leaves = discover_leaf_skills(root)
+    if not os.path.isfile(router_entry) or not leaves:
+        report["status"] = "skip"
+        report["skip_reason"] = cfg["skip_note"]
+        return report
+    report["leaves"] = len(leaves)
+    if not os.path.isfile(report["source"]):
+        report["missing"].append("__source__")
+        return report
+    with open(report["source"], "rb") as fh:
+        source_bytes = fh.read()
+    for leaf in leaves:
+        target = os.path.join(root, leaf, cfg["target"])
+        if not os.path.isfile(target):
+            report["missing"].append(leaf)
+            continue
+        with open(target, "rb") as fh:
+            if fh.read() != source_bytes:
+                report["drifted"].append(leaf)
+    leaf_set = set(leaves)
+    for name in sorted(os.listdir(root)):
+        skill_dir = os.path.join(root, name)
+        if not os.path.isfile(os.path.join(skill_dir, "SKILL.md")):
+            # 带叶子前缀但已不是技能目录（缺 SKILL.md），却残留副本 → 目标集合变化
+            if name.startswith(cfg["leaf_prefixes"]) and os.path.isfile(os.path.join(skill_dir, cfg["target"])):
+                report["unexpected"].append(f"{name}（缺 SKILL.md，副本应删除或恢复技能目录）")
+            continue
+        if name in leaf_set:
+            continue
+        # 非资产/业务叶子（router / 横切能力 / 元技能）不得持有叶子公共契约副本
+        if os.path.isfile(os.path.join(skill_dir, cfg["target"])):
+            report["unexpected"].append(f"{name}（非资产/业务叶子，不应持有叶子契约副本）")
+    return report
+
+
+def sync_leaf_common_contract(skill_root: str, write: bool = False):
+    """确定性同步叶子公共契约副本。
+
+    - `write=True`：只为**缺失或漂移**的叶子写入规范源的逐字节副本（已一致的文件不触碰 → 幂等）；
+    - `write=False`：等价 `--check`，只报告。
+
+    返回 `leaf_common_contract_report` 的结果，另带 `written[]`（本次实际写入的叶子）。
+    """
+    before = leaf_common_contract_report(skill_root)
+    written = []
+    if write and before["status"] == "ok" and before["missing"] != ["__source__"]:
+        with open(before["source"], "rb") as fh:
+            source_bytes = fh.read()
+        for leaf in before["missing"] + before["drifted"]:
+            target = os.path.join(before["skill_root"], leaf, LEAF_COMMON_CONTRACT["target"])
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as fh:
+                fh.write(source_bytes)
+            written.append(leaf)
+    report = leaf_common_contract_report(skill_root) if write else before
+    report["written"] = sorted(written)
+    return report
+
+
+def leaf_common_contract_lint(skill_root: str):
+    """把叶子公共契约检查接入 `validate`（返回 (errors, warns)）。
+
+    缺失 / 漂移 / 目标集合变化 → error；非完整源仓技能层 → warn（skip，不阻断安装子集）。
+    """
+    errors, warns = [], []
+    report = leaf_common_contract_report(skill_root)
+    if report["status"] == "skip":
+        warns.append(f"叶子公共契约同步检查：skip（{report['skip_reason']}）")
+        return errors, warns
+    if report["missing"] == ["__source__"]:
+        errors.append(
+            f"叶子公共契约规范源缺失：{report['source']}"
+            "（先恢复规范源，再跑 kb_tool.py sync-leaf-common-contract --write）")
+        return errors, warns
+    for leaf in report["missing"]:
+        errors.append(
+            f"{leaf}: 缺少本地公共契约副本 {report['target']}"
+            "（运行 kb_tool.py sync-leaf-common-contract --write 生成）")
+    for leaf in report["drifted"]:
+        errors.append(
+            f"{leaf}: 本地公共契约副本与规范源漂移"
+            "（重新运行 kb_tool.py sync-leaf-common-contract --write）")
+    for name in report["unexpected"]:
+        errors.append(f"{name}: 叶子公共契约副本出现在目标集合之外（不得静默保留）")
     return errors, warns
 
 
@@ -287,6 +506,9 @@ def cmd_validate(args):
         e4, w4 = repo_reference_lint(root)
         errors += e4
         warns += w4
+        e5, w5 = leaf_common_contract_lint(root)
+        errors += e5
+        warns += w5
     print("== validate 结果 ==")
     for w in warns:
         print("  [warn ] " + w)
@@ -294,6 +516,32 @@ def cmd_validate(args):
         print("  [error] " + e_)
     print(f"warn={len(warns)} error={len(errors)}")
     return 1 if errors else 0
+
+
+def cmd_sync_leaf_common_contract(args):
+    report = sync_leaf_common_contract(args.skill_root, write=bool(args.write))
+    print("== 叶子公共契约 %s ==" % ("同步（--write）" if args.write else "检查（--check）"))
+    print(f"  技能层：{report['skill_root']}")
+    print(f"  规范源：{report['source']}")
+    print(f"  目标副本：{report['target']}")
+    if report["status"] == "skip":
+        print(f"  [skip ] {report['skip_reason']}")
+        return 0
+    print(f"  叶子集合：{report['leaves']} 个（目录发现，不写死）")
+    for leaf in report["missing"]:
+        print(f"  [missing]    {leaf}")
+    for leaf in report["drifted"]:
+        print(f"  [drifted]    {leaf}")
+    for name in report["unexpected"]:
+        print(f"  [unexpected] {name}")
+    for leaf in report.get("written", []):
+        print(f"  [written]    {leaf}")
+    print(
+        f"missing={len(report['missing'])} drifted={len(report['drifted'])} "
+        f"unexpected={len(report['unexpected'])} written={len(report.get('written', []))}"
+    )
+    problems = len(report["missing"]) + len(report["drifted"]) + len(report["unexpected"])
+    return 1 if problems else 0
 
 
 def main():
@@ -306,6 +554,16 @@ def main():
     p_v.add_argument("--forbid-literal", action="append", default=[], metavar="字面",
                      help="实时协议 lint：禁止出现的知识库名称等字面（可多次；根路径/nodeId 检查默认只对 crwu-audit*/crwu-dev-audit-* 目录生效）")
     p_v.set_defaults(fn=cmd_validate)
+
+    p_s = sub.add_parser(
+        "sync-leaf-common-contract",
+        help="叶子公共契约：规范源 → 各叶子 references/03-common-contract.md（缺失/漂移/目标集合变化）")
+    p_s.add_argument("--skill-root", required=True,
+                     help="技能层目录（如 plugins/dsh-crwu-workbench/skills/crwu）")
+    mode = p_s.add_mutually_exclusive_group()
+    mode.add_argument("--write", action="store_true", help="确定性生成/修复所有叶子副本（已一致的文件不触碰）")
+    mode.add_argument("--check", action="store_true", help="只报告 missing/drifted/unexpected，不写文件（默认）")
+    p_s.set_defaults(fn=cmd_sync_leaf_common_contract)
 
     args = ap.parse_args()
     try:

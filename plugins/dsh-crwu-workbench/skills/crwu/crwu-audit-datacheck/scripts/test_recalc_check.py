@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -287,6 +290,129 @@ class RecalcCheckContractTest(unittest.TestCase):
         entry = r["notRecomputable"][0]
         self.assertTrue(entry.get("engineError"))
         self.assertIn("引擎异常 RuntimeError", entry["reason"])
+
+
+_RUNNER_TEMPLATE = """\
+import importlib.abc
+import importlib.util
+import pathlib
+import runpy
+import sys
+
+PRUNE = set({prune!r})
+PROBE = set({probe!r})
+
+
+def _prune(names):
+    dropped = []
+    for entry in list(sys.path):
+        if not entry:
+            continue
+        base = pathlib.Path(entry)
+        if any((base / n).is_dir() or (base / (n + ".py")).is_file() for n in names):
+            dropped.append(entry)
+    sys.path[:] = [e for e in sys.path if e not in dropped]
+    for name in names:
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+
+
+class _ProbeRaiser(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in PROBE:
+            raise ModuleNotFoundError("No module named " + repr(fullname), name=fullname)
+        return None
+
+
+_prune(PRUNE)
+sys.meta_path.insert(0, _ProbeRaiser())
+sys.argv = {argv!r}
+runpy.run_path({script!r}, run_name="__main__")
+"""
+
+
+class MissingOpenpyxlBehaviorTest(unittest.TestCase):
+    """OPT-005-R1/-R2：`recalc_check.py` 对 openpyxl 也要区分三态，且都 fail closed。
+
+    - `missing`：`find_spec` 返回 None（`prune`）
+    - `import_failed`：spec 在、import 抛错（`shadow`）
+    - `probe_failed`：`find_spec` 自身抛异常（`probe`）
+
+    三者都必须 exit=3、不读值、不重算、**不产出差异文件**，错误文本必须准确。
+    模拟都在**子进程**里做，不动本机包。
+    """
+
+    def _run(self, case: Path, workbook: Path, out: Path, *, prune=(), probe=(), shadow=None):
+        runner = case / "_runner.py"
+        runner.write_text(
+            _RUNNER_TEMPLATE.format(
+                prune=tuple(prune),
+                probe=tuple(probe),
+                argv=[str(SCRIPTS_DIR / "recalc_check.py"), "--workbook", str(workbook),
+                      "--out", str(out)],
+                script=str(SCRIPTS_DIR / "recalc_check.py"),
+            ),
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        paths = []
+        if shadow:
+            shadow_dir = case / "_shadow"
+            shadow_dir.mkdir(exist_ok=True)
+            for module, body in shadow.items():
+                (shadow_dir / f"{module}.py").write_text(body, encoding="utf-8")
+            paths.append(str(shadow_dir))
+        if env.get("PYTHONPATH"):
+            paths.append(env["PYTHONPATH"])
+        if paths:
+            env["PYTHONPATH"] = os.pathsep.join(paths)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        proc = subprocess.run(
+            [sys.executable, str(runner)], capture_output=True, text=True, env=env, cwd=str(case)
+        )
+        return proc, (proc.stdout or "") + (proc.stderr or "")
+
+    def _workbook(self, name: str = "表.xlsx"):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        case = Path(temp.name)
+        book = case / name
+        book.write_bytes(b"PK\x03\x04")            # 内容无关：依赖问题在 import 阶段就暴露
+        return case, book
+
+    def test_missing_openpyxl_fails_loudly_without_writing_a_diff(self):
+        case, book = self._workbook()
+        out = case / "差异.json"
+        proc, combined = self._run(case, book, out, prune=("openpyxl",))
+        self.assertEqual(3, proc.returncode, f"缺包必须 exit=3：{combined[:200]}")
+        self.assertIn("openpyxl", combined)
+        self.assertIn("缺少第三方运行时依赖", combined)
+        self.assertNotIn("Traceback", combined, "不得以裸 traceback 代替明确错误")
+        self.assertFalse(out.exists(), "缺包时不得产生伪差异结果文件")
+
+    def test_import_failed_openpyxl_says_import_failure_not_missing(self):
+        case, book = self._workbook()
+        out = case / "差异.json"
+        proc, combined = self._run(
+            case, book, out, shadow={"openpyxl": 'raise ImportError("模拟：openpyxl 已损坏")\n'}
+        )
+        self.assertEqual(3, proc.returncode, f"导入失败也必须 exit=3：{combined[:200]}")
+        self.assertIn("openpyxl", combined)
+        self.assertIn("导入失败", combined)
+        self.assertNotIn("缺少", combined, f"import_failed 不得说成缺少：{combined[:200]}")
+        self.assertNotIn("Traceback", combined)
+        self.assertFalse(out.exists())
+
+    def test_probe_failed_openpyxl_says_probe_failure_not_missing(self):
+        case, book = self._workbook()
+        out = case / "差异.json"
+        proc, combined = self._run(case, book, out, probe=("openpyxl",))
+        self.assertEqual(3, proc.returncode, f"探测失败也必须 exit=3：{combined[:200]}")
+        self.assertIn("openpyxl", combined)
+        self.assertIn("探测失败", combined)
+        self.assertNotIn("缺少", combined, f"probe_failed 不得伪装成缺少：{combined[:200]}")
+        self.assertNotIn("Traceback", combined)
+        self.assertFalse(out.exists())
 
 
 if __name__ == "__main__":

@@ -7,7 +7,9 @@
 
 | 改动 | 唯一 owner |
 | --- | --- |
-| 输入字段、route profile schema、溯源与隐藏数据隔离 | `00-input-and-route-profile.md` |
+| 输入字段、route profile schema、溯源 | `00-input-and-route-profile.md` |
+| 隐藏区**规范**（H0 禁读禁报 / H1 书面授权 / 定级、状态与去向） | **`12-leaf-common-contract.md` §7.1（唯一权威）** |
+| 隐藏区**隔离机制**（结构识别、raw 元数据、工作版重建、坐标映射、媒体锚点、`prepare_materials.py` 输入输出） | `00-input-and-route-profile.md` |
 | `SeqNo` / `ObjectId` 定位 | `01-report-id-resolution.md` |
 | `scope_types[]` 分类与企业价值 materiality | `02-scope-classification.md` |
 | `asset_types[]` 分类 | `03-asset-classification.md` |
@@ -46,6 +48,8 @@
 ## 隐藏数据隔离
 
 下载的 Excel 在任何解析前按 00 制作只含可见 sheet、行、列的重建工作版，并重开验证隐藏区为零。raw 原件只由编排层持有；叶子只接收工作版。公式/引用坐标核查仅可对 raw 可见区做限定只读访问。发现读取隐藏区、叶子整簿读取 raw 或工作版仍含隐藏区时立即阻断并记录违规。
+
+本节只讲**机制**（谁把隐藏区剔除、怎么验证零残留）；隐藏区事项的**定级、状态与去向**唯一权威是 `12-leaf-common-contract.md` §7.1，此处不复述。
 
 ## 自查
 

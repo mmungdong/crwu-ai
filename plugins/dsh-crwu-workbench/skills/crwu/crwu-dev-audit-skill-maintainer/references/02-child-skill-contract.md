@@ -18,12 +18,27 @@ crwu-audit-asset-<name>/
 └── references/
     ├── 00-applicability.md
     ├── 01-kb-assembly.md
-    └── 02-review-focus.md
+    ├── 02-review-focus.md
+    └── 03-common-contract.md      # 公共契约本地副本（由 kb_tool 同步生成，勿手改）
 ```
 
 `SKILL.md` 必须声明仅经 `crwu-audit` 编排，不查询报告记录、不替代其他轴、不读取上一轮知识正文。输入为冻结的一级 route profile、隔离后的源材料和本次 DWS manifest。
 
-**共同约束只写一份**：轴边界、输入、一级根装配、二级选择返回、执行顺序（一级共用层→命中二级条目）、必检项/历史问题状态字段、来源优先级、证据出处与 capability gap，全部落在 `crwu-audit/references/12-leaf-common-contract.md`；每个叶子 `SKILL.md` 用相对路径 `../crwu-audit/references/12-leaf-common-contract.md` 引用它，只写本轴/本标签特有内容，不复制共同规则。新建叶子时先按 `crwu-audit-biz-asset-operation` 的四个文件作为版式基线。
+**公共规则：一个规范源 + 各叶子本地副本（不是多个事实源）**。轴边界、输入、一级根装配、二级选择返回、执行顺序（一级共用层→命中二级条目）、必检项/历史问题状态字段、来源优先级、证据出处与 capability gap，维护在**一个规范源** `crwu-audit/references/12-leaf-common-contract.md`，由确定性工具同步为每个叶子的**本地副本** `references/03-common-contract.md`：
+
+```bash
+# 生成/修复所有叶子副本（只为缺失或漂移的叶子写入；重复执行无 diff）
+python3 scripts/kb_tool.py sync-leaf-common-contract --skill-root <本技能层> --write
+# 只报告 missing / drifted / unexpected（validate 已自动执行同等检查）
+python3 scripts/kb_tool.py sync-leaf-common-contract --skill-root <本技能层> --check
+```
+
+- 叶子 `SKILL.md` 只用**同目录相对链接** `[共同约束](references/03-common-contract.md)` 引用本地副本；
+  叶子 `references/*.md` 用 `[共同约束](03-common-contract.md)`。**不得**写 `../crwu-audit/...`。
+- 运行时只读取本 Skill 内的副本，**不读取 sibling Skill**；`kb_tool.py validate` 阻止缺失与漂移，
+  自包含 lint 阻止任何逃出技能目录的链接。
+- 规范源与副本逐字节相同：同步生成，**不得手改副本**；改口径只改规范源再同步。
+- 新建叶子时先按 `crwu-audit-biz-asset-operation` 的四文件作为版式基线，再补 `03-common-contract.md`。
 
 ## 00-applicability.md
 

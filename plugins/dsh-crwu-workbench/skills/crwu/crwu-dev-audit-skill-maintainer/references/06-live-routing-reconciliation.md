@@ -58,8 +58,10 @@
 
 ### 5 方法层 / 清单类是否有人装配（`ASSEMBLY_GAP_METHOD_LAYER`）
 
-方法轴技能（`crwu-audit-method-*`）为 `pending` 期间，方法层与清单类内容由命中叶子的装配键承载；
-**"方法轴 pending"不等于"内容可以不装"**。本类检查专门抓"知识库有、没有任何叶子装配键覆盖"：
+方法轴技能（`crwu-audit-method-*`）为 `pending` 期间，方法层与清单类内容**可由命中叶子的装配表承载，
+也可由 router 依据本次 `methods[]`、`overlays[]`、`business_types[]` 与显式跨轴条件动态追加**
+（即 `08-union-dispatch-rules.md` 的方法层/覆盖层/财务报告映射）。上述三类都是**合法装配来源**；
+**"方法轴 pending"不等于"内容可以不装"**。本类检查专门抓"知识库有、三类合法来源的路径键都没覆盖"：
 
 | 库内层级路径（模式） | 期望承载方 | 未覆盖时的判定 |
 | --- | --- | --- |
@@ -67,10 +69,11 @@
 | `06-规则库/清单-M-成本法/` | router 的 `method=成本法` 独立装配映射；不得与资产基础法共用清单 | `ASSEMBLY_GAP_METHOD_LAYER` |
 | `03-评估方法/00-评估方法准则2019-精编/评估方法准则2019-精编条目/` | router 对应方法映射中的准则条目 | `ASSEMBLY_GAP_METHOD_LAYER` |
 | `03-评估方法/01-市场法/`、`05-审核要点/` | router 的 `method=市场法` 与“任一方法命中”映射 | `ASSEMBLY_GAP_METHOD_LAYER` |
-| `03-评估方法/02-收益法/`、`03-资产基础法/`、`04-方法选择/` | 采用对应方法作结论的项目，其命中叶子装配键（**当前未指定 → 已知缺口，须登记**） | `ASSEMBLY_GAP_METHOD_LAYER`（已知待处理） |
+| `03-评估方法/02-收益法/`、`03-资产基础法/`、`04-方法选择/` | router `08-union-dispatch-rules.md` 的对应方法映射：`method=收益法`、`method=资产基础法`、任一 `methods[]` 命中（`04-方法选择/` 归"选择、差异处理与结论一致性"） | `ASSEMBLY_GAP_METHOD_LAYER` |
 | `06-规则库/易错点库/` | 公共通用准则技能的恒装配路径 | `ASSEMBLY_GAP_METHOD_LAYER` |
 
-判定口径：**按目录前缀在全部叶子 `references/01-kb-assembly.md`（及 `00-KB装配表.md`）的路径键集合里查找覆盖**；
+判定口径：**对全部合法装配来源的路径键取并集**——命中叶子 `references/01-kb-assembly.md`、
+横切技能 `references/00-KB装配表.md`、router `08-union-dispatch-rules.md`（方法层/覆盖层/财务报告条件映射）；
 覆盖可以是该目录本身，也可以是其中任一单文件路径键。**只看键集合，不看正文**（正文由 crwu-dws 实时下载）。
 
 同时检查**通道可导性**：被覆盖的目录若含原生（非 `adoc`）节点，而下载规范未声明对应通道

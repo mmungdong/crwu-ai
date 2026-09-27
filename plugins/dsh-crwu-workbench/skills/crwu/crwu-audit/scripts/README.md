@@ -3,15 +3,31 @@
 本目录实现《CRWU 审核意见 HTML 送达规范 v1.6》的**机器可校验 Schema**、**校验器**与**确定性 renderer**。
 规范正文（唯一事实源）：本技能 `references/11-html-delivery-spec.md`。
 
+> **归档与通知只走结构化 Tool，本目录不含任何业务 CLI 执行路径。**
+> 钉钉回传由 `crwu_audit_dingtalk_archive`（契约见 `references/13-dingtalk-result-publish.md`）与
+> `crwu_audit_dingtalk_notify_self` 完成；Skill 自带脚本**不得**用 `subprocess` / `child_process` /
+> shell / 裸命令调用 `crwu` / `dws` / `ossutil`。这条边界由 `npm run skills:cli-guard`
+> （`scripts/check-skill-cli-guard.mjs`）静态守住，扫描 `.md` / `.py` / `.js` / `.mjs`。
+
+## 导航
+
+- [用法](#用法)
+- [材料准备与媒体证据通道（阶段一 / 阶段二复核件）](#材料准备与媒体证据通道阶段一-阶段二复核件)
+- [编排层接入（脚本映射）](#编排层接入脚本映射)
+- [校验器覆盖的强制规则（§9.4 / §11.1 / §12.2）](#校验器覆盖的强制规则94-111-122)
+- [renderer 行为（§10）](#renderer-行为10)
+- [维护规则](#维护规则)
+
 | 文件 | 作用 | 对应规范 |
 | --- | --- | --- |
 | `audit_result.schema.json` | AuditResult JSON Schema（draft 2020-12）：必填、枚举、条件必填、路径安全 | §9.1–§9.3 |
 | `audit_delivery.py` | 校验器 + renderer（纯标准库，无第三方依赖）；`validate` / `digest` / `render` 子命令 | §9.4、§10、§11.1、§12.2 |
-| `upload_audit_result.py` | **非 DSH 宿主兼容入口**：最终态 AuditResult 钉钉回传（固定组织/空间/结果目录、按审核年月归档、写后验证）。DSH 环境**不要运行它** —— 那一步是 `crwu_audit_dingtalk_archive` Tool | `references/13-dingtalk-result-publish.md` |
+| `fetch_review_records.py` | 阶段二**按《阶段一排除清单》定向取回**复核件到 `复核-人工/`（只认清单、禁写 `材料-源/`、逐件校验字节数） | [14-orchestration-workflow.md](../references/14-orchestration-workflow.md) 步骤 2、步骤 12 |
 | `template/audit-report.html`（从技能根目录定位） | 独立 HTML/CSS 模板：左侧目录、响应式正文、折叠轨迹与 A4 打印 | §10、附录 B |
 | `examples/audit-result.sample.json` | 【示意】样例（数值与名称为占位，禁止当真值使用） | §9.3 |
 | `test_audit_delivery.py` | 契约测试（Schema 语义、门禁、证据链、统计可重算、隐私、模板、目录、渲染确定性、转义、打印、空态） | §13.4 |
-| `test_upload_audit_result.py` | 钉钉回传契约测试（组织门禁、年月目录、时间戳命名、重名保护、最终态门禁） | `references/13-dingtalk-result-publish.md` |
+| `test_fetch_review_records.py` | `fetch_review_records.py` 的契约测试（清单边界、字节数校验、禁写源材料目录） | [14-orchestration-workflow.md](../references/14-orchestration-workflow.md) 步骤 2、步骤 12 |
+| `test_audit_multiaxis_router.py` | 多轴 router 契约测试（注册表、并集派发、装配路径键、渐进披露与入口尺寸） | [SKILL.md](../SKILL.md) + `references/00–14` |
 
 ## 用法
 
@@ -30,14 +46,12 @@ python3 scripts/audit_delivery.py render scripts/examples/audit-result.sample.js
 # 校验渲染后状态（要求 fileTrace 摘要已回填）
 python3 scripts/audit_delivery.py validate <rendered.json> --rendered
 
-# 最终态监控 JSON 回传钉钉（只允许自动创建 YYYY/MM）
-#   ⚠️ 仅用于**非 DSH 宿主**；DSH 环境调 crwu_audit_dingtalk_archive({caseDir, seqNo})，
-#      不要运行这个脚本（它内部用 subprocess 调 dws，会绕过 DSH 的沙箱与审批）。
-python3 scripts/upload_audit_result.py 审核结果.PRJ-2026-0001.json
+# 最终态监控 JSON 回传钉钉：**只能**用结构化 Tool，本目录不提供 CLI 回传脚本
+#   crwu_audit_dingtalk_archive({ caseDir, seqNo })     → 归档（契约见 references/13-dingtalk-result-publish.md）
+#   crwu_audit_dingtalk_notify_self({ caseDir, seqNo }) → 发给自己并转应用内 DING
 
 # 契约测试
 python3 scripts/test_audit_delivery.py
-python3 scripts/test_upload_audit_result.py
 ```
 
 退出码：`0` 通过；`1` 校验失败（错误逐条打印到 stderr，且**拒绝渲染**）。`render` 严格先做 JSON 校验；
@@ -73,16 +87,9 @@ python3 scripts/test_media_extract.py
 
 ## 编排层接入（脚本映射）
 
-调用者唯一：`crwu-audit` 编排层（router）。叶子不得调用校验器/渲染器，也不得生成页面或定义最终字段。
-规范口径见本技能 `references/11-html-delivery-spec.md` §14.1。
+调用者唯一：`crwu-audit` 编排层（router）；叶子不得直接调用校验器/渲染器，也不得生成页面或定义最终字段。
 
-| 编排阶段 | 命令 | 失败处理 |
-| --- | --- | --- |
-| 阶段一冻结（router 步骤 11） | `digest <冻结快照.json>` → 写入 `phaseControl.phase1FrozenAt` / `phase1Digest` | 失败 → 不进阶段二，记 capability gap |
-| 阶段二收口（router 步骤 14 ①） | `validate 审核意见.<项目ID>.json` | 失败 → 停止交付、逐条报错，禁止绕过或删检查 |
-| 阶段二收口（router 步骤 14 ②） | `render … --out 审核意见.<项目ID>.html --json-out 审核结果.<项目ID>.json`（内置 JSON 校验与渲染后自检） | 失败 → HTML 与配套 JSON 均不产出，记 capability gap，**不得跳过 JSON 校验出 HTML** |
-| 交付（router 步骤 14 ③） | 员工侧交付 HTML；内部监控读取配套 JSON，且该 JSON 与 HTML 内嵌对象逐字段一致 | — |
-| 钉钉回传（router 步骤 15） | **DSH**：`crwu_audit_dingtalk_archive` + `crwu_audit_dingtalk_notify_self`；**非 DSH 宿主**：`python3 scripts/upload_audit_result.py 审核结果.<项目ID>.json` | 失败 → 保留本地交付件并报告真实原因；不得换组织、猜目录或覆盖同名文件 |
+**完整阶段、输入、输出与失败处理只见规范 [11-html-delivery-spec.md §14.1](../references/11-html-delivery-spec.md#141-编排层调用映射脚本接入)——该节是编排层调用映射的唯一事实源。** 本文件不复述、不另存第二份映射表。
 
 `digest`、`render` 共用同一规范化序列化（排序键、UTF-8、无多余空白），故冻结指纹可复现，且可与
 `fileTrace.sourceDigest` 互校；脚本仅依赖 Python 标准库。

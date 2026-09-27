@@ -21,10 +21,49 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-import openpyxl
-from openpyxl.utils import column_index_from_string, get_column_letter
+# `openpyxl` 是**第三方运行时依赖**（DSH 运行时随包提供）。缺它时本脚本 **fail closed**：
+# 不读值、不重算、不产出差异文件，而是清晰非零退出 —— 绝不改用标准库解析 OOXML 去"读值"
+# 继续审核（那既读不可靠、又会把"未核"混成"已核"）。
+# openpyxl 的三态（2026-09-26 · R2）：只有 `missing` 可以说"缺少"。
+DEPENDENCY_STATE_TEXT = {
+    "missing": "缺少第三方运行时依赖 openpyxl",
+    "import_failed": "第三方依赖存在但导入失败/不可用",
+    "probe_failed": "第三方依赖状态探测失败",
+}
+
+
+def _openpyxl_state() -> tuple:
+    """探测 openpyxl 的三态，返回 `(state, detail)`。
+
+    只在"import openpyxl 已经失败"之后调用，所以 spec 存在即可判定为 `import_failed`。
+    `find_spec` 自身抛异常 = `probe_failed`（无法确认安装状态），**不得**伪装成缺包。
+    """
+    import importlib.util as importlib_util
+    try:
+        spec = importlib_util.find_spec("openpyxl")
+    except Exception as exc:                          # noqa: BLE001 —— 探测本身失败也是一种状态
+        return "probe_failed", f"{type(exc).__name__}: {exc}"
+    if spec is None:
+        return "missing", "find_spec('openpyxl') is None"
+    origin = getattr(spec, "origin", None) or "(namespace)"
+    return "import_failed", f"find_spec('openpyxl') → {origin}"
+
+
+try:
+    import openpyxl
+    from openpyxl.utils import column_index_from_string, get_column_letter
+except ImportError as _openpyxl_error:            # pragma: no cover - 由缺包用例覆盖
+    openpyxl = None
+    column_index_from_string = get_column_letter = None
+    _OPENPYXL_ERROR = str(_openpyxl_error)
+    _OPENPYXL_STATE, _OPENPYXL_DETAIL = _openpyxl_state()
+else:
+    _OPENPYXL_ERROR = None
+    _OPENPYXL_STATE = None
+    _OPENPYXL_DETAIL = None
 
 
 class Unavailable(Exception):
@@ -454,6 +493,16 @@ def run(workbook: str):
 
 
 def main() -> int:
+    if _OPENPYXL_ERROR is not None:
+        print(
+            "错误：" + DEPENDENCY_STATE_TEXT[_OPENPYXL_STATE]
+            + "（" + _OPENPYXL_ERROR + "；" + str(_OPENPYXL_DETAIL) + "）。"
+            "无法重算 .xlsx 公式链：本次不读值、不重算、不产出差异结果文件，"
+            "按 capability gap 登记（state=" + _OPENPYXL_STATE + "）；"
+            "不得改用标准库解析 OOXML 读值，也不得自行 pip 安装或切换/回退解释器。",
+            file=sys.stderr,
+        )
+        return 3
     ap = argparse.ArgumentParser(description="C7 计算链重算验证（只报差异、不下判断）")
     ap.add_argument("--workbook", required=True)
     ap.add_argument("--out", default=None)

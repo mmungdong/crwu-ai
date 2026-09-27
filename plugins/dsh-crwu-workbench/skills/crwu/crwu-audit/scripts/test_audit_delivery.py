@@ -27,6 +27,12 @@ MODULE_PATH = Path(__file__).resolve().parent / "audit_delivery.py"
 SAMPLE_PATH = Path(__file__).resolve().parent / "examples" / "audit-result.sample.json"
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "template" / "audit-report.html"
 
+# DeepSeek Harness 的 iFinD 取数入口是宿主的结构化 Tool（不是第三方技能目录）。
+# 旧架构写成"第三方技能"；本文件按**形态**判定（kebab-case 名称 + 技能），
+# 不在此保留旧技能名 —— 本测试要随技能单独安装，也不该成为需要豁免的残留。
+DSH_IFIND_TOOL = "crwu_audit_ifind_query"
+SKILL_ENTRY_RE = re.compile(r"[a-z0-9][a-z0-9-]*\s*技能")
+
 REGION_ORDER = [
     "project-info",
     "summary",
@@ -913,6 +919,29 @@ class ExternalDataVerificationTest(unittest.TestCase):
         self.assertIn("未配置", document)
         self.assertIn("未授权", document)
 
+    def test_source_note_names_the_structured_tool_not_a_skill(self):
+        """R3C：可执行样例必须把 DSH 取数入口写成结构化 Tool，不得再写成第三方技能。
+
+        样例是**可执行文档**：`sources[].note` 会原样渲染进交付 HTML
+        （`_external_data_sources_section`），所以旧路径会随示例被下一个审核复制。
+        """
+        notes = [item.get("note") or "" for item in self.result["externalDataVerification"]["sources"]]
+        self.assertTrue(notes, "样例必须保留数据源可用性声明")
+        for note in notes:
+            self.assertNotRegex(note, SKILL_ENTRY_RE, "样例的数据源说明不得把取数入口写成技能")
+        self.assertTrue(
+            any(DSH_IFIND_TOOL in note for note in notes),
+            "样例必须把 DeepSeek Harness 的取数入口写成结构化 Tool {0}".format(DSH_IFIND_TOOL),
+        )
+
+        # 渲染后的 HTML 才是员工真正读到的交付件 —— 两边都要锁。
+        section = self.document[
+            self.document.find('id="external-data-verification"'):
+            self.document.find("</section>", self.document.find('id="external-data-verification"'))
+        ]
+        self.assertNotRegex(section, SKILL_ENTRY_RE, "交付 HTML 的数据源表不得出现技能形态的取数入口")
+        self.assertIn(DSH_IFIND_TOOL, self.document, "交付 HTML 必须写明结构化 Tool")
+
     def test_each_check_shows_correct_and_incorrect_with_deviation(self):
         self.assertIn("EXTERNAL", self.document.replace("EXT-", "EXTERNAL"))  # 编号可见（示意）
         self.assertIn("符合", self.document)
@@ -1524,6 +1553,124 @@ class DeliveryContractDocumentationTest(unittest.TestCase):
         self.assertIn("scope.notCheckedItems[]", spec)
         self.assertIn("externalDataVerification.applicability.status", spec)
         self.assertIn("HTML 内嵌", spec)
+
+    def test_scripts_readme_has_complete_inventory_and_defers_mapping_to_spec(self):
+        """F-017：`scripts/README.md` 只留目录与回指；编排调用映射的唯一事实源仍是规范 §14.1。"""
+        skill_root = Path(__file__).resolve().parent.parent
+        spec = (skill_root / "references" / "11-html-delivery-spec.md").read_text(encoding="utf-8")
+        readme = (skill_root / "scripts" / "README.md").read_text(encoding="utf-8")
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        scripts_root = skill_root / "scripts"
+
+        # 1) 权威正文仍在 §14.1：标题与四行阶段映射都不得被改写或搬迁。
+        self.assertIn("### 14.1 编排层调用映射（脚本接入）", spec, "§14.1 标题必须保留")
+        for row in (
+            "| 阶段一冻结（步骤 11） |",
+            "| 阶段二收口 · 交付校验（步骤 14 ①） |",
+            "| 阶段二收口 · 渲染（步骤 14 ②） |",
+            "| 交付（步骤 14 ③） |",
+        ):
+            self.assertIn(row, spec, f"§14.1 必须保留阶段映射行：{row}")
+
+        # 2) README 只保留回指：可点击相对链接（同时显示完整文件名与 §14.1）+ 唯一事实源声明。
+        link = re.search(
+            r"\[[^\]]*11-html-delivery-spec\.md[^\]]*§14\.1[^\]]*\]"
+            r"\(\.\./references/11-html-delivery-spec\.md[^)]*\)",
+            readme,
+        )
+        self.assertIsNotNone(
+            link, "README 必须以相对链接回指 11-html-delivery-spec.md §14.1",
+        )
+        self.assertIn("唯一事实源", readme, "README 必须声明 §14.1 为编排调用映射的唯一事实源")
+        for banned in (
+            "| 编排阶段 | 命令 | 失败处理 |",
+            "| 阶段一冻结（router 步骤 11） |",
+            "| 阶段二收口（router 步骤 14 ①） |",
+            "| 阶段二收口（router 步骤 14 ②） |",
+            "| 交付（router 步骤 14 ③） |",
+        ):
+            self.assertNotIn(banned, readme, f"README 不得保留第二张编排映射表：{banned}")
+
+        # 3) README 的 Python 目录必须与磁盘精确一致（缺一或多一都失败）。
+        listed = set(
+            re.findall(
+                r"`([A-Za-z0-9_]+\.py)`",
+                "\n".join(line for line in readme.splitlines() if line.startswith("|")),
+            )
+        )
+        on_disk = {path.name for path in scripts_root.glob("*.py")}
+        self.assertEqual(
+            on_disk, listed,
+            f"README 目录与磁盘不一致：缺 {sorted(on_disk - listed)}，多 {sorted(listed - on_disk)}",
+        )
+
+        # 4) SKILL.md 必须提供一层入口，并在同一处说明职责与真正的事实源。
+        entry_lines = [
+            line for line in skill.splitlines()
+            if "[scripts/README.md](scripts/README.md)" in line
+        ]
+        self.assertTrue(entry_lines, "SKILL.md 必须链接 [scripts/README.md](scripts/README.md)")
+        entry = "\n".join(entry_lines)
+        self.assertIn("脚本目录", entry, "入口必须写明它是脚本目录")
+        self.assertTrue("用法" in entry and "维护" in entry, "入口必须写明它含用法与维护入口")
+        self.assertIn("11-html-delivery-spec.md", entry, "同一处必须声明交付/编排映射仍以规范为准")
+
+        # 5) F-017-R1：三个新增目录项的**规范归口**必须正确 —— 运行 owner 在 14，不在 11。
+        #    §14.1 只定义 audit_delivery 的 digest/validate/render 与文件交付；§13.4 是
+        #    AuditResult/renderer 的推荐测试，二者都不是取回复核件或多轴 router 的规范。
+        orchestration = (
+            skill_root / "references" / "14-orchestration-workflow.md"
+        ).read_text(encoding="utf-8")
+        for token in ("排除清单", "复核-人工/", "材料-源/"):
+            self.assertIn(token, orchestration, f"14 必须保留安全边界标识：{token}")
+
+        def _step(text: str, number: int) -> str:
+            """截取 14 中编号为 `number` 的步骤段落（至下一个编号步骤为止）。"""
+            start = text.find(f"\n{number}. **")
+            if start < 0:
+                return ""
+            following = re.search(rf"\n{number + 1}\. \*\*", text[start:])
+            return text[start:start + following.start()] if following else text[start:]
+
+        for label, number in (("步骤 2", 2), ("步骤 12", 12)):
+            self.assertIn(
+                "scripts/fetch_review_records.py", _step(orchestration, number),
+                f"运行时 owner：14 {label} 必须含取回复核件的脚本路径",
+            )
+
+        def _owner_cell(filename: str) -> str:
+            """README 目录表中该文件所在行的『对应规范/口径』单元格（按**首列**精确匹配）。
+
+            不能按"行内含反引号文件名"匹配：`test_fetch_review_records.py` 行的作用列会
+            提到 `fetch_review_records.py`，那样会把两行都算进来。
+            """
+            rows = []
+            for line in readme.splitlines():
+                if not line.startswith("|"):
+                    continue
+                cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+                if cells and cells[0] == f"`{filename}`":
+                    rows.append(cells)
+            self.assertEqual(1, len(rows), f"README 目录表应有且仅有一行 {filename}")
+            return rows[0][-1]
+
+        fetch_owner = _owner_cell("fetch_review_records.py")
+        self.assertIn("14-orchestration-workflow.md", fetch_owner, "取回脚本必须回指 14")
+        self.assertIn("步骤 2", fetch_owner, "取回脚本必须回指 14 步骤 2")
+        self.assertIn("步骤 12", fetch_owner, "取回脚本必须回指 14 步骤 12")
+        self.assertNotIn("§14.1", fetch_owner, "取回脚本不归交付规范 §14.1")
+        self.assertNotIn("§13.4", fetch_owner, "取回脚本不归交付规范 §13.4")
+
+        fetch_test_owner = _owner_cell("test_fetch_review_records.py")
+        self.assertIn("14-orchestration-workflow.md", fetch_test_owner, "取回脚本测试必须回指 14")
+        self.assertIn("步骤 2", fetch_test_owner, "取回脚本测试必须回指 14 步骤 2")
+        self.assertIn("步骤 12", fetch_test_owner, "取回脚本测试必须回指 14 步骤 12")
+        self.assertNotIn("§13.4", fetch_test_owner, "取回脚本测试不归交付规范 §13.4")
+
+        router_test_owner = _owner_cell("test_audit_multiaxis_router.py")
+        self.assertIn("SKILL.md", router_test_owner, "router 测试必须回指 router 入口")
+        self.assertIn("references/00–14", router_test_owner, "router 测试必须回指 router references 全段")
+        self.assertNotIn("§13.4", router_test_owner, "router 测试不归交付规范 §13.4")
 
 
 

@@ -71,29 +71,131 @@ HIDDEN_SHEET = "[隐藏]"
 OPTIONAL_DEPS = {"openpyxl": ".xlsx", "docx": ".docx", "pypdf": ".pdf", "xlrd": ".xls"}
 
 
-def missing_deps() -> list:
-    """缺哪些可选依赖（缺了会让对应格式读不到，必须显式告知，不得静默）。"""
-    import importlib.util as iu
-    return [f"{mod}({ext})" for mod, ext in OPTIONAL_DEPS.items() if iu.find_spec(mod) is None]
-
-
-# ---- 压缩包处理（下载后必须先解压再审核；解压产物落派生目录，绝不写入源材料目录） ----
 ARCHIVE_EXTS = (".zip", ".tar", ".tgz", ".tbz2", ".txz", ".tar.gz", ".tar.bz2", ".tar.xz",
                 ".rar", ".7z")
-# 阶段一隔离门禁：归档内含复核记录类文件时**不解压该条目**（隔离优先于解压）
+
 REVIEW_NAME_HINTS = ("复核", "质控", "外审", "答复", "审核意见", "复核意见", "底稿意见")
+
 MAX_ENTRIES = 2000
+
 MAX_TOTAL_BYTES = 500 * 1024 * 1024
+
 MAX_NESTED_DEPTH = 2
 
-# ---- 表格遍历的四层边界（口径见 crwu-audit/references/00 §Excel 隐藏数据隔离） ----
-# B1 扫描边界 = 存在的格（精确集合，无阈值）；B2 内容边界 = 其中有值的格；
-# B3 异常阈值 = 声明用区与内容用区之差；B4 硬护栏 = 单表真实格数。
-# 关键：**"空洞大" ≠ "表大"**。实测坏表 944 格 / 空洞 104 万行；真有 5 万行的表空洞 0 行。
-# 故 B4 按规模裁、不按空洞裁；B3 只出提示、不改变遍历。
-ORPHAN_SPAN_ROWS = 1000          # B3：声明用区 − 内容用区 > 此值 → 记 sheetAnomalies（仅提示）
+ORPHAN_SPAN_ROWS = 1000
+
 ORPHAN_SPAN_COLS = 1000
-MAX_SHEET_CELLS = 2_000_000      # B4：单表"有值格"上限，超限记 capabilityGaps 并跳过该表
+
+MAX_SHEET_CELLS = 2_000_000
+
+
+# **格式级依赖边界**（2026-09-26 · R2）：顶层依赖固定到格式，绝不由 `e.name` 推导 ——
+# 传导依赖（如 pypdf 内部缺的模块）只进 `causeModule`/`detail`，不得顶替顶层依赖字段。
+# `.docx` 不入表：它保留 `docx` → `textutil` 的既有回退，不产生依赖缺口。
+FORMAT_DEPENDENCIES = {".xlsx": "openpyxl", ".pdf": "pypdf", ".xls": "xlrd"}
+
+DEPENDENCY_STATE_MISSING = "missing"
+DEPENDENCY_STATE_IMPORT_FAILED = "import_failed"
+DEPENDENCY_STATE_PROBE_FAILED = "probe_failed"
+
+# 只有 `missing` 允许说"缺少"；另外两态必须如实说清是哪一种，不得伪装成缺包。
+DEPENDENCY_STATE_TEXT = {
+    DEPENDENCY_STATE_MISSING: "缺少第三方运行时依赖",
+    DEPENDENCY_STATE_IMPORT_FAILED: "第三方依赖存在但导入失败/不可用",
+    DEPENDENCY_STATE_PROBE_FAILED: "第三方依赖状态探测失败",
+}
+
+
+class DependencyUnavailable(Exception):
+    """本件因**顶层依赖不可用**而未核：`_record_dependency_gap` 已记账，跳过本件继续下一件。
+
+    单独成类是为了让分支内的捕获能干净地终止该分支，而不必依赖文件级 `except ImportError`
+    去猜"是谁缺了"（那正是要消灭的跨格式推导）。
+    """
+
+
+def dependency_state(module: str) -> tuple:
+    """探测某个**顶层依赖**的三态，返回 `(state, detail)`。
+
+    - `missing`：`find_spec` 返回 None（确实没装）
+    - `probe_failed`：`find_spec` 自身抛异常（无法确认安装状态）
+    - `import_failed`：spec 存在，但调用方已经观测到 import 失败
+
+    只在"该依赖的 import 已经失败"之后调用，所以 spec 存在即可判定为 `import_failed`。
+    """
+    import importlib.util as iu
+    try:
+        spec = iu.find_spec(module)
+    except Exception as exc:                     # noqa: BLE001 —— 探测本身失败也是一种状态
+        return DEPENDENCY_STATE_PROBE_FAILED, f"{type(exc).__name__}: {exc}"
+    if spec is None:
+        return DEPENDENCY_STATE_MISSING, f"find_spec({module}) is None"
+    origin = getattr(spec, "origin", None) or "(namespace)"
+    return DEPENDENCY_STATE_IMPORT_FAILED, f"find_spec({module}) → {origin}"
+
+
+def _dependency_absent(module: str) -> bool:
+    """该第三方依赖是否**确实不可用**（供 `missing_deps()` 汇总用）。"""
+    return dependency_state(module)[0] == DEPENDENCY_STATE_MISSING
+
+
+def missing_deps() -> list:
+    """缺哪些可选依赖（缺了会让对应格式读不到，必须显式告知，不得静默）。"""
+    return [f"{mod}({ext})" for mod, ext in OPTIONAL_DEPS.items() if _dependency_absent(mod)]
+
+
+def _record_dependency_gap(rec: dict, rel: str, dependency: str, ext: str,
+                           exc: ImportError) -> None:
+    """把"顶层依赖不可用"结构化记进盘点记录（三态共用；fail closed，本次未核、未生成工作版）。
+
+    `dependency` **始终**是该格式的顶层依赖（由 `FORMAT_DEPENDENCIES` 固定）；
+    传递依赖/缺失子模块只写进 `causeModule` 与 `detail`。
+    """
+    state, probe_detail = dependency_state(dependency)
+    text = DEPENDENCY_STATE_TEXT[state]
+    # `causeModule` 只记**与顶层依赖不同的**那个模块（即传递依赖 / 导入期真正缺的子模块）；
+    # 顶层依赖自己缺失或失败时它就是 `dependency` 本身，不重复记，保持字段含义单一。
+    cause = (getattr(exc, "name", None) or "").strip().split(".")[0] or None
+    if cause == dependency:
+        cause = None
+    rec["readable"] = False
+    rec["dependencyGaps"] = [{
+        "path": rel,
+        "dependency": dependency,          # 顶层依赖，固定
+        "format": ext,
+        "state": state,                    # missing / import_failed / probe_failed
+        "reason": f"{text} {dependency}",
+        "causeModule": cause,              # 传递依赖只进这里
+        "detail": f"{type(exc).__name__}: {exc}｜{probe_detail}",
+        "notChecked": True,
+        "workVersionCreated": False,
+    }]
+    rec["capabilityGaps"] = list(rec.get("capabilityGaps") or []) + [
+        f"{text} {dependency}（{ext}）：本件未核（notChecked）、未生成工作版"
+    ]
+    rec["note"] = (
+        f"{text} {dependency}：本件未读值、未读公式、未重算、未生成工作版；"
+        "按 capability gap 登记（不是材料缺失；不得改用标准库解析 OOXML 读值代替）"
+    )
+
+
+def _call_with_dependency(rec: dict, rel: str, dependency: str, ext: str, func, *args):
+    """在**格式分支内**调用需要第三方依赖的函数。
+
+    - 依赖可用 → `(True, 返回值)`
+    - 导入失败 → 按该格式的**顶层依赖**精确记账，返回 `(False, None)`；调用方应终止该分支
+
+    顶层依赖与格式必须一一对应（`FORMAT_DEPENDENCIES`）；不一致属编程错误，直接抛出让盘点
+    如实记录，而不是猜一个依赖名继续。
+    """
+    expected = FORMAT_DEPENDENCIES.get(ext)
+    if expected != dependency:
+        raise ValueError(f"格式 {ext} 的顶层依赖应为 {expected!r}，收到 {dependency!r}")
+    try:
+        return True, func(*args)
+    except ImportError as exc:
+        _record_dependency_gap(rec, rel, dependency, ext, exc)
+        return False, None
 
 
 def is_archive(name: str) -> bool:
@@ -878,7 +980,10 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                 if err:
                     rec["note"] = err
             elif ext == ".pdf":
-                txt, err = pdf_to_text(p)
+                _ok, _parsed = _call_with_dependency(rec, rel, "pypdf", ext, pdf_to_text, p)
+                if not _ok:
+                    raise DependencyUnavailable()
+                txt, err = _parsed
                 rec["readable"] = not err
                 with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
                           encoding="utf-8") as fh:
@@ -893,8 +998,11 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                     out_name = f"{stem}__{os.path.basename(os.path.dirname(p))}{se}"
                     rec["nameCollision"] = True
                 seen_xlsx.add(out_name)
-                out, hidden, stats, resid, unavailable, refs, anomalies, wb_gaps = \
-                    xlsx_visible(p, work_dir, out_name)
+                _ok, _built = _call_with_dependency(
+                    rec, rel, "openpyxl", ext, xlsx_visible, p, work_dir, out_name)
+                if not _ok:
+                    raise DependencyUnavailable()
+                out, hidden, stats, resid, unavailable, refs, anomalies, wb_gaps = _built
                 rec["readable"] = True
                 media_n = _raw_media_count(p)
                 rec["workbook"] = {"workVersion": os.path.relpath(out, case),
@@ -937,7 +1045,10 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                           encoding="utf-8") as fh:
                     fh.write(json.dumps(stats, ensure_ascii=False, indent=1))
             elif ext == ".xls" and kind == "ole":
-                txt, note = xls_dump(p)
+                _ok, _dumped = _call_with_dependency(rec, rel, "xlrd", ext, xls_dump, p)
+                if not _ok:
+                    raise DependencyUnavailable()
+                txt, note = _dumped
                 rec["readable"] = True
                 rec["note"] = note
                 with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
@@ -952,6 +1063,14 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
             else:
                 rec["readable"] = False
                 rec["note"] = f"未支持格式 magic={kind}"
+        except DependencyUnavailable:
+            # 本件因**该格式的顶层依赖**不可用而未核：分支内已通过 `_call_with_dependency`
+            # 精确记账（readable / dependencyGaps / capabilityGaps / notChecked /
+            # workVersionCreated 都已写好）——这里只跳过本件，继续处理下一个文件。
+            #
+            # 依赖归因**只**发生在各格式分支内，这里不再按 `e.name` 猜依赖（跨格式推导正是
+            # R1/R2 要消灭的形态）。
+            pass
         except Exception as e:
             rec["readable"] = False
             rec["note"] = f"{type(e).__name__}: {e}"

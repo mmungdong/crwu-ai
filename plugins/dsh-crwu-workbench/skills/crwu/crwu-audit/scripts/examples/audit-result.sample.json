@@ -262,7 +262,7 @@
         "source": "同花顺 iFinD",
         "configured": true,
         "authenticated": true,
-        "note": "取数路径：DeepSeek Harness 的 ifind-finance-data 技能；逐项取数时点与口径见下表"
+        "note": "取数路径：DeepSeek Harness 的结构化 Tool crwu_audit_ifind_query；逐项取数时点与口径见下表"
       }
     ],
     "checks": [

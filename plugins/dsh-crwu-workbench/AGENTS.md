@@ -286,6 +286,13 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 
 ### 4.5 CRWU 结构化 Tool 层（`src/host/tools/` + `src/host/dws/`）
 
+**iFinD 取数也是结构化 Tool，不是脚本例外**（2026-09-26 · OPT-006）：同花顺 iFinD 的取数入口是
+`crwu_audit_ifind_query`（`operation` = `list_tools` / `query`），走 `defineTool` + `ctx.tools.register`，
+纳入既有审批、超时、取消与脱敏链路。技能**不得**再授权"在 `ifind-finance-data` 技能目录写临时脚本、
+执行其 `call.py` / `call-node.js`、读取其 `mcp_config.json`"，也**不得**搜索 `~/.agents` / `~/.dsh` /
+`~/.codebuddy` / `~/.claude` 等技能根。服务地址与 `serverType` 映射是 Host 内部固定表（模型不能提交 URL），
+令牌由 Host 从环境清单声明的固定位置读取（模型不可见），TLS 正常校验（不接受任何"关校验"开关）。
+
 **这是本次改造的核心口径，不是可选风格。**
 
 1. **注册只走 DSH 注册表**：`defineTool()` + `ctx.tools.register()`，在 `apply()` 里用
@@ -423,7 +430,7 @@ tests/unit/                         # 配置 / 路由 / 操作表 / 包清单 + 
 | 新增部署可变的值 | YAML Schema 边界测试，并写进 `config/crwu-workbench.yml` | `host-yaml-config.test.mjs` + `host-package.test.mjs` 的真实 pack/install/激活测试 |
 | **新增 / 改名一个 CRWU Tool**（`host/tools/`） | 工具名的**逐字**断言（`host-tools.test.mjs` 的注册清单与 `REQUIRED_AUDIT_TOOLS` 对照）+ 参数无逃生字段 + 输出 schema 能过 `validateJsonSchemaValue` + 命令走包内绝对路径 + `exec.signal` 透传 + 沙箱/提权断言 | `host-tools.test.mjs`（注册清单、封禁字段、工具名）；`smoke:built`（产物里 8 个工具名）；改名的工具还要同步 `host-audit-prompt.test.mjs`（提示词逐字列 Tool 名） |
 | **审核提示词 / 审核链路**（`host/audit/`） | 逐条断言（`host-audit-prompt.test.mjs`）：必需 Tool 名、**不含**插件 bin 路径 / `export PATH` / `which` / `command -v` / 裸命令 / Python 回传脚本；能力门禁（`host-audit-lifecycle.test.mjs`：缺 Tool 或能力缺失时**不得创建子代理**） | `host-audit-prompt.test.mjs`（删一步就红）；`skills:cli-guard`（技能侧的对应约束） |
-| **技能正文里的执行指令**（`skills/crwu/**`、`plugins/common/skills/**`） | 改完跑 `npm run skills:cli-guard`；新增兼容章节必须用 `crwu-cli-guard:legacy-compat-start/end` 包起来 | `skills:cli-guard`（`check` 与 CI 里都有）；`host-skills-guard.test.mjs` 另有守卫自身的证伪用例 |
+| **技能正文与自带脚本里的执行指令**（`skills/crwu/**`、`plugins/common/skills/**`） | 改完跑 `npm run skills:cli-guard`；新增兼容章节必须用 `crwu-cli-guard:legacy-compat-start/end` 包起来。守卫现在也扫 `.py` / `.js` / `.mjs`：脚本不得用 `subprocess` / `child_process` / shell / 裸命令驱动 `crwu` / `dws` / `ossutil`（归档与通知只走 `crwu_audit_dingtalk_archive` / `crwu_audit_dingtalk_notify_self`） | `skills:cli-guard`（`check` 与 CI 里都有）；`host-skills-guard.test.mjs` 另有守卫自身的证伪用例（含 Python/Node 旁路与间接调用形态） |
 | **自带二进制 / 打包**（`scripts/sync-binaries.mjs`、`assert-pack.mjs`、`release.yml`） | 改清单字段或判据时补 `host-bin-manifest.test.mjs`（哈希变化、缺平台/工具/manifest、运行残留）；发布形状改动跑 `npm run pack:assert:strict` | `host-bin-manifest.test.mjs`；`make plugin-check` 里的 `pack:assert:strict`；`release.yml` 的 `binaries` job |
 
 **新增一个 Host 操作的最小改动清单**（最容易漏的是 2~4）：
@@ -768,6 +775,9 @@ dsh plugin --profile <临时 profile> add ./dsh-crwu-workbench-<ver>.tgz
    覆盖本轮快照；仍然不得读取上一轮审核产物与 `复核-人工/`。
 
 ### 7.16 DSH 自带 Python：审核脚本的运行时（2026-09-25）
+
+**外部数据取数不在本节范围内**：iFinD 取数不是"技能脚本运行时"问题，而是 §4.5 的结构化 Tool
+（`crwu_audit_ifind_query`）。Python 运行时只用于材料准备、表格勾稽、交付渲染等本机脚本。
 
 **不再把系统 `python3` 当运行时依赖。** 技能脚本要 `openpyxl` 这类包，员工机器上的
 `/usr/bin/python3` 既没有它们、版本也不受控。DSH 0.1.7 起自带 workspace runtime，并把它暴露成工具

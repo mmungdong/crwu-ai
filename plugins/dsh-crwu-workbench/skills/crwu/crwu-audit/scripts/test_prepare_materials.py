@@ -23,7 +23,10 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -858,6 +861,220 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual(1, idx["count"], idx)
         self.assertFalse((self.case / "材料盘点.json").exists(),
                          "只跑阶段二时不应产出阶段一盘点表")
+
+
+_RUNNER_TEMPLATE = """\
+import importlib.abc
+import importlib.util
+import pathlib
+import runpy
+import sys
+
+PRUNE = set({prune!r})
+PROBE = set({probe!r})
+
+
+def _prune(names):
+    dropped = []
+    for entry in list(sys.path):
+        if not entry:
+            continue
+        base = pathlib.Path(entry)
+        if any((base / n).is_dir() or (base / (n + ".py")).is_file() for n in names):
+            dropped.append(entry)
+    sys.path[:] = [e for e in sys.path if e not in dropped]
+    for name in names:
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+
+
+class _ProbeRaiser(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in PROBE:
+            raise ModuleNotFoundError("No module named " + repr(fullname), name=fullname)
+        return None
+
+
+_prune(PRUNE)
+sys.meta_path.insert(0, _ProbeRaiser())
+sys.argv = {argv!r}
+runpy.run_path({script!r}, run_name="__main__")
+"""
+
+
+class DependencyStateBoundaryTest(unittest.TestCase):
+    """OPT-005-R1/-R2：**格式级依赖边界** + 三态结构化登记。
+
+    顶层依赖固定：`.xlsx`→`openpyxl`、`.pdf`→`pypdf`、`.xls`→`xlrd`；`.docx` 保留
+    `docx`→`textutil` 的既有回退（不产生依赖缺口）。传递依赖只能进 `causeModule`/`detail`。
+
+    三种模拟都在**子进程**里做，不卸载、不改动本机包：
+
+    - `prune`：删掉 sys.path 里装着该依赖的条目 → `find_spec` 返回 None（**真缺包** = `missing`）
+    - `shadow`：影子模块（`find_spec` 找得到、import 抛错）→ **`import_failed`**
+    - `probe`：finder 的 `find_spec` 自身抛异常 → **`probe_failed`**
+    """
+
+    def _run(self, case: Path, src: Path, *, prune=(), probe=(), shadow=None,
+             name: str = "材料盘点.json"):
+        runner = case / "_runner.py"
+        runner.write_text(
+            _RUNNER_TEMPLATE.format(
+                prune=tuple(prune),
+                probe=tuple(probe),
+                argv=[str(SCRIPTS_DIR / "prepare_materials.py"), "--case", str(case),
+                      "--src", str(src), "--inventory", name],
+                script=str(SCRIPTS_DIR / "prepare_materials.py"),
+            ),
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        paths = []
+        if shadow:
+            shadow_dir = case / "_shadow"
+            shadow_dir.mkdir(exist_ok=True)
+            for module, body in shadow.items():
+                (shadow_dir / f"{module}.py").write_text(body, encoding="utf-8")
+            paths.append(str(shadow_dir))
+        if env.get("PYTHONPATH"):
+            paths.append(env["PYTHONPATH"])
+        if paths:
+            env["PYTHONPATH"] = os.pathsep.join(paths)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return subprocess.run(
+            [sys.executable, str(runner)], capture_output=True, text=True, env=env, cwd=str(case)
+        )
+
+    def _case(self, files, *, prune=(), probe=(), shadow=None):
+        """建临时案例跑一次，返回 (案例目录, 进程结果, {文件名: 记录})。"""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        case = Path(temp.name)
+        src = case / "材料-源"
+        src.mkdir()
+        for name, data in files.items():
+            (src / name).write_bytes(data)
+        proc = self._run(case, src, prune=prune, probe=probe, shadow=shadow)
+        payload = json.loads((case / "材料盘点.json").read_text(encoding="utf-8"))
+        return case, proc, {item["name"]: item for item in payload["items"]}
+
+    def _assert_gap(self, rec, *, dependency, ext, state):
+        """三态共同的结构要求 + 该状态专属的措辞。"""
+        self.assertFalse(rec.get("readable"), f"readable 必须为 false：{rec}")
+        gaps = rec.get("dependencyGaps") or []
+        self.assertEqual(1, len(gaps), f"必须有一条结构化依赖记录：{rec}")
+        gap = gaps[0]
+        self.assertEqual(dependency, gap["dependency"], f"依赖字段必须是该格式的顶层依赖：{gap}")
+        self.assertEqual(ext, gap["format"])
+        self.assertEqual(state, gap["state"], f"状态判定不符：{gap}")
+        self.assertIs(True, gap["notChecked"])
+        self.assertIs(False, gap["workVersionCreated"])
+        self.assertEqual(rec["path"], gap["path"])
+        # 三态都必须进 capabilityGaps（上游据此知道"该件未核"）
+        self.assertTrue(
+            any(dependency in entry for entry in (rec.get("capabilityGaps") or [])),
+            f"必须进结构化 capabilityGaps：{rec}",
+        )
+        self.assertIsNot(True, rec.get("missing"), "依赖问题不得登记为材料缺失")
+        self.assertNotIn("materialGap", rec)
+        note = rec.get("note") or ""
+        if state == "missing":
+            self.assertIn("缺少第三方运行时依赖", note)
+            self.assertIn("缺少第三方运行时依赖", gap["reason"])
+        else:
+            self.assertNotIn("缺少", note, f"只有 missing 才能说「缺少」：{note}")
+            self.assertNotIn("缺少", gap["reason"], f"只有 missing 才能说「缺少」：{gap}")
+        return gap
+
+    # ---- 1 真缺包：.xlsx ----
+    def test_xlsx_missing_openpyxl(self):
+        case, proc, items = self._case(
+            {"明细表.xlsx": b"PK\x03\x04", "说明.txt": b"non excel"},
+            prune=("openpyxl",),
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr[-600:])
+        self.assertEqual({"明细表.xlsx", "说明.txt"}, set(items), "其他文件不得被短路")
+        gap = self._assert_gap(items["明细表.xlsx"], dependency="openpyxl", ext=".xlsx",
+                               state="missing")
+        self.assertFalse((case / "工作版" / "明细表.xlsx").exists(), "缺依赖时不得生成工作版")
+
+    # ---- 2 真缺包：.pdf ----
+    def test_pdf_missing_pypdf_is_not_blamed_on_openpyxl(self):
+        _case, _proc, items = self._case({"说明.pdf": b"%PDF-1.4\n% fake\n"}, prune=("pypdf",))
+        gap = self._assert_gap(items["说明.pdf"], dependency="pypdf", ext=".pdf", state="missing")
+        self.assertIsNone(gap.get("causeModule"))
+        self.assertNotIn("openpyxl", json.dumps(items["说明.pdf"], ensure_ascii=False))
+
+    # ---- 3 真缺包：.xls（OLE magic 最小夹具）----
+    def test_xls_missing_xlrd_with_ole_fixture(self):
+        ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 512
+        _case, _proc, items = self._case({"明细表.xls": ole}, prune=("xlrd",))
+        self._assert_gap(items["明细表.xls"], dependency="xlrd", ext=".xls", state="missing")
+
+    # ---- 4 传递依赖缺失：dependency 仍是顶层依赖 ----
+    def test_transitive_missing_module_keeps_the_top_level_dependency(self):
+        _case, _proc, items = self._case(
+            {"说明.pdf": b"%PDF-1.4\n% fake\n"},
+            shadow={"pypdf": "import _missing_inner_helper_xyz\n"},
+        )
+        gap = self._assert_gap(items["说明.pdf"], dependency="pypdf", ext=".pdf",
+                               state="import_failed")
+        self.assertEqual("_missing_inner_helper_xyz", gap.get("causeModule"),
+                         f"传递依赖只能进 causeModule：{gap}")
+        self.assertIn("_missing_inner_helper_xyz", gap.get("detail") or "")
+
+    # ---- 5 顶层依赖存在但导入失败 ----
+    def test_import_failed_openpyxl_is_a_structured_gap(self):
+        _case, _proc, items = self._case(
+            {"明细表.xlsx": b"PK\x03\x04"},
+            shadow={"openpyxl": 'raise ImportError("模拟：openpyxl 已损坏")\n'},
+        )
+        rec = items["明细表.xlsx"]
+        self._assert_gap(rec, dependency="openpyxl", ext=".xlsx", state="import_failed")
+        self.assertIn("导入失败", rec["note"], f"import_failed 必须说清是导入失败：{rec['note']}")
+
+    # ---- 6 探测失败 ----
+    def test_probe_failed_is_not_reported_as_missing(self):
+        _case, _proc, items = self._case({"明细表.xlsx": b"PK\x03\x04"}, probe=("openpyxl",))
+        gap = self._assert_gap(items["明细表.xlsx"], dependency="openpyxl", ext=".xlsx",
+                               state="probe_failed")
+        self.assertIn("探测失败", gap["reason"])
+        self.assertNotIn("缺少", json.dumps(gap, ensure_ascii=False))
+
+    # ---- 7 结构护栏：不得再有重复相邻的宽泛 except ----
+    def test_no_duplicate_adjacent_broad_except(self):
+        import ast
+
+        source = (SCRIPTS_DIR / "prepare_materials.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            for first, second in zip(node.handlers, node.handlers[1:]):
+                left, right = first.type, second.type
+                if left is None or right is None:
+                    offenders.append(second.lineno)
+                    continue
+                if (isinstance(left, ast.Name) and isinstance(right, ast.Name)
+                        and left.id == right.id and left.id in ("Exception", "BaseException")):
+                    offenders.append(second.lineno)
+        self.assertEqual(
+            [], offenders,
+            "出现相邻且捕获同一宽泛类型的 except（后一个恒不可达）—— 行号：" + repr(offenders),
+        )
+
+    def test_no_cross_format_openpyxl_default(self):
+        """不得存在"跨格式默认回退到 openpyxl"的逻辑；顶层依赖必须来自固定表。"""
+        source = (SCRIPTS_DIR / "prepare_materials.py").read_text(encoding="utf-8")
+        for forbidden in ('or "openpyxl"', "or 'openpyxl'", 'or"openpyxl"'):
+            self.assertNotIn(forbidden, source, f"不得硬编码回退：{forbidden}")
+        module = _load_module()
+        self.assertEqual(
+            {".xlsx": "openpyxl", ".pdf": "pypdf", ".xls": "xlrd"},
+            dict(module.FORMAT_DEPENDENCIES),
+            "格式 → 顶层依赖必须是固定表（.docx 保留 textutil 回退，不入表）",
+        )
 
 
 if __name__ == "__main__":

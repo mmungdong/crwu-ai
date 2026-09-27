@@ -9,7 +9,7 @@ description: Use when crwu-audit has selected the public 通用准则 capability
 
 仅经 `crwu-audit` router 编排调用，禁止单独调用。本技能是 `public` 轴叶子，只审核**报告形态无关的通用准则层**：报告与披露要求、评估程序执行要求、机构质量控制要求。不查询报告记录、不准备材料、不重新下载规则，也不替代任何专业轴技能。
 
-共同约束见 [共同约束](../crwu-audit/references/12-leaf-common-contract.md)：输入、执行顺序、条目状态、来源优先级、证据出处与 capability gap 均按该文件执行（按与本技能不冲突的部分参照适用）；本文件只写本能力特有内容。
+本能力的执行契约见 [执行契约](references/03-execution-contract.md)：输入边界、执行顺序、条目状态、来源优先级、证据字段与 capability gap 均按该文件执行。本技能**只读取自己目录内的文件**，不读取任何 sibling Skill；资产/业务叶子共同约束里的轴边界、一级根装配与二级选择**对本能力不适用**。
 
 - 对象专业事项（权属、实物与经济特征、对象特有方法前提）由 `crwu-audit-asset-*` 处理；
 - 评估目的与经济行为对口径、材料、判断的影响由 `crwu-audit-biz-*` 处理；
@@ -32,7 +32,8 @@ description: Use when crwu-audit has selected the public 通用准则 capability
 
 1. [00-applicability.md](references/00-applicability.md)：确认本公共能力的适用、排除与边界；
 2. [01-kb-assembly.md](references/01-kb-assembly.md)：核对本次规则快照覆盖的 RULE 与库内层级路径；
-3. [02-review-focus.md](references/02-review-focus.md)：按报告披露层与程序质控层的关注点实施检查。
+3. [02-review-focus.md](references/02-review-focus.md)：按报告披露层与程序质控层的关注点实施检查；
+4. [03-execution-contract.md](references/03-execution-contract.md)：本能力自包含执行契约（输入边界、执行顺序、条目状态、来源优先级、证据字段、capability gap）。
 
 ## 执行与输出
 

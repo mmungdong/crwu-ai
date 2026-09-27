@@ -22,7 +22,7 @@ description: Use when auditing/inventorying, creating, repairing, or remapping c
 
 一级业务目录下若存在 `共同审核点` 文档，必须与一级根一并拉取、并作为该业务 Skill 的共用审核层参考：它在目录包内先于子业务条目执行，适用于该一级业务的全部子业务，不因命中哪几个子业务而改变。文档不存在时不视为缺口，也不得凭经验或旧摘录补造其内容。
 
-**叶子共同约束**：公共规则只写一份 —— `crwu-audit/references/12-leaf-common-contract.md`（轴边界、输入、一级根装配、二级选择返回、执行顺序、条目状态字段、来源优先级、证据出处、capability gap）。新建或修复叶子按它执行，叶子只写本轴/本标签特有内容并引用它，**不得复述共同规则**；版式基线取任一 `crwu-audit-biz-*` 的四件套（`SKILL.md` + `00-applicability.md` + `01-kb-assembly.md` + `02-review-focus.md`）。
+**叶子共同约束：一个规范源 + 各叶子本地副本**。公共规则维护在**一个规范源** `crwu-audit/references/12-leaf-common-contract.md`（轴边界、输入、一级根装配、二级选择返回、执行顺序、条目状态字段、来源优先级、证据出处、capability gap），由 `scripts/kb_tool.py sync-leaf-common-contract --write` 确定性同步为每个资产/业务叶子的**本地副本** `references/03-common-contract.md`；运行时只读取本 Skill 内副本，`validate` 阻止缺失与漂移。规范源与副本逐字节相同 —— **它们是同一内容的多个副本，不是多个独立事实源**；改口径只改规范源再同步，**不得手改副本**。新建或修复叶子按规范源执行，只写本轴/本标签特有内容、**不复述共同规则**，`SKILL.md` 用 `[共同约束](references/03-common-contract.md)` 引用本地副本（**不得**写 `../crwu-audit/...`）；版式基线取任一 `crwu-audit-biz-*` 的四件套（`SKILL.md` + `00-applicability.md` + `01-kb-assembly.md` + `02-review-focus.md`）+ 同步生成的 `03-common-contract.md`。
 
 ## 模式
 
@@ -66,7 +66,8 @@ description: Use when auditing/inventorying, creating, repairing, or remapping c
 - 不为土地使用权等细分对象或租赁与租金评估等子业务另建 Skill。
 - 不把一级业务目录的 `共同审核点` 当成某个子业务的专属条目；它是该一级业务的共用层，命中任一子业务都执行。
 - **必检项为「待补」、文档为空或为 `TODO` 占位时，登记知识库内容缺口并声明覆盖不完整，绝不据标题、经验或历史问题补造要求。**
-- 新建或修复叶子不得复述 `12-leaf-common-contract.md` 的共同规则，只引用它。
+- 新建或修复叶子不得复述 `12-leaf-common-contract.md` 的共同规则，只引用它；叶子引用的是**同步生成的同目录副本** `references/03-common-contract.md`，**不得**写 `../crwu-audit/...` 这类逃出技能目录的链接。
+- 改公共契约只改规范源，再跑 `sync-leaf-common-contract --write` 同步副本；**不得手改副本**（`validate` 会报漂移）。
 - 校准表只由检查器 `--emit-map` 生成；与实际不一致时重新校准，不手改状态列。
 - **本文档里的路径只写库内真名**；需要举反例时不要写成反引号寻址键（检查器会把反引号内容当寻址键校验）。
 - 不直接写、复制、链接或删除任何运行时 Skill 目录。

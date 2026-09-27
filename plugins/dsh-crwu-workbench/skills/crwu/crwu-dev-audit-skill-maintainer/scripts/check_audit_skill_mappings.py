@@ -61,20 +61,57 @@ BUSINESS_COMMON_REVIEW_DOC = "共同审核点"
 # executable audit rules. They stay visible in every inventory run but must not enter runtime
 # assembly until a maintainer explicitly verifies the enablement conditions and changes this
 # policy. Directory-only inspection cannot infer that a document's body has matured.
+# ---- 非运行时 / 仅兼容模块（不得进入运行时装配）----
+# `runtimePolicy` 决定被装配时报哪个码：
+#   - `prototype`：状态=原型、规则待编，满足启用条件并经人工复核前不得参与审核
+#     → `NON_RUNTIME_MODULE_ASSEMBLED`；
+#   - `compat-only`：库内保留的**兼容入口**，正文自身声明"正式内容一律指向迁移目标"，
+#     供外部旧引用使用，CRWU 运行时不再装配 → `COMPAT_MODULE_ASSEMBLED`。
+# 两者都进 `nonRuntime` 校准桶（同一张表就能看出"谁被隔离、谁被误装"）。
 NON_RUNTIME_KB_MODULES = (
     {
         "prefix": "06-规则库/M-收益法/",
+        "runtimePolicy": "prototype",
         "classification": "prototype/non-runtime",
         "reason": "模块规程仍为原型，规则依据含待编占位，不能作为正式审核依据",
         "enableWhen": "知识库状态改为正式、规则编号补齐且维护人明确后，经人工复核启用",
     },
     {
         "prefix": "06-规则库/M-法律法规合规/",
+        "runtimePolicy": "prototype",
         "classification": "prototype/non-runtime",
         "reason": "模块规程仍为原型，A 级规则未发布且规则依据待编，不能作为正式合规依据",
         "enableWhen": "知识库状态改为正式、规则编号补齐且维护人明确后，经人工复核启用",
     },
+    # 2026-09-26（F-007）：`05-模块-基准要素一致性` 自述「版本 v0.1 / 状态 原型」、
+    # 「A 级条目（报告准则/程序准则相关 RULE 待编）」、「严重度定级依据（A 级规则发布后启用）」，
+    # 却曾被 available 的 crwu-audit-datacheck 作为勾稽口径装入运行时。
+    {
+        "prefix": "06-规则库/M-数据对齐-勾稽与一致性/05-模块-基准要素一致性",
+        "runtimePolicy": "prototype",
+        "classification": "prototype/non-runtime",
+        "reason": "模块规程仍为原型（v0.1），A 级条目待编，严重度定级依据待 A 级规则发布",
+        "enableWhen": "知识库状态改为正式、规则编号补齐且维护人明确后，经人工复核启用",
+    },
+    # 2026-09-26（F-006 决策 2）：兼容入口。库内 `M-计算表审核/00` §七与 `09` §六都写明
+    # "旧模块降为兼容入口：保留旧路径供既有引用使用，正式内容一律指向本模块"。
+    {
+        "prefix": "06-规则库/M-数据对齐-勾稽与一致性/03-模块-数据校对",
+        "runtimePolicy": "compat-only",
+        "classification": "compat-only/non-runtime",
+        "reason": "兼容入口，正式口径已迁移至 06-规则库/M-计算表审核/，仅供外部旧引用使用",
+        "enableWhen": "不需要启用：运行时口径以 06-规则库/M-计算表审核/ 为准；库侧删除该兼容入口后退出追踪",
+    },
 )
+
+# 必须**递归**（带 `/` 的目录键）装配的权威根：只写单文件键虽然"覆盖"了前缀，
+# 但库内新增正文时会静默掉出下载清单（与 CHK-MKT-001~014 缺装同一失效模式）。
+RECURSIVE_ROOT_REQUIRED = {
+    "06-规则库/M-计算表审核/": (
+        "authoritative calculation-sheet root must be assembled as one recursive directory key; "
+        "per-file keys silently drop any document added to the library later"
+    ),
+}
 
 # ---- 路由层（router ↔ 目录 ↔ 注册表 ↔ 真实 Skill）----
 ROUTER_SKILL = "crwu-audit"
@@ -777,6 +814,55 @@ def _suggested_skill(axis: str, label: str) -> str | None:
     return f"{prefix}-{suffix}"
 
 
+# ---- 路径覆盖语义（按分段，不做裸字符串前缀）----
+# 2026-09-26（OPT-004-R1 复核）实测三个反例，全部来自 `key.startswith(prefix)` 这种普通字符串前缀比较：
+#   · 只装父目录 `06-规则库/M-数据对齐-勾稽与一致性/` → 两个禁用模块被递归下进本次审核，却**漏报**；
+#   · 装相似名兄弟文件 `…/05-模块-基准要素一致性-扩展` → **误报** 该模块被装配；
+#   · 只装子文件 `…/M-计算表审核/00-模块边界与证据规则` → 子文件被当成覆盖了**整个**受监视目录。
+# 正确语义：目录键（以 `/` 结尾）递归包含其下全部节点；文件键只精确匹配同名文件。
+# 目录键天然分段安全（`06-规则库/清单-M-成本法/` 不会命中 `清单-M-成本法-旧/`），因为斜杠就在末尾。
+def _path_covers(key: str, target: str) -> bool:
+    """装配键 `key` 是否把 `target` 递归纳入本次下载清单。"""
+    if key == target:
+        return True
+    if not key.endswith("/"):
+        return False  # 文件键不递归：`…-扩展` 与 `…` 是两个不同节点
+    return target.startswith(key)
+
+
+def _path_present(paths: set[str], target: str) -> bool:
+    """`target` 是否存在于最新目录：`target` 本身，或是它（作为目录）内部的任一节点。"""
+    return any(path == target or _path_covers(target, path) for path in paths)
+
+
+def _path_overlaps(key: str, target: str) -> bool:
+    """键是否把目标模块的**任意部分**带进本次下载清单（非运行时 / 仅兼容模块隔离专用）。
+
+    与 `_path_covers` 的区别正是 2026-09-26（R2）复核指出的第二条：**目标是目录**时，其**内部文件**键
+    也算部分泄漏 —— `06-规则库/M-收益法/04-模块-收益法` 进入运行时，等于该原型模块泄漏了一半，
+    旧实现（只认"键==目录或键在目录之下以 / 结尾"）对此**完全静默**。
+    目标为**文件**时仍只认"它自己"或"祖先目录"，否则相似名兄弟（`…-扩展`）会假阳性。
+    """
+    if key == target:
+        return True
+    if key.endswith("/") and target.startswith(key):
+        return True  # 键是目标的祖先目录：递归包含
+    if target.endswith("/") and key.startswith(target):
+        return True  # 目标是目录而键在其内部：部分泄漏
+    return False
+
+
+def _path_within(key: str, folder: str) -> bool:
+    """`key` 是否就是 `folder`，或位于 `folder` 之内。
+
+    与 `_path_covers` **方向相反**，用于"某个子目录是否被**显式**登记"这类判定：
+    父目录（一级根）永远包含全部二级条目，用 `_path_covers` 判定会让二级维度恒真 ——
+    每个可用叶子都必然声明了一级根，于是"库里有、叶子没索引"重新变成不可见。
+    """
+    return key == folder or (folder.endswith("/") and key.startswith(folder))
+
+
+
 def inspect_method_layer_assembly(
     repo_root: Path,
     paths: set[str],
@@ -788,8 +874,10 @@ def inspect_method_layer_assembly(
     由命中叶子的装配键承载。此前无此检查，`03-评估方法/**`、`06-规则库/清单-M-*`、`06-规则库/易错点库`
     可长期无人装配而不报错，导致整套市场法审核清单（CHK-MKT-001~014）在真实审核中缺装。
 
-    判定只看**装配键集合**（不看正文）：被监视目录若存在于最新目录，但没有任何 audit 族技能在
-    `01-kb-assembly.md` / `00-KB装配表.md` 的路径键里覆盖它，即记装配缺口。
+    判定只看**装配键集合**（不看正文）：被监视目录若存在于最新目录，但**三类合法装配来源**都没有覆盖它，
+    即记装配缺口 —— 命中叶子的 `01-kb-assembly.md`、横切技能的 `00-KB装配表.md`、
+    以及 router 的 `08-union-dispatch-rules.md`（方法层/覆盖层/财务报告条件映射，2026-09-16 起纳入）。
+    「方法轴技能 pending」不构成免检理由。
     另检查通道可导性：覆盖了方法层目录时，下载规范必须声明原生文本通道（`drive +download` 或 `markdown fetch`）。
     """
     watched_prefixes = (
@@ -806,6 +894,9 @@ def inspect_method_layer_assembly(
         "06-规则库/清单-M-收益法/",
         "06-规则库/清单-M-资产基础法/",
         "06-规则库/易错点库/",
+        # 2026-09-26（F-006）：`06-规则库/M-计算表审核/` 11 份正文此前**零引用**——
+        # 库内有正式计算表口径、datacheck 却装的是旧兼容入口，无人装配也不报错。
+        "06-规则库/M-计算表审核/",
         # 2026-09-16：这 5 个目录此前完全不在监视范围。四类监管 overlay 在技能 pending
         # 期间由 router 按 overlays[] 装配；财务报告目录按 business_types[]=财务报告装配
         # （见 crwu-audit references/08）。无装载方即为真实缺口，必须在门禁暴露。
@@ -844,11 +935,11 @@ def inspect_method_layer_assembly(
     non_runtime: list[dict[str, object]] = []
     watched = 0
     for prefix in watched_prefixes:
-        if not any(path == prefix or path.startswith(prefix) for path in paths):
+        if not _path_present(paths, prefix):
             continue  # 目录不在最新目录 → 不是装配问题（由目录漂移类检查负责）
         watched += 1
         holders = sorted({source for key, source in assembly_keys.items()
-                          if key == prefix or key.startswith(prefix)})
+                          if _path_covers(key, prefix)})
         if holders:
             covered.append({"prefix": prefix, "coveredBy": holders})
         else:
@@ -857,21 +948,34 @@ def inspect_method_layer_assembly(
                 "ASSEMBLY_GAP_METHOD_LAYER",
                 "error",
                 (
-                    "method-layer/checklist content exists in the library but no leaf assembly key covers "
-                    "it; method-axis skills being pending does NOT mean the content may stay unassembled"
+                    "method-layer/checklist content exists in the library but no legal assembly source "
+                    "(leaf assembly table `01-kb-assembly.md`, cross-cutting `00-KB装配表.md`, or the router "
+                    "dispatch mapping `08-union-dispatch-rules.md`) covers it; method-axis skills being "
+                    "pending does NOT mean the content may stay unassembled"
                 ),
                 path=prefix,
+            )
+        # 覆盖 ≠ 递归覆盖：权威根必须有**它自己**的目录键。过粗祖先（如 `06-规则库/`）虽然把内容
+        # 带进了清单（因此不报装配缺口），却会把整个规则库连禁用模块一起拖进来，不能替代本根的
+        # 显式递归装配（2026-09-26 · R2 复核）。
+        if prefix in RECURSIVE_ROOT_REQUIRED and prefix not in assembly_keys:
+            add_finding(
+                "AUTHORITATIVE_ROOT_NOT_RECURSIVE",
+                "error",
+                str(RECURSIVE_ROOT_REQUIRED[prefix]),
+                path=prefix,
+                source=", ".join(holders) or None,
             )
 
     for module in NON_RUNTIME_KB_MODULES:
         prefix = str(module["prefix"])
-        if not any(path == prefix or path.startswith(prefix) for path in paths):
+        if not _path_present(paths, prefix):
             continue
         holders = sorted(
             {
                 source
                 for key, source in assembly_keys.items()
-                if key == prefix or key.startswith(prefix)
+                if _path_overlaps(key, prefix)
             }
         )
         tracked = dict(module)
@@ -879,12 +983,18 @@ def inspect_method_layer_assembly(
         tracked["holders"] = holders
         non_runtime.append(tracked)
         if holders:
+            policy = str(module.get("runtimePolicy", "prototype"))
             add_finding(
-                "NON_RUNTIME_MODULE_ASSEMBLED",
+                "COMPAT_MODULE_ASSEMBLED" if policy == "compat-only" else "NON_RUNTIME_MODULE_ASSEMBLED",
                 "error",
                 (
-                    "prototype/non-runtime knowledge module is present in runtime assembly; "
-                    "remove the assembly path until its enablement conditions are verified"
+                    "compatibility-only knowledge module is present in runtime assembly; the formal "
+                    "authority lives elsewhere and this shim must stay out of the download manifest"
+                    if policy == "compat-only"
+                    else (
+                        "prototype/non-runtime knowledge module is present in runtime assembly; "
+                        "remove the assembly path until its enablement conditions are verified"
+                    )
                 ),
                 path=prefix,
                 source=", ".join(holders),
@@ -927,6 +1037,275 @@ def _catalog_age_hours(catalog: "Catalog") -> float | None:
         stamp = stamp.replace(tzinfo=datetime.timezone.utc)
     now = datetime.datetime.now(datetime.timezone.utc)
     return (now - stamp).total_seconds() / 3600.0
+
+
+def _available_row_for(
+    rows_by_skill: dict[str, list["RegistryRow"]], axis: str, label: str
+) -> "RegistryRow | None":
+    for rows in rows_by_skill.values():
+        for row in rows:
+            if row.axis == axis and row.label == label and row.status == "available":
+                return row
+    return None
+
+
+def _second_level_children(
+    paths: set[str], axis: str, first_level_root: str
+) -> list[tuple[str, str]]:
+    """`[(二级目录节点名, 该目录的完整库内路径)]`，按 `SECOND_LEVEL_SPECS` 的容器规则取。"""
+    spec = SECOND_LEVEL_SPECS[axis]
+    if spec["container"]:
+        container_root = _find_named_folder(paths, first_level_root, spec["container"])
+        if container_root is None:
+            return []
+        parent = container_root
+    else:
+        parent = first_level_root
+    return [
+        (child, f"{parent}{child}/")
+        for child in _immediate_folder_children(paths, parent)
+        if not _is_ignored_label(child)
+    ]
+
+
+_BACKTICKED_SPAN_RE = re.compile(r"`[^`\n]*`")
+
+
+def _mentions_on_index_line(text: str, names: tuple[str, ...]) -> bool:
+    """`names` 是否作为**展示名**出现在索引行（表格行 / 列表项）里。
+
+    两个刻意收紧的地方，都是为了不让"分类"维度和"装配"维度变成同一个判断：
+
+    - 只认索引行：散文里提到一次某个词，不足以证明它被登记进了取值域；
+    - **反引号内容先剥掉再匹配**：库内路径写作 `` `02-细分对象/01-通用设备/` ``，去掉数字前缀的
+      标签 `通用设备` 是它的子串 —— 不剥的话，任何列了路径的装配行都会顺带满足分类维度。
+      分类表把标签写在单元格里（反引号外），路径才进反引号，所以剥掉反引号正好区分两者。
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not (stripped.startswith(("|", "-", "*", "+")) or re.match(r"^\d+[.)、]\s", stripped)):
+            continue
+        visible = _BACKTICKED_SPAN_RE.sub(" ", line)
+        if any(name and name in visible for name in names):
+            return True
+    return False
+
+
+SUBROUTE_COLUMN_HEADER = "子业务"
+SUBROUTE_SEPARATORS = "、，,"
+
+
+def _subroute_value_set(text: str, label: str) -> set[str]:
+    """`04-business-classification.md` 里 `label` 的**子业务取值域**，返回精确标签集合。
+
+    三条纪律，缺一条都会产生真实假阴性：
+
+    - **锚在表头**：只认表头里真的带 `子业务` 列的表（约定位置是「子业务识别」小节）。一级业务表
+      那一行的第二格是**命中信号**（含"商誉减值测试"这类历史行为词），拿它判"子业务是否登记"会把
+      信号词当成登记项。
+    - **只取 `子业务` 那一格**：把整行其余单元格拼起来，第三列（目标技能）或自定义列里恰好写了
+      `商誉减值` 就会冒充登记项。
+    - **按分隔符切成集合再做成员判断**（`second in value_set`），不做子串比较：否则
+      `商誉减值测试` 会满足 `商誉减值`。
+
+    目标一级业务在「子业务」表里**整行缺失**时返回**空集合**（不是 `None`）：调用方据此为每个实际
+    存在的二级子业务各报一次，不得静默跳过。
+    """
+    header: list[str] | None = None
+    column: int | None = None
+    values: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            header = None
+            column = None
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if _is_separator(cells):
+            continue
+        if header is None:
+            header = [_label(cell) for cell in cells]
+            column = header.index(SUBROUTE_COLUMN_HEADER) if SUBROUTE_COLUMN_HEADER in header else None
+            continue
+        if column is None or column >= len(cells) or _label(cells[0]) != label:
+            continue
+        # 同一一级业务意外出现多行时合并各行的精确值，不取最后一行覆盖前面内容。
+        for raw in re.split("[" + re.escape(SUBROUTE_SEPARATORS) + "]", cells[column]):
+            token = raw.replace("`", "").strip()
+            if token:
+                values.add(token)
+    return values
+
+
+def inspect_second_level_index(
+    repo_root: Path,
+    paths: set[str],
+    first_level: dict[str, list[tuple[str, str]]],
+    rows_by_skill: dict[str, list["RegistryRow"]],
+    add_finding,
+) -> None:
+    """知识库里的每个二级对象/子业务都必须在父叶子里被**分维度**索引。
+
+    背景（2026-09-26 快照实测）：机器设备与债权各自已有 4 个 `02-细分对象/…/评估审核条目`，
+    两个父叶子却仍声明"本一级根未提供 `02-细分对象/`"并完全没有二级索引；财务报告已有 5 个子业务，
+    父叶子只索引 4 个（漏"商誉减值"）。旧门禁只检查二级目录**是否缺审核文件**，
+    从不检查父叶子有没有索引它 —— 于是"知识库有、审核读不到"这一整类漏装完全不可见。
+
+    三个维度分别落在三个文件上（各有职责，互不替代）：
+    - `00-applicability.md`：二级标签进入取值域（表格行 / 列表项）；
+    - `01-kb-assembly.md`：该二级目录被装进装配键（完整库内路径或它的前缀）；
+    - `02-review-focus.md`：写出该二级目录的完整库内路径，作为审核关注点入口。
+
+    只对**已注册且 `available`** 的父 Skill 强制；二级对象/子业务**不**要求独立 Skill 或 registry 行。
+    """
+    audit_root = resolve_skill_dir(repo_root, ROUTER_SKILL)
+    classification_path = audit_root / "references" / "04-business-classification.md"
+    classification_text = (
+        classification_path.read_text(encoding="utf-8") if classification_path.is_file() else ""
+    )
+    top_levels = _catalog_top_levels(paths)
+
+    for axis, items in first_level.items():
+        spec = SECOND_LEVEL_SPECS[axis]
+        class_code, assemble_code, review_code = spec["codes"]
+        for label, first_level_root in items:
+            row = _available_row_for(rows_by_skill, axis, label)
+            if row is None:
+                continue
+            skill_dir = resolve_skill_dir(repo_root, row.skill)
+            texts: dict[str, str] = {}
+            for name in LEAF_OWNED_REFERENCES:
+                reference_path = skill_dir / "references" / name
+                if not reference_path.is_file():
+                    break
+                texts[name] = reference_path.read_text(encoding="utf-8")
+            if len(texts) != len(LEAF_OWNED_REFERENCES):
+                continue  # 缺失的 reference 由 SKILL_REFERENCE_MISSING 负责，不在这里重复报
+            children = _second_level_children(paths, axis, first_level_root)
+
+            # 知识库确实有二级目录，父叶子却仍声称"本一级根未提供" —— 陈旧且主动误导。
+            absent_marker = spec["absent_marker"]
+            if children and absent_marker:
+                for name, text in texts.items():
+                    if absent_marker in text:
+                        add_finding(
+                            spec["absent_code"],
+                            "error",
+                            f"{name} still claims the first-level root provides no "
+                            f"{spec['container'] or 'subroutes'} while the catalog has "
+                            f"{len(children)} of them",
+                            axis=axis,
+                            label=label,
+                            skill=row.skill,
+                            path=first_level_root,
+                        )
+                        break
+
+            if not children:
+                continue
+            keys = set(_addressing_keys(texts["01-kb-assembly.md"], top_levels))
+            for child, child_root in children:
+                second = _label(child)
+                # 二级目录的写法有两套、都被接受：相对本一级根的写法（`02-细分对象/<对象>/`）
+                # 与完整库内路径写法（`02-资产类型/<一级>/02-细分对象/<对象>/`）。
+                container = str(spec["container"] or "")
+                relative_folder = f"{container}/{child}/" if container else f"{child}/"
+                relative_doc = f"{relative_folder}{spec['doc']}"
+                forms = (child_root, f"{child_root}{spec['doc']}", relative_folder, relative_doc)
+                # （1）取值域登记：二级**标签**出现为 `00-applicability.md` 的表格行 / 列表项。
+                # **只认 00**：装配表（01）不得替适用性分类说话 —— 否则三个维度重新退化成两个。
+                # 只认去掉数字前缀的标签，不认节点名 `01-通用设备`：后者是库内路径的组成部分，
+                # 任何列出路径的装配行都会命中它。反引号内容先剥掉再匹配（同上理由）。
+                if not _mentions_on_index_line(texts["00-applicability.md"], (second,)):
+                    add_finding(
+                        class_code,
+                        "error",
+                        f"second-level {'object' if axis == 'asset' else 'subroute'} is not in the "
+                        "applicability value set (table row / list item expected in "
+                        "00-applicability.md)",
+                        axis=axis,
+                        label=label,
+                        skill=row.skill,
+                        path=child_root,
+                        second_level=second,
+                    )
+                # （2）装配：该二级目录必须以相对目录或完整库内路径出现在装配表里。
+                if not (
+                    any(form in texts["01-kb-assembly.md"] for form in forms)
+                    or any(_path_within(key, child_root) for key in keys)
+                ):
+                    add_finding(
+                        assemble_code,
+                        "error",
+                        "second-level folder is not assembled: list its relative directory or full "
+                        "library path in 01-kb-assembly.md",
+                        axis=axis,
+                        label=label,
+                        skill=row.skill,
+                        path=child_root,
+                        second_level=second,
+                    )
+                # （3）审核关注点：写出该二级目录的路径（相对或完整），作为审核入口。
+                if not any(form in texts["02-review-focus.md"] for form in forms):
+                    add_finding(
+                        review_code,
+                        "error",
+                        "second-level folder has no review-focus entry carrying its library path "
+                        "(relative or full)",
+                        axis=axis,
+                        label=label,
+                        skill=row.skill,
+                        path=child_root,
+                        second_level=second,
+                    )
+                # 业务子业务还必须在 router 的业务分类取值域里登记一次（子业务不占 registry 行）。
+                # 精确成员判断；`_subroute_value_set` 在"整行缺失"时返回**空集合**（不是 None），
+                # 所以父业务在「子业务」表里没有行时，它的每个实际子业务都会各自报错，不静默跳过。
+                if axis == "business" and classification_text:
+                    if second not in _subroute_value_set(classification_text, label):
+                        add_finding(
+                            "BUSINESS_SUBROUTE_NOT_IN_CLASSIFICATION",
+                            "error",
+                            "business subroute is missing from the router business classification "
+                            "subroute value set",
+                            axis=axis,
+                            label=label,
+                            skill=row.skill,
+                            path=child_root,
+                            second_level=second,
+                        )
+
+
+# ---- 二级目录一致性（2026-09-26 立规）----
+# 一级根内部还有一层结构：资产轴的 `02-细分对象/<对象>/` 与业务轴一级根直接下挂的
+# `<子业务>/`。两者都**不**建 Skill、不占 registry 行，必须由父叶子在三个文件里各自索引。
+# 容器名、审核文件名、三类错误码与"陈旧缺省声明"话术集中在这里，避免多处各写一份。
+SECOND_LEVEL_SPECS: dict[str, dict[str, object]] = {
+    "asset": {
+        "container": "细分对象",
+        "doc": "评估审核条目",
+        "codes": (
+            "ASSET_SUBOBJECT_NOT_CLASSIFIED",
+            "ASSET_SUBOBJECT_NOT_ASSEMBLED",
+            "ASSET_SUBOBJECT_NOT_REVIEWED",
+        ),
+        "absent_code": "ASSET_SUBOBJECT_ABSENT_CLAIM",
+        "absent_marker": "未提供 `02-细分对象",
+    },
+    "business": {
+        "container": "",
+        "doc": "业务通用审核要点",
+        "codes": (
+            "BUSINESS_SUBROUTE_NOT_CLASSIFIED",
+            "BUSINESS_SUBROUTE_NOT_ASSEMBLED",
+            "BUSINESS_SUBROUTE_NOT_REVIEWED",
+        ),
+        "absent_code": "BUSINESS_SUBROUTE_ABSENT_CLAIM",
+        "absent_marker": "",
+    },
+}
 
 
 def inspect_routing_layer(
@@ -1042,6 +1421,7 @@ def inspect_repository(
         skill: str | None = None,
         path: str | None = None,
         source: str | None = None,
+        second_level: str | None = None,
     ) -> None:
         findings.append(
             {
@@ -1052,6 +1432,7 @@ def inspect_repository(
                 "skill": skill,
                 "path": path,
                 "source": source,
+                "second_level": second_level,
                 "message": message,
             }
         )
@@ -1576,6 +1957,9 @@ def inspect_repository(
                     path=subroute_root,
                 )
 
+    # 有内容不等于被索引：二级对象/子业务必须逐个在父叶子的三个文件里各自成立。
+    inspect_second_level_index(repo_root, paths, first_level, rows_by_skill, add_finding)
+
     findings.sort(
         key=lambda item: (
             str(item["severity"]),
@@ -1748,6 +2132,15 @@ def _preserved_block(text: str | None, begin: str, end: str) -> str:
     return text[start + len(begin) : stop].strip("\n")
 
 
+def _markdown_anchor(title: str) -> str:
+    """把 H2 标题转成可点击的内链锚点（去标点、空白折为一个连字符）。
+
+    与契约测试里的同名规则保持一致 —— 生成器与测试各写一套就会漂移。
+    """
+    slug = re.sub(r"[^\w\u4e00-\u9fff\s-]", "", title.strip().lower())
+    return re.sub(r"\s+", "-", slug.strip())
+
+
 def render_calibration(report: dict[str, object], previous: str | None = None) -> str:
     calibration = report.get("calibration")
     assert isinstance(calibration, dict)
@@ -1766,12 +2159,35 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
     if catalog.get("fetched_at") is None:
         complete_text += " · **无抓取时间（未能证明是最新）**"
 
+    # 轴计数只算一次：正文 H2 与导航标题复用同一份 `axis_titles`，避免两处各自拼接后计数/文案漂移。
+    axis_rows = {
+        axis: [row for row in rows if row["axis"] == axis] for axis in ("asset", "business")
+    }
+    axis_titles = {
+        "asset": f"资产轴（{len(axis_rows['asset'])}）",
+        "business": f"业务轴（{len(axis_rows['business'])}）",
+    }
+    # 导航标题 = 本次正文 H2 序列（顺序即正文顺序）；不另存一份易漂移的文案副本。
+    nav_titles = [
+        axis_titles["asset"],
+        axis_titles["business"],
+        "库内路径键健康（公共轴也查）",
+        "原型 / 非运行时模块",
+        "未登记 / 待处理 Skill",
+        "内容级校准备注（人工维护，工具不覆盖）",
+        "校准历史（新→旧，工具追加）",
+    ]
+
     lines = [
         "# 知识库 ↔ Skill 映射校准表",
         "",
         "> 本表由 `crwu-dev-audit-skill-maintainer` 在每次 `audit` 后重新生成，供人工一眼查看映射现状。",
-        "> **事实源**：知识库最新目录（经 `crwu-dws` 实时拉取）+ `crwu-audit/references/07-skill-registry.md` + `skills/crwu/` 层真实目录。",
+        "> **事实源**：知识库最新目录（经 `crwu-dws` 实时拉取）+ `crwu-audit/references/07-skill-registry.md` + 源仓技能层里的真实目录。",
         "> 本表是**只读派生视图**：不要手工改状态列；不一致时重新校准，不要手改。",
+        "",
+        "## 导航",
+        "",
+        *[f"- [{title}](#{_markdown_anchor(title)})" for title in nav_titles],
         "",
         "| 校准项 | 值 |",
         "| --- | --- |",
@@ -1785,10 +2201,10 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
         "",
     ]
 
-    for axis, title in (("asset", "资产轴"), ("business", "业务轴")):
-        axis_rows = [row for row in rows if row["axis"] == axis]
-        lines += [f"## {title}（{len(axis_rows)}）", ""]
-        if not axis_rows:
+    for axis in ("asset", "business"):
+        rows_for_axis = axis_rows[axis]
+        lines += [f"## {axis_titles[axis]}", ""]
+        if not rows_for_axis:
             lines += ["（知识库本次无该轴一级目录）", ""]
             continue
         if axis == "asset":
@@ -1801,7 +2217,7 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
                 "| 知识库一级目录 | 一级标签 | Skill | registry | 声明的一级根 | 共同审核点 | 子业务(有要点) | 本次问题 |",
                 "| --- | --- | --- | --- | --- | --- | --- | --- |",
             ]
-        for row in axis_rows:
+        for row in rows_for_axis:
             detail = row["detail"]
             assert isinstance(detail, dict)
             if axis == "asset":
@@ -1893,6 +2309,10 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
         "",
         "> 目录级事实由上表自动同步；**内容级状态**（必检项是否「待补」、文档是否为空、是否占位）需在下载正文核对后写在这里。",
         "> 空表示本次未下载正文核对，不代表内容合格。",
+        # 2026-09-27（F-029）：备注区同时保留新旧结论，缺读取规则时读者会把较早结论误当现状。
+        # 规则固定生成在人工备注块**之外**（块内是人工维护内容，工具不改写）。
+        "> **现行 / 历史读取规则**：本区按新到旧记录；**同一事项出现冲突时，只采信位置更靠前的较新结论**。",
+        "> 其后较早的冲突表述均为**历史记录**，**不得作为当前事实**。",
         "",
         CALIBRATION_NOTES_BEGIN,
         notes if notes else "",
@@ -1911,16 +2331,21 @@ def render_calibration(report: dict[str, object], previous: str | None = None) -
             "| 校准时间 | 目录抓取时间 | 节点数 | error | warning | 建议 |",
             "| --- | --- | --- | --- | --- | --- |",
         ]
-    if entry not in history_lines:
-        history_lines.append(entry)
-    # Header rows stay on top; data rows are stored oldest-first but shown newest-first.
-    header_rows = history_lines[:2]
-    data_rows = history_lines[2:]
+    # 2026-09-26（OPT-004-R1）：旧实现把新行 append 到"按展示顺序解析出来"的列表上再整体反转，
+    # 于是**每次 emit 都把已有行的顺序翻一次**（实测同一快照 4 行被搅成 17:57:50 / 17:36:32 /
+    # 16:10:15 / 17:56:59），而且顺序一旦错乱无法自愈。改为**按校准时间排序**：输出确定、可自愈，
+    # 不再依赖文件里的既有顺序。注意这**不是**字节幂等：每行第一格是本次运行时间，跨秒的两次 emit
+    # 会各追加一条（append-only 设计）；只有同一秒内整行相同才不重复追加。
+    data_rows = [line for line in history_lines[2:] if line.strip()]
+    if entry not in data_rows:
+        data_rows.append(entry)
+    data_rows = sorted(set(data_rows), key=lambda line: line.split("|")[1].strip())
     lines += [
         "## 校准历史（新→旧，工具追加）",
         "",
         CALIBRATION_HISTORY_BEGIN,
-        "\n".join(header_rows + list(reversed(data_rows))),
+        # 表头在顶；数据行按时间升序保存、展示时反向（新→旧）
+        "\n".join(history_lines[:2] + list(reversed(data_rows))),
         CALIBRATION_HISTORY_END,
         "",
     ]

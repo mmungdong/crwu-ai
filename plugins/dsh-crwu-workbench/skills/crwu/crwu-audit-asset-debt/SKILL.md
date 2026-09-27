@@ -9,7 +9,7 @@ description: Use when crwu-audit has selected the canonical 债权 asset label f
 
 仅经 `crwu-audit` router 编排调用，禁止单独调用。本技能只审核 canonical `债权` 对象的资产专业事项，不查询报告记录、不准备材料、不重新下载规则，也不替代其他轴技能。
 
-共同约束见 [共同约束](../crwu-audit/references/12-leaf-common-contract.md)：轴边界、输入、一级根装配、二级选择、执行顺序、条目状态、来源优先级、证据出处与 capability gap 均按该文件执行，本文件只写本对象特有内容。
+共同约束见 [共同约束](references/03-common-contract.md)：轴边界、输入、一级根装配、二级选择、执行顺序、条目状态、来源优先级、证据出处与 capability gap 均按该文件执行，本文件只写本对象特有内容。
 
 不得决定租赁、清算、资产处置、拍卖、抵押质押、财务报告等业务标签或业务判断；这些事项由 router 同时加载的 business skills 处理。材料含测算、明细或汇总表时，表格勾稽由 router 并入 public skill 执行，本技能只提供本对象侧的界面与一致性检查。
 
