@@ -142,7 +142,7 @@ export async function ifindEnvCheck(
     applyUrl: options.applyUrl ?? '',
   }
   if (!view.exists) {
-    return { ...base, state: 'unconfigured', reason: view.reason || '还没有保存 iFinD API-Key', errorKind: '' }
+    return { ...base, state: 'unconfigured', reason: view.reason || '还没有保存同花顺 iFinD API-Key', errorKind: '' }
   }
   if (view.state === 'invalid') {
     return { ...base, state: 'invalid', errorKind: 'credential', reason: view.reason }

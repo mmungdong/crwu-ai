@@ -71,7 +71,7 @@ export function ifindErrorHint(errorKind: string): string {
   return ''
 }
 
-/** 探测结论 → 给员工看的一行（成功只说"取到数据"，技术细节留给维护者诊断）。 */
+/** 探测结论 → 给员工看的一行（成功只说"取到数据"，技术细节留给开发者诊断）。 */
 export function probeLine(probe: IfindProbeResult): string {
   if (probe.dataVerified === true) {
     return zhCN.envIfindVerified
@@ -131,7 +131,7 @@ export function IfindAuthCard(props: IfindAuthCardProps): React.ReactElement {
     setHint(ifindErrorHint(probe.errorKind))
     if (probe.dataVerified === true) {
       setError('')
-      // 工具名与数据样本只在维护者诊断里出现（用户视图只要"成功/失败 + 时间"）。
+      // 工具名与数据样本只在开发者诊断里出现（用户视图只要"成功/失败 + 时间"）。
       setMessage(zhCN.envIfindVerified)
       props.onSaved()
       return

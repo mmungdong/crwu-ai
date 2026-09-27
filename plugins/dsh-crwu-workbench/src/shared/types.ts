@@ -176,7 +176,7 @@ export interface ServiceCheckView {
    * 氚云 / 钉钉没有归因，留空。
    */
   errorKind?: string
-  /** 探测目标（`oss://bucket/prefix/`），**不含凭据**；只用于维护者诊断。 */
+  /** 探测目标（`oss://bucket/prefix/`），**不含凭据**；只用于开发者诊断。 */
   target?: string
 }
 

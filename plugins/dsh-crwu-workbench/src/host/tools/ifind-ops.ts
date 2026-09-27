@@ -146,7 +146,7 @@ export async function ifindCredentialClear(
   const platform = await deps.platform()
   const path = (await ifindCredentialView(deps.ctx, home)).path
   if (args.confirm !== true) {
-    return { ok: false, error: '清除 iFinD API-Key 是不可撤销的操作，需要显式确认（confirm: true）', cleared: false, path }
+    return { ok: false, error: '清除同花顺 iFinD API-Key 是不可撤销的操作，需要显式确认（confirm: true）', cleared: false, path }
   }
   const cleared = await clearIfindSecret(deps.ctx, home, { platform })
   return { ok: cleared.ok, error: cleared.error, cleared: cleared.ok, path }
@@ -160,7 +160,7 @@ export async function ifindProbe(deps: IfindOpsDeps, args: Record<string, unknow
   if (secret === '') {
     return {
       ok: false, state: view.state === 'invalid' ? 'invalid' : 'unconfigured',
-      errorKind: 'unconfigured', error: view.reason || '还没有保存 iFinD API-Key',
+      errorKind: 'unconfigured', error: view.reason || '还没有保存同花顺 iFinD API-Key',
       toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: '',
       dataVerified: false, dataTool: '', dataSample: '', path: view.path,
     }

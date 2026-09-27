@@ -652,12 +652,12 @@ async function main() {
         // 页面结构（2026-09-26 重排，读者是普通员工）：
         // 1. 顶部**状态摘要**：一句结论 + 已完成 N/N + 最近检查 / 最近**真实验证**时间 +
         //    **唯一**主动作「重新检查」（**没有**「进入报告审核」按钮）；
-        // 2. **配置工作区**：左侧步骤导航（1 账号连接 / 2 阿里云 OSS / 3 iFinD / 4 工作空间，
+        // 2. **配置工作区**：左侧步骤导航（1 账号连接 / 2 阿里云 OSS / 3 同花顺 iFinD / 4 工作空间，
         //    各带已完成 / 待处理），右侧当前步骤的用途说明 + 表单；
-        // 3. **维护者诊断**（默认收起）：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节。
+        // 3. **开发者诊断**（右下角、默认收起）：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节。
         //
         // 三条不许回退的边界：员工视野里没有「安装二进制 / 装 Python / 改 PATH」；
-        // 技术细节只在维护者诊断里；密钥只提交、不回显。
+        // 技术细节只在开发者诊断里；密钥只提交、不回显。
         await phase('环境信息页', async () => {
           await moduleButton('环境信息').click()
           await page.waitForTimeout(1500)
@@ -672,7 +672,7 @@ async function main() {
             checks.that('就绪时提示可以从左侧进入报告审核', envText.includes('配置已完成。你可以从左侧进入报告审核。'))
           }
           // 四个步骤都在左侧导航里，且**顺序**固定（用页面文本下标核对）。
-          const steps = ['账号连接', '阿里云 OSS', 'iFinD', '工作空间']
+          const steps = ['账号连接', '阿里云 OSS', '同花顺 iFinD', '工作空间']
           for (const step of steps) checks.that(`步骤导航有「${step}」`, envText.includes(step))
           const stepIndex = steps.map((step) => envText.indexOf(step))
           checks.that('步骤顺序 = 用户操作顺序', stepIndex.every((value, index) => value >= 0 && (index === 0 || value > stepIndex[index - 1])),
@@ -738,7 +738,7 @@ async function main() {
           checks.that('iFinD 面向用户的文案里不再出现「SK」', !/(^|[^A-Za-z])SK([^A-Za-z]|$)/.test(ifindText), ifindText.slice(0, 120))
           checks.that('iFinD 卡片明说不要让 Agent 代填', ifindText.includes('不要让 Agent 代填'))
           checks.that('iFinD 卡片说明从哪里获得', ifindText.includes('从哪里获得'))
-          checks.that('iFinD 卡片不展示验证工具名与数据样本（已移入维护者诊断）',
+          checks.that('iFinD 卡片不展示验证工具名与数据样本（已移入开发者诊断）',
             !ifindText.includes('验证工具') && !ifindText.includes('取数样本') && !ifindText.includes('取数摘要'))
           const ifindLink = ifindCard.locator('a').first()
           checks.that('iFinD 官方入口是链接', await ifindLink.count() > 0)
@@ -754,18 +754,34 @@ async function main() {
           checks.that('工作空间就绪时压成摘要（有「更换」入口）', (await wsPanel.innerText()).includes('更换'))
           await page.screenshot({ path: join(out, 'env-config.png') })
 
-          // 维护者诊断：点开后才是技术细节（包根、清单、字节数、运行时、Tool 可见性、验证工具名）。
+          // 开发者诊断：点开后才是技术细节（包根、清单、字节数、运行时、Tool 可见性、验证工具名）。
           await pick('ifind')
-          const maintenanceHead = page.locator('.crwu-audit-details-head').filter({ hasText: '维护者诊断' }).first()
-          checks.that('有「维护者诊断」折叠区', await maintenanceHead.count() > 0)
+          const maintenanceHead = page.locator('.crwu-audit-details-head').filter({ hasText: '开发者诊断' }).first()
+          checks.that('有「开发者诊断」折叠区', await maintenanceHead.count() > 0)
+          const diagnostics = page.locator('[data-crwu-env-diag="1"]').first()
+          const developerContact = diagnostics.getByRole('link', { name: /联系开发同学进行排查/ }).first()
+          checks.that('开发者诊断下方有钉钉排查入口', await developerContact.count() === 1)
+          checks.that('排查入口使用钉钉个人名片链接',
+            String(await developerContact.getAttribute('href') ?? '').startsWith('https://n.dingtalk.com/dingding/h5-profile/'))
+          const diagnosticsBox = await diagnostics.boundingBox()
+          const maintenanceHeadBox = await maintenanceHead.boundingBox()
+          checks.that('开发者诊断是内容区右下角的轻量入口',
+            diagnosticsBox !== null && maintenanceHeadBox !== null
+              && Math.abs((maintenanceHeadBox.x + maintenanceHeadBox.width) - (diagnosticsBox.x + diagnosticsBox.width)) <= 2
+              && maintenanceHeadBox.width < diagnosticsBox.width * 0.5,
+            JSON.stringify({ diagnosticsBox, maintenanceHeadBox }))
           await maintenanceHead.click()
           await page.waitForTimeout(300)
           const detailText = await body()
-          checks.that('维护者诊断展开后有包内组件 / DSH Runtime / 平台 / Tool 可见性',
+          checks.that('开发者诊断信息收进一个大面板', await page.locator('[data-crwu-developer-panel="1"]').count() === 1)
+          checks.that('开发者诊断提供完整复制入口', detailText.includes('复制诊断信息'))
+          checks.that('开发者诊断显示插件版本与同花顺 iFinD 连接状态',
+            detailText.includes('CRWU Workbench 版本') && detailText.includes('同花顺 iFinD 连接状态'))
+          checks.that('开发者诊断展开后有包内组件 / DSH Runtime / 平台 / Tool 可见性',
             ['包内组件', 'DSH Runtime', '平台', 'Tool 可见性'].every((item) => detailText.includes(item)))
           checks.that('技术细节里有包根与包内清单', detailText.includes('包根') && detailText.includes('包内清单'))
           checks.that('技术细节里有 DSH 运行时路径', detailText.includes('运行时路径') || detailText.includes('/'))
-          checks.that('维护者诊断里不再需要授权开关', !detailText.includes('记住氚云授权'))
+          checks.that('开发者诊断里不再需要授权开关', !detailText.includes('记住氚云授权'))
           await page.screenshot({ path: join(out, 'env-details.png') })
         })
 

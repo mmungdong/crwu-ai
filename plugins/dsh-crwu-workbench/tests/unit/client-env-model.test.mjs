@@ -188,7 +188,7 @@ test('environmentGate：iFinD 未通过时 audit 的提示指名 iFinD API-Key',
     capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
     issues: [issue('ifind', { owner: 'user', scope: 'global', message: 'iFinD API-Key 未通过验证：还没有填写 iFinD API-Key' })],
   })
-  assert.match(environmentGate(blocked, 'audit', LABELS).reason, /进入【报告审核】前，请先完成 iFinD API-Key 验证/)
+  assert.match(environmentGate(blocked, 'audit', LABELS).reason, /进入【报告审核】前，请先完成同花顺 iFinD API-Key 验证/)
 })
 
 test('navigateModuleIn：被拦时落到 env，并带上目标页名', () => {

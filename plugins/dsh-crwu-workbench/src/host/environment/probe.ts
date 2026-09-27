@@ -77,7 +77,7 @@ export interface ServiceCheck {
   detail: string
   /** 归因；不需要归因的服务（氚云 / 钉钉）留空串。 */
   errorKind?: string
-  /** 探测目标（`oss://bucket/prefix/` 这类），**不含凭据**；只用于维护者诊断。 */
+  /** 探测目标（`oss://bucket/prefix/` 这类），**不含凭据**；只用于开发者诊断。 */
   target?: string
 }
 
@@ -354,7 +354,7 @@ export type OssProbeKind = '' | 'credential' | 'permission' | 'config' | 'infras
 /**
  * 一次真实 OSS 只读验证的请求形状（**完全由受信配置推出，模型与员工都不能提交**）。
  *
- * 导出它有两个目的：① 单测可以对命令字符串逐字断言；② 维护者诊断里能显示"验的是哪个目标"，
+ * 导出它有两个目的：① 单测可以对命令字符串逐字断言；② 开发者诊断里能显示"验的是哪个目标"，
  * 而目标里**不含任何凭据**。
  */
 export function ossProbeTarget(oss: OssSpec): { bucket: string; prefix: string; target: string } {

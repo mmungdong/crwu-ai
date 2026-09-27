@@ -81,13 +81,13 @@ export function checkIfindSecret(raw: unknown, placeholder: unknown = IFIND_PLAC
   const expected = text(placeholder) || IFIND_PLACEHOLDER
   const bad = (reason: string, errorKind: 'input' | 'invalid'): SecretVerdict =>
     ({ ok: false, reason, value: '', length: 0, errorKind })
-  if (value === '' || value.trim() === '') return bad('API-Key 为空，请填写你自己的 iFinD API-Key', 'input')
+  if (value === '' || value.trim() === '') return bad('API-Key 为空，请填写你自己的同花顺 iFinD API-Key', 'input')
   if (value.trim().toLowerCase() === expected.toLowerCase()) {
     return bad(`API-Key 仍是占位符「${expected}」，请替换成你自己的 API-Key`, 'input')
   }
   if (/[\r\n]/.test(value)) return bad('API-Key 不能包含换行', 'input')
   if (value !== value.trim()) return bad('API-Key 两侧有多余空白（复制时容易带上），请去掉后重试', 'input')
-  if (value.length < 8) return bad('API-Key 长度不足 8 位，看起来不是有效的 iFinD API-Key', 'invalid')
+  if (value.length < 8) return bad('API-Key 长度不足 8 位，看起来不是有效的同花顺 iFinD API-Key', 'invalid')
   return { ok: true, reason: '', value, length: value.length, errorKind: '' }
 }
 
@@ -160,22 +160,22 @@ export async function readIfindSecret(ctx: Context, home: string): Promise<ReadS
   }
 
   const fs = fileSystem(ctx)
-  if (fs === undefined) return empty('unreachable', 'infrastructure', 'Host 文件服务不可用，无法读取 iFinD 凭据')
-  if (home === '') return empty('unreachable', 'infrastructure', '主目录未知，无法定位 iFinD 凭据文件')
+  if (fs === undefined) return empty('unreachable', 'infrastructure', 'Host 文件服务不可用，无法读取同花顺 iFinD 凭据')
+  if (home === '') return empty('unreachable', 'infrastructure', '主目录未知，无法定位同花顺 iFinD 凭据文件')
 
   let raw = ''
   try {
     const target = await resolveTarget(ctx, path)
     const info = await fs.stat(target)
     if (info?.type !== 'file') {
-      const reason = '还没有保存 iFinD API-Key'
+      const reason = '还没有保存同花顺 iFinD API-Key'
       return { ok: false, secret: '', state: 'unconfigured', errorKind: 'input', reason,
         view: { path, exists: false, state: 'unconfigured', length: 0, reason } }
     }
     raw = await fs.readText(target)
   } catch (error) {
     void error
-    const reason = '无法读取 iFinD 凭据文件'
+    const reason = '无法读取同花顺 iFinD 凭据文件'
     return { ok: false, secret: '', state: 'unreachable', errorKind: 'infrastructure', reason,
       view: { path, exists: false, state: 'unreachable', length: 0, reason } }
   }
@@ -267,9 +267,9 @@ export async function writeIfindSecret(
     }
   }
 
-  if (home === '') return writeFailure('infrastructure', '主目录未知，无法保存 iFinD 凭据', path)
+  if (home === '') return writeFailure('infrastructure', '主目录未知，无法保存同花顺 iFinD 凭据', path)
   const fs = fileSystem(ctx)
-  if (fs === undefined) return writeFailure('infrastructure', 'Host 文件服务不可用，无法保存 iFinD 凭据', path)
+  if (fs === undefined) return writeFailure('infrastructure', 'Host 文件服务不可用，无法保存同花顺 iFinD 凭据', path)
 
   const platform = text(options.platform) || process.platform
   const dir = ifindStateDir(home)
@@ -322,7 +322,7 @@ export async function clearIfindSecret(
         error: `清除 DSH 凭据存储失败：${error instanceof Error ? error.message : String(error)}`, mode: 'host' }
     }
   }
-  if (home === '') return { ok: false, errorKind: 'infrastructure', error: '主目录未知，无法清除 iFinD 凭据', mode: 'file' }
+  if (home === '') return { ok: false, errorKind: 'infrastructure', error: '主目录未知，无法清除同花顺 iFinD 凭据', mode: 'file' }
   const platform = text(options.platform) || process.platform
   const result = await runShell(ctx, `rm -f ${shellQuote(ifindCredentialPath(home), platform)}`, {
     workdir: home, timeoutMs: 15_000, escalate: true,

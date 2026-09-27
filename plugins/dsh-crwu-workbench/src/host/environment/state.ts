@@ -153,12 +153,12 @@ function ifindItem(input: EnvironmentInput): SetupItemView {
   const required = ifind.required === true
   const value = ifind.tokenLength === 0 ? '' : 'API-Key 已保存'
   if (ifind.state === 'unconfigured' || (ifind.ok !== true && ifind.tokenLength === 0)) {
-    return item('unconfigured', value, ifind.reason || '还没有填写 iFinD API-Key', required)
+    return item('unconfigured', value, ifind.reason || '还没有填写同花顺 iFinD API-Key', required)
   }
   if (ifind.ok === true && ifind.dataVerified !== true) {
     // 认证过了但**没真的取到数据**：这一条必须单独说清 —— 说「已认证」会让人以为能用。
     return item('unverified', value,
-      '认证通过，但这次没有真的取到数据：请点「重新验证」再试一次；连续失败请联系管理员确认 iFinD 数据权益', required)
+      '认证通过，但这次没有真的取到数据：请点「重新验证」再试一次；连续失败请联系管理员确认同花顺 iFinD 数据权益', required)
   }
   if (ifind.ok !== true) {
     const raw = ifind.state === '' ? 'invalid' : ifind.state
@@ -313,15 +313,15 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
       ? 'admin'
       : (infrastructure ? 'system' : 'user')
     const action = kind === 'entitlement'
-      ? '联系管理员开通 iFinD 数据权益'
+      ? '联系管理员开通同花顺 iFinD 数据权益'
       : (infrastructure
-        ? '稍后重新验证（iFinD 服务不可达）'
-        : (unconfigured ? '填写 iFinD API-Key（向管理员获取）' : '重新填写 iFinD API-Key'))
-    const cause = input.ifind.reason || (unconfigured ? '还没有填写 iFinD API-Key' : '未通过真实取数验证')
+        ? '稍后重新验证（同花顺 iFinD 服务不可达）'
+        : (unconfigured ? '填写你自己的同花顺 iFinD API-Key' : '重新填写同花顺 iFinD API-Key'))
+    const cause = input.ifind.reason || (unconfigured ? '还没有填写同花顺 iFinD API-Key' : '未通过真实取数验证')
     // scope 双写（global + external-data）：前者让统一导航把它拦回环境页，后者关掉 auditCore ——
     // 光关外部数据却放行审核是自相矛盾的，审核装配里本来就要取外部数据。
-    push('ifind', owner, true, 'global', action, `iFinD API-Key 未通过验证：${cause}`)
-    push('ifind-external', owner, true, 'external-data', action, `iFinD 外部数据不可用：${cause}`)
+    push('ifind', owner, true, 'global', action, `同花顺 iFinD API-Key 未通过验证：${cause}`)
+    push('ifind-external', owner, true, 'external-data', action, `同花顺 iFinD 外部数据不可用：${cause}`)
   }
   return issues
 }

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Badge, Button, Chip, LoadingBar, Meter, Notice, Spinner, StatusDot } from '../../components/primitives.tsx'
-import { CheckIcon, WarnIcon } from '../../components/icons.tsx'
+import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { headlineOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
@@ -9,6 +9,8 @@ import { WorkspaceCard } from '../workbench/WorkspaceCard.tsx'
 import type { ClientServices } from '../workbench/services.ts'
 import { IfindAuthCard } from './IfindAuthCard.tsx'
 import { OssCredCard } from './OssCredCard.tsx'
+import type { BuildSnapshot } from '../workbench/build-store.ts'
+import { DEVELOPER_CONTACT_URL } from '../../../shared/consts.ts'
 import {
   allStepsDone, lastVerifiedAt, pickStep, setupStepInput, setupSteps, type SetupStepKind,
 } from './steps.ts'
@@ -30,14 +32,14 @@ import {
  * │ 3 iFinD 待处理       │ 验证过程与人话结果       │
  * │ 4 工作空间 已完成    │ 获取方式 / 安全说明      │
  * └──────────────────────────────────────────────┘
- * [维护者诊断 ▾]
+ * [开发者诊断 ▾]
  * ```
  *
  * ## 四条不许退回去的口径
  *
  * 1. **顶部不再有「进入报告审核」按钮**（用户口径：只做提示，跳转走左侧栏的统一导航门禁）；
  * 2. **顶部不再罗列全部阻塞项**（左侧步骤已经承担状态导航），只给**第一条**明确下一步；
- *    `平台` 这类技术指标移入维护者诊断，「最近检查」压成一行辅助文案；
+ *    `平台` 这类技术指标移入开发者诊断，「最近检查」压成一行辅助文案；
  * 3. **默认停在第一项未完成的步骤**；用户手动选过之后，后台刷新**不许**抢焦点；
  * 4. **密钥类输入只提交、不回显**（OSS AK / iFinD API-Key）：提交后立刻清空，已保存只给掩码。
  *
@@ -47,6 +49,8 @@ import {
 
 export interface EnvironmentPaneProps {
   env: EnvResult | null
+  /** 当前实际运行的插件构建；开发者诊断与页面头共用同一份版本事实。 */
+  build?: BuildSnapshot
   error: string
   busy: boolean
   /** 最近一次成功自检的时刻（ISO 串）；空串表示还不知道。 */
@@ -112,6 +116,129 @@ function Kv(props: { label: string; children?: React.ReactNode }): React.ReactEl
   </>
 }
 
+interface DiagnosticRow {
+  label: string
+  value: string
+  details?: string[]
+}
+
+/** iFinD 的凭据认证与真实取数是两层事实，不能只凭 `state` 报“已连接”。 */
+function ifindConnectionText(env: EnvResult): string {
+  if (env.external.state === 'authenticated') {
+    return env.external.dataVerified ? zhCN.envDiagIfindConnected : zhCN.envDiagIfindNoData
+  }
+  if (env.external.state === 'unconfigured') return zhCN.envIfindStateUnconfigured
+  if (env.external.state === 'invalid') return zhCN.envIfindStateInvalid
+  if (env.external.state === 'unreachable') return zhCN.envIfindStateUnreachable
+  return zhCN.envIfindStateUnverified
+}
+
+function buildVersionText(build: BuildSnapshot): string {
+  if (build.version !== '') return `v${build.version}`
+  if (build.rev.startsWith('pkg-')) return `v${build.rev.slice('pkg-'.length)}`
+  return build.rev === '' ? zhCN.versionUnknown : build.rev
+}
+
+/**
+ * 开发者诊断的单一事实源：页面与复制文本都从这些行生成，避免二者遗漏不同字段。
+ * 这里只接收 Host 已脱敏的视图，绝不放入 API-Key / AccessKey 明文。
+ */
+function diagnosticRows(env: EnvResult, checkedAt: string, build: BuildSnapshot): DiagnosticRow[] {
+  const health = env.state?.systemHealth
+  const integrity = env.packageIntegrity
+  const runtime = env.runtime
+  const root = env.auditRoot
+  const session = env.sessionWorkspace
+  const buildDetails = [
+    build.buildKind === '' ? '' : `${zhCN.envDiagBuildKind}：${build.buildKind}`,
+    build.rev === '' ? '' : `${zhCN.envDiagBuildRev}：${build.rev}`,
+    build.protocol === null ? '' : `${zhCN.envDiagProtocol}：${String(build.protocol)}`,
+    build.builtAt === '' ? '' : `${zhCN.envDiagBuildTime}：${localTime(build.builtAt)}`,
+  ].filter((item) => item !== '')
+  const ifindDetails = [
+    `${zhCN.envDiagIfindCredential}：${env.external.path === '' ? zhCN.envNotConfigured : env.external.path}`,
+    env.external.reason === '' ? '' : env.external.reason,
+    env.external.dataTool === '' ? '' : `${zhCN.envDiagIfindTool}${env.external.dataTool}`,
+    env.external.dataSample === '' ? '' : `${zhCN.envDiagIfindSample}${env.external.dataSample}`,
+    env.external.checkedAt === '' ? '' : `${zhCN.envIfindDataAt}${localTime(env.external.checkedAt)}`,
+  ].filter((item) => item !== '')
+  const auditRoot = root === undefined || root.sessionId === ''
+    ? zhCN.envAuditRootNone
+    : [
+        root.title || root.sessionId,
+        `${shortSessionId(root.sessionId)}…`,
+        root.workspacePath,
+        root.usable ? '' : `${zhCN.envAuditRootStale}${root.reason === '' ? '' : `（${root.reason}）`}`,
+      ].filter((item) => item !== '').join(' · ')
+
+  return [
+    { label: zhCN.envDiagWorkbenchVersion, value: buildVersionText(build), details: buildDetails },
+    {
+      label: zhCN.envDiagPackages,
+      value: `${String(integrity.tools.filter((tool) => tool.ok).length)}/${String(integrity.tools.length)} · ${integrity.ok ? zhCN.envDiagOk : zhCN.envDiagBad}`,
+      details: health === undefined || health.packageIntegrity.reason === '' ? [] : [health.packageIntegrity.reason],
+    },
+    {
+      label: zhCN.envDiagRuntime,
+      value: `${runtime.path === '' ? zhCN.envUnset : runtime.path} · ${runtime.versionText} · ${runtime.source}`,
+      details: runtime.missingPackages.length === 0 ? [] : [`${zhCN.envRuntimeMissingPackages}${runtime.missingPackages.join('、')}`],
+    },
+    { label: zhCN.envDiagPlatform, value: env.platform === '' ? zhCN.envNotResolved : env.platform },
+    {
+      label: zhCN.envDiagTools,
+      value: health === undefined ? zhCN.envDiagToolsUnknown
+        : (health.toolRegistry.state === 'ok' ? zhCN.envDiagToolsOk : itemStateText(health.toolRegistry)),
+      details: health === undefined || health.toolRegistry.reason === '' ? [] : [health.toolRegistry.reason],
+    },
+    { label: zhCN.envDiagIfindConnection, value: ifindConnectionText(env), details: ifindDetails },
+    {
+      label: zhCN.envDiagOssTarget,
+      value: `${env.delivery.probe.target === undefined || env.delivery.probe.target === '' ? zhCN.envNotConfigured : env.delivery.probe.target} · ${env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail}`,
+      details: env.delivery.probe.detail === '' ? [] : [env.delivery.probe.detail],
+    },
+    { label: zhCN.envPackagesRoot, value: integrity.packageRoot === '' ? zhCN.envNotResolved : integrity.packageRoot },
+    {
+      label: zhCN.envPackagesManifest,
+      value: `${integrity.manifestPath === '' ? zhCN.envNotResolved : integrity.manifestPath} · ${integrity.manifestFound ? zhCN.envPass : zhCN.envFail}`,
+    },
+    { label: zhCN.envHome, value: env.home },
+    { label: zhCN.envConfigSource, value: env.configSource === '' ? zhCN.envNotConfigured : env.configSource },
+    { label: zhCN.envCheckedAt, value: checkedAt === '' ? zhCN.envUnset : localTime(checkedAt) },
+    { label: zhCN.envCaseRoot, value: env.workspace.path === '' ? zhCN.envUnset : env.workspace.path },
+    { label: zhCN.envOssBucket, value: env.delivery.oss.bucket || zhCN.envNotConfigured },
+    { label: zhCN.envOssPrefix, value: env.delivery.oss.prefix },
+    { label: zhCN.envOssCredFile, value: env.delivery.ossCred.exists ? env.delivery.ossCred.path : zhCN.envOssCredMissing },
+    { label: zhCN.envAuditRoot, value: auditRoot },
+    { label: zhCN.envParentSession, value: session.parentSessionId === '' ? zhCN.envUnset : session.parentSessionId },
+    ...integrity.tools.map((tool): DiagnosticRow => ({
+      label: tool.name,
+      value: tool.present ? tool.file : zhCN.envNotInstalled,
+      details: [
+        tool.present ? `${zhCN.envPackagesSize} ${String(tool.sizeBytes)} / ${zhCN.envPackagesManifestSize} ${String(tool.manifestSizeBytes)}` : '',
+        tool.sha256 === '' ? '' : `${zhCN.envPackagesSha} ${tool.sha256}`,
+        tool.reason === '' ? '' : `${zhCN.envReason}：${tool.reason}`,
+      ].filter((item) => item !== ''),
+    })),
+    { label: zhCN.envRuntimeExpect, value: runtime.expect },
+    { label: zhCN.envRuntimeRequiredPackages, value: runtime.requiredPackages.join(' / ') },
+    {
+      label: zhCN.envRuntimeDistributions,
+      value: Object.entries(runtime.distributions).map(([name, version]) => `${name} ${version}`).join(' · ') || zhCN.envUnset,
+    },
+    {
+      label: zhCN.envProbe,
+      value: env.delivery.probe.state === '' ? (env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail) : env.delivery.probe.state,
+    },
+  ]
+}
+
+function diagnosticText(rows: DiagnosticRow[]): string {
+  return rows.map((row) => [
+    `${row.label}: ${row.value}`,
+    ...(row.details ?? []).map((detail) => `  ${detail}`),
+  ].join('\n')).join('\n')
+}
+
 /** 配置项状态 → 色调。`unverified` 是琥珀（"还没证据"），不是红色。 */
 function toneOfItem(item: SetupItemView): 'ok' | 'busy' | 'bad' {
   if (item.state === 'ok' || item.state === 'authenticated') return 'ok'
@@ -166,17 +293,20 @@ function StatusSummary(props: {
   // OSS 的探测结果里没有独立时间戳，但 `probeOss` **每次自检都真跑**（没有缓存），
   // 所以"这次自检的时刻"（store 在应答落地时记的 `checkedAt`）就是它的真实验证时刻。
   const verifiedAt = lastVerifiedAt(props.env, props.checkedAt ?? '')
+  // 同一必检项可能同时产生 global / external-data 两条诊断 issue（例如 iFinD）。
+  // 顶部数量必须跟 N/N 的必检项口径一致，不能把诊断作用域当成待配置项重复计数。
+  const remaining = Math.max(0, head.total - head.passed)
   const title = ok
     ? zhCN.envStatusReady
     : (head.status === 'admin-required'
-      ? `${zhCN.envStatusAdmin}${String(head.blockers.length)}${zhCN.envStatusActionTail}`
+      ? `${zhCN.envStatusAdmin}${String(remaining)}${zhCN.envStatusActionTail}`
       : (head.status === 'system-blocked'
         ? zhCN.envStatusSystem
         : (head.status === 'check-failed'
           ? zhCN.envStatusFailed
           : (head.status === 'unknown' || head.status === 'checking'
             ? zhCN.envStatusChecking
-            : `${zhCN.envStatusAction}${String(head.blockers.length)}${zhCN.envStatusActionTail}`))))
+            : `${zhCN.envStatusAction}${String(remaining)}${zhCN.envStatusActionTail}`))))
   return <div className={`${C.status} ${ok ? C.statusOk : C.statusBad}`} data-crwu-env-status={head.status}>
     <span className={`${C.statusMark} ${ok ? C.statusMarkOk : C.statusMarkBad}`}>
       {ok ? <CheckIcon size={18} /> : <WarnIcon size={18} />}
@@ -333,131 +463,85 @@ function AccountsStep(props: EnvironmentPaneProps & { env: EnvResult; authorized
 }
 
 /**
- * 维护者诊断：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节。
+ * 开发者诊断：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节。
  *
  * 普通用户默认看不到：包路径、sha256、协议版本、运行时路径、凭据路径、验证工具名与数据样本
  * **只在这里**出现。
  */
-function Maintenance(props: { env: EnvResult; checkedAt: string; open: boolean; onToggle: () => void }): React.ReactElement {
-  const { env } = props
-  const health = env.state?.systemHealth
-  const integrity = env.packageIntegrity
-  const runtime = env.runtime
-  const session = env.sessionWorkspace
-  const root = env.auditRoot
+function DeveloperDiagnostics(props: {
+  env: EnvResult
+  build?: BuildSnapshot
+  checkedAt: string
+  open: boolean
+  onToggle: () => void
+}): React.ReactElement {
+  const rows = diagnosticRows(props.env, props.checkedAt, props.build ?? {
+    ok: false, error: '', rev: '', version: '', buildKind: '', builtAt: '', protocol: null, parentSessionId: '',
+  })
+  const [copied, setCopied] = React.useState(false)
+  const [copyError, setCopyError] = React.useState('')
+
+  const copy = (): void => {
+    void (async () => {
+      setCopyError('')
+      const text = diagnosticText(rows)
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText !== undefined) {
+          try {
+            await navigator.clipboard.writeText(text)
+            setCopied(true)
+            return
+          } catch {
+            // 浏览器可能因为权限策略拒绝；继续走 Host 的系统剪贴板退路。
+          }
+        }
+        const result = await workbenchApi.clipboard({ text })
+        if (!result.ok) throw new Error(result.error)
+        setCopied(true)
+      } catch {
+        setCopyError(zhCN.envDiagCopyFailed)
+      }
+    })()
+  }
+
   return <div className={C.details} data-crwu-env-diag="1">
     <button type="button" className={C.detailsHead} aria-expanded={props.open} onClick={props.onToggle}>
-      <span>{zhCN.envGroupMaintenance}</span>
+      <span className={C.detailsTitle}>
+        <DeveloperDiagnosticsIcon size={17} />
+        <span>{zhCN.envGroupMaintenance}</span>
+      </span>
       <span className={C.detailsToggle}>{props.open ? zhCN.envLayerCollapse : zhCN.envLayerExpand}</span>
     </button>
+    <a
+      className={`${C.link} ${C.detailsContact}`}
+      href={DEVELOPER_CONTACT_URL}
+      target="_blank"
+      rel="noreferrer noopener"
+    >{zhCN.envDeveloperContact}</a>
     {props.open
-      ? <div className={C.detailsBody}>
-          <div className={C.muted}>{zhCN.envGroupMaintenanceHint}</div>
+      ? <section className={C.detailsBody} data-crwu-developer-panel="1">
+          <header className={C.detailsPanelHead}>
+            <div className={C.detailsPanelTitle}>{zhCN.envDiagPanelTitle}</div>
+            <Button label={copied ? zhCN.envDiagCopied : zhCN.envDiagCopy} small onClick={copy} />
+          </header>
+          {copyError === '' ? null : <div className={C.detailsCopyError}>{copyError}</div>}
           <div className={C.kv}>
-            <Kv label={zhCN.envDiagPackages}>
-              <span className={C.mono}>{`${String(integrity.tools.length)}/${String(integrity.tools.length)}`}</span>
-              <span className={C.muted}>{` · ${integrity.ok ? zhCN.envDiagOk : zhCN.envDiagBad}`}</span>
-              {health === undefined ? null : <div className={C.muted}>{health.packageIntegrity.reason}</div>}
-            </Kv>
-            <Kv label={zhCN.envDiagRuntime}>
-              <span className={C.mono}>{runtime.path === '' ? zhCN.envUnset : runtime.path}</span>
-              <span className={C.muted}>{` · ${runtime.versionText} · ${runtime.source}`}</span>
-              {runtime.missingPackages.length === 0 ? null
-                : <div className={C.muted}>{`${zhCN.envRuntimeMissingPackages}${runtime.missingPackages.join('、')}`}</div>}
-            </Kv>
-            <Kv label={zhCN.envDiagPlatform}>
-              <span className={C.mono}>{env.platform === '' ? zhCN.envNotResolved : env.platform}</span>
-            </Kv>
-            <Kv label={zhCN.envDiagTools}>
-              {health === undefined
-                ? <span className={C.muted}>{zhCN.envDiagToolsUnknown}</span>
-                : <>
-                    <span>{health.toolRegistry.state === 'ok' ? zhCN.envDiagToolsOk : itemStateText(health.toolRegistry)}</span>
-                    {health.toolRegistry.reason === '' ? null : <div className={C.muted}>{health.toolRegistry.reason}</div>}
-                  </>}
-            </Kv>
-            {/* 外部数据与交付的**技术事实**：协议版本、验证工具名、数据样本、凭据路径。 */}
-            <Kv label={zhCN.envDiagIfind}>
-              <span className={C.mono}>{env.external.path === '' ? zhCN.envNotConfigured : env.external.path}</span>
-              <span className={C.muted}>{` · ${env.external.dataVerified ? zhCN.envPass : zhCN.envFail}`}</span>
-              {env.external.dataTool === '' ? null
-                : <div className={C.mono}>{`${zhCN.envDiagIfindTool}${env.external.dataTool}`}</div>}
-              {env.external.dataSample === '' ? null
-                : <div className={C.mono}>{`${zhCN.envDiagIfindSample}${env.external.dataSample}`}</div>}
-            </Kv>
-            <Kv label={zhCN.envDiagOssTarget}>
-              <span className={C.mono}>{env.delivery.probe.target === undefined || env.delivery.probe.target === ''
-                ? zhCN.envNotConfigured : env.delivery.probe.target}</span>
-              <span className={C.muted}>{` · ${env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail}`}</span>
-              {env.delivery.probe.detail === '' ? null : <div className={C.muted}>{env.delivery.probe.detail}</div>}
-            </Kv>
-          </div>
-          <div className={C.kv}>
-            <Kv label={zhCN.envPackagesRoot}><span className={C.mono}>{integrity.packageRoot === '' ? zhCN.envNotResolved : integrity.packageRoot}</span></Kv>
-            <Kv label={zhCN.envPackagesManifest}>
-              <span className={C.mono}>{integrity.manifestPath === '' ? zhCN.envNotResolved : integrity.manifestPath}</span>
-              <span className={C.muted}>{` · ${integrity.manifestFound ? zhCN.envPass : zhCN.envFail}`}</span>
-            </Kv>
-            <Kv label={zhCN.envHome}><span className={C.mono}>{env.home}</span></Kv>
-            <Kv label={zhCN.envConfigSource}><span className={C.mono}>{env.configSource === '' ? zhCN.envNotConfigured : env.configSource}</span></Kv>
-            <Kv label={zhCN.envCheckedAt}>{props.checkedAt === '' ? zhCN.envUnset : localTime(props.checkedAt)}</Kv>
-            <Kv label={zhCN.envCaseRoot}>
-              <span className={C.mono}>{env.workspace.path === '' ? zhCN.envUnset : env.workspace.path}</span>
-            </Kv>
-            <Kv label={zhCN.envOssBucket}><span className={C.mono}>{env.delivery.oss.bucket || zhCN.envNotConfigured}</span></Kv>
-            <Kv label={zhCN.envOssPrefix}><span className={C.mono}>{env.delivery.oss.prefix}</span></Kv>
-            <Kv label={zhCN.envOssCredFile}><span className={C.mono}>{env.delivery.ossCred.exists ? env.delivery.ossCred.path : zhCN.envOssCredMissing}</span></Kv>
-            <Kv label={zhCN.envAuditRoot}>
-              {root === undefined || root.sessionId === ''
-                ? <span className={C.muted}>{zhCN.envAuditRootNone}</span>
-                : <>
-                    <span>{root.title || root.sessionId}</span>
-                    {/* 短 id 要剥掉 `session-` 前缀：直接 slice(0,8) 只会得到没有信息量的
-                        `session-`，用户拿它去侧栏什么也核对不到（实测踩过）。 */}
-                    <span className={`${C.muted} ${C.mono}`}>{` · ${shortSessionId(root.sessionId)}…`}</span>
-                    {/* 「挂在哪个工作空间」要就地看得出来：用户报的正是「没挂到我的工作空间里」。 */}
-                    {root.workspacePath ? <span className={`${C.muted} ${C.mono}`}>{` · ${root.workspacePath}`}</span> : null}
-                    {/* 失效的根要在**这一行**说明「下次发起审核会自动新建一个」（旧的树保留）。 */}
-                    {root.usable
-                      ? null
-                      : <span className={C.muted}>{`${zhCN.envAuditRootStale}${root.reason === '' ? '' : `（${root.reason}）`}`}</span>}
-                  </>}
-            </Kv>
-            <Kv label={zhCN.envParentSession}>
-              <span className={C.mono}>{session.parentSessionId === '' ? zhCN.envUnset : session.parentSessionId}</span>
-            </Kv>
-          </div>
-          <div className={C.kv}>
-            {integrity.tools.map((tool) => <Kv key={tool.name} label={tool.name}>
-              <span className={C.mono}>{tool.present ? tool.file : zhCN.envNotInstalled}</span>
-              {tool.present
-                ? <span className={`${C.muted} ${C.mono}`}>{` · ${zhCN.envPackagesSize} ${String(tool.sizeBytes)} / ${zhCN.envPackagesManifestSize} ${String(tool.manifestSizeBytes)}`}</span>
-                : null}
-              {tool.sha256 === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${zhCN.envPackagesSha} ${tool.sha256}`}</span>}
-              {tool.reason === '' ? null : <div className={C.itemFix}>{`${zhCN.envReason}：${tool.reason}`}</div>}
+            {rows.map((row, index) => <Kv key={`${row.label}-${String(index)}`} label={row.label}>
+              <span className={C.mono}>{row.value}</span>
+              {(row.details ?? []).map((detail, detailIndex) => <div
+                key={`${String(index)}-${String(detailIndex)}`}
+                className={C.muted}
+              >{detail}</div>)}
             </Kv>)}
           </div>
-          <div className={C.kv}>
-            <Kv label={zhCN.envRuntimeExpect}>{runtime.expect}</Kv>
-            <Kv label={zhCN.envRuntimeRequiredPackages}><span className={C.mono}>{runtime.requiredPackages.join(' / ')}</span></Kv>
-            <Kv label={zhCN.envRuntimeDistributions}>
-              <span className={C.mono}>
-                {Object.entries(runtime.distributions).map(([name, version]) => `${name} ${version}`).join(' · ') || zhCN.envUnset}
-              </span>
-            </Kv>
-            <Kv label={zhCN.envProbe}>
-              <Chip text={env.delivery.probe.state === '' ? (env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail) : env.delivery.probe.state}
-                tone={env.delivery.probe.ok ? 'ok' : 'bad'} />
-            </Kv>
-          </div>
-        </div>
+        </section>
       : null}
   </div>
 }
 
 export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement {
   const { env } = props
-  const [maintenanceOpen, setMaintenanceOpen] = React.useState(false)
+  const [developerDiagnosticsOpen, setDeveloperDiagnosticsOpen] = React.useState(false)
   /**
    * 用户手动选过的步骤。
    *
@@ -514,16 +598,13 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
             onPick={setManualStep}
           />}
 
-      <Maintenance
+      <DeveloperDiagnostics
         env={env}
+        build={props.build}
         checkedAt={props.checkedAt ?? ''}
-        open={maintenanceOpen}
-        onToggle={() => { setMaintenanceOpen(!maintenanceOpen) }}
+        open={developerDiagnosticsOpen}
+        onToggle={() => { setDeveloperDiagnosticsOpen(!developerDiagnosticsOpen) }}
       />
-
-      <div className={C.row} style={{ marginTop: '10px' }}>
-        <Badge text={zhCN.envGroupMaintenanceHint} tone="low" />
-      </div>
     </div>
   </div>
 }

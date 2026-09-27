@@ -7,7 +7,7 @@
  * 3. **Client 不保留已保存的 API-Key**（提交后立刻清空本地，且绝不回填）；
  * 4. 保存成功后立即真实验证（结论来自 Host 的探测，不是"文件写下去了"）；
  * 5. 用户视图只有「验证成功/失败 + 最近验证时间 + 脱敏摘要」：**工具名、数据样本、
- *    协议版本都不是用户能看到的东西** —— 它们属于维护者诊断（`EnvironmentPane.tsx` 的
+ *    协议版本都不是用户能看到的东西** —— 它们属于开发者诊断（`EnvironmentPane.tsx` 的
  *    `envDiagIfind*`），卡片里一个技术细节都不许有；
  * 6. 允许替换 API-Key；
  * 7. 错误就地显示，且不回显 API-Key；
@@ -188,7 +188,7 @@ test('保存过程中按钮禁用；客户端提交后立刻丢掉本地那一�
   assert.equal(saved, 1, '保存并验证通过后要刷新环境自检')
 
   // 成功之后用户视图只说「验证成功 + 最近验证时间」：环境应答里**真的带着**工具名与数据样本
-  // （Host 的 probe 回包就是它们），但它们是维护者诊断的内容，卡片一个都不许渲染。
+  // （Host 的 probe 回包就是它们），但它们是开发者诊断的内容，卡片一个都不许渲染。
   const verified = textOf(rerender(IfindAuthCard, {
     credential: credential({
       ok: true, state: 'authenticated', tokenLength: 10, reason: '',
@@ -200,8 +200,8 @@ test('保存过程中按钮禁用；客户端提交后立刻丢掉本地那一�
   assert.equal(verified.includes(zhCN.envIfindVerified), true, '成功要显示「验证成功，已读取到测试数据。」')
   assert.equal(verified.includes(`${zhCN.envIfindDataAt}${new Date('2026-09-26T10:00:00.000Z').toLocaleString()}`), true,
     '要显示最近验证时间')
-  assert.equal(verified.includes('get_stock_summary'), false, '工具名只在维护者诊断里出现')
-  assert.equal(verified.includes('{"v":1}'), false, '数据样本只在维护者诊断里出现')
+  assert.equal(verified.includes('get_stock_summary'), false, '工具名只在开发者诊断里出现')
+  assert.equal(verified.includes('{"v":1}'), false, '数据样本只在开发者诊断里出现')
   // 脱敏摘要：只说「已保存（长度 N，不回显）」；key 本体在任何视图里都不出现。
   assert.equal(verified.includes(`${zhCN.ifindConfigured}10${zhCN.ifindNoEcho}`), true, '要显示脱敏摘要')
   assert.equal(verified.includes('abcdefghij'), false, '任何情况下都不回显 API-Key')
@@ -286,7 +286,7 @@ test('已保存：显示脱敏摘要与「替换 API-Key」，输入框收起（
   // 脱敏摘要只有长度 + 「不回显」的明说，没有 key 本体。
   assert.equal(text.includes(`${zhCN.ifindConfigured}24${zhCN.ifindNoEcho}`), true, '要显示脱敏摘要')
   assert.equal(text.includes('abcdefghij'), false, '任何视图里都不出现 key 本体')
-  // 凭据文件路径是插件状态文件（不是秘密），保留在卡片脚注里便于对照维护者诊断。
+  // 凭据文件路径是插件状态文件（不是秘密），保留在卡片脚注里便于对照开发者诊断。
   assert.equal(text.includes(`${zhCN.envIfindPath} ${savedView.path}`), true, '要显示凭据文件路径')
   assert.equal(inputs(tree).length, 0, '已认证时不展开输入框')
   assert.ok(buttonLike(tree, zhCN.envIfindReplace), '要能替换 API-Key')

@@ -311,8 +311,13 @@ export const WORKBENCH_CLASSES = {
   layerFix: 'crwu-audit-layer-fix',
   details: 'crwu-audit-details',
   detailsHead: 'crwu-audit-details-head',
+  detailsTitle: 'crwu-audit-details-title',
   detailsToggle: 'crwu-audit-details-toggle',
   detailsBody: 'crwu-audit-details-body',
+  detailsPanelHead: 'crwu-audit-details-panel-head',
+  detailsPanelTitle: 'crwu-audit-details-panel-title',
+  detailsCopyError: 'crwu-audit-details-copy-error',
+  detailsContact: 'crwu-audit-details-contact',
 
   metrics: 'crwu-audit-metrics',
   metric: 'crwu-audit-metric',
@@ -1080,21 +1085,47 @@ export const WORKBENCH_STYLE_TEXT = `
 .crwu-audit-layer-fix .crwu-audit-card { margin-bottom: 0; box-shadow: none; }
 
 /* ════════════════════════════════════════════════════════════════════
-   13. 排查详情（维护者看）
+   13. 开发者诊断
    ────────────────────────────────────────────────────────────────────
-   默认收起：sha256、清单来源、会话 id 这些是维护者信息，普通员工一进来不该看到。
+   默认收起在内容区右下角：sha256、清单来源、会话 id 这些是开发信息，普通员工不需要注意。
+   展开内容保持全宽并排在入口上方，入口本身不悬浮、不遮挡员工表单。
    ──────────────────────────────────────────────────────────────────── */
-.crwu-audit-details { margin-bottom: 14px; }
-.crwu-audit-details-head {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 14px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 10px;
-  background: transparent; color: var(--dsw-alias-label-secondary);
-  font-family: inherit; font-size: 12px; text-align: left; cursor: pointer;
-  transition: background 0.14s ease;
+.crwu-audit-details {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  margin-top: 4px;
 }
-.crwu-audit-details-head:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.crwu-audit-details-toggle { margin-left: auto; color: var(--dsw-alias-link); font-size: 11.5px; white-space: nowrap; }
-.crwu-audit-details-body { padding: 12px 0 0; }
+.crwu-audit-details-head {
+  display: flex; align-items: center; gap: 8px; width: auto; min-height: 34px;
+  padding: 6px 9px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-tertiary);
+  font-family: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.crwu-audit-details-head:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+.crwu-audit-details-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.crwu-audit-details-title svg { flex: 0 0 auto; color: currentColor; }
+.crwu-audit-details-toggle { margin-left: auto; color: currentColor; font-size: 11.5px; white-space: nowrap; }
+.crwu-audit-details-contact {
+  padding: 0 9px 4px; color: var(--dsw-alias-label-secondary); font-size: 12px;
+  text-decoration: none; text-underline-offset: 3px;
+}
+.crwu-audit-details-contact:hover { color: var(--dsw-alias-link); text-decoration: underline; }
+.crwu-audit-details-contact:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; border-radius: 4px; }
+.crwu-audit-details-body {
+  align-self: stretch; order: -1; width: 100%; box-sizing: border-box;
+  padding: 16px 18px 18px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv1);
+}
+.crwu-audit-details-panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.crwu-audit-details-panel-title { color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 600; }
+.crwu-audit-details-copy-error { margin: -4px 0 10px; color: var(--dsw-alias-state-error-primary); font-size: 12px; }
+.crwu-audit-details-body .crwu-audit-kv { margin-top: 0; }
 .crwu-audit-hero-todo { margin-top: 8px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
 
 /* ════════════════════════════════════════════════════════════════════

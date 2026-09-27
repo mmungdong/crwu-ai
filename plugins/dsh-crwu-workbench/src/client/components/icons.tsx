@@ -80,6 +80,16 @@ export function EnvIcon(props: IconProps): React.ReactElement {
   </svg>
 }
 
+/** 开发者诊断：终端窗口 + 命令提示符，只用于收起的技术诊断入口。 */
+export function DeveloperDiagnosticsIcon(props: IconProps): React.ReactElement {
+  const box = frame(props.size, props.className)
+  return <svg {...box} {...STROKE}>
+    <rect x={3.5} y={4.5} width={17} height={15} rx={3} />
+    <path d="m7.5 9 2.5 2.5L7.5 14" />
+    <path d="M12.5 14h4" />
+  </svg>
+}
+
 /** 未通过 / 需要处理：圆里一枚感叹号（比叉号少一点"终结"意味，更像"待办"）。 */
 export function WarnIcon(props: IconProps): React.ReactElement {
   const box = frame(props.size, props.className)

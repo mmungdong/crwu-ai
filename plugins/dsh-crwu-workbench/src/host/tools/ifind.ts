@@ -67,7 +67,7 @@ async function readIfindToken(deps: ToolDeps): Promise<{ token: string; error: s
   const home = await deps.world.home()
   const result = await readIfindSecret(deps.ctx, home)
   if (result.ok) return { token: result.secret, error: '' }
-  return { token: '', error: `iFinD 取数入口未认证：${result.reason}（在环境信息页填写 SK 后重试）` }
+  return { token: '', error: `同花顺 iFinD 取数入口未认证：${result.reason}（在环境信息页填写 API-Key 后重试）` }
 }
 
 export function ifindTool(deps: ToolDeps) {
@@ -145,7 +145,7 @@ export function ifindTool(deps: ToolDeps) {
 
       // ① 读本机凭据必须先获得授权：未授权一律 policy，且**不发任何请求**。
       if (!credentialsTrusted(deps)) {
-        return failure('policy', '读取本机 iFinD 凭据需要先在面板授权（trustCredentials）')
+        return failure('policy', '读取本机同花顺 iFinD 凭据需要先在面板授权（trustCredentials）')
       }
       // ② 令牌缺失 → capability-gap：模型应记能力缺口并继续其它检查项。
       const credential = await readIfindToken(deps)
@@ -182,7 +182,7 @@ export function ifindTool(deps: ToolDeps) {
         const opened = await openIfindSession(transport, url, credential.token, linked.signal, timeoutMs, abortSourceOf)
         if (!opened.ok) {
           return failure(timedOut() ? 'infrastructure' : opened.errorKind,
-            timedOut() ? '调用 iFinD 服务超时' : opened.error)
+            timedOut() ? '调用同花顺 iFinD 服务超时' : opened.error)
         }
         const session = opened.session
         const protocolVersion = session.protocolVersion
@@ -190,7 +190,7 @@ export function ifindTool(deps: ToolDeps) {
         const listed = await listIfindTools(transport, url, credential.token, session, linked.signal, timeoutMs, abortSourceOf)
         if (!listed.ok) {
           return failure(timedOut() ? 'infrastructure' : listed.errorKind,
-            timedOut() ? '调用 iFinD 服务超时' : listed.error)
+            timedOut() ? '调用同花顺 iFinD 服务超时' : listed.error)
         }
         // `tools`（内部完整集合）是下面 toolName 校验的依据，不受模型可见清单裁剪影响。
         const tools = listed.tools
@@ -236,9 +236,9 @@ export function ifindTool(deps: ToolDeps) {
           { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: toolName, arguments: params } },
           linked.signal, redact.redact, timeoutMs, abortSourceOf)
         if (!called.ok) return failure(timedOut() ? 'infrastructure' : called.errorKind,
-          timedOut() ? '调用 iFinD 服务超时' : called.error)
+          timedOut() ? '调用同花顺 iFinD 服务超时' : called.error)
         if (!Object.prototype.hasOwnProperty.call(called.data, 'result')) {
-          return failure('infrastructure', 'iFinD 调用成功但响应缺少 result（协议错误）')
+          return failure('infrastructure', '同花顺 iFinD 调用成功但响应缺少 result（协议错误）')
         }
         const payload = called.data.result
         const rendered = JSON.stringify(r(payload) ?? null)

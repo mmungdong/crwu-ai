@@ -18,7 +18,7 @@ registerTsxLoader()
 
 const ROOT = new URL('../../', import.meta.url)
 
-const { WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
+const { DEVELOPER_CONTACT_URL, WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { WORKBENCH_CLASSES, WORKBENCH_STYLE_ID, WORKBENCH_STYLE_TEXT } = await import(
   new URL('src/client/features/workbench/consts.ts', ROOT).href
 )
@@ -797,7 +797,7 @@ test('after boot and env the shell renders the self-check result', async () => {
   assert.equal(text.includes(zhCN.envStatusReady), true, '环境就绪要有明确结论')
   assert.equal(text.includes('9/9'), true, '通过率与结论必须自洽（只统计必需项，iFinD 在分母里）')
   // 页面按"我接下来要做什么"分四步（新结构：左侧步骤导航 + 右侧当前步骤）；
-  // 技术细节收进默认收起的「维护者诊断」。
+  // 技术细节收进默认收起的「开发者诊断」。
   for (const title of [
     zhCN.envStepAccounts, zhCN.envStepOss, zhCN.envStepIfind, zhCN.envStepWorkspace,
     zhCN.envGroupMaintenance,
@@ -808,11 +808,11 @@ test('after boot and env the shell renders the self-check result', async () => {
   for (const id of ['accounts', 'oss', 'ifind', 'workspace']) {
     assert.equal(stepStateOf(tree, id), 'done', `「${id}」这一步应当是已完成`)
   }
-  // **员工视野里只有他能做的事**：包内组件 / DSH Runtime / 平台 / Tool 可见性只在维护者诊断里，
+  // **员工视野里只有他能做的事**：包内组件 / DSH Runtime / 平台 / Tool 可见性只在开发者诊断里，
   // 默认收起 —— 所以正文里看不到技术细节（收起时连它们的行标签都不渲染）。
-  assert.equal(text.includes(zhCN.envDiagToolsOk), false, 'Tool 可见性只在维护者诊断里')
-  assert.equal(text.includes(zhCN.envPackagesManifest), false, '包内清单路径只在维护者诊断里')
-  assert.equal(text.includes(zhCN.envRuntimeExpect), false, '运行时技术细节只在维护者诊断里')
+  assert.equal(text.includes(zhCN.envDiagToolsOk), false, 'Tool 可见性只在开发者诊断里')
+  assert.equal(text.includes(zhCN.envPackagesManifest), false, '包内清单路径只在开发者诊断里')
+  assert.equal(text.includes(zhCN.envRuntimeExpect), false, '运行时技术细节只在开发者诊断里')
   assert.equal(text.includes(zhCN.envLayerPackages), false, '旧的"五层"标题不该再出现')
   // AK 掩码是**许可**出现的（它就是脱敏摘要，员工要用来核对是哪一份 AK）；
   // 不许出现的是 Secret 与 SK 明文 —— 那两条在各自卡片的用例里逐字钉住。
@@ -821,7 +821,7 @@ test('after boot and env the shell renders the self-check result', async () => {
 
 test('a blocked environment names the first thing still missing instead of a second checklist', async () => {
   // 新结构（2026-09-26）：顶部**只给第一条**员工能修的下一步，不再把 `blocked[]` 罗列一遍
-  // （哪里不对由左侧步骤导航回答）；技术类故障的原文只在默认收起的维护者诊断里。
+  // （哪里不对由左侧步骤导航回答）；技术类故障的原文只在默认收起的开发者诊断里。
   stubOps({
     boot: { body: bootOk() },
     env: {
@@ -980,15 +980,15 @@ function findByClass(node, className) {
 }
 
 /**
- * 点开维护者诊断（新结构里**唯一**的收起区；账号 / 交付 / 工作空间三块常驻可见）。
+ * 点开开发者诊断（新结构里**唯一**的收起区；账号 / 交付 / 工作空间三块常驻可见）。
  *
- * 旧版是"点开某一层"，新版把技术细节收进一个「维护者诊断」折叠区，所以断言里要展开的是它。
+ * 旧版是"点开某一层"，新版把技术细节收进一个「开发者诊断」折叠区，所以断言里要展开的是它。
  */
 function expandMaintenance(tree) {
   const head = find(tree, (node) => node.type === 'button'
     && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.detailsHead)
     && textOf(node).includes(zhCN.envGroupMaintenance))
-  assert.ok(head, '环境信息页要有「维护者诊断」折叠区')
+  assert.ok(head, '环境信息页要有「开发者诊断」折叠区')
   head.props.onClick()
   return head
 }
@@ -1549,11 +1549,11 @@ test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是�
     services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
   })
   const ROOT_WORKSPACE = '/Users/mungdong/中瑞世联工作空间'
-  /** 审核根会话属于**维护者诊断**（默认收起）：先像用户那样点开，再重渲染同一实例。 */
+  /** 审核根会话属于**开发者诊断**（默认收起）：先像用户那样点开，再重渲染同一实例。 */
   const rooted = (env) => {
     const paneProps = props(env)
     const collapsed = render(EnvironmentPane, paneProps)
-    assert.equal(rowValueOf(collapsed.tree, zhCN.envAuditRoot), null, '维护者诊断默认不展开时不该出现这一行')
+    assert.equal(rowValueOf(collapsed.tree, zhCN.envAuditRoot), null, '开发者诊断默认不展开时不该出现这一行')
     expandMaintenance(collapsed.tree)
     return rerender(EnvironmentPane, paneProps)
   }
@@ -2065,12 +2065,15 @@ test('the iFinD card never echoes the token and points at the source when missin
     total: 9,
     capabilities: { global: false, auditCore: false, delivery: true, externalData: false },
     userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '还没有保存 iFinD API-Key', required: true } },
-    issues: [{ id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据暂不可用：还没有保存 iFinD API-Key' }],
+    issues: [
+      { id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD API-Key 未通过验证：还没有保存 iFinD API-Key' },
+      { id: 'ifind-external', owner: 'user', blocking: true, scope: 'external-data', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据不可用：还没有保存 iFinD API-Key' },
+    ],
   }) } }
   const missingTree = render(EnvironmentPane, missingProps).tree
   const text = textOf(missingTree)
   assert.equal(text.includes(zhCN.envStatusReady), false, 'iFinD 没通过就不能说「环境就绪」')
-  assert.match(text, new RegExp(`${zhCN.envStatusAction}1${zhCN.envStatusActionTail}`), '要说清还差 1 项')
+  assert.match(text, new RegExp(`${zhCN.envStatusAction}1${zhCN.envStatusActionTail}`), '同一 iFinD 配置即使有两个诊断作用域，也只能算还差 1 项')
   assert.equal(text.includes('还没有保存 iFinD API-Key'), true, '要说清为什么没过')
   // 默认停在第一项未完成的步骤 —— 就是 iFinD 这一步，卡片随即可见（一次只渲染当前步骤）。
   assert.equal(stepStateOf(missingTree, 'ifind'), 'doing', '默认停在 iFinD 这一步')
@@ -2106,15 +2109,15 @@ test('the iFinD card never echoes the token and points at the source when missin
   assert.equal(okText.includes(zhCN.envIfindGet), true, '要有「获取 iFinD API-Key」链接')
   const link = find(okAfter, (node) => node.type === 'a')
   assert.equal(link.props.href, 'https://mcp.51ifind.com/')
-  // 工具名与取数样本是**技术证据**：用户视图看不到，只在默认收起的「维护者诊断」里。
+  // 工具名与取数样本是**技术证据**：用户视图看不到，只在默认收起的「开发者诊断」里。
   assert.equal(okText.includes('get_stock_summary'), false, '验证工具名不进用户视野')
   assert.equal(okText.includes(zhCN.envDiagIfindSample), false, '取数样本不进用户视野')
   const verifiedTree = render(EnvironmentPane, okProps).tree
   expandMaintenance(verifiedTree)
   const verifiedText = textOf(rerender(EnvironmentPane, okProps))
-  assert.equal(verifiedText.includes(zhCN.envDiagIfindTool), true, '维护者诊断里要给出验证用的工具名')
+  assert.equal(verifiedText.includes(zhCN.envDiagIfindTool), true, '开发者诊断里要给出验证用的工具名')
   assert.equal(verifiedText.includes('get_stock_summary'), true, '要显示验证用的工具名')
-  assert.equal(verifiedText.includes(zhCN.envDiagIfindSample), true, '维护者诊断里要给出取数样本')
+  assert.equal(verifiedText.includes(zhCN.envDiagIfindSample), true, '开发者诊断里要给出取数样本')
   assert.equal(verifiedText.includes('{"value":42}'), true, '取数摘要要显示（脱敏后的人工核对证据）')
   assert.equal(verifiedText.includes('abcdefghijkl'), false, '任何情况下都不回显 API-Key')
 })
@@ -2416,7 +2419,7 @@ test('iFinD 未通过时：侧栏点报告审核立刻被拦回环境页，并�
   const note = find(after, (node) => node.props?.['data-crwu-env-gate'] === 'blocked')
   assert.ok(note, '被拦的那一刻就要有拦截说明')
   // 指名到项：iFinD 未通过时门禁把话说具体，页面不许把它换成通用文案。
-  assert.match(textOf(note), /进入【报告审核】前，请先完成 iFinD API-Key 验证/, textOf(note))
+  assert.match(textOf(note), /进入【报告审核】前，请先完成同花顺 iFinD API-Key 验证/, textOf(note))
   assert.equal(textOf(after).includes(zhCN.tabPending), false, '报告页不许出来')
 })
 
@@ -2683,6 +2686,10 @@ test('envLampOf and envTally derive the light and the pass rate from the snapsho
 function envPaneProps(env, patch = {}) {
   return {
     env,
+    build: {
+      ok: true, error: '', rev: 'pkg-0.0.10', version: '0.0.10', buildKind: 'installed',
+      builtAt: '2026-09-27T10:00:00.000Z', protocol: 15, parentSessionId: 'p1',
+    },
     error: '', busy: false, checkedAt: '2026-09-20T10:00:00.000Z',
     onRefresh: () => {},
     onRelogin: () => {}, onDwsLogin: () => {},
@@ -2691,7 +2698,7 @@ function envPaneProps(env, patch = {}) {
   }
 }
 
-test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作区 + 折叠的维护者诊断', async () => {
+test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作区 + 折叠的开发者诊断', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const paneProps = envPaneProps(okEnvBody())
   const { tree } = render(EnvironmentPane, paneProps)
@@ -2703,7 +2710,7 @@ test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作�
     zhCN.envStepIfind,
     zhCN.envStepWorkspace,
     zhCN.envStepDone,              // 每一步的状态词
-    zhCN.envGroupMaintenance,      // 维护者诊断（默认收起）
+    zhCN.envGroupMaintenance,      // 开发者诊断（默认收起）
     zhCN.envStatusProceedHint,     // 就绪时唯一一句"接下来去哪"
     '/cases/a',                    // 四项都完成 → 默认停在最后一步（工作空间）
   ]) assert.equal(text.includes(expected), true, `环境页缺了「${expected}」`)
@@ -2730,7 +2737,7 @@ test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作�
   )
   // 通过率与结论自洽：只统计必需项。
   assert.equal(text.includes('9/9'), true)
-  // 技术细节默认看不到（包路径 / 清单 / 平台值 / 运行时版本都在收起的维护者诊断里）。
+  // 技术细节默认看不到（包路径 / 清单 / 平台值 / 运行时版本都在收起的开发者诊断里）。
   for (const hidden of [zhCN.envPackagesManifest, 'darwin-arm64', zhCN.envRuntimeExpect]) {
     assert.equal(text.includes(hidden), false, `「${hidden}」默认不该出现`)
   }
@@ -2807,7 +2814,7 @@ test('没就绪时：说清"还差 N 项"与怎么修，且不出现"请安装�
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.envStatusSystem), true, '结论要明说系统故障')
   assert.equal(text.includes(zhCN.envStatusReady), false, '系统故障不能同时显示「环境就绪」')
-  // 系统故障的技术原因**不进员工视野**（它不是员工能修的）：只在维护者诊断里。
+  // 系统故障的技术原因**不进员工视野**（它不是员工能修的）：只在开发者诊断里。
   assert.equal(text.includes('插件包不完整'), false, '员工页不出现包内组件故障的技术细节')
   assert.equal(text.includes('插件内置组件'), false, '旧的 blocked[] 文案也不许再画到页面上')
   // 系统故障**不给员工派活**：没有"下一步：装点什么"。
@@ -2815,13 +2822,13 @@ test('没就绪时：说清"还差 N 项"与怎么修，且不出现"请安装�
   assert.equal(/安装系统 ?Python|export PATH|command -v/i.test(text), false, '不该提示装 Python 或改 PATH')
   // 系统故障时主动作仍然是「重新检查」（唯一动作），不是"复制安装提示词"。
   assert.ok(findButtonLike(tree, zhCN.envActionRecheck), '系统故障时主动作是重新检查')
-  // 技术原因在「维护者诊断」里能看到（默认收起，展开一次即可）。
+  // 技术原因在「开发者诊断」里能看到（默认收起，展开一次即可）。
   expandMaintenance(tree)
   const expanded = textOf(rerender(EnvironmentPane, paneProps))
-  assert.equal(expanded.includes('插件包不完整'), true, '系统故障的技术原因要在维护者诊断里可查')
+  assert.equal(expanded.includes('插件包不完整'), true, '系统故障的技术原因要在开发者诊断里可查')
 })
 
-test('维护者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节都在里面', async () => {
+test('开发者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节都在里面', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const paneProps = envPaneProps(okEnvBody())
   const collapsed = render(EnvironmentPane, paneProps)
@@ -2833,7 +2840,7 @@ test('维护者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool �
   const text = textOf(rerender(EnvironmentPane, paneProps))
   for (const expected of [
     zhCN.envDiagPackages, zhCN.envDiagRuntime, zhCN.envDiagPlatform, zhCN.envDiagTools,
-    // 包路径、清单与字节数这些技术细节也只在维护者诊断里。
+    // 包路径、清单与字节数这些技术细节也只在开发者诊断里。
     '/Users/x/.dsh/plugins/dsh-crwu-workbench',
     zhCN.envPackagesManifest,
     zhCN.envPackagesSize,
@@ -2841,7 +2848,122 @@ test('维护者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool �
     'DSH 自带（bundled runtime）',
     'openpyxl 3.1.2',
     zhCN.envConfigSource,
-  ]) assert.equal(text.includes(expected), true, `维护者诊断里缺了「${expected}」`)
+  ]) assert.equal(text.includes(expected), true, `开发者诊断里缺了「${expected}」`)
+})
+
+test('开发者诊断入口使用 SVG 图标，且不再向员工解释内部检查项', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const paneProps = envPaneProps(okEnvBody())
+  const collapsed = render(EnvironmentPane, paneProps)
+  const head = find(collapsed.tree, (node) => node.type === 'button'
+    && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.detailsHead))
+
+  assert.ok(head, '环境信息页要保留默认收起的开发者诊断入口')
+  assert.equal(textOfAll(head).includes('开发者诊断'), true, '入口应使用面向开发同学的名称')
+  assert.equal(findAll(head, (node) => node.type === 'svg').length, 1, '入口标题左侧应有一枚 SVG 诊断图标')
+  assert.equal(
+    textOf(collapsed.tree).includes('包内组件、DSH Runtime、平台与 Tool 可见性；员工日常不需要看。'),
+    false,
+    '收起时不应再显示内部检查项说明',
+  )
+
+  head.props.onClick()
+  const expanded = rerender(EnvironmentPane, paneProps)
+  assert.equal(
+    textOf(expanded).includes('包内组件、DSH Runtime、平台与 Tool 可见性；员工日常不需要看。'),
+    false,
+    '展开后也不应再显示内部检查项说明',
+  )
+})
+
+test('开发者诊断收起时是内容区右下角的轻量入口，展开内容位于入口上方', () => {
+  const rule = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hit = new RegExp(`${escaped}(?:\\s*,\\s*[^{}]*)?\\s*\\{([^}]*)\\}`).exec(WORKBENCH_STYLE_TEXT)
+    assert.ok(hit !== null, `样式里找不到 ${selector} 规则`)
+    return hit[1]
+  }
+
+  const wrapper = rule('.crwu-audit-details')
+  assert.match(wrapper, /align-items:\s*flex-end/, '入口要贴内容区右侧')
+  assert.doesNotMatch(wrapper, /position:\s*fixed/, '不能用悬浮定位遮挡员工表单')
+
+  const head = rule('.crwu-audit-details-head')
+  assert.match(head, /width:\s*auto/, '收起入口不再占满整行')
+  assert.match(head, /border:\s*(?:0|none)/, '收起入口不再使用整行虚线框')
+
+  const body = rule('.crwu-audit-details-body')
+  assert.match(body, /align-self:\s*stretch/, '展开后的诊断数据仍占可读的完整宽度')
+  assert.match(body, /order:\s*-1/, '展开内容显示在右下角入口上方')
+})
+
+test('开发者诊断下方提供可直接打开钉钉个人名片的排查入口', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const { tree } = render(EnvironmentPane, envPaneProps(okEnvBody()))
+  const contact = find(tree, (node) => node.type === 'a' && textOf(node).includes(zhCN.envDeveloperContact))
+
+  assert.ok(contact, '普通员工遇到问题时应能直接找到开发同学')
+  assert.equal(contact.props.href, DEVELOPER_CONTACT_URL, '必须使用用户名片二维码中的真实钉钉链接')
+  assert.equal(contact.props.target, '_blank')
+  assert.match(contact.props.rel, /noopener/)
+})
+
+test('开发者诊断把全部信息放进一个大面板，并补齐插件版本与同花顺 iFinD 连接状态', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const paneProps = envPaneProps(okEnvBody())
+  const rendered = render(EnvironmentPane, paneProps)
+  expandMaintenance(rendered.tree)
+  const expanded = rerender(EnvironmentPane, paneProps)
+  const panels = findAll(expanded, (node) => node.props?.['data-crwu-developer-panel'] === '1')
+
+  assert.equal(panels.length, 1, '所有诊断行应收进同一个大型信息面板')
+  const panelText = textOf(panels[0])
+  for (const expected of [
+    'CRWU Workbench 版本', 'v0.0.10',
+    '同花顺 iFinD 连接状态', '已连接，真实取数成功',
+    zhCN.envDiagPackages, zhCN.envDiagRuntime, zhCN.envDiagPlatform, zhCN.envDiagTools,
+    zhCN.envDiagOssTarget, zhCN.envPackagesRoot, zhCN.envConfigSource,
+  ]) assert.equal(panelText.includes(expected), true, `诊断大面板缺少「${expected}」`)
+
+  assert.ok(findButtonLike(panels[0], '复制诊断信息'), '诊断面板顶部应提供复制按钮')
+})
+
+test('复制诊断信息会复制面板里的完整可转发文本', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  let copied = ''
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { clipboard: { writeText: async (value) => { copied = value } } },
+    configurable: true,
+  })
+  try {
+    const paneProps = envPaneProps(okEnvBody())
+    const rendered = render(EnvironmentPane, paneProps)
+    expandMaintenance(rendered.tree)
+    const expanded = rerender(EnvironmentPane, paneProps)
+    const copy = findButtonLike(expanded, '复制诊断信息')
+    assert.ok(copy, '展开后应有复制诊断信息按钮')
+    copy.props.onClick()
+    for (let i = 0; i < 4; i += 1) await settle()
+
+    for (const expected of [
+      'CRWU Workbench 版本: v0.0.10',
+      '同花顺 iFinD 连接状态: 已连接，真实取数成功',
+      '包内组件:', 'DSH Runtime:', 'Tool 可见性:', 'OSS 验证目标:',
+    ]) assert.equal(copied.includes(expected), true, `复制文本缺少「${expected}」`)
+  } finally {
+    delete globalThis.navigator
+  }
+})
+
+test('环境配置步骤与 API-Key 卡片都明确写成同花顺 iFinD', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const paneProps = envPaneProps(okEnvBody())
+  const rendered = render(EnvironmentPane, paneProps)
+  assert.equal(textOf(rendered.tree).includes('同花顺 iFinD'), true, '步骤导航应让非专业用户认出产品来源')
+
+  findStep(rendered.tree, 'ifind').props.onClick()
+  const ifindStep = rerender(EnvironmentPane, paneProps)
+  assert.equal(textOf(ifindStep).includes('同花顺 iFinD API-Key'), true, '配置卡片标题应带同花顺品牌名')
 })
 
 test('a blocked self-check names the missing item and still offers the maintainer fallback', async () => {
@@ -2858,10 +2980,10 @@ test('a blocked self-check names the missing item and still offers the maintaine
   assert.equal(text.includes('进入报告审核'), false)
   assert.equal(text.includes('安装提示词'), false, '旧的「复制安装提示词」兜底不该再出现')
   assert.equal(countButtonsLike(tree, zhCN.envActionRecheck) >= 1, true, '主动作是重新检查')
-  // 维护者兜底（默认收起的诊断区）仍在同一页上。
+  // 开发者兜底（默认收起的诊断区）仍在同一页上。
   assert.ok(
     find(tree, (node) => node.type === 'button' && textOf(node).includes(zhCN.envGroupMaintenance)),
-    '维护者兜底入口要留着（默认收起）',
+    '开发者兜底入口要留着（默认收起）',
   )
 })
 

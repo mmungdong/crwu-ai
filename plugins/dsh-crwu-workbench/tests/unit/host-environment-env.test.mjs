@@ -258,9 +258,9 @@ test('iFinD 是必检项：未配置即阻塞，且不是 degraded（2026-09-26 
 test('iFinD 三类失败分别派给 user / admin / system', async () => {
   const cases = [
     // 认证被拒（401 / 签名错）→ 员工重填
-    ['http401', 'user', /重新填写 iFinD API-Key/],
+    ['http401', 'user', /重新填写同花顺 iFinD API-Key/],
     // 权益不足（403 / 无可用取数工具）→ 管理员开通
-    ['http403', 'admin', /联系管理员开通 iFinD 数据权益/],
+    ['http403', 'admin', /联系管理员开通同花顺 iFinD 数据权益/],
     // 网络 / 超时 / 协议 → 系统侧，员工和管理员都不该去换密钥
     ['protocol', 'system', /稍后重新验证/],
   ]
@@ -327,7 +327,7 @@ test('统一环境模型：包与运行时故障归 system，页面不派给员�
   assert.ok(ids.includes('package'), '包不完整必须是 system')
   assert.ok(ids.includes('runtime'), '运行时不可用必须是 system')
   // 员工**能看见的那两块**（账号连接 / 交付与外部数据）不得提示安装二进制、装系统 Python、改 PATH。
-  // 技术细节（包内路径、清单、sha256）本来就在"维护者诊断"里，不受这条约束。
+  // 技术细节（包内路径、清单、sha256）本来就在"开发者诊断"里，不受这条约束。
   const employeeVisible = JSON.stringify({
     setup: result.state.userSetup,
     issues: result.state.issues.map((issue) => ({ ...issue, owner: issue.owner })),

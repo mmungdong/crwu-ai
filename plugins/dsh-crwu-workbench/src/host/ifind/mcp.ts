@@ -70,7 +70,7 @@ export function negotiateProtocol(serverVersion: unknown): { ok: boolean; versio
   return {
     ok: false,
     version: value,
-    error: `iFinD 服务声明的 MCP 协议版本不受支持：${value}`
+    error: `同花顺 iFinD 服务声明的 MCP 协议版本不受支持：${value}`
       + `（本插件支持 ${IFIND_SUPPORTED_PROTOCOL_VERSIONS.join(' / ')}）`,
   }
 }
@@ -260,17 +260,17 @@ export async function rpc(
     })
   } catch (error) {
     const source = abortSource()
-    if (source === 'timeout') return { ok: false, errorKind: 'infrastructure', error: '调用 iFinD 服务超时' }
+    if (source === 'timeout') return { ok: false, errorKind: 'infrastructure', error: '调用同花顺 iFinD 服务超时' }
     if (source === 'external') return { ok: false, errorKind: 'cancelled', error: '调用已取消' }
     const message = error instanceof Error ? error.message : String(error)
     const safe = String(redact(message))
     return { ok: false, errorKind: 'infrastructure', error: `取数请求失败：${clampText(safe, 200)}` }
   }
   const sourceAfter = abortSource()
-  if (sourceAfter === 'timeout') return { ok: false, errorKind: 'infrastructure', error: '调用 iFinD 服务超时' }
+  if (sourceAfter === 'timeout') return { ok: false, errorKind: 'infrastructure', error: '调用同花顺 iFinD 服务超时' }
   if (sourceAfter === 'external') return { ok: false, errorKind: 'cancelled', error: '调用已取消' }
   if (response.status < 200 || response.status >= 300) {
-    return { ok: false, errorKind: 'infrastructure', error: `iFinD 服务返回 HTTP ${response.status}` }
+    return { ok: false, errorKind: 'infrastructure', error: `同花顺 iFinD 服务返回 HTTP ${response.status}` }
   }
   if (response.body.trim() === '') return { ok: true, data: {}, headers: response.headers ?? {}, status: response.status }
   let parsed: unknown
@@ -278,20 +278,20 @@ export async function rpc(
     parsed = JSON.parse(response.body)
   } catch (error) {
     void error
-    return { ok: false, errorKind: 'infrastructure', error: 'iFinD 服务返回的不是合法 JSON（协议错误）' }
+    return { ok: false, errorKind: 'infrastructure', error: '同花顺 iFinD 服务返回的不是合法 JSON（协议错误）' }
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, errorKind: 'infrastructure', error: 'iFinD 服务返回了非对象 JSON（协议错误）' }
+    return { ok: false, errorKind: 'infrastructure', error: '同花顺 iFinD 服务返回了非对象 JSON（协议错误）' }
   }
   const doc = parsed as Record<string, unknown>
   // 带 id 的请求必须是 JSON-RPC 2.0，且响应 id 与请求 id 一致；否则不得当作成功。
   if (body.id !== undefined) {
     if (doc.jsonrpc !== '2.0') {
-      return { ok: false, errorKind: 'infrastructure', error: 'iFinD 响应不是 JSON-RPC 2.0（协议错误）' }
+      return { ok: false, errorKind: 'infrastructure', error: '同花顺 iFinD 响应不是 JSON-RPC 2.0（协议错误）' }
     }
     if (doc.id !== body.id) {
       return { ok: false, errorKind: 'infrastructure',
-        error: `iFinD 响应 id 与请求不一致（协议错误）：期望 ${String(body.id)}，收到 ${String(doc.id)}` }
+        error: `同花顺 iFinD 响应 id 与请求不一致（协议错误）：期望 ${String(body.id)}，收到 ${String(doc.id)}` }
     }
   }
   if (doc.error !== undefined && doc.error !== null) {
@@ -299,7 +299,7 @@ export async function rpc(
       ? String((doc.error as Record<string, unknown>).message ?? JSON.stringify(doc.error))
       : String(doc.error)
     const safeDetail = String(redact(detail))
-    return { ok: false, errorKind: 'cli', error: `iFinD 服务返回错误：${clampText(safeDetail, 300)}` }
+    return { ok: false, errorKind: 'cli', error: `同花顺 iFinD 服务返回错误：${clampText(safeDetail, 300)}` }
   }
   return { ok: true, data: doc, headers: response.headers ?? {}, status: response.status }
 }
@@ -331,13 +331,13 @@ export async function openIfindSession(
   }, signal, redactor.redact, timeoutMs, abortSource)
   if (!init.ok) {
     return { ok: false, errorKind: timedOut() ? 'infrastructure' : init.errorKind,
-      error: timedOut() ? '调用 iFinD 服务超时' : init.error }
+      error: timedOut() ? '调用同花顺 iFinD 服务超时' : init.error }
   }
   const negotiated = negotiateProtocol((init.data.result as Record<string, unknown> | undefined)?.protocolVersion)
   if (!negotiated.ok) return { ok: false, errorKind: 'infrastructure', error: negotiated.error }
   const sessionId = init.headers['mcp-session-id'] ?? init.headers['Mcp-Session-Id'] ?? ''
   if (sessionId === '') {
-    return { ok: false, errorKind: 'infrastructure', error: 'iFinD initialize 成功但未返回 Mcp-Session-Id（协议错误）' }
+    return { ok: false, errorKind: 'infrastructure', error: '同花顺 iFinD initialize 成功但未返回 Mcp-Session-Id（协议错误）' }
   }
   // R2：session id 也是秘密，必须进保护集合（上游会把它塞进普通字段）。
   redactor.protect([sessionId])
@@ -346,7 +346,7 @@ export async function openIfindSession(
     { jsonrpc: '2.0', method: 'notifications/initialized' }, signal, redactor.redact, timeoutMs, abortSource)
   if (!initialized.ok) {
     return { ok: false, errorKind: timedOut() ? 'infrastructure' : initialized.errorKind,
-      error: timedOut() ? '调用 iFinD 服务超时' : `iFinD initialized 通知失败：${initialized.error}` }
+      error: timedOut() ? '调用同花顺 iFinD 服务超时' : `同花顺 iFinD initialized 通知失败：${initialized.error}` }
   }
   return { ok: true, session, redactor }
 }
@@ -375,14 +375,14 @@ export async function listIfindTools(
   if (!listed.ok) {
     const timedOut = abortSource() === 'timeout'
     return { ok: false, errorKind: timedOut ? 'infrastructure' : listed.errorKind,
-      error: timedOut ? '调用 iFinD 服务超时' : listed.error }
+      error: timedOut ? '调用同花顺 iFinD 服务超时' : listed.error }
   }
   const result = listed.data.result
   const rows = result !== null && typeof result === 'object'
     ? (result as Record<string, unknown>).tools
     : undefined
   if (!Array.isArray(rows)) {
-    return { ok: false, errorKind: 'infrastructure', error: 'iFinD tools/list 返回形状不符（协议错误）' }
+    return { ok: false, errorKind: 'infrastructure', error: '同花顺 iFinD tools/list 返回形状不符（协议错误）' }
   }
   const tools = rows
     .filter((row): row is Record<string, unknown> => row !== null && typeof row === 'object')
@@ -457,7 +457,7 @@ export async function probeIfind(
 
   if (typeof token !== 'string' || token.trim() === '') {
     return {
-      ok: false, state: 'unconfigured', errorKind: 'unconfigured', error: '还没有保存 iFinD API-Key',
+      ok: false, state: 'unconfigured', errorKind: 'unconfigured', error: '还没有保存同花顺 iFinD API-Key',
       toolCount: 0, toolNames: [], protocolVersion: '', checkedAt,
       dataVerified: false, dataTool: '', dataSample: '',
     }
@@ -565,7 +565,7 @@ export async function probeIfind(
   } catch (error) {
     // 传输层抛错：按基础设施归类（网络/服务不可达），绝不说成"密钥错误"。
     const message = error instanceof Error ? error.message : String(error)
-    return fail('unreachable', 'infrastructure', `iFinD 服务不可达：${clampText(String(makeIfindRedactor([token]).redact(message)), 200)}`, '')
+    return fail('unreachable', 'infrastructure', `同花顺 iFinD 服务不可达：${clampText(String(makeIfindRedactor([token]).redact(message)), 200)}`, '')
   } finally {
     cleanup()
   }
@@ -714,7 +714,7 @@ export function classifyFailure(message: string, stage = ''):
   const code = httpStatusOf(message)
   if (code === 401) {
     return { state: 'invalid', errorKind: 'credential',
-      message: `${prefix}iFinD 拒绝了这份 API-Key（HTTP 401）：请确认 API-Key 是否正确、是否已过期` }
+      message: `${prefix}同花顺 iFinD 拒绝了这份 API-Key（HTTP 401）：请确认 API-Key 是否正确、是否已过期` }
   }
   if (code === 403) {
     return { state: 'unreachable', errorKind: 'entitlement',

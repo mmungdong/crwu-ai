@@ -277,7 +277,7 @@ export function environmentGate(
     const blockers = blockerMessages(view)
     return {
       allowed: false,
-      reason: `${labels.target}前，请先完成 iFinD API-Key 验证。${blockers.length === 0 ? '' : `（${blockers.join('；')}）`}`,
+      reason: `${labels.target}前，请先完成同花顺 iFinD API-Key 验证。${blockers.length === 0 ? '' : `（${blockers.join('；')}）`}`,
       status,
     }
   }
@@ -308,7 +308,7 @@ export function environmentGate(
     const shown = blockers.slice(0, 2).join('；')
     return {
       allowed: false,
-      reason: `${names[requirement]}前，请先完成 iFinD API-Key 验证。${shown === '' ? '' : `（${shown}）`}`,
+      reason: `${names[requirement]}前，请先完成同花顺 iFinD API-Key 验证。${shown === '' ? '' : `（${shown}）`}`,
       status,
     }
   }

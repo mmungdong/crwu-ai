@@ -1,6 +1,9 @@
 /** Host 与 Client 共用的同源工作台端点。 */
 export const WORKBENCH_ROUTE = '/api/crwu-workbench'
 
+/** 员工排障入口：用户公开分享的钉钉个人名片链接（来自名片二维码）。 */
+export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile/outside/index.html?fr_source=13&uidCipher=7O4cP9kgKCT4CvRDZlgrxQ%3D%3D&cardToken=dff1f30a70&profile=%40kgDOFH5CaA'
+
 /**
  * 宿主插件与客户端产物的**协议代数**。
  *

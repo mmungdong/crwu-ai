@@ -387,8 +387,8 @@ test('probeOss honours a manifest-provided probe command template', async () => 
 // ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
 
 test('checkIfindSecret 区分空值 / 占位符 / 首尾空白 / 换行 / 过短', () => {
-  assert.equal(checkIfindSecret('').reason, 'API-Key 为空，请填写你自己的 iFinD API-Key')
-  assert.equal(checkIfindSecret('   ').reason, 'API-Key 为空，请填写你自己的 iFinD API-Key')
+  assert.equal(checkIfindSecret('').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')
+  assert.equal(checkIfindSecret('   ').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')
   assert.match(checkIfindSecret('your ifind-mcp key').reason, /仍是占位符/)
   assert.match(checkIfindSecret('YOUR IFIND-MCP KEY').reason, /仍是占位符/)
   assert.match(checkIfindSecret('abcdefgh ').reason, /多余空白/)

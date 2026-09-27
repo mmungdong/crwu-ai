@@ -450,6 +450,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 环境信息页的公共 props：env===null（正在自检/失败）与已有结论时只差 env 本身。
   const envPane = <EnvironmentPane
     env={env}
+    build={build}
     error={snapshot.error !== '' ? snapshot.error : bootError}
     busy={snapshot.busy}
     checkedAt={snapshot.checkedAt}

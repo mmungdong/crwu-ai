@@ -14,7 +14,7 @@ import { workbenchApi, type EnvResult } from '../report-audit/api.ts'
  *
  * 1. AK 是两个字段（ID + Secret），各自有真实 `<label>`、纵向排布（窄窗口里不会挤成一行）；
  * 2. **Bucket / Endpoint / 前缀由部署配置决定**，员工只填凭据 —— 插件不接受员工自填 Bucket
- *    （那等于让员工把交付件传到任意桶）。所以这三个值只在维护者诊断里显示。
+ *    （那等于让员工把交付件传到任意桶）。所以这三个值只在开发者诊断里显示。
  *
  * ## 失败按四类给人话
  *
