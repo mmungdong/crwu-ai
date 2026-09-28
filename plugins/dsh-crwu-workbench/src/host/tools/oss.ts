@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { normalizeOss } from '../environment/manifest.ts'
-import { shellQuote } from '../environment/probe.ts'
+import { shellInvoke } from '../environment/probe.ts'
 import { sanitizeOssError } from '../oss/sanitize.ts'
 
 // 兼容再导出：脱敏器搬到了 `host/oss/sanitize.ts`（环境探测与上传共用一份），
@@ -144,7 +144,7 @@ export function ossTools(deps: ToolDeps) {
         const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${key}`]
         if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
         for (const extra of oss.extraArgs) argv.push(extra)
-        const run = await runShell(ctx, argv.map((item) => shellQuote(item, platform)).join(' '), {
+        const run = await runShell(ctx, shellInvoke(argv[0] ?? '', argv.slice(1), platform), {
           workdir: caseDir,
           timeoutMs: 180_000,
           signal: exec.signal,
@@ -201,7 +201,7 @@ async function verifyObject(
   signal: AbortSignal | undefined,
 ): Promise<{ ok: boolean; sizeBytes: number; error: string }> {
   const argv = [ossutil, 'ls', `oss://${bucket}/${prefix}/`]
-  const run = await runShell(ctx, argv.map((item) => shellQuote(item, platform)).join(' '), {
+  const run = await runShell(ctx, shellInvoke(argv[0] ?? '', argv.slice(1), platform), {
     workdir,
     timeoutMs: 90_000,
     stdoutMaxBytes: 4 * 1024 * 1024,

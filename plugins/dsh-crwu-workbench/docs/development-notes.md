@@ -213,6 +213,7 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 | 点了 DeepSeek 直接建会话，把半个月前的审核结论当成"当前问题" | 没有做版本检查 | 先 `freshnessOf()`（`digest → version → etag → mtime → 时间退化`）；**纯时间差只给 possibly_stale**，`stale` 必须有 digest/version/etag 证据；缺原始报告要进 Limited 并如实写进上下文 |
 | | 抽屉/浮层里的菜单项点了没反应（脚本里 `getByRole('button', { name })` 超时） | 菜单项挂的是 `role="menuitem"`，可访问角色不是 button | 用类名 + 文案定位（`.crwu-audit-float-item` + hasText）；`install/browser-check.mjs` 里已经踩过两次 |
 | 用户报「界面颜色不对」，但自己本地看是对的 | 主题是**服务端设置**（`~/.dsh/settings.yaml` 的 `ui-theme.preference`），用户切到 dark 之后整页观感全变（主操作会从深色实心翻成近白实心） | 改配色先在**当前真实主题**下量一遍：读 `~/.dsh/settings.yaml` 或用浏览器会话里 `document.body.hasAttribute('data-ds-dark-theme')` 确认，不要默认浅色 |
+| Windows 上环境页「氚云员工会话」「钉钉认证」两行一起红，报 `表达式或语句中包含意外的标记"h3yun"` / `ParserError` / `UnexpectedToken`（macOS 上一切正常） | 拼命令时按 `cmd.exe` 的规矩办事，而 **DSH 在 Windows 挂的执行器是 PowerShell**（`@deepseek-ai/dsh-pwsh-local` 把整条命令当**一个 argv 元素**交给 `pwsh -Command`）。于是在 PowerShell 里「引号包住可执行文件」是**字符串表达式**、不是命令调用，紧随其后的第一个参数就成了意外标记。同一类错还有 `chmod`（Windows 根本没有这个命令）、`rm -f`（`-f` 在 `Remove-Item` 上同时匹配 `-Force` 与 `-Filter`）、`mkdir -p`（靠参数名缩写） | ① 命令位置一律走 `shellInvoke(exe, args, platform)`（`environment/probe.ts`），它只在 Windows 补调用运算符 `&`；**参数位置**用 `shellQuote`，Windows 走 PowerShell 单引号字面量（双引号会插值 `$`）；② 平台方言跟着**同一个 `platform` 键**走，不要读 `process.platform`（否则 Windows CI 上跑 stubbed `darwin-arm64` 的用例也会被加上 `&`）；③ POSIX-only 命令按平台分支（`ifind/store.ts` / `oss/ops.ts` 已有样例）。`host-shell-fs.test.mjs` 有一条静态守卫盯着「模板以 `${shellQuote(` 开头」与「`argv.map(…shellQuote…).join(' ')`」这两种会复发的写法 |
 
 ## 11.1 环境领域模型与统一门禁（2026-09-26）
 

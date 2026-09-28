@@ -4,7 +4,7 @@ import { fileSystem, isFile, resolveTarget } from '../fs/paths.ts'
 import { runCrwu, describeFailure } from '../crwu/run.ts'
 import { parseSessionOutput, type H3yunSession } from '../h3yun/session.ts'
 import { readOssCred, type OssCredView } from '../oss/cred.ts'
-import { shellQuote } from '../environment/probe.ts'
+import { shellQuote, shellInvoke } from '../environment/probe.ts'
 import { runShell } from '../shell/run.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import { defaultCaseRoot } from '../audit/state.ts'
@@ -123,7 +123,7 @@ export async function dwsLogin(deps: SystemDeps, args: Record<string, unknown>):
   // 表现就是「点了钉钉登录没有任何反应」（客户端此前又把返回值丢掉了，所以连错误都看不到）。
   const argv = [await resolveBundledCommand(deps.ctx, deps.platform, 'dws'), 'auth', 'login']
   if (args.device === true) argv.push('--device')
-  const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
+  const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
     workdir: await deps.workdir(),
     // 扫码要等人，5 分钟。
     timeoutMs: 300_000,

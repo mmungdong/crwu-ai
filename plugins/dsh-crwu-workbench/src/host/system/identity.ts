@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
-import { shellQuote } from '../environment/probe.ts'
+import { shellInvoke } from '../environment/probe.ts'
 import { runShell } from '../shell/run.ts'
 
 /**
@@ -66,7 +66,7 @@ export async function dwsSelf(deps: WhoamiDeps): Promise<WhoamiResult> {
   // 命令是固定的字面量（没有用户输入、没有需要转义的字符），与「钉钉认证」那条探测同样写法。
   // 用**包内绝对路径**：只按名字调用在 Finder 启动的桌面端会 `bash: dws: command not found`。
   const dws = await resolveBundledCommand(deps.ctx, deps.platform ?? '', 'dws')
-  const run = await runShell(deps.ctx, `${shellQuote(dws, deps.platform ?? '')} contact user get-self --format json`, {
+  const run = await runShell(deps.ctx, shellInvoke(dws, ['contact', 'user', 'get-self', '--format', 'json'], deps.platform ?? ''), {
     workdir: await deps.workdir(),
     timeoutMs: deps.timeoutMs ?? 30_000,
     escalate: true,

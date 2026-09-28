@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { runShell } from '../shell/run.ts'
-import { shellQuote } from '../environment/probe.ts'
+import { shellInvoke } from '../environment/probe.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import type { ShellResult } from '../shell/run.ts'
 
@@ -92,13 +92,14 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
   // 不能因为拿不到工作区就把命令直接判失败 —— 那样员工看到的是一句基础设施错误，
   // 而不是「钥匙串被拒，去授权」这条可操作的路径。
   const canEscalate = effective && (options.workdir ?? '') !== ''
-  const quote = (value: string): string => shellQuote(value, options.platform ?? '')
+  const platform = options.platform ?? ''
   // 上面已经按「argv[0] 必须是 crwu」放行过了；这里再把命令名换成**包内绝对路径**。
   // 只按名字调用会在 Finder 启动的桌面端直接失败（PATH 里没有 crwu，实测
   // `bash: crwu: command not found`），而那时「氚云登录」按钮点了没有任何反应。
-  const resolved = await resolveBundledCommand(ctx, options.platform ?? '', 'crwu')
-  const spawnArgv = [resolved, ...clean.slice(1)]
-  const result: ShellResult = await runShell(ctx, spawnArgv.map(quote).join(' '), {
+  const resolved = await resolveBundledCommand(ctx, platform, 'crwu')
+  // 命令位置必须走 `shellInvoke`：Windows 上的 PowerShell 需要调用运算符 `&`，
+  // 否则以引号开头的绝对路径会被当成字符串表达式（员工实测的 ParserError）。
+  const result: ShellResult = await runShell(ctx, shellInvoke(resolved, clean.slice(1), platform), {
     ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
     timeoutMs: options.timeoutMs ?? 60_000,
     escalate: canEscalate,

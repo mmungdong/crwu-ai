@@ -112,10 +112,52 @@ export interface IfindCheck {
   applyUrl: string
 }
 
+/**
+ * 把一个参数安全地放进**该平台真实使用的 shell** 的命令串里。
+ *
+ * POSIX 上就是 `bash -c`：能不加引号就不加（`quoteArg`），需要时用单引号 + `'\''`。
+ *
+ * **Windows 上是 PowerShell，不是 `cmd.exe`**（DSH 在 Windows 挂 `@deepseek-ai/dsh-pwsh-local`，
+ * 整串命令交给 `pwsh -Command`）。所以这里用 PowerShell 的单引号字面量、内部单引号翻倍：
+ * 双引号在 PowerShell 里会做 `$` / 反引号插值（路径或 URL 里出现 `$` 就会被当变量展开），
+ * 而单引号是纯字面量。cmd 那套 `"…"` + `""` 转义在这里既没必要也不安全。
+ *
+ * 以引号开头的命令还需要 PowerShell 的调用运算符 `&` —— 那是**命令位置**的事，由下面的
+ * `shellInvoke()` 负责；`shellQuote` 只管「一个参数」。
+ */
 export function shellQuote(value: unknown, platform: string): string {
   if (!isWindowsPlatform(text(platform))) return quoteArg(value)
-  const raw = String(value)
-  return `"${raw.replace(/"/g, '""')}"`
+  return `'${String(value).replace(/'/g, "''")}'`
+}
+
+/**
+ * 拼一条**可执行文件 + 参数**的命令串（命令位置）。
+ *
+ * 为什么不能直接 `${shellQuote(exe, platform)} 参数…`（2026-09-28 修，员工在 Windows 上实测报错）：
+ * DSH 在 Windows 挂的执行器是 `@deepseek-ai/dsh-pwsh-local`，它把整条命令作为**一个 argv 元素**
+ * 交给 `pwsh -NoLogo -NoProfile -NonInteractive -Command <整串>`（该包自己的 README：*the command
+ * string is passed as ONE argv element to `-Command`; PowerShell itself parses the text*）。
+ * 也就是说插件拼的是 **PowerShell 脚本**，不是 `cmd.exe` 的批处理行。
+ *
+ * 后果很硬：**以引号开头的 token 在 PowerShell 里是字符串表达式，不是命令调用**。
+ *
+ * ```text
+ * PS> "C:\…\crwu.exe" "h3yun" "session" "status"
+ * 表达式或语句中包含意外的标记"h3yun"。
+ * ```
+ *
+ * 员工看到的正是这个：环境页「氚云员工会话」「钉钉认证」两行一起红，因为它们的命令都以包内绝对
+ * 路径开头。PowerShell 的调用运算符 `&` 才是「把这段字符串当命令执行」，所以 Windows 上必须写
+ * `& 'C:\…\crwu.exe' 'h3yun' 'session' 'status'`。
+ *
+ * POSIX 上**绝不能**加 `&`：`bash -c` 里它是后台作业，会把前台命令变成异步执行。
+ *
+ * 所有「第一条 token 是可执行文件」的调用点都必须走这里，而不是自己 join ——
+ * `tests/unit/host-shell-fs.test.mjs` 里有静态守卫钉着这一点。
+ */
+export function shellInvoke(executable: string, args: readonly string[], platform: string): string {
+  const parts = [executable, ...args].map((item) => shellQuote(item, platform))
+  return isWindowsPlatform(text(platform)) ? `& ${parts.join(' ')}` : parts.join(' ')
 }
 
 /**
@@ -438,18 +480,25 @@ export async function probeOss(
  */
 export function buildOssProbeCommand(oss: OssSpec, ossutil: string, platform: string): string {
   const { bucket, prefix, target } = ossProbeTarget(oss)
-  const endpointArg = oss.endpoint === '' ? '' : ` --endpoint ${shellQuote(oss.endpoint, platform)}`
-  const extra = oss.extraArgs.map((arg) => ` ${shellQuote(arg, platform)}`).join('')
+  // `{ossutil}` 占位符替换成**命令位置**的形式（Windows 上带 `&`）：模板里的 `{ossutil}` 就是
+  // 可执行文件的位置，直接塞一个引号路径会让 PowerShell 把它当字符串表达式。
+  const executable = shellInvoke(ossutil, [], platform)
   if (oss.probeCommand !== '') {
     return oss.probeCommand
-      .split('{ossutil}').join(shellQuote(ossutil, platform))
+      .split('{ossutil}').join(executable)
       .split('{bucket}').join(bucket)
       .split('{prefix}').join(prefix)
       .split('{target}').join(target)
       .split('{endpoint}').join(oss.endpoint)
   }
-  // `--limited-num 1` = 最多一次请求；空目录（0 个对象）仍然是成功的列举。
-  return `${shellQuote(ossutil, platform)} ls ${shellQuote(target, platform)}${endpointArg} --limited-num 1${extra}`
+  const args = [
+    'ls', target,
+    ...(oss.endpoint === '' ? [] : ['--endpoint', oss.endpoint]),
+    // `--limited-num 1` = 最多一次请求；空目录（0 个对象）仍然是成功的列举。
+    '--limited-num', '1',
+    ...oss.extraArgs,
+  ]
+  return shellInvoke(ossutil, args, platform)
 }
 
 /**

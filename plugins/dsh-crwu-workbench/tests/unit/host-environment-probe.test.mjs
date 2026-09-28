@@ -20,7 +20,7 @@ const ROOT = new URL('../../', import.meta.url)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const {
-  shellQuote, probePackageIntegrity, packageIntegrityPaths,
+  shellQuote, shellInvoke, probePackageIntegrity, packageIntegrityPaths,
   probeOss, resolveOssutil, ossutilMissingMessage, serviceChecks,
 } = await import(new URL('src/host/environment/probe.ts', ROOT).href)
 const { checkIfindSecret, readIfindSecret, writeIfindSecret, clearIfindSecret, ifindCredentialPath, ifindStateDir } =
@@ -146,14 +146,29 @@ function packagedFs({ platform = 'darwin-arm64', present = ['crwu', 'dws', 'ossu
   return fsStub({ infos, files })
 }
 
-// ── 引号 ────────────────────────────────────────────────────────────────────
+// ── 引号与命令位置 ──────────────────────────────────────────────────────────
 
-test('shellQuote uses POSIX quoting on POSIX and double quotes on Windows', () => {
+test('shellQuote 在 POSIX 用单引号、在 Windows 用 PowerShell 单引号字面量', () => {
   assert.equal(shellQuote('/usr/local/bin/ossutil', 'darwin-arm64'), '/usr/local/bin/ossutil')
   assert.equal(shellQuote('/opt/my tools/ossutil', 'linux-x64'), "'/opt/my tools/ossutil'")
-  // cmd.exe 不认单引号：Windows 上必须换双引号并把内部引号翻倍。
-  assert.equal(shellQuote('C:\\Program Files\\ossutil.exe', 'win32-x64'), '"C:\\Program Files\\ossutil.exe"')
-  assert.equal(shellQuote('a"b', 'win32-x64'), '"a""b"')
+  // Windows 的执行器是 PowerShell（`pwsh -Command <整串>`），不是 cmd.exe：
+  // 单引号才是纯字面量，双引号会做 `$` / 反引号插值；内部单引号翻倍即转义。
+  assert.equal(shellQuote('C:\\Program Files\\ossutil.exe', 'win32-x64'), "'C:\\Program Files\\ossutil.exe'")
+  assert.equal(shellQuote("it's", 'win32-x64'), "'it''s'")
+})
+
+test('shellInvoke 在 Windows 补 PowerShell 调用运算符 `&`（员工实测的 ParserError）', () => {
+  // 现场报错：`"C:\…\crwu.exe" "h3yun" "session" "status"` →
+  // 「表达式或语句中包含意外的标记"h3yun"。」—— 以引号开头的 token 在 PowerShell 里是字符串表达式。
+  assert.equal(
+    shellInvoke('C:\\Program Files\\crwu.exe', ['h3yun', 'session', 'status'], 'win32-x64'),
+    "& 'C:\\Program Files\\crwu.exe' 'h3yun' 'session' 'status'",
+  )
+  // 参数里的单引号同样翻倍，且不会被 PowerShell 插值。
+  assert.equal(shellInvoke('dws.exe', ["a'b", '$HOME'], 'win32-x64'), "& 'dws.exe' 'a''b' '$HOME'")
+  // POSIX 上绝不能加 `&`：`bash -c` 里它是后台作业，会把前台命令变成异步执行。
+  assert.equal(shellInvoke('/usr/local/bin/ossutil', ['ls', 'oss://b/p/'], 'darwin-arm64'), '/usr/local/bin/ossutil ls oss://b/p/')
+  assert.equal(shellInvoke('/opt/my tools/ossutil', ['ls'], 'linux-x64'), "'/opt/my tools/ossutil' ls")
 })
 
 // ── 插件内置组件 ────────────────────────────────────────────────────────────
@@ -384,6 +399,25 @@ test('probeOss honours a manifest-provided probe command template', async () => 
   assert.match(call, /oss-cn-x\.aliyuncs\.com/)
 })
 
+test('Windows 上探测命令是可执行的 PowerShell：以 `&` 开头、路径与参数都是单引号字面量', async () => {
+  const shell = shellStub(() => ({ stdout: '' }))
+  const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'b', prefix: 'crwu/audit', enabled: true, endpoint: 'oss-cn-x.aliyuncs.com' }
+  await probeOss(ctxOf(packagedFs({ platform: 'win32-x64' }), shell.ctx), oss, 'win32-x64')
+  const command = shell.calls[0] ?? ''
+  assert.equal(command.startsWith('& '), true, `必须补调用运算符，否则 PowerShell 报 ParserError：${command}`)
+  assert.match(command, /^& '.*ossutil\.exe' 'ls' 'oss:\/\/b\/crwu\/audit\/' '--endpoint' 'oss-cn-x\.aliyuncs\.com' '--limited-num' '1'$/)
+  assert.equal(command.includes('"'), false, '不得出现 cmd 式双引号')
+})
+
+test('Windows 上清单给的探测模板同样补调用运算符', async () => {
+  const shell = shellStub(() => ({ stdout: 'ok\n' }))
+  const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/ --endpoint {endpoint}' }
+  await probeOss(ctxOf(packagedFs({ platform: 'win32-x64' }), shell.ctx), oss, 'win32-x64')
+  const command = shell.calls[0] ?? ''
+  assert.equal(command.startsWith("& '"), true, `模板里的 {{ossutil}} 就是命令位置：${command}`)
+  assert.match(command, / --endpoint oss-cn-x\.aliyuncs\.com$/)
+})
+
 // ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
 
 test('checkIfindSecret 区分空值 / 占位符 / 首尾空白 / 换行 / 过短', () => {
@@ -502,4 +536,27 @@ test('清除凭据走显式命令，失败要如实报', async () => {
   const failed = await clearIfindSecret(down, '/Users/x', { platform: 'darwin-arm64' })
   assert.equal(failed.ok, false)
   assert.equal(failed.errorKind, 'infrastructure')
+})
+
+test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价写法', async () => {
+  // `mkdir -p` 靠参数名缩写、`chmod` 根本不是命令、`rm -f` 的 `-f` 在 Remove-Item 上同时
+  // 前缀匹配 -Force 与 -Filter（「参数名不明确」）—— 三条在 PowerShell 里都会失败。
+  const ctx = asShellCtx(fsStub({}), { runs: true })
+  const home = 'C:\\Users\\x'
+  const result = await writeIfindSecret(ctx, home, 'abcdefgh', { platform: 'win32-x64' })
+  assert.equal(result.ok, true)
+  assert.equal(result.mode, 'file')
+  assert.equal(ctx.commands.some((command) => command.includes('chmod')), false, 'Windows 不得执行 chmod')
+  assert.equal(
+    ctx.commands.some((command) => command.startsWith('New-Item -ItemType Directory -Force -Path ')),
+    true,
+    `建目录必须是幂等的 PowerShell 写法：${ctx.commands.join(' | ')}`,
+  )
+  // Windows 没有 POSIX 权限位：这一项不适用，报「没有未收紧的权限」而不是伪造失败。
+  assert.equal(result.chmodOk, true)
+  assert.equal(result.chmodError, '')
+
+  await clearIfindSecret(ctx, home, { platform: 'win32-x64' })
+  assert.equal(ctx.commands.some((command) => command.startsWith('Remove-Item -LiteralPath ')), true)
+  assert.equal(ctx.commands.some((command) => command.startsWith('rm -f ')), false)
 })

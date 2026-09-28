@@ -2,8 +2,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
 import type { EnvManifest, OssSpec } from '../environment/manifest-default.ts'
-import { ossutilMissingMessage, probeOss, resolveOssutil, shellQuote } from '../environment/probe.ts'
+import { ossutilMissingMessage, probeOss, resolveOssutil, shellInvoke, shellQuote } from '../environment/probe.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
+import { isWindowsPlatform } from '../platform/detect.ts'
 import { runShell } from '../shell/run.ts'
 import { readOssCred, type OssCredView } from './cred.ts'
 import {
@@ -99,7 +100,7 @@ export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}
   // 那些元数据是"审核结果有没有重新生成过"的客观依据 —— 加 `--short-format` 等于把它们丢掉。
   const argv = [ossutil, 'ls', `oss://${oss.bucket}/${listedPrefix}/`]
   if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-  const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
+  const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
     workdir: await shellWorkdir(deps),
     timeoutMs: 90_000,
     stdoutMaxBytes: 4 * 1024 * 1024,
@@ -152,7 +153,7 @@ export async function ossResult(deps: OssDeps, args: Record<string, unknown>): P
 
   const argv = [ossutil, 'cat', `oss://${oss.bucket}/${key}`]
   if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-  const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
+  const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
     workdir: await shellWorkdir(deps),
     timeoutMs: 60_000,
     stdoutMaxBytes: 8 * 1024 * 1024,
@@ -203,7 +204,7 @@ export async function ossLink(deps: OssDeps, args: Record<string, unknown>): Pro
     const ossutil = lookup.path
     const argv = [ossutil, 'sign', cloud, '--timeout', String(oss.linkTtl)]
     if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-    const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
+    const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
       workdir: await shellWorkdir(deps),
       timeoutMs: 30_000,
     })
@@ -280,7 +281,7 @@ export async function uploadArtifacts(
     const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${key}`]
     if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
     for (const extra of oss.extraArgs) argv.push(extra)
-    const run = await runShell(deps.ctx, argv.map((item2) => shellQuote(item2, deps.platform)).join(' '), {
+    const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
       workdir: await shellWorkdir(deps),
       timeoutMs: 180_000,
     })
@@ -433,17 +434,25 @@ async function writeOssCred(
   } catch (error) {
     return { ok: false, error: `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, path: '', operation: '', chmodOk: false, chmodError: '' }
   }
-  const chmod = await runShell(deps.ctx, `chmod 600 ${shellQuote(path, deps.platform)}`, {
-    workdir: await shellWorkdir(deps),
-    timeoutMs: 15_000,
-  })
+  // Windows 没有 POSIX 权限位，也没有 `chmod` 命令：这一项在 Windows 上不适用（凭据文件在用户
+  // 配置目录内，由用户 ACL 保护），跳过并报「没有未收紧的权限」，而不是伪造一条必然失败的命令。
+  let chmodOk = true
+  let chmodError = ''
+  if (!isWindowsPlatform(deps.platform)) {
+    const chmod = await runShell(deps.ctx, `chmod 600 ${shellQuote(path, deps.platform)}`, {
+      workdir: await shellWorkdir(deps),
+      timeoutMs: 15_000,
+    })
+    chmodOk = chmod.ok
+    chmodError = chmod.ok ? '' : (text(chmod.stderr) || text(chmod.error) || '权限设置失败').slice(0, 200)
+  }
   return {
     ok: true,
     error: '',
     path,
     operation,
-    chmodOk: chmod.ok,
-    chmodError: chmod.ok ? '' : (text(chmod.stderr) || text(chmod.error) || '权限设置失败').slice(0, 200),
+    chmodOk,
+    chmodError,
   }
 }
 

@@ -7,6 +7,34 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.13 · 2026-09-28
+
+**修复 Windows 上的平台方言：命令串按 PowerShell 拼，不再按 `cmd.exe` 拼。**
+0.0.12 及更早的版本在 Windows 上，环境页的「氚云员工会话」「钉钉认证」两行会一起报
+`表达式或语句中包含意外的标记"h3yun"`（PowerShell `ParserError` / `FullyQualifiedErrorId:
+UnexpectedToken`），相关按钮点下去也不会有结果；macOS 上完全正常。
+
+- **根因**：DSH 在 Windows 挂的执行器是 `@deepseek-ai/dsh-pwsh-local` —— 整条命令作为**一个
+  argv 元素**交给 `pwsh -NoLogo -NoProfile -NonInteractive -Command <整串>`，由 PowerShell 自己
+  解析。插件此前按 `cmd.exe` 的规矩拼命令，于是在 PowerShell 里「引号包住可执行文件」是
+  **字符串表达式**、不是命令调用，紧随其后的第一个参数就成了意外标记。
+- **命令位置改用 PowerShell 的调用运算符 `&`**：新增 `shellInvoke(exe, args, platform)`，
+  由它在 Windows 上拼 `& 'C:\…\crwu.exe' 'h3yun' 'session'`。所有「第一条 token 是可执行文件」
+  的调用点（`crwu` / `dws` / DSH 自带 Python / `ossutil` / 清单里的探测模板）全部改走它；
+  POSIX 上仍是原样的 `bash -c` 命令串（那里 `&` 是后台作业，绝不能加）。
+- **参数引用改用 PowerShell 单引号字面量**：Windows 上 `shellQuote` 不再用 cmd 式的双引号
+  （在 PowerShell 里会插值 `$` 与反引号），改为单引号 + 内部单引号翻倍。
+- **清掉同一类「POSIX-only」写法**：Windows 上不再执行 `chmod`（Windows 没有这个命令，
+  凭据文件由用户 ACL 保护，这一项在 Windows 上不适用、如实标注而不是伪造失败）；
+  建目录用幂等的 `New-Item -ItemType Directory -Force`；删文件用
+  `Remove-Item -LiteralPath … -Force -ErrorAction SilentlyContinue`
+  （`rm -f` 的 `-f` 在 `Remove-Item` 上同时前缀匹配 `-Force` 与 `-Filter`，会直接报「参数名不明确」）。
+- **平台方言跟着 `platform` 键走，不读 `process.platform`**：否则在 Windows CI 上跑
+  stubbed `darwin-arm64` 的用例也会被补上 `&`。
+- **回归测试**：`host-environment-probe.test.mjs`（引用与命令位置）、`host-shell-fs.test.mjs`
+  （一条静态守卫，钉死「模板以 `${shellQuote(` 开头」与「`argv.map(…shellQuote…).join(' ')`」
+  这两种会复发的写法）、`host-crwu-h3yun.test.mjs`（按员工报的原文断言 Windows 命令形状）。
+
 ## package · 0.0.12 · 2026-09-28
 
 **首个包含自更新能力的正式版本。** 0.0.10 / 0.0.11 用户需要**手动完成一次**引导升级

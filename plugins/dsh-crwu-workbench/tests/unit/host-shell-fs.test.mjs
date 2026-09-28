@@ -280,3 +280,47 @@ test('fileSystem exposes the optional service without requiring injection', () =
   const fs = { resolve: async () => ({}) }
   assert.equal(fileSystem(fakeContext({ fs })), fs)
 })
+
+// ── 命令位置的平台方言（2026-09-28 Windows 实测：PowerShell ParserError）────────
+
+/**
+ * 静态守卫：**第一条 token 是可执行文件**的命令必须经 `shellInvoke` 拼。
+ *
+ * 为什么需要它：DSH 在 Windows 用 `pwsh -Command <整串>` 解析命令，以引号开头的 token 在那里是
+ * 字符串表达式（`"C:\…\crwu.exe" "h3yun"` → 「表达式或语句中包含意外的标记"h3yun"」）。
+ * 而这个坑**只在 Windows 上出现**，本机（macOS/Linux）怎么测都是绿的 —— 所以只靠行为测试守不住，
+ * 必须有一条对源码形态的断言，把两种会复发的写法钉死：
+ *   ① 模板以 `${shellQuote(可执行文件…)}` 开头（命令位置被当成参数位置引用）；
+ *   ② `argv.map(… shellQuote …).join(' ')`（整条命令自己拼，绕过了调用运算符）。
+ * 唯一允许出现这两种写法的地方是 `shellQuote` / `shellInvoke` 自己的实现。
+ */
+test('命令位置只能走 shellInvoke（Windows 的 PowerShell 调用运算符 `&`）', async () => {
+  const { readFile, readdir } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const root = fileURLToPath(new URL('src/host', ROOT))
+  const dialectHome = fileURLToPath(new URL('src/host/environment/probe.ts', ROOT))
+
+  const walk = async (dir) => {
+    const out = []
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) out.push(...await walk(full))
+      else if (entry.name.endsWith('.ts')) out.push(full)
+    }
+    return out
+  }
+
+  const offenders = []
+  for (const file of await walk(root)) {
+    if (file === dialectHome) continue
+    const source = await readFile(file, 'utf8')
+    source.split('\n').forEach((line, index) => {
+      // ① 模板字面量以 `${shellQuote(` 开头 = 命令位置。
+      if (line.includes('`${shellQuote(')) offenders.push(`${file}:${index + 1}: ${line.trim()}`)
+      // ② argv 自己 join 成命令串 = 绕过了调用运算符。
+      if (/\.map\([^)]*shellQuote[^)]*\)\.join\(' '\)/.test(line)) offenders.push(`${file}:${index + 1}: ${line.trim()}`)
+    })
+  }
+  assert.deepEqual(offenders, [], `这些地方必须改成 shellInvoke(exe, args, platform)：\n${offenders.join('\n')}`)
+})

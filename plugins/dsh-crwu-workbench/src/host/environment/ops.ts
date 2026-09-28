@@ -6,7 +6,7 @@ import { applyDeploymentConfig } from '../config/deployment.ts'
 import { runCrwu } from '../crwu/run.ts'
 import type { WhoamiResult } from '../system/identity.ts'
 import { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } from './manifest-default.ts'
-import { shellQuote } from './probe.ts'
+import { shellInvoke } from './probe.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import type { EnvManifest } from '../environment/manifest-default.ts'
 import {
@@ -296,7 +296,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const trustedCredentials = state.trustCredentials === true
   const dwsCommand = await resolveBundledCommand(ctx, platform, 'dws')
   const dwsRun = trustedCredentials
-    ? await runShell(ctx, `${shellQuote(dwsCommand, platform)} auth status --format json`, {
+    ? await runShell(ctx, shellInvoke(dwsCommand, ['auth', 'status', '--format', 'json'], platform), {
       workdir: await deps.sessionRoot(),
       timeoutMs: 30_000,
       escalate: true,

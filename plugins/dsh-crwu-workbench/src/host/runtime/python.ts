@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { shellQuote } from '../environment/probe.ts'
+import { shellInvoke } from '../environment/probe.ts'
 import { runShell } from '../shell/run.ts'
 import type { WorldFacts } from '../platform/world.ts'
 
@@ -160,7 +160,7 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
       }
 
       // ③ 跑一次版本探测：既拿到版本，也证明它真的能执行（只读命令，走默认沙箱）。
-      const probe = await runShell(ctx, `${shellQuote(python, platform)} -c ${shellQuote('import sys;print(sys.version.split()[0])', platform)}`, {
+      const probe = await runShell(ctx, shellInvoke(python, ['-c', 'import sys;print(sys.version.split()[0])'], platform), {
         workdir: await deps.world.workdir(),
         timeoutMs: 30_000,
       })

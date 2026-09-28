@@ -314,3 +314,36 @@ test('maskKey never leaks a short key', () => {
   assert.equal(maskKey('short'), '****')
   assert.equal(maskKey(''), '')
 })
+
+test('Windows：命令带 PowerShell 调用运算符 `&`（员工实测 ParserError 的回归）', async () => {
+  // 现场：`"C:\…\crwu.exe" "h3yun" "session" "status"` → PowerShell 报
+  // 「表达式或语句中包含意外的标记"h3yun"。」（环境页氚云那一行）。
+  // 判据与平台无关（两个 OS 上跑这条测试结论必须一致），所以这里按 `platform` 参数走 Windows 分支。
+  const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
+  const platform = 'win32-x64'
+  const bundled = bundledBinaryPath(platform, 'crwu')
+  const specs = []
+  const ctx = {
+    get: (name) => {
+      if (name === 'shell') {
+        return {
+          resolve: (request) => { specs.push(request); return request },
+          async execute() {
+            return { result: async () => ({ exitCode: 0, timedOut: false, stdout: { text: '{}', truncated: false }, stderr: { text: '', truncated: false } }) }
+          },
+        }
+      }
+      if (name === 'fs') {
+        return {
+          async resolve(path) { return { targetKey: path, displayPath: path } },
+          async stat(target) { return target.targetKey === bundled ? { type: 'file' } : undefined },
+        }
+      }
+      return undefined
+    },
+  }
+  await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], { trusted: false, platform })
+  assert.equal(specs.length, 1)
+  assert.equal(specs[0].command, `& '${bundled}' 'h3yun' 'session' 'status'`)
+  assert.equal(specs[0].command.includes('"'), false, '不得出现 cmd 式双引号')
+})

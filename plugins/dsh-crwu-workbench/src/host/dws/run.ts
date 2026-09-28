@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
-import { shellQuote } from '../environment/probe.ts'
+import { shellInvoke } from '../environment/probe.ts'
 import { requireBundledCommand } from '../platform/command.ts'
 import { runShell } from '../shell/run.ts'
 import { DWS_ALLOWED_PREFIXES, DWS_ESCALATION_PREFIXES, DWS_STDOUT_MAX, DWS_TIMEOUT_MS } from './consts.ts'
@@ -183,8 +183,7 @@ export async function runDws(
     && options.workdir !== ''
     && dwsEscalationAllowed(argv)
 
-  const quote = (value: string): string => shellQuote(value, platform)
-  const command = [resolved.path, ...argv.map((item) => text(item))].map(quote).join(' ')
+  const command = shellInvoke(resolved.path, argv.map((item) => text(item)), platform)
   const result = await runShell(ctx, command, {
     ...(options.workdir === '' ? {} : { workdir: options.workdir }),
     timeoutMs: options.timeoutMs ?? DWS_TIMEOUT_MS,
