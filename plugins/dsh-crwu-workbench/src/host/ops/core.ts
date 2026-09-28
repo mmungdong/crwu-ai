@@ -80,6 +80,13 @@ export interface CoreDeps {
    */
   ifindProbeCache?: import('../ifind/env.ts').IfindProbeCache | null
   auditTools?: (options: { refresh: boolean }) => Promise<{ missing: string[]; checked: boolean }>
+  /**
+   * Task 4 的四个自助更新操作（由 `update/ops.ts` 组装）。
+   *
+   * 这里只做**组合**：拿到就并进操作表，并把名字登记进 `ported.done` —— 声明从真实注入的
+   * 操作表推导，避免"声明一份、实现一份"漂移（clipboard 那次就是这么踩的）。
+   */
+  update?: OperationMap
 }
 
 export interface HostResolvers {
@@ -190,7 +197,13 @@ export function createCoreOperations(
   const guard = async (operation: string): Promise<Record<string, unknown> | null> =>
     await guardOperation(gate, operation)
 
+  // 四个 update 操作（Task 4）：名字从**真实注入的操作表**推导，声明与实现不会各写一份。
+  const updateOperations = extra.update ?? {}
+
   return {
+    // Task 4：自助更新四个操作（检查 / 手动检查 / 安装 / 取消）。由 update/ops.ts 组装，
+    // 这里只并表；没有注入时就不登记（声明必须跟着实现走）。
+    ...updateOperations,
     // `rev` 只反映包版本，同一轮开发里两次 build 完全相同；`builtAt` 是这份产物的写入时间，
     // 用来回答「重启之后生效的是不是我刚 build 的那份」（见 AGENTS.md §7 的本地开发循环）。
     ping: () => ({
@@ -239,7 +252,9 @@ export function createCoreOperations(
           // 第 6 层：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是「读技能目录里的文件」）。
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
-          'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred'],
+          'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
+          // 协议 16：自助更新四个操作（安装目标由 Host 自己授权，调用方只能传空参数）。
+          ...Object.keys(updateOperations)],
         // 24 个 legacy RPC 已全部搬完；这里保留空数组，是为了让「声明跟着实现走」的测试继续成立。
         todo: [],
       },

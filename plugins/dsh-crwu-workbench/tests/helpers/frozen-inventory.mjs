@@ -32,6 +32,9 @@ export const FROZEN_OPERATIONS = [
   'report-files',
   // 第 27~30 个：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是"读技能目录里的文件"）。
   'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
+  // 第 31~34 个：自助更新（协议 16）。检查 / 手动检查 / 安装 / 取消；安装目标由 Host 自己授权，
+  // 调用方只能传空参数（边界在 `src/host/update/ops.ts`，测试在 host-update-operations.test.mjs）。
+  'update-status', 'update-check', 'update-install', 'update-cancel',
 ]
 
 /** 宿主操作的条数。 */

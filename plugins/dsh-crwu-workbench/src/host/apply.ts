@@ -4,10 +4,13 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 // 以稳定 id `tools` 挂载（`dsh-base/cordis.patch.yml`），所以这里**不重复插入第二个实例**。
 import type {} from '@deepseek-ai/dsh-tools'
 import { WORKBENCH_ROUTE } from '../shared/consts.ts'
+import { HOST_BUILD_KIND } from './build-info.ts'
+import { PLUGIN_VERSION } from './consts.ts'
 import { resolveWorkbenchConfig, type PluginConfig } from './config/config.ts'
 import { registerRpcRoute } from './http/route.ts'
 import { subscribeAuditEvents } from './audit/events.ts'
 import { createCoreOperations } from './ops/core.ts'
+import { createUpdateOperations } from './update/ops.ts'
 import { createWorldFacts } from './platform/world.ts'
 import { createWorkbenchState } from './state/store.ts'
 import { H3yunFormResolver } from './h3yun/form.ts'
@@ -38,7 +41,24 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   // 自研审核链路的全部业务能力都以结构化 Tool 交付（`crwu_*`）。注册进 DSH 的注册表，
   // schema 自动进 system prompt，并走同一条审批/沙箱/取消 pipeline。
   ctx.effect(() => registerCrwuTools(ctx, { ctx, config, state, world, form }), 'crwu-workbench: tools')
-  const operations = createCoreOperations(ctx, config, state, world, { form, python })
+  // 自助更新（Task 4）：每个插件实例一套检查器 / 持久化 / 安装服务。
+  // 这里只装配 —— 恢复与后台自动检查都在它内部启动，**不 await**（registry 故障、
+  // Plugin Manager 缺失或检查挂起都不得挡住插件激活或下面的路由注册）。
+  const update = createUpdateOperations({
+    ctx,
+    state,
+    version: PLUGIN_VERSION,
+    buildKind: HOST_BUILD_KIND,
+    home: () => world.home(),
+  })
+  const operations = createCoreOperations(
+    ctx,
+    config,
+    state,
+    world,
+    { form, python },
+    { update: update.operations },
+  )
   ctx.effect(() => registerRpcRoute(ctx, operations), 'crwu-workbench: rpc route')
   ctx.logger?.info?.('中瑞世联工作台 Host 半（包形态骨架）已装配 %o', {
     route: WORKBENCH_ROUTE,

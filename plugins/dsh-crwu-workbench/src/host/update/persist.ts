@@ -166,3 +166,16 @@ export function pluginUpdateStoreOf(ctx: Context, home: string): PluginUpdateSto
     writeConfig: (patch) => writeWorkbenchConfig(ctx, home, patch),
   })
 }
+
+/**
+ * 惰性 home 的 store：`home` 是**异步探测**出来的执行世界事实，而 `apply()` 是同步函数。
+ *
+ * 所以这里拿的是 provider 而不是字符串 —— 既不在模块加载时猜 home，也不把 `apply()` 变成
+ * 阻塞磁盘/网络的异步入口；真正读盘时（恢复、安装前落盘）才去问一次，`WorldFacts` 自己缓存。
+ */
+export function pluginUpdateStoreFor(ctx: Context, home: () => Promise<string>): PluginUpdateStore {
+  return createPluginUpdateStore({
+    readConfig: async () => readWorkbenchConfigResult(ctx, await home()),
+    writeConfig: async (patch) => writeWorkbenchConfig(ctx, await home(), patch),
+  })
+}

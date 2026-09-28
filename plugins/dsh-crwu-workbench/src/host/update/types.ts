@@ -183,10 +183,13 @@ export interface PluginUpdateStore {
 /**
  * DSH Plugin Manager 的**公开方法**（`ctx.get('pluginManager')` 满足这个形状）。
  *
- * 只列本任务用到的四个：Task 4 负责接线，Task 3 只通过注入口工作。
+ * `registries()` 给 Task 2 的检查器判定政策（公共源 / 企业源），其余四个给安装与恢复。
+ * 它**不在** `PLUGIN_INJECT` 里：Plugin Manager 是可选能力，缺失时插件照常激活，
+ * 检查状态是 `unsupported/manager-unavailable`（见 `shared/update/types.ts`）。
  * profile 锁、pnpm、registry 回退、回滚、兼容性与日志全部由 Plugin Manager 拥有。
  */
 export interface PluginManagerPort {
+  registries(): Promise<PluginRegistries>
   listBundles(): Promise<BundleInfo[]>
   installBundle(spec: string, options: InstallBundleOptions): Promise<ChangeResult>
   waitForInstall(requestId: PluginInstallRequestId): Promise<ChangeResult | null>

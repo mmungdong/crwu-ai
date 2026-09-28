@@ -24,7 +24,10 @@ const { PLUGIN_INJECT, PLUGIN_NAME } = await import(new URL('src/host/consts.ts'
 const { RPC_BODY_MAX_BYTES } = await import(new URL('src/host/http/consts.ts', ROOT).href)
 const { createWorkbenchState, workspaceView } = await import(new URL('src/host/state/store.ts', ROOT).href)
 const { createCoreOperations } = await import(new URL('src/host/ops/core.ts', ROOT).href)
-const { WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
+const { createUpdateOperations } = await import(new URL('src/host/update/ops.ts', ROOT).href)
+const { PLUGIN_VERSION } = await import(new URL('src/host/consts.ts', ROOT).href)
+const { HOST_BUILD_KIND } = await import(new URL('src/host/build-info.ts', ROOT).href)
+const { WORKBENCH_ROUTE, WORKBENCH_PROTOCOL } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { readJsonBody, writeJson } = await import(new URL('src/host/http/json.ts', ROOT).href)
 // 冻结清单只有一份（工具 / 操作的名字与数量），避免各测试各写一个裸数字。
 const { FROZEN_AUDIT_TOOLS, FROZEN_AUDIT_TOOL_COUNT, FROZEN_OPERATIONS, FROZEN_OPERATION_COUNT } =
@@ -182,6 +185,8 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
     get: (name) => (name === 'shell' ? stubShell : (name === 'fs' ? stubFs : undefined)),
     // 真实 Cordis 上下文一定有 effect：插件用它登记随生命周期释放的资源。
     effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
+    // 更新插件的进度监听走 ctx.on（同样由生命周期管理）：这里只需存在，测试不驱动它。
+    on: () => () => {},
     ...(sessions === undefined ? {} : { sessions }),
   }
   // 两个实例级解析器：审核启动/记录类 Tool 依赖它们。
@@ -199,7 +204,22 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
       }
     },
   }
-  return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world, { form, python }) }
+  // 自助更新：用**真实**操作层（不注入 Plugin Manager —— 该 ctx 的 `get` 也回不出它，
+  // 所以检查停在 `unsupported/manager-unavailable`，不会打 registry），与 apply() 同一条组合路径。
+  const update = createUpdateOperations({
+    ctx,
+    state,
+    version: PLUGIN_VERSION,
+    buildKind: HOST_BUILD_KIND,
+    home: () => world.home(),
+  })
+  return {
+    state,
+    ctx,
+    operations: createCoreOperations(
+      ctx, resolved, state, world, { form, python }, { update: update.operations },
+    ),
+  }
 }
 
 test('buildKind 靠包根旁边有没有 src/ 判断：源码检出 = dev，装好的包 = installed', async () => {
@@ -271,6 +291,17 @@ test('ping and boot answer with the state the panel needs to render', async () =
     assert.ok(boot.ported.done.includes(name), `${name} 应当已移植`)
   }
   assert.deepEqual(boot.ported.todo, [], '不该再有未移植的操作')
+
+  // 协议 16：更新操作与 check/install 线协议是跨进程契约的一部分（见 shared/consts.ts）。
+  // ping 与 boot 都必须报同一代，否则「界面新、宿主旧」只能在用户点更新时才暴露。
+  assert.equal(WORKBENCH_PROTOCOL, 16, '新增四个 update 操作后协议必须 +1')
+  assert.equal(pong.protocol, 16, 'ping 必须报当前协议代')
+  assert.equal(bootAnswer.protocol, 16, 'boot 必须报当前协议代')
+  // 四个更新操作必须真的在操作表里（不是只写进 boot 的声明）。
+  assert.deepEqual(
+    Object.keys(operations).filter((name) => name.startsWith('update-')).sort(),
+    ['update-cancel', 'update-check', 'update-install', 'update-status'],
+  )
 })
 
 test('env 操作的运行时分区来自 DSH Python 解析器（接线 + refresh 透传）', async () => {
@@ -347,7 +378,8 @@ test('the Host half still registers the frozen inventory of operations', async (
   assert.equal(FROZEN_OPERATIONS.length, FROZEN_OPERATION_COUNT)
   // 30 → 29：`install-prompt` 已删除（2026-09-26，「复制安装提示词」在环境页不再需要）。
   // 同批协议号 13 → 14（旧客户端挂载时会调这个操作，必须靠协议号让"界面新、宿主旧"显形）。
-  assert.equal(FROZEN_OPERATION_COUNT, 29)
+  // 29 → 33：自助更新四个操作（协议 15 → 16）。
+  assert.equal(FROZEN_OPERATION_COUNT, 33)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {

@@ -1,6 +1,20 @@
 /** Host 与 Client 共用的同源工作台端点。 */
 export const WORKBENCH_ROUTE = '/api/crwu-workbench'
 
+/**
+ * 自助更新的四个 Host 操作名（协议 16）。
+ *
+ * 与 `WORKBENCH_ROUTE` 同级：它们是**跨进程契约**的一部分（Host 的操作表、`boot.ported.done`、
+ * 冻结清单与 Task 5 的 Client 门面共用这一份名字，避免各写一遍然后漂移）。
+ * 四个操作都返回 `{ ok, check, install }`；安装目标不接受调用方参数（见 `host/update/ops.ts`）。
+ */
+export const UPDATE_OPERATION_NAMES = [
+  'update-status',
+  'update-check',
+  'update-install',
+  'update-cancel',
+] as const
+
 /** 员工排障入口：用户公开分享的钉钉个人名片链接（来自名片二维码）。 */
 export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile/outside/index.html?fr_source=13&uidCipher=7O4cP9kgKCT4CvRDZlgrxQ%3D%3D&cardToken=dff1f30a70&profile=%40kgDOFH5CaA'
 
@@ -11,6 +25,15 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * 于是很容易出现「界面是新的、逻辑是旧的」——审核挂错会话那次就是这么来的（用户看到新按钮、
  * 跑的是老代码，报障说「还是挂错位置」）。
  *
+ * 16：**自助更新**（2026-09-28）。新增四个 Host 操作 `update-status` / `update-check` /
+ *    `update-install` / `update-cancel`（操作清单 29 → 33），统一返回 `{ ok, check, install }`
+ *    （`shared/update/types.ts` 的 `UpdateCheckState` / `UpdateInstallState`）：检查结论与安装任务
+ *    分开表达，安装的终点只有 `awaiting-restart`。两处必须靠协议号喊出来：
+ *    ① 安装成功后**磁盘上的客户端产物已经是新的，而仍在运行的 Host 还是旧的**，两者会短暂不一致；
+ *    ② 因此客户端一旦发现协议不一致，就必须拦下新的审核并直接提示
+ *       「完全退出并重新打开 DeepSeek Harness」（macOS 关闭窗口不等于退出，要从菜单退出或 Command-Q），
+ *       而不是拿旧宿主干新活。旧宿主没有这四个操作，新界面点下去只会拿到 404 ——
+ *       这一代同样必须由协议号自己显形。
  * 14：**删除 `install-prompt` 操作**（连同 `src/host/environment/install-prompt.ts` 与界面上的
  *    「复制安装提示词」入口）。为什么这也算契约变更：旧客户端挂载时会调这个操作，新宿主没有它 ——
  *    不靠协议号喊出来的话，用户会看到一条与真实原因无关的「未知 op」报错。同理，
@@ -69,7 +92,7 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 15
+export const WORKBENCH_PROTOCOL = 16
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

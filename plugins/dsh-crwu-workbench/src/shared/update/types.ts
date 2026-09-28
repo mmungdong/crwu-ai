@@ -83,3 +83,28 @@ export type UpdateInstallState =
   | { status: 'cancelled'; targetVersion?: string }
   /** 重启后核对实际运行版本成功的一次性提示。 */
   | { status: 'updated'; version: string }
+
+/**
+ * 四个 `update-*` 操作**统一**的返回信封（协议 16）。
+ *
+ * `ok` 说的是"这个操作执行了"，不是"检查/安装成功"：检查失败、安装失败都在 `check` / `install`
+ * 的闭合联合里，界面按它们分派文案。四个操作都返回同一形状，Client 只需要一套收窄逻辑。
+ */
+export interface UpdateStatusPayload {
+  ok: true
+  check: UpdateCheckState
+  install: UpdateInstallState
+}
+
+/**
+ * 边界拒绝信封：只在调用方破坏了操作契约时出现（例如给 `update-install` 传了任何参数）。
+ *
+ * 它**不带**状态快照，因为拒绝路径不调用 checker、store 或 Plugin Manager —— 这也是
+ * "参数注入不影响任何东西"的可观察证据。`error` 是固定文案，绝不回显调用方输入。
+ */
+export interface UpdateRejectionPayload {
+  ok: false
+  error: string
+}
+
+export type UpdateOperationPayload = UpdateStatusPayload | UpdateRejectionPayload

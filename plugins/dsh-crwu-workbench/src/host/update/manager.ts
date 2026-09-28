@@ -159,3 +159,24 @@ export async function readDiskVersion(manager: PluginManagerPort): Promise<DiskV
   if (version === null) return { kind: 'unknown' }
   return { kind: 'installed', version }
 }
+
+/**
+ * Plugin Manager 缺失时的占位端口（`ctx.get('pluginManager')` 回 undefined）。
+ *
+ * 为什么不是"可选端口 + 到处判空"：这样服务里每个读磁盘事实的调用都自然落到
+ * `unknown`（读不出来），而**安装入口由操作层直接拦下**（`update/ops.ts` 里没有服务就
+ * 不进安装流程）。所有方法一律抛错 —— 任何"真的走到了包安装"的路径都必须以失败收场，
+ * 不得静默成功；抛出的文案不会进任何对外状态（读盘失败本来就归类成 `unknown`）。
+ */
+export function createUnavailableManager(): PluginManagerPort {
+  const unavailable = (): never => {
+    throw new Error('pluginManager 服务不可用')
+  }
+  return {
+    registries: async () => unavailable(),
+    listBundles: async () => unavailable(),
+    installBundle: async () => unavailable(),
+    waitForInstall: async () => unavailable(),
+    cancelInstall: async () => unavailable(),
+  }
+}
