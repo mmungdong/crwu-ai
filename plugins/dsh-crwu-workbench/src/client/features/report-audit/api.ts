@@ -1,4 +1,5 @@
 import { rpc } from '../../api/client.ts'
+import { createUpdateApi, UPDATE_METHOD_OPERATION, type UpdateApi } from '../update/api.ts'
 import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
 import type { AuditRootView, EnvResultView } from '../../../shared/types.ts'
@@ -17,6 +18,10 @@ import {
  *
  * 注意**每个方法都只做类型标注**，不做字段改名：Host 返回什么字段，这里就声明什么字段。
  * 改名会让「Host 与 Client 的字段对不上」变成运行期才发现的静默问题。
+ *
+ * 自助更新（协议 16）那四个方法不在这里手写：它们来自 `features/update/api.ts`，并由
+ * `OPERATION_OF` 组合进同一张 Client→Host 操作清单。更新响应要走**运行时收窄**
+ * （`parseUpdateResponse`）之后才进 UI 状态，所以那四个方法返回的是未收窄的 `unknown`。
  */
 
 /** Host 返回的错误信封；各操作失败时都带 `ok: false` + `error`。 */
@@ -163,8 +168,13 @@ export interface SimpleResult {
   error: string
 }
 
-/** 带类型的调用集合。每个方法对应 Host 的一个 `workbench:*` handler。 */
-export interface WorkbenchApi {
+/**
+ * 带类型的调用集合。每个方法对应 Host 的一个 `workbench:*` handler。
+ *
+ * 更新那四个方法来自 `features/update/api.ts`（`UpdateApi`）——门面在这里**组合**，
+ * 操作名只有一份（`UPDATE_METHOD_OPERATION`），不在这里再手写字符串。
+ */
+export interface WorkbenchApi extends UpdateApi {
   boot: () => Promise<BootResult>
   /** `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存。 */
   env: (args?: { refresh?: boolean }) => Promise<EnvResult>
@@ -245,6 +255,8 @@ async function call<T>(operation: string, args?: unknown): Promise<T> {
 }
 
 export const workbenchApi: WorkbenchApi = {
+  // 四个更新方法（零参数、只发 {}）；实现与收窄都在 features/update/ 里。
+  ...createUpdateApi(),
   boot: () => call('boot'),
   env: (args) => call('env', args),
   pending: (args) => call('pending', args),
@@ -281,6 +293,8 @@ export const workbenchApi: WorkbenchApi = {
  * 反之亦然。少一个的表现是点下去 404，而界面只会显示「未知 op」。
  */
 export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
+  // 更新四个操作：从更新模块的派生映射组合进来（操作名来自共享常量，这里不重写）。
+  ...UPDATE_METHOD_OPERATION,
   boot: 'boot',
   env: 'env',
   pending: 'pending',
