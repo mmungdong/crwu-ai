@@ -127,6 +127,7 @@
 | [`docs/ui-design-guidelines.md`](dsh-crwu-workbench/docs/ui-design-guidelines.md) | 动界面、样式、交互 | 视觉语言（办公 + Apple）、DSH token 白名单与踩过的假 token、样式交付与模板字符串禁反引号、类名与选择器纪律、布局硬规则（滚动 / 表格 / 浮层）、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
 | [`docs/development-notes.md`](dsh-crwu-workbench/docs/development-notes.md) | 动交付形态、Cordis 生命周期、Host 操作、协议号、沙箱与授权、测试与发版 | 三条加载契约、生命周期归属表、bundle patch 的 `baseUrl` 陷阱、Host/Client 分开加载与协议号、沙箱与授权口径、「我是谁」的来源、增删 Host 操作的最小清单、本地开发循环与两道人工关卡、测试与证伪纪律、发版与同版本不可覆盖、常见坑速查表 |
 | [`docs/PRD-workbench-sidebar-modules.md`](dsh-crwu-workbench/docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块、面板壳的形态与口径 | 需求与取舍、历次返工记录、真机几何证据与证伪清单 |
+| [`docs/releasing.md`](dsh-crwu-workbench/docs/releasing.md) | 准备或执行 npm 发版 | 认证配置、版本升级、完整门禁、`plugin-v*` tag、Actions、发布后验收、失败恢复与回滚 |
 
 三条维护要求：
 
@@ -134,7 +135,7 @@
    `development-notes.md` 的「常见坑速查」。
 2. 文档与插件自己的 `AGENTS.md` 冲突时，**以插件 `AGENTS.md` 为准**，并在同一批修正文档 ——
    不许出现两套互相矛盾的口径。
-3. 这两份文档是**给维护者读的**（写为什么、写取舍、写复现步骤），不是运行时读物：
+3. 这些文档是**给维护者读的**（写为什么、写取舍、写复现步骤），不是运行时读物：
    技能自洽性 lint 只扫技能根，`docs/` 不属于技能根，也不得把"必须某文档在手边才能干活"
    这类依赖写进 `SKILL.md` 或技能脚本。
 

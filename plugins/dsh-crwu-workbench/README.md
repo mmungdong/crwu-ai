@@ -11,7 +11,9 @@ AI 审核子会话 → 盯住它的运行状态、可随时停止/重启 → 交
 审核流程本体不在本仓：它由 `crwu-audit` 技能族执行（见「依赖」）。本仓只负责**发起、盯状态、交付件回传**。
 
 源码在 `src/`，构建产物是 `lib/index.js` + `lib/client.js`，按 **DSH 包插件**（npm）分发安装。
-维护规范见 [`AGENTS.md`](AGENTS.md)，迁移历史与逐项记录见 [`PORTING.md`](PORTING.md)，安全模型见 [`SECURITY.md`](SECURITY.md)。
+维护规范见 [`AGENTS.md`](AGENTS.md)，完整发版步骤见
+[`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md)，
+迁移历史与逐项记录见 [`PORTING.md`](PORTING.md)，安全模型见 [`SECURITY.md`](SECURITY.md)。
 
 > 本仓为**内部使用**软件，见 [`LICENSE`](LICENSE)；发现安全问题请按 [`SECURITY.md`](SECURITY.md) 私下联系维护者，不要开公开 issue。
 
@@ -22,7 +24,7 @@ AI 审核子会话 → 盯住它的运行状态、可随时停止/重启 → 交
 | | |
 |---|---|
 | 怎么活 | `dsh plugin --profile <p> add …` 装进 profile，随 profile 启动而加载 |
-| 版本号 | semver（`package.json` / `VERSION` / `CHANGELOG.md` 三处一致，`npm run version:check` 强制） |
+| 版本号 | semver（`package.json` / `package-lock.json` / `VERSION` / `src/host/consts.ts` 同步，`CHANGELOG.md` 有对应小节，`npm run version:check` 强制） |
 | 重启 DSH 后 | **还在**（这是它相对于旧动态形态的主要好处） |
 | 谁能改 | 任何能跑 `dsh` CLI 的人/agent 都能独立闭环；源码改动由 CI 与 `npm run check` 把关 |
 | 分发 | npm（tag → release workflow）；也支持 git 安装与 tarball |
@@ -294,7 +296,8 @@ dsh plugin --profile web remove dsh-crwu-workbench
 
 ### 四条命令
 
-> 本机怎么开发、怎么在真实 DSH 上验、怎么发版，逐步步骤都在 [`AGENTS.md`](AGENTS.md) 第七、八节；
+> 本机怎么开发、怎么在真实 DSH 上验见 [`AGENTS.md`](AGENTS.md) 第七节；完整发版流程见
+> [`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md)；
 > 下面只是命令速查。
 
 | 命令 | 作用 |
@@ -305,8 +308,8 @@ dsh plugin --profile web remove dsh-crwu-workbench
 | `npm run build` | tsdown 双端打包出 `lib/index.js` + `lib/client.js`（`prepare` 也走它） |
 | `npm run smoke:built` | 用**真的** `lib/index.js` 走一遍同源路由、用真的 `lib/client.js` 过一遍 `__ModuleLoader__` |
 | `npm run check` | 上面几条按顺序跑一遍（`version:check` → `typecheck` → `test` → `build` → `smoke:built`）—— **交付/提 PR 前跑这个** |
-| `npm run version:set 0.0.2` | 改版本号（`package.json` + `VERSION` + lockfile 根版本） |
-| `npm run version:check` | 校验 `package.json` / `VERSION` / `CHANGELOG.md` 版本一致 |
+| `npm run version:set 0.0.2` | 同步版本号（`package.json` + `package-lock.json` 根版本 + `VERSION` + `src/host/consts.ts`） |
+| `npm run version:check` | 校验版本文件、Host 版本常量与 `CHANGELOG.md` 小节一致 |
 | `npm run pack:assert` | 核对 `npm pack` 真正打进去的文件清单 + 三条加载契约（发布前必跑；CI 也跑这条） |
 | `npm run pack:assert:strict` | **发布严格模式**：真打一份 tarball、解包后按 `bin/manifest.json` 逐个重算两个平台六个二进制的 size/sha256 |
 | `npm run bin:check` | 装配过 `bin/` 时：按清单重算**最终文件**哈希（内容变了就红，不看大小） |

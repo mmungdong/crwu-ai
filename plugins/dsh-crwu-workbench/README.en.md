@@ -22,7 +22,9 @@ Migration history: [`PORTING.md`](PORTING.md).
 > two forms differ in RPC registration, client transport and React provisioning. That trade-off is
 > deliberate — one form, not two.
 
-Conventions: [`AGENTS.md`](AGENTS.md). Security model: [`SECURITY.md`](SECURITY.md).
+Conventions: [`AGENTS.md`](AGENTS.md). Complete release runbook:
+[`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md).
+Security model: [`SECURITY.md`](SECURITY.md).
 Licensed for internal use only: [`LICENSE`](LICENSE) — do not redistribute.
 
 ## Install
@@ -126,13 +128,16 @@ and the installed Host automatically reads that packaged copy. Distribution need
 
 ## Releasing
 
-Never run `npm publish` by hand. The release path is tag-driven and gated:
+The complete operator procedure, including authentication setup, failure recovery, and rollback, is in
+[`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md).
+Never run a real `npm publish` by hand. The release path is tag-driven and gated:
 
 ```bash
-npm run version:set 0.1.3          # package.json + VERSION + lockfile root
+npm run version:set 0.1.3          # package.json + lockfile + VERSION + Host version constant
 # add a `## package · 0.1.3 · <date>` section to CHANGELOG.md
-npm run check && npm run pack:assert:strict
-git commit -am "release: 0.1.3" && git push
+cd ../..
+make plugin-pack
+# review and commit only the release's files, then push the release commit to main
 git tag plugin-v0.1.3 && git push origin plugin-v0.1.3
 ```
 
@@ -140,11 +145,10 @@ A `plugin-v*` tag triggers the repository-root [`.github/workflows/release.yml`]
 (`v*` is reserved for the Go CLI in the same repository, keeping the two release lines apart); it asserts the
 tag matches `package.json` / `VERSION`, builds and stages both platforms' binaries in a separate job,
 recomputes every staged hash against `bin/manifest.json`, runs the full gate and the **strict** packed-artifact
-check, then publishes
-on GitHub Actions with OIDC (which attaches a provenance attestation automatically; no long-lived
-`NPM_TOKEN` needed). The very first release has to be published locally **without** `--provenance`,
-because npm only generates attestations inside a supported CI provider. `workflow_dispatch` runs the same pipeline
-as a dry run. `prepublishOnly` re-runs the artifact check and the gate, so a manual publish cannot skip them.
+check, then publishes on GitHub Actions. The **current** workflow uses `NPM_TOKEN` for registry authentication and
+`id-token: write` plus `--provenance` for the build attestation. It is not yet tokenless npm Trusted Publishing;
+the runbook documents both the current setup and the recommended OIDC migration. `workflow_dispatch` runs the
+same pipeline as a dry run. `prepublishOnly` re-runs the artifact check and the gate.
 
 ### One trap worth knowing: npm runs `prepare` on install too
 

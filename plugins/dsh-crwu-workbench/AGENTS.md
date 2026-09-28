@@ -2,7 +2,7 @@
 
 本仓库是一个 **DeepSeek Harness（DSH）插件**。所有代码、目录、测试和发布改动都必须遵守 DSH 的插件装配、Host/Client 分层、Cordis 生命周期与浏览器模块规范。不能把它当作普通 Node.js 网站或独立 React 应用处理。
 
-**延伸阅读（`docs/`，给维护者读的"为什么"）**：本文件是**门禁口径**；写代码前按需读下面三份，
+**延伸阅读（`docs/`，给维护者读的"为什么"）**：本文件是**门禁口径**；写代码前按需读下面四份，
 它们与本文件冲突时以本文件为准，并在同一批把文档改回来。
 
 | 文档 | 什么时候读 |
@@ -10,8 +10,9 @@
 | [`docs/ui-design-guidelines.md`](docs/ui-design-guidelines.md) | 动界面 / 样式 / 交互：视觉语言、DSH token 白名单、样式交付与模板字符串禁反引号、类名纪律、布局硬规则、侧栏分组卡与面板壳口径、加载态与空态、改样式的验收方式 |
 | [`docs/development-notes.md`](docs/development-notes.md) | 动交付形态 / Cordis 生命周期 / Host 操作 / 协议号 / 沙箱与授权 / 测试与发版：加载契约、`baseUrl` 陷阱、协议号规则、增删操作清单、开发循环与证伪纪律、常见坑速查 |
 | [`docs/PRD-workbench-sidebar-modules.md`](docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块或面板壳的形态与口径：需求、取舍、历次返工与证伪记录 |
+| [`docs/releasing.md`](docs/releasing.md) | 准备或执行 npm 发版：认证配置、版本升级、完整门禁、`plugin-v*` tag、Actions、发布后验收、失败恢复与回滚 |
 
-`plugins/AGENTS.md` §3.3 也指向这三份文档；新踩的坑**写回对应文档**，不要只留在提交信息或对话里。
+`plugins/AGENTS.md` §3.3 也指向这些文档；新踩的坑**写回对应文档**，不要只留在提交信息或对话里。
 
 ## 1. 形态与修改原则
 
@@ -960,8 +961,9 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 1. 断言 tag 与 `package.json` / `VERSION` 一致（CHANGELOG 由 `check` 里的 `version:check` 覆盖）；
 2. `binaries` job 先在 macOS 上交叉编译并按 manifest 装配六个二进制，作为 artifact 交给发布 job；
    再跑 `npm run check` + `npm run pack:assert:strict`（tag 可能指向没经过 CI 的提交，所以这里再跑一遍）；
-3. `npm publish`（CI 在 GitHub Actions 里跑，`permissions: id-token: write` ⇒ npm 用 **OIDC**
-   自动附 provenance attestation；**不要把 `provenance: true` 写进 `publishConfig`** ——
+3. `npm publish`（当前由仓库 secret `NPM_TOKEN` 完成 registry 鉴权；`permissions: id-token: write`
+   配合 `--provenance` 生成 provenance attestation；迁移到无长期 Token 的 npm Trusted Publishing
+   见 `docs/releasing.md`）；**不要把 `provenance: true` 写进 `publishConfig`** ——
    那样本机 `npm publish` 会以 `EUSAGE: ... provider: null` 拒绝发布，首发引导就做不了了）。
 
 也可以在 Actions 里 `workflow_dispatch` 手动跑：`dry-run` 默认 true，只打包与校验、不发布。
