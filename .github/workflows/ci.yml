@@ -170,3 +170,16 @@ jobs:
           test -f lib/index.js
           test -f lib/client.js
           node -e "const fs=require('fs');const c=fs.readFileSync('lib/client.js','utf8');if(!c.includes('__ModuleLoader__'))throw new Error('lib/client.js 缺少 DSH ModuleLoader 包装')"
+
+      # DSH 运行时兼容矩阵：**真的**在干净临时工程里装齐 DSH 0.1.7 与 0.2.0 的完整 peer 集，
+      # 再把本插件的 tarball 装进去，最后调用 DSH 自己的 `evaluatePluginCompatibility()`
+      # 断言它不会被 skip / disable，并用**该版本**的 DSH 类型跑一次 tsc。
+      #
+      # 为什么必须真的装：2026-09-28 的事故是 peer 区间只覆盖 0.1 系列、DSH 0.2 直接禁用整包，
+      # 而当时只有一条「读区间字符串」的单测 —— 它证明不了 DSH 会加载这个包。
+      #
+      # 只在 Node 22 上跑：这一步与 Node 版本无关（两个 DSH 运行时线各装一遍），
+      # 跑两遍只是把 CI 时间翻倍。OS 两平台都覆盖（Linux + Windows 的安装/解析行为不同）。
+      - name: DSH runtime compatibility matrix
+        if: matrix.node == 22
+        run: npm run compat:dsh

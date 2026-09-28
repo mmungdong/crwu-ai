@@ -702,6 +702,8 @@ test('the npm release path is wired: publishable, self-checked before publish', 
   assert.match(pkg.scripts.prepack, /build:lib/)
   assert.match(pkg.scripts['build:lib'], /prepare\.mjs --force/)
   assert.ok(pkg.files.includes('scripts/prepare.mjs'), 'prepare 入口必须随包发布')
+  assert.equal('compat:dsh' in pkg.scripts, true, 'DSH 兼容矩阵要有可直接跑的门禁命令')
+  assert.equal(pkg.scripts['compat:dsh'], 'node scripts/check-dsh-compat.mjs')
 })
 
 test('an installed tarball can actually be installed and imported', async () => {
