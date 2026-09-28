@@ -70,12 +70,18 @@ export function createUpdateService(ports: UpdateServicePorts): UpdateService {
     }
   }
 
-  async function clearRecord(): Promise<void> {
+  /**
+   * 清除持久化标记，并如实返回"到底清掉了没有"。
+   *
+   * 为什么要看返回值：`recover()` 在运行版本已到目标时，清不掉标记就意味着磁盘上还留着记录，
+   * 下一次启动还会再报一次"更新成功"。清除是一次性提示的**前置条件**，不是随手做的收尾动作。
+   * 抛异常与返回 `false` 同义（两者都没成功）。
+   */
+  async function clearRecord(): Promise<boolean> {
     try {
-      await ports.store.clear()
+      return (await ports.store.clear()) === true
     } catch {
-      // 清除失败只是多留一条恢复记录，不影响本次结论；下次恢复会再处理一次。
-      return
+      return false
     }
   }
 
@@ -105,16 +111,23 @@ export function createUpdateService(ports: UpdateServicePorts): UpdateService {
   /** 一次安装调用的落点：只有磁盘确认目标版本才进入等待重启。 */
   async function settle(outcome: InstallOutcome, targetVersion: string): Promise<UpdateInstallState> {
     if (outcome.kind === 'cancelled') {
+      // 已知取消：清掉 installing 标记，免得员工重启后把它误判成"安装中断"。
+      // 清不掉也仍是取消（不谎报成功），只是多留一条记录由下次恢复处理。
+      await clearRecord()
       return finish({ status: 'cancelled', targetVersion })
     }
     if (outcome.kind === 'failed') {
+      // 已知失败：同样清掉标记，并**保持原来的稳定分类**。
+      await clearRecord()
       return finish({ status: 'failed', kind: outcome.reason, targetVersion })
     }
     if (outcome.kind === 'unknown') {
+      // 结果不确定（例如 waitForInstall 返回 null）：**保留** installing 记录，
+      // 让下次启动能用 listBundles 确认磁盘事实，再决定是"等待重启"还是"安装中断"。
       return finish({ status: 'failed', kind: 'unknown', targetVersion })
     }
     if (await diskReached(targetVersion)) return await enterAwaitingRestart(targetVersion)
-    // ChangeResult 说成功、磁盘却对不上：自相矛盾，不进入等待重启。
+    // ChangeResult 说成功、磁盘却对不上：自相矛盾 → unknown，且保留记录供启动恢复确认。
     return finish({ status: 'failed', kind: 'unknown', targetVersion })
   }
 
@@ -222,9 +235,13 @@ export function createUpdateService(ports: UpdateServicePorts): UpdateService {
     const target = valid(record.targetVersion)
     if (current === null || target === null) return state
 
-    // 运行版本已经到（或高于）目标：这条记录已经没有意义，清掉并给出一次性成功提示。
+    // 运行版本已经到（或高于）目标：这条记录已经没有意义 —— 但**只有真的清掉**才能报"更新成功"，
+    // 否则文件不可写时每次启动都会重复产生一次 updated，而记录始终留在磁盘上。
     if (gte(current, target)) {
-      await clearRecord()
+      if (!(await clearRecord())) {
+        // 清除失败：不声称成功，也不谎报其它结论；下次 recover 会再试一次（记录还在，判据相同）。
+        return setState({ status: 'failed', kind: 'unknown' })
+      }
       return setState({ status: 'updated', version: current })
     }
 

@@ -27,9 +27,41 @@ function normalizedVersion(value: unknown): string | undefined {
   return valid(value) ?? undefined
 }
 
-/** 合法时间 → ISO 字符串；不合法返回 undefined。 */
+/**
+ * 状态文件里的时间契约：**带明确时区的 ISO 8601 date-time**。
+ *
+ * 只认"日期 + `T` + 时间 + 时区（`Z` 或 ±HH:MM／±HHMM）"这一种结构。
+ * 为什么不能用 `Date.parse` 一把梭：它会接受 `September 28 2026`、`2026-09-28`、`'0'`
+ * 这类平台相关的宽松格式，还会把 `2026-02-31` 悄悄滚到 3 月 3 日 —— 状态文件是契约，
+ * 不是尽力而为的输入框。
+ */
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/
+
+/** 日期必须真实存在（含闰年）：`Date.UTC` 会把 2 月 31 日滚到下个月，这里先挡掉。 */
+function isRealCalendarDate(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12) return false
+  if (day < 1 || day > 31) return false
+  const probe = new Date(Date.UTC(year, month - 1, day))
+  return (
+    probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day
+  )
+}
+
+/** 严格 ISO date-time → `toISOString()` 规范化形式；任何不合格都返回 undefined（不抛异常）。 */
 function isoTime(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
+  const match = ISO_DATE_TIME.exec(value)
+  if (match === null) return undefined
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  // 秒可以省略（ISO 允许 `hh:mm`），省略时按 0 处理。
+  const second = match[6] === undefined ? 0 : Number(match[6])
+  if (!isRealCalendarDate(year, month, day)) return undefined
+  if (hour > 23 || minute > 59 || second > 59) return undefined
   const timestamp = Date.parse(value)
   if (Number.isNaN(timestamp)) return undefined
   return new Date(timestamp).toISOString()

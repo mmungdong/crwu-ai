@@ -84,7 +84,9 @@ function availableCandidate(clock, target = '0.0.12', current = '0.0.11') {
 function memoryStore(options = {}) {
   const state = { record: options.record, writes: [], clears: 0 }
   const log = options.log
-  return {
+  const store = {
+    // 暴露给测试：失败模式可以中途改（例如"第一次清除失败、第二次成功"）。
+    options,
     get record() {
       return state.record
     },
@@ -95,24 +97,26 @@ function memoryStore(options = {}) {
       return state.clears
     },
     async read() {
-      if (options.readThrows === true) throw new Error(`read boom ${SECRET_TEXT}`)
+      if (store.options.readThrows === true) throw new Error(`read boom ${SECRET_TEXT}`)
       return state.record
     },
     async write(record) {
       state.writes.push(record)
       log?.push(`persist:${record.phase}`)
-      if (options.writeOk === false) return false
+      if (store.options.writeOk === false) return false
       state.record = record
       return true
     },
     async clear() {
       state.clears += 1
       log?.push('persist:clear')
-      if (options.clearOk === false) return false
+      if (store.options.clearThrows === true) throw new Error(`clear boom ${SECRET_TEXT}`)
+      if (store.options.clearOk === false) return false
       state.record = undefined
       return true
     },
   }
+  return store
 }
 
 const changeResult = (patch = {}) => ({
@@ -1194,4 +1198,183 @@ test('适配：createPluginUpdateStore 的读/写/清除都返回稳定结果', 
   assert.equal(await broken.read(), undefined)
   assert.equal(await broken.write({ phase: 'installing', fromVersion: '0.0.11', targetVersion: '0.0.12', startedAt: NOW }), false)
   assert.equal(await broken.clear(), false)
+})
+
+// ---------------------------------------------------------------------------
+// 六、清理可靠性与一次性恢复（修正轮）
+// ---------------------------------------------------------------------------
+
+test('恢复 36：清除失败不产生 updated，记录仍在，下次 recover 会重试', async () => {
+  const record = {
+    phase: 'awaiting-restart',
+    fromVersion: '0.0.11',
+    targetVersion: '0.0.12',
+    startedAt: NOW,
+    installedAt: NOW,
+  }
+  const harness = createHarness({ version: '0.0.12', record, storeOptions: { clearOk: false } })
+
+  const first = await harness.service.recover()
+  assert.deepEqual(first, { status: 'failed', kind: 'unknown' }, '清不掉标记就不能声称更新成功')
+  assert.notEqual(first.status, 'updated')
+  assertClean(first, '清除失败状态')
+  assert.deepEqual(harness.store.record, record, '标记必须还在磁盘上')
+  assert.equal(harness.store.clears, 1)
+
+  // 第二次：文件现在可写了 → 才允许 updated，并且记录真的消失。
+  harness.store.options.clearOk = true
+  const second = await harness.service.recover()
+  assert.deepEqual(second, { status: 'updated', version: '0.0.12' })
+  assert.equal(harness.store.record, undefined)
+  assert.equal(harness.store.clears, 2)
+
+  // 第三次：标记已消失 → 不再清除、不再触发新的恢复动作（status 继续供 UI 消费）。
+  const third = await harness.service.recover()
+  assert.deepEqual(third, { status: 'updated', version: '0.0.12' })
+  assert.equal(harness.store.clears, 2, '不得再次清除')
+  assert.equal(harness.manager.installBundle.calls.length, 0)
+  assert.equal(harness.manager.listBundles.calls.length, 0)
+})
+
+test('恢复 37：清除抛异常与返回 false 同样处理，异常原文不进状态', async () => {
+  const record = {
+    phase: 'installing',
+    fromVersion: '0.0.11',
+    targetVersion: '0.0.12',
+    startedAt: NOW,
+  }
+  const harness = createHarness({ version: '0.0.12', record, storeOptions: { clearThrows: true } })
+
+  const state = await harness.service.recover()
+  assert.deepEqual(state, { status: 'failed', kind: 'unknown' })
+  assert.notEqual(state.status, 'updated')
+  assertClean(state, '清除抛错状态')
+  assert.deepEqual(harness.store.record, record, '抛错时记录也还在')
+  assert.equal(harness.store.clears, 1)
+})
+
+test('安装 38：明确 failed 结果清除 installing 标记，并保留稳定失败分类', async () => {
+  const failing = () =>
+    changeResult({
+      application: 'failed',
+      packageResult: { exitCode: 1, output: 'x', truncated: false, logPath: '/l', kind: 'permission' },
+    })
+
+  const harness = createHarness({ managerOptions: { installBundle: spy(async () => failing()) } })
+  const state = await harness.service.install()
+  assert.deepEqual(state, { status: 'failed', kind: 'permission', targetVersion: '0.0.12' }, '分类不被清理动作改变')
+  assert.equal(harness.store.clears, 1, '已知失败要清掉 installing 标记')
+  assert.equal(harness.store.record, undefined)
+  assert.equal(harness.store.writes.some((entry) => entry.phase === 'awaiting-restart'), false)
+
+  // 清除失败也不能把失败谎报成成功；记录留下由下次恢复处理。
+  const stubborn = createHarness({
+    managerOptions: { installBundle: spy(async () => failing()) },
+    storeOptions: { clearOk: false },
+  })
+  const stubbornState = await stubborn.service.install()
+  assert.deepEqual(stubbornState, { status: 'failed', kind: 'permission', targetVersion: '0.0.12' })
+  assert.equal(stubborn.store.record.phase, 'installing')
+})
+
+test('安装 39：明确 cancelled 结果清除 installing 标记，最终仍是 cancelled', async () => {
+  const cancelled = () => changeResult({ application: 'cancelled' })
+
+  const harness = createHarness({ managerOptions: { installBundle: spy(async () => cancelled()) } })
+  const state = await harness.service.install()
+  assert.deepEqual(state, { status: 'cancelled', targetVersion: '0.0.12' })
+  assert.equal(harness.store.clears, 1, '已知取消要清掉 installing 标记')
+  assert.equal(harness.store.record, undefined)
+  assert.equal(harness.store.writes.some((entry) => entry.phase === 'awaiting-restart'), false)
+
+  const stubborn = createHarness({
+    managerOptions: { installBundle: spy(async () => cancelled()) },
+    storeOptions: { clearOk: false },
+  })
+  assert.equal((await stubborn.service.install()).status, 'cancelled', '清不掉也还是取消')
+  assert.equal(stubborn.store.record.phase, 'installing')
+})
+
+test('安装 40：unknown 结果保留 installing 记录，供启动恢复确认磁盘事实', async () => {
+  const harness = createHarness({
+    managerOptions: {
+      installBundle: spy(async () => {
+        throw new Error(`lost ${SECRET_TEXT}`)
+      }),
+      waitForInstall: spy(async () => null),
+    },
+  })
+  const state = await harness.service.install()
+  assert.deepEqual(state, { status: 'failed', kind: 'unknown', targetVersion: '0.0.12' })
+  assert.equal(harness.store.clears, 0, '结果不确定就不清除')
+  assert.equal(harness.store.record.phase, 'installing')
+  assert.equal(harness.store.record.targetVersion, '0.0.12')
+
+  // 记录确实还有用：磁盘已经是 target → 恢复时自愈成"等待重启"。
+  const recovered = await harness.service.recover()
+  assert.deepEqual(recovered, {
+    status: 'awaiting-restart',
+    targetVersion: '0.0.12',
+    installedAt: harness.clock.now().toISOString(),
+  })
+})
+
+test('安装 41：声称成功但磁盘对不上时保留 installing 记录，且不写 awaiting-restart', async () => {
+  const harness = createHarness({ managerOptions: { diskVersion: '0.0.11' } })
+  const state = await harness.service.install()
+
+  assert.deepEqual(state, { status: 'failed', kind: 'unknown', targetVersion: '0.0.12' })
+  assert.equal(harness.store.clears, 0, '不确定的记录要留给启动恢复')
+  assert.equal(harness.store.record.phase, 'installing')
+  assert.equal(harness.store.writes.some((entry) => entry.phase === 'awaiting-restart'), false)
+})
+
+test('持久化 42：时间字段只接受带时区的 ISO 8601 date-time', () => {
+  const base = { phase: 'installing', fromVersion: '0.0.11', targetVersion: '0.0.12' }
+
+  const accepted = [
+    ['毫秒 + Z', '2026-09-28T10:00:00.000Z', '2026-09-28T10:00:00.000Z'],
+    ['显式 offset', '2026-09-28T18:00:00+08:00', '2026-09-28T10:00:00.000Z'],
+    ['负 offset', '2026-09-28T05:00:00-05:00', '2026-09-28T10:00:00.000Z'],
+    ['无秒但带时区', '2026-09-28T10:00Z', '2026-09-28T10:00:00.000Z'],
+    ['无冒号的 offset', '2026-09-28T18:00:00+0800', '2026-09-28T10:00:00.000Z'],
+    ['亚毫秒精度', '2026-09-28T10:00:00.123456Z', '2026-09-28T10:00:00.123Z'],
+  ]
+  for (const [label, value, expected] of accepted) {
+    const parsed = parsePluginUpdate({ pluginUpdate: { ...base, startedAt: value } })
+    assert.equal(parsed?.startedAt, expected, label)
+  }
+
+  const rejected = [
+    ['自然语言', 'September 28 2026'],
+    ['只有日期', '2026-09-28'],
+    ['无时区', '2026-09-28T10:00:00'],
+    ['纯数字', '0'],
+    ['空串', ''],
+    ['只有时间', '10:00:00Z'],
+    ['本地习惯格式', '09/28/2026 10:00:00Z'],
+    ['超范围月份', '2026-13-01T10:00:00Z'],
+    ['不存在的日期（2026-02-31）', '2026-02-31T10:00:00Z'],
+    ['超范围小时', '2026-09-28T25:00:00Z'],
+    ['紧凑格式（无分隔符）', '20260928T100000Z'],
+    ['非字符串（epoch 毫秒）', 1759053600000],
+    ['数组', [NOW]],
+  ]
+  for (const [label, value] of rejected) {
+    assert.equal(parsePluginUpdate({ pluginUpdate: { ...base, startedAt: value } }), undefined, label)
+  }
+
+  // awaiting-restart 的 installedAt 走同一条判据（带上 startedAt，否则测的是另一条判据）。
+  const awaiting = { ...base, startedAt: NOW, phase: 'awaiting-restart' }
+  assert.equal(
+    parsePluginUpdate({ pluginUpdate: { ...awaiting, installedAt: '2026-09-28' } }),
+    undefined,
+    'installedAt 也必须带时区',
+  )
+  assert.equal(parsePluginUpdate({ pluginUpdate: { ...awaiting, installedAt: 'September 28 2026' } }), undefined)
+  assert.deepEqual(
+    parsePluginUpdate({ pluginUpdate: { ...awaiting, installedAt: '2026-09-28T18:00:00+08:00' } }),
+    { ...awaiting, installedAt: '2026-09-28T10:00:00.000Z' },
+    '合法 offset 统一规范成 UTC',
+  )
 })
