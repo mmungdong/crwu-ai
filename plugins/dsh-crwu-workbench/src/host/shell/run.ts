@@ -139,6 +139,47 @@ export function shellUnavailable(result: ShellResult): boolean {
   return result.error !== ''
 }
 
+/**
+ * 这条命令是不是被**沙箱**拦下的（而不是它自己业务失败）。
+ *
+ * ## 为什么需要它（2026-09-28 员工实测）
+ *
+ * 受限沙箱（`workspace-write`）下，凡是需要碰**工作区之外**的命令都会失败，而且失败的
+ * 样子**完全不像权限问题**：
+ *
+ * - `crwu h3yun session status` 读操作系统凭据存储 → 回
+ *   `secret not found in keyring`（看起来像「没登录」）；
+ * - `dws auth login` 要写 `%USERPROFILE%\.dws\` → 回
+ *   `acquiring file lock: opening lock file: open C:\Users\<用户>\.dws\.data.lock: Access is denied.`
+ *   （看起来像 dws 自己的 bug）；
+ * - 插件的 `fs.writeText` 写 `~/.ossutilconfig` → 回
+ *   `file access denied under workspace-write mode`（这条是 DSH 自己的标记，最好认）。
+ *
+ * 三种表现对应同一个原因，而「未登录 / 登录失败 / 写不进去」的处置完全不同 —— 所以这里统一认一次，
+ * 由调用方把那句话补进错误里，让员工（和模型）看到的是**原因加动作**，不是 CLI 的表象。
+ *
+ * 判据分两档，措辞也分两档（不把猜测说成结论）：
+ * - **确定**：出现 DSH 自己的标记 `file access denied under <mode> mode`；
+ * - **疑似**：出现 `Access is denied` / `Permission denied`，且同一段文本里带着工作区外的
+ *   用户目录或凭据存储线索（`.dws` / `.ossutilconfig` / `keyring` / `credential store`）——
+ *   这种情况也可能是真的 NTFS ACL 或文件占用，所以只说「疑似」并给出两条排查方向。
+ */
+export function sandboxDenialNote(result: { stdout?: unknown; stderr?: unknown; error?: unknown }): string {
+  const blob = `${text(result.stderr)}\n${text(result.stdout)}\n${text(result.error)}`
+  const marker = /file access denied under\s+(\S+)\s+mode/i.exec(blob)
+  if (marker !== null) {
+    return `这是 DSH 沙箱（${marker[1] ?? '当前模式'}）的拒绝，不是命令本身的业务失败：`
+      + '这条命令需要访问工作区之外的路径。'
+  }
+  if (/access is denied|permission denied|拒绝访问/i.test(blob)
+    && (/\.dws|ossutilconfig|keyring|credential store|credential-store/i.test(blob))) {
+    return '疑似被沙箱拦下（命令要访问工作区外的用户目录或凭据存储）：'
+      + '如果这台机器开着 workspace-write，请先在面板「授权读取本机凭据」；'
+      + '若它确实是一份被别的进程占用的文件或 NTFS 权限问题，也会报同样的字样。'
+  }
+  return ''
+}
+
 /** 命令是否可用/成功：只看 `ok`，方便调用方做 `if (!(await ok(...)))`。 */
 export async function commandOk(ctx: Context, command: string, options: Parameters<typeof runShell>[2] = {}): Promise<boolean> {
   const result = await runShell(ctx, command, options)

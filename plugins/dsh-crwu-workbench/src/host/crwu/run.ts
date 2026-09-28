@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
-import { runShell } from '../shell/run.ts'
+import { runShell, sandboxDenialNote } from '../shell/run.ts'
 import { shellInvoke } from '../platform/shell.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import type { ShellResult } from '../shell/run.ts'
@@ -46,7 +46,11 @@ export interface CrwuRun {
 export function escalationAllowed(argv: string[]): boolean {
   if (argv[1] !== 'h3yun') return false
   const sub = argv[2]
-  if (sub === 'session') return argv[3] === 'login'
+  // `h3yun session` 整段放行：`login` 写钥匙串，而 `status` / `bind` **读**钥匙串 ——
+  // 受限沙箱下读不到就会回 `secret not found in keyring`，那是**假结论**（实测同一台机器
+  // 同一时刻：沙箱里「没找到」，带 `sandboxPolicy: danger-full-access` 时才拿到真状态）。
+  // 只放行 `login` 是 2026-09-28 之前留下的缺口：面板因此把「未授权/被沙箱拦」显示成「未登录」。
+  if (sub === 'session') return true
   return sub === 'forms' || sub === 'records' || sub === 'apps' || sub === 'files' || sub === 'file' || sub === 'tools'
 }
 
@@ -108,9 +112,14 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
   })
 
   const blocked = keychainBlocked(result)
+  // 沙箱拒绝（受限沙箱下读钥匙串 / 写用户目录）要说清原因，否则上层会把
+  // 「secret not found in keyring」当成「真的没登录」显示出去。
+  const denied = result.ok ? '' : sandboxDenialNote(result)
   return {
     ok: result.ok,
-    error: result.error,
+    error: denied === ''
+      ? result.error
+      : (result.error === '' ? denied : `${denied}${result.error}`),
     exitCode: result.exitCode,
     stdout: text(result.stdout),
     stderr: text(result.stderr),

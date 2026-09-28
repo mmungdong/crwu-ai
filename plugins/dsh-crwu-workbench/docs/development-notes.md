@@ -74,6 +74,43 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
   （`~/.dsh/crwu-workbench.json`）同样要带 `sandboxPolicy`，否则受限沙箱下写不进去 ——
   症状是「授权没能写入磁盘，重启后需要重新授权」。
 
+### 5.1 工作区之外的路径清单（2026-09-28 员工 Windows 实测补齐）
+
+`workspace-write` 的**可写根 = 工作区 + 系统临时目录**（见 `@deepseek-ai/dsh-sandbox` 的
+`writableRoots`）。下面这些路径**全在界外**，碰它们必须逐次声明 `sandboxPolicy` 或让命令提权：
+
+| 路径 | 谁在用 | 怎么声明 |
+| --- | --- | --- |
+| `~/.dsh/crwu-workbench.json` | 插件状态（授权 / 工作空间 / 占用锁） | `fs.writeText(..., { mode: 'danger-full-access', workspaceRoot: home })`（`state/persist.ts`） |
+| `~/.dsh/crwu-workbench/ifind-credential.json` | iFinD API-Key | 同上（`ifind/store.ts`） |
+| `~/.ossutilconfig` | OSS AccessKey | 同上（`oss/ops.ts`，**2026-09-28 之前漏了**） |
+| `~/.dws/**`（`.data.lock` 等） | 钉钉 CLI 自己的登录态 | 命令必须提权（`runShell({ escalate: true })`） |
+| 操作系统凭据存储（钥匙串 / Credential Manager） | `crwu h3yun session …`、`dws auth …` | 命令必须提权（白名单见 `crwu/run.ts` 的 `escalationAllowed`） |
+
+**三种表象、同一个原因**（认错就会把员工指去重新扫码 / 重装 CLI / 换 AK）：
+
+| 表象（原文） | 真原因 |
+| --- | --- |
+| `file access denied under workspace-write mode` | DSH 自己的拒绝标记（最好认） |
+| `secret not found in keyring`（看着像没登录） | 命令在沙箱里读不到系统凭据存储 |
+| `acquiring file lock: … .dws\.data.lock: Access is denied.`（看着像 dws 的 bug） | 命令在沙箱里写不了 `~/.dws/`；也可能是真的文件被占用 / NTFS 权限 |
+
+归因由 `shell/run.ts` 的 `sandboxDenialNote()` 统一做，`runDws` / `runCrwu` 会把那句话补在错误最前面。
+`fs.writeText` 那条没有 shell，所以它报的就是 DSH 的标记本身。
+
+### 5.2 真要在整台机器上关掉沙箱（只用于已知机器 / 排障）
+
+插件**不能**给自己发常驻豁免：`@deepseek-ai/dsh-sandbox` 的提权是
+`approveEscalation()` —— 逐次、需要人批、只对该次调用生效，没有审批通道时 fail closed。
+要「一次设置、全局不沙箱」，只能改 DSH 侧：
+
+```bash
+DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
+```
+
+或把 profile 里 `dsh-sandbox-policy` 的 `mode` 设为 `danger-full-access`。**这是员工的机器设置，
+不是插件的产品口径**（产品口径仍是「员工零启动参数，首次授权一次」）。
+
 ## 6. 「我是谁」与身份口径
 
 - 姓名来源是钉钉 CLI：`dws contact user get-self --format json` →

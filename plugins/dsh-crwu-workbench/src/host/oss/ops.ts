@@ -427,7 +427,15 @@ async function writeOssCred(
 
   let operation = ''
   try {
-    const outcome = await fs.writeText(await resolveTarget(deps.ctx, path), built.content)
+    // `~/.ossutilconfig` 在**工作区之外**：员工默认的受限沙箱（workspace-write）下写它会被拦，
+    // 实测报 `cannot write "C:\Users\<用户>\.ossutilconfig": file access denied under
+    // workspace-write mode`（2026-09-28，Windows）。`fs.writeText` 支持逐次声明策略，
+    // 这里与 `ifind/store.ts`、`state/persist.ts` 用同一形态 —— 插件自己的用户目录落盘，
+    // 不是用户数据，也不该指望员工去改 DSH 的启动参数。
+    const outcome = await fs.writeText(await resolveTarget(deps.ctx, path), built.content, undefined, undefined, {
+      mode: 'danger-full-access',
+      workspaceRoot: deps.home,
+    })
     operation = text(outcome?.operation)
   } catch (error) {
     const message = `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`

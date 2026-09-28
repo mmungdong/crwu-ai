@@ -33,8 +33,13 @@ test('runCrwu refuses anything that is not the crwu binary', async () => {
 
 test('runCrwu only escalates whitelisted h3yun subcommands', async () => {
   // 白名单必须是显式枚举：氚云将来加子命令时默认落在「拒绝」侧。
+  //
+  // `session` 整段放行（2026-09-28 修）：`login` 写钥匙串，而 `status` / `bind` **读**钥匙串 ——
+  // 受限沙箱下读不到就会回 `secret not found in keyring`，那是**假结论**（面板会显示成「未登录」）。
+  // 之前只放行 `login`，于是环境自检那条 `session status` 永远拿不到真值。
   assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'login']), true)
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'logout']), false)
+  assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'status']), true)
+  assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'bind']), true)
   assert.equal(escalationAllowed(['crwu', 'h3yun', 'records', 'list']), true)
   assert.equal(escalationAllowed(['crwu', 'h3yun', 'forms', 'search']), true)
   assert.equal(escalationAllowed(['crwu', 'audit', 'run']), false)

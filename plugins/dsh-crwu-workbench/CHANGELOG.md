@@ -201,6 +201,33 @@ UnexpectedToken`），相关按钮点下去也不会有结果；macOS 上完全�
 - 文档：`docs/windows-acceptance.md` 的收尾步骤在 PowerShell 里错用了 `rm -rf`，
   改为 `Remove-Item -LiteralPath … -Recurse -Force`。
 
+#### 工作区外路径与沙箱归因（同一版本的第四批，2026-09-28 员工 Windows 实测）
+
+员工在 Windows 上报了三段看起来无关的错误，实际是同一个原因：**受限沙箱（`workspace-write`）
+不允许碰工作区之外的路径**（`%USERPROFILE%` 下的 `.ossutilconfig`、`.dws\`、操作系统凭据存储）。
+当时插件有两处该提权却没提权，还有一处把沙箱下的假结论当成了真结论。
+
+- **修①｜写 `~/.ossutilconfig` 被沙箱拒绝**：`oss/ops.ts` 的 `fs.writeText` 没声明
+  `sandboxPolicy`（同仓的 `ifind/store.ts`、`state/persist.ts` 都声明了），员工实测原文
+  `cannot write "C:\Users\<用户>\.ossutilconfig": file access denied under workspace-write mode`。
+  现在与那两处同一形态。
+- **修②｜`crwu h3yun session status` 拿不到真结论**：提权白名单只放行了 `session login`，
+  而 `status` / `bind` 才是**读**钥匙串的那两条。受限沙箱下读不到，crwu 如实回
+  `secret not found in keyring` —— 面板照着显示成「未登录」，把人指去重新扫码。
+  现在 `h3yun session` 整段放行（凭据存储的读与写都要在沙箱外）。
+- **修③｜未授权时不再去问氚云**：环境探测原来无条件跑一次 `h3yun session status`，
+  既是假结论、又永远拿不到真值。现在与钉钉那条同一条纪律：未授权就报「需要授权」并进阻塞项，
+  **一条凭据命令都不发**；授权后才带 `sandboxPolicy` 去拿真结论。
+- **新增归因**：`shell/run.ts` 的 `sandboxDenialNote()` 统一认三种表象 ——
+  DSH 的标记 `file access denied under <mode> mode`（确定）、
+  以及 `Access is denied` + 工作区外路径线索（**疑似**，措辞不把猜测说成结论）。
+  `runDws` / `runCrwu` 会把这句话补在错误最前面，于是 `dws` 的
+  `acquiring file lock: … .dws\.data.lock: Access is denied.` 不再看起来像 dws 自己的 bug。
+  测试样本**逐字抄自员工贴回来的原文**。
+- 文档：`README.md` 的 Windows 故障排查与 `docs/development-notes.md` §5.1/§5.2 补上
+  「工作区外的路径清单」「三种表象→同一个原因」「要全局关沙箱只能改 DSH 侧
+  （`DSH_PERMISSION_MODE=danger-full-access` 或 profile 的 `dsh-sandbox-policy.mode`）」。
+
 ## package · 0.0.12 · 2026-09-28
 
 **首个包含自更新能力的正式版本。** 0.0.10 / 0.0.11 用户需要**手动完成一次**引导升级

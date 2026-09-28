@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { shellInvoke } from '../platform/shell.ts'
 import { requireBundledCommand } from '../platform/command.ts'
-import { runShell } from '../shell/run.ts'
+import { runShell, sandboxDenialNote } from '../shell/run.ts'
 import { DWS_ALLOWED_PREFIXES, DWS_ESCALATION_PREFIXES, DWS_STDOUT_MAX, DWS_TIMEOUT_MS } from './consts.ts'
 
 /**
@@ -193,12 +193,17 @@ export async function runDws(
   })
 
   const errorKind = classifyShellFailure(result)
+  // 沙箱拒绝要认出并说清：dws 自己的报错（`Access is denied` 写 `~/.dws`）看起来像它的 bug，
+  // 实际是「命令碰了工作区之外的路径」。归因写在消息最前面，原文附在后面以供对照。
+  const denied = result.ok ? '' : sandboxDenialNote(result)
   return {
     ok: result.ok,
     errorKind: result.ok ? '' : (errorKind === '' ? 'cli' : errorKind),
     error: result.ok
       ? ''
-      : (text(result.stderr).trim() || text(result.error).trim() || `dws 退出码 ${String(result.exitCode ?? 'unknown')}`).slice(0, 600),
+      : ((denied === ''
+        ? (text(result.stderr).trim() || text(result.error).trim() || `dws 退出码 ${String(result.exitCode ?? 'unknown')}`)
+        : `${denied}原文：${text(result.stderr).trim() || text(result.error).trim() || `退出码 ${String(result.exitCode ?? 'unknown')}`}`)).slice(0, 600),
     exitCode: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,

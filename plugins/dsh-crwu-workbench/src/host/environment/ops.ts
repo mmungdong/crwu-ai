@@ -251,15 +251,25 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const services: ServiceCheck[] = []
 
   // 氚云会话：只有 crwu 能回答，所以直接问它。
-  const sessionRun = await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], {
-    workdir: await deps.sessionRoot(),
-    timeoutMs: 20_000,
-    trusted: state.trustCredentials,
-    platform,
-  })
+  //
+  // **未授权就不问**（2026-09-28 修，与下面钉钉那条同一条纪律）：`crwu h3yun session status`
+  // 读的是操作系统凭据存储，受限沙箱下读不到，它会如实回
+  // `read H3Yun session from operating system credential store: secret not found in keyring` ——
+  // 那是**假结论**，面板照着显示就成了「未登录」，把人指去重新扫码。
+  // 之前这里无条件跑一遍：既是假的结论，又因为提权白名单漏了 `session status` 而永远拿不到真值。
+  const trustedCredentials = state.trustCredentials === true
+  const sessionRun = trustedCredentials
+    ? await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], {
+      workdir: await deps.sessionRoot(),
+      timeoutMs: 20_000,
+      trusted: true,
+      platform,
+    })
+    : null
   let sessionData: Record<string, unknown> | null = null
   try {
-    const parsed: unknown = parseJsonLoose(sessionRun.stdout)
+    // 未授权时 `sessionRun` 是 null：解析这一步也要跟着跳过（不猜、不假装跑过）。
+    const parsed: unknown = sessionRun === null ? null : parseJsonLoose(sessionRun.stdout)
     const doc = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
     sessionData = doc?.data !== null && typeof doc?.data === 'object' ? doc.data as Record<string, unknown> : null
   } catch (error) {
@@ -275,12 +285,19 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     id: 'h3yun',
     label: '氚云（H3Yun）员工会话',
     required: serviceRequired(manifest, 'h3yun', true),
-    ok: sessionData !== null && !expired,
-    // 命令没跑起来时，`stdout` 为空是「探测失败」，不是「未绑定」—— 两者的处置完全不同。
-    state: shellUnavailable(sessionRun) ? '探测失败' : (sessionData === null ? '未绑定' : (expired ? '已过期' : '正常')),
-    detail: sessionData === null
-      ? (text(sessionRun.stderr) || sessionRun.error || '未取得会话状态')
-      : `userId ${text(sessionData.userId)} · 到期 ${text(sessionData.expiresAt)}`,
+    ok: sessionRun !== null && sessionData !== null && !expired,
+    // 四种「不是正常」的原因必须分开：未授权（员工点一下就行）≠ 命令没跑起来（沙箱/审批）
+    // ≠ 真的没绑定 ≠ 已过期。合并就会把前两种显示成「未登录」。
+    state: sessionRun === null
+      ? '需要授权'
+      : (shellUnavailable(sessionRun)
+        ? '探测失败'
+        : (sessionData === null ? '未绑定' : (expired ? '已过期' : '正常'))),
+    detail: sessionRun === null
+      ? '还没授权读取本机凭据 —— 未授权时读到的「未登录」不可信，插件不做猜测'
+      : (sessionData === null
+        ? (text(sessionRun.stderr) || sessionRun.error || '未取得会话状态')
+        : `userId ${text(sessionData.userId)} · 到期 ${text(sessionData.expiresAt)}`),
   })
 
   // 钉钉：dws 自带 JSON 输出，直接解析，不要靠文本匹配。
@@ -293,7 +310,6 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   // `{"authenticated":false,"message":"未登录"}` —— 实测同一台机器同一时刻：沙箱里 false、
   // 带 `sandboxPolicy: danger-full-access` 时 true。所以「未授权时不许猜」：宁可说需要授权，
   // 也不能报一个假的「未登录」把员工指去重新登录。
-  const trustedCredentials = state.trustCredentials === true
   const dwsCommand = await resolveBundledCommand(ctx, platform, 'dws')
   const dwsRun = trustedCredentials
     ? await runShell(ctx, shellInvoke(dwsCommand, ['auth', 'status', '--format', 'json'], platform), {

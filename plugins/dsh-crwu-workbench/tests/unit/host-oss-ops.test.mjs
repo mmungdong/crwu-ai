@@ -57,8 +57,10 @@ function ossDeps(patch = {}) {
             return (patch.files ?? {})[target.targetKey] === undefined ? undefined : { type: 'file' }
           },
           async readText(target) { return (patch.files ?? {})[target.targetKey] ?? '' },
-          async writeText(target, content) {
-            patch.writes?.push({ path: target.targetKey, content })
+          async writeText(target, content, _intent, _version, options) {
+            // 第 5 个参数是写盘策略：`~/.ossutilconfig` 在工作区之外，必须逐次声明
+            // `danger-full-access`，否则受限沙箱会直接拒绝（员工实测）。
+            patch.writes?.push({ path: target.targetKey, content, sandboxPolicy: options })
             // 真实 fs 会落盘，所以后续 readText/stat 必须能看到这次写入。
             patch.files = patch.files ?? {}
             patch.files[target.targetKey] = content
@@ -501,6 +503,12 @@ test('oss-cred-save writes the config, tightens permissions and re-probes', asyn
   assert.equal(result.permission.status, 'verified')
   assert.equal(result.permission.mechanism, 'posix-0600')
   assert.equal(commands.some((command) => command.startsWith('chmod 600')), true, '凭据文件必须收紧到 600')
+  // `~/.ossutilconfig` 在**工作区之外**：员工默认的 workspace-write 沙箱下写它会被直接拒绝
+  // （实测 `cannot write "C:\Users\<用户>\.ossutilconfig": file access denied under workspace-write mode`）。
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].path, '/Users/x/.ossutilconfig')
+  assert.equal(writes[0].sandboxPolicy?.mode, 'danger-full-access', '写工作区外的凭据文件必须声明无沙箱')
+  assert.equal(writes[0].sandboxPolicy?.workspaceRoot, '/Users/x', '策略要绑 workspaceRoot（DSH 契约）')
   assert.equal(commands.some((command) => /^stat -[fc] /.test(command)), true, '收紧后必须回读模式位')
   const written = writes[0].content
   assert.match(written, /accessKeyID=AKID1234567890/)

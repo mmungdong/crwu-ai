@@ -519,6 +519,13 @@ npm 安装**已发布的 tarball** 时也会执行 `prepare`，而 tarball 里�
 
 ### Windows 故障排查
 
+> **权限边界（先读）**：插件**不能**给自己发常驻豁免。DSH 的提权是「逐次、需人工批准、
+> 只对该次调用生效」，没有审批通道时 fail closed。插件能做到的是：① 对工作区外的路径逐次声明
+> `sandboxPolicy`；② 见到沙箱拒绝就**如实报因**（而不是把它显示成「未登录 / 未配置」）；
+> ③ 用一次性的「同意并继续」授权覆盖插件自己发的凭据命令。要把整台机器设成不沙箱，只有改 DSH 侧：
+> `DSH_PERMISSION_MODE=danger-full-access dsh --profile <profile>`（或 profile 里
+> `dsh-sandbox-policy` 的 `mode`）—— 那是机器设置，不是本插件的默认口径。
+
 | 症状 | 先查什么 | 处置 |
 | --- | --- | --- |
 | 插件装上了、界面里什么都没有，启动日志干净 | 是否被 DSH 判为**不兼容**（`skippedBundles` / 插件管理器标「与 DSH `<版本>` 不兼容」并禁用） | 判据是 `peerDependencies`（**不是** `engines.dsh`）：本包写 `^0.1.7-rc.2 \|\| ^0.2.0-rc.1`。升级 DSH 后出现就先升插件；应急用 profile 的 `compatibility.json` 精确豁免。跑 `npm run compat:dsh` 复现判定 |
@@ -527,6 +534,9 @@ npm 安装**已发布的 tarball** 时也会执行 `prepare`，而 tarball 里�
 | 命令「成功」了但文件其实没动 | 是否被 `-ErrorAction SilentlyContinue` 之类吞掉 | 0.0.14+ 已去掉；`case-files.ts` 还会用 `ctx.fs.stat` 回读后置条件 |
 | 路径被截断、目录名变成一长串 | 是不是按 POSIX 规则拼/取本地路径 | 0.0.14+ 统一走 `shared/utils/local-path.ts`；安全判定走 `ctx.fs.check` 之外的 `fs.contains`，不用字符串前缀 |
 | 二进制启动报「不是有效的 Win32 应用程序」/ 缺 DLL | 发布形态的架构是否匹配（`win32-x64` vs `win32-arm64`） | `win32-arm64` 不支持（设计如此）；`npm run bin:smoke` 会在 Windows runner 上真的启动一次发布二进制 |
+| 报 `file access denied under workspace-write mode`（例如写 `C:\Users\<你>\.ossutilconfig` 或 `~/.dsh/`） | 那是 **DSH 沙箱**的拒绝标记，不是 Windows 权限 | 0.0.14 起插件对工作区外的落盘自己声明 `sandboxPolicy`；若仍出现，说明 profile 把提权请求降级了 —— 见下一条 |
+| 环境页说「未登录」，但你在终端里 `crwu h3yun session status` / `dws auth status` 明明是登录的 | 受限沙箱里读不到系统凭据存储，命令会**如实**回 `secret not found in keyring` —— 那是假结论 | 点面板「同意并继续」完成**一次性授权**（长期有效），插件才会带 `sandboxPolicy` 去读；这就是「未授权时不许猜」 |
+| 钉钉登录报 `acquiring file lock: opening lock file: open C:\Users\<你>\.dws\.data.lock: Access is denied.` | 两种可能：命令在沙箱里写不了 `~/.dws/`，**或**那个文件真的被占用 / 有异常 ACL | ① 先在面板授权后重试；② 仍失败就在**你自己的 PowerShell**（不受沙箱约束）里关掉残留的 `dws` 进程，必要时删掉 `%USERPROFILE%\.dws` 再登录 |
 | 凭据文件权限看不到「600」 | Windows 没有 POSIX 权限位、也没有 `chmod` | 界面会明说「使用当前 Windows 账户 ACL；POSIX 0600 不适用」（协议 17 的 `permission.status = inherited`）——这不是失败，也不是「已验证」 |
 | 安装/`prepare` 报找不到 `tsdown` 或路径被拆坏 | 构建命令是否经过 shell | 0.0.14+ 用 `process.execPath` 直接执行 tsdown 的 JS 入口（`scripts/lib/cli-entry.mjs`），**不经过 shell**，所以路径里的空格与单引号不会被改写 |
 

@@ -730,6 +730,51 @@ function makeUnauthorizedCtx() {
 function makeUnauthorizedSpecs() { return makeUnauthorizedSpecs.specs ?? [] }
 makeUnauthorizedSpecs.specs = []
 
+test('氚云探测：未授权就不问（unsandboxed 才拿得到真结论），授权后带无沙箱策略去问', async () => {
+  // 员工 2026-09-28 在 Windows 上的原文：
+  //   `read H3Yun session from operating system credential store: secret not found in keyring`
+  // 受限沙箱（workspace-write）下读不到系统凭据存储，crwu 就会回这句话 —— 那是**假结论**。
+  // 面板照着显示成「未登录」，把人指去重新扫码；而真原因是「没授权 / 被沙箱拦」。
+  const specs = []
+  const ctx = healthyContext({
+    shellLines: {
+      'h3yun session status': { stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) },
+      ' ls ': { stdout: 'ok\n' },
+    },
+    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
+  })
+  const originalGet = ctx.get
+  ctx.get = (name) => {
+    const value = originalGet(name)
+    if (name !== 'shell' || value === undefined) return value
+    const inner = value.execute
+    return { ...value, execute: async (spec) => { specs.push(spec); return inner(spec) } }
+  }
+
+  // ① 未授权：**一条氚云命令都不发**（问了也只能得到假的「没找到」），并如实说是「需要授权」。
+  const unauthorized = await loadEnvironment(depsOf(makeUnauthorizedCtx()).deps, {})
+  const h3yunUnauthorized = unauthorized.services.find((service) => service.id === 'h3yun')
+  assert.equal(h3yunUnauthorized.state, '需要授权')
+  assert.equal(h3yunUnauthorized.ok, false)
+  assert.match(h3yunUnauthorized.detail, /还没授权/)
+  assert.equal(
+    makeUnauthorizedSpecs().some((spec) => String(spec.command).includes('h3yun session status')),
+    false,
+    '未授权不该去问氚云（沙箱里问出来的「没找到」是假结论）',
+  )
+
+  // ② 已授权：自己声明无沙箱权限去拿真结论。这条断言就是缺陷复现 ——
+  //    去提权白名单里只放行 `session login` 时它立刻变红。
+  const { deps } = depsOf(ctx, { state: { trustCredentials: true } })
+  const result = await loadEnvironment(deps, {})
+  const sessionSpec = specs.find((spec) => String(spec.command).includes('h3yun session status'))
+  assert.ok(sessionSpec, '授权后应当问过 h3yun session status')
+  assert.equal(sessionSpec.sandboxPolicy?.mode, 'danger-full-access', '读钥匙串的命令必须声明无沙箱（钥匙串在沙箱外）')
+  const h3yun = result.services.find((service) => service.id === 'h3yun')
+  assert.equal(h3yun.state, '正常')
+  assert.equal(h3yun.ok, true)
+})
+
 test('信任本机凭据后确实没登录，仍然如实报未登录并阻塞', async () => {
   const ctx = healthyContext({
     shellLines: {
