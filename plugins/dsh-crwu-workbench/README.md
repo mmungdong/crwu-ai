@@ -240,6 +240,41 @@ dsh plugin --profile web add dsh-crwu-workbench@<version>
 > **版本号只发一次**：分发走 npm，已发布的版本号不能覆盖 —— 改了内容就要**升版本号**再发，
 > 否则早装和重装的员工会拿到「同一个版本、两份内容」。
 
+### 更新 CRWU（自助更新，0.0.12 起）
+
+**在哪看、怎么查**：侧栏底部工作台卡头右侧与面板头部都有那枚**版本徽标**（`dev` / `v0.0.12`）；
+它本身就是更新入口。插件装载后会**静默**做一次后台检查，发现新版本时徽标变成
+`v0.0.12 · 有更新`。点徽标打开更新面板，「检查更新」可以立刻再查一次（绕过缓存）。
+
+**怎么装**：面板里点「安装更新」。安装由 DSH 的 Plugin Manager 执行，本插件不自己下载或覆盖插件目录。
+安装期间面板显示**诚实的离散阶段**（正在连接更新源 / 正在下载安装包 / 正在写入插件目录 / 正在取消…），
+**不显示百分比**；可以随时「取消安装」。**审核任务正在启动或运行时禁止安装**（不动 profile），
+但**不禁止检查更新**。
+
+**装完必须手动重启**：安装完成后界面会说
+
+> CRWU v0.0.12 已安装。请完全退出并重新打开 DeepSeek Harness，使新版生效。
+
+**macOS 注意**：关闭窗口**不等于**退出应用，请从应用菜单选择「退出」，或按 **Command-Q**；
+刷新页面同样不等于重启。本插件**不会**修改、也不会替你重启 DeepSeek Harness 桌面端
+（没有"立即重启"按钮，也没有静默更新）。
+
+**0.0.10 / 0.0.11 用户（重要）**：那两个版本里**没有**这段自更新代码，所以它们**不会**自动发现
+0.0.12。请先按下面这条手动装一次，之后（0.0.12 起）的稳定版本才能在界面内检查与安装：
+
+```bash
+# <profile> 换成你实际在用的 DeepSeek Harness profile 名（不要照抄）
+dsh plugin --profile <profile> add dsh-crwu-workbench@0.0.12
+```
+
+装完**完全退出并重新打开** DeepSeek Harness。
+
+**国内网络策略**：检查更新会**同时**查询 npm 官方 registry 与 npmmirror，取合法的更高稳定版本；
+两个源同版本时优先展示 npmmirror（国内更可能装得上）。安装优先使用 `https://registry.npmmirror.com/`，
+**镜像失败与回退由 Plugin Manager 负责**。镜像与官方 npm 之间**可能存在同步延迟** ——
+这不是"没有新版本"，稍后重新检查即可；官方源已经出现更高版本时，即使镜像暂时落后也能被发现。
+企业 / 私有 registry 策略照旧生效，本插件**不会**绕过它。
+
 ### 卸载
 
 ```bash
@@ -399,7 +434,13 @@ npm run build && npm run check && npm run pack:assert:strict
 npm publish                      # 不带 --provenance
 ```
 
-首发成功后包就存在了，再到 npm 网页给这个包配 **Trusted Publisher**（repo `mmungdong/crwu-ai`
+**当前真实工作流（0.0.12 仍在用）**：`.github/workflows/release.yml` 读 GitHub Secret
+`NPM_TOKEN`（`NODE_AUTH_TOKEN`），在 tag `plugin-v<版本>` 上执行 `npm publish --provenance` ——
+provenance（构建来源证明）由 GitHub Actions 的 OIDC 在 CI 里产生，**不是**本机发布。
+**Trusted Publishing 目前没有启用**：它只是 `docs/releasing.md` §3.3 记录的**未来可迁移方案**，
+在真的改完工作流之前，不要把"已采用无 token 发布"当成当前事实。
+
+未来若迁移到 Trusted Publisher（npm 网页给这个包配 repo `mmungdong/crwu-ai`
 + workflow `release.yml`）；之后的版本由 CI 用 **OIDC** 发布 —— 不需要任何长期 token，
 npm 会**自动**附带 provenance attestation，`NPM_TOKEN` secret 也可以删掉。
 也可以在 Actions 里用 `workflow_dispatch` 跑一次 dry-run：只打包与校验，不发。

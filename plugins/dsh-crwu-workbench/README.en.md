@@ -92,6 +92,46 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
 > commands that genuinely read local credentials ask for unconfined execution; everything else stays in
 > the profile's default sandbox.
 
+### Updating CRWU (self-update, from 0.0.12)
+
+**Where to look:** the version badge in the sidebar card header and in the panel header (`dev` / `v0.0.12`)
+is the update entry point. The plugin runs one **silent** background check after it loads; when a newer
+stable version exists the badge becomes `v0.0.12 · 有更新`. Click the badge to open the update panel and use
+「检查更新」 to force another check that bypasses the cache.
+
+**How to install:** click 「安装更新」 in the panel. Installation is performed by the DSH Plugin Manager —
+this plugin never downloads packages or overwrites its own directory. During installation the panel shows
+**honest discrete stages** (connecting / downloading / writing the plugin directory / cancelling) and
+**no percentage**; you can cancel at any time. Installation is **disabled while an audit is starting or
+running** (it must not touch the profile), but **checking is still allowed**.
+
+**You must restart manually:** when the install finishes the panel says
+
+> CRWU v0.0.12 已安装。请完全退出并重新打开 DeepSeek Harness，使新版生效。
+
+**macOS:** closing the window does **not** quit the app — choose Quit from the application menu or press
+**Command-Q**. Reloading the page is not a restart either. This plugin never modifies or restarts the
+DeepSeek Harness desktop app (no "restart now" button, no silent updates).
+
+**Users on 0.0.10 / 0.0.11:** those releases do **not** contain the updater, so they cannot discover
+0.0.12 by themselves. Install 0.0.12 once by hand, then later stable versions can be checked and installed
+from the UI:
+
+```bash
+# replace <profile> with the DeepSeek Harness profile you actually use
+dsh plugin --profile <profile> add dsh-crwu-workbench@0.0.12
+```
+
+Then **fully quit and reopen** DeepSeek Harness.
+
+**Mainland-China network policy:** the check queries **both** the official npm registry and npmmirror and
+picks the valid higher stable version; when both report the same version npmmirror is preferred
+(it is more likely to be reachable). Installation prefers `https://registry.npmmirror.com/`;
+**failures and fallbacks are the Plugin Manager's responsibility**. Mirror sync can lag behind the official
+registry — that is not "no new version", just re-check later; once the official registry has a higher
+version it will be found even if the mirror lags. Enterprise/private registry policies still apply and are
+never bypassed.
+
 ### Updating and removing
 
 ```bash
@@ -127,6 +167,13 @@ before starting the DSH profile to test another file. `npm pack` validates and e
 and the installed Host automatically reads that packaged copy. Distribution needs no bucket constants at all.
 
 ## Releasing
+
+**Current workflow (still used for 0.0.12):** `.github/workflows/release.yml` uses the GitHub secret
+`NPM_TOKEN` (as `NODE_AUTH_TOKEN`) and runs `npm publish --provenance` on the `plugin-v<version>` tag —
+provenance comes from GitHub Actions OIDC in CI, not from a local publish. **Trusted Publishing is not
+enabled today**; it is only a *future migration option* documented in `docs/releasing.md` §3.3.
+
+
 
 The complete operator procedure, including authentication setup, failure recovery, and rollback, is in
 [`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md).

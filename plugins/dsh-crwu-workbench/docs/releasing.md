@@ -9,9 +9,9 @@ Git tag 约定、GitHub Actions、npm 认证、发布后验收、失败恢复和
 - 源码目录：`plugins/dsh-crwu-workbench/`
 - npm registry：`https://registry.npmjs.org`
 - 发布工作流：仓库根 `.github/workflows/release.yml`
-- 发布触发 tag：`plugin-v<semver>`，例如 `plugin-v0.0.11`
+- 发布触发 tag：`plugin-v<semver>`，例如 `plugin-v0.0.12`
 
-> `v*` tag 留给仓库里的 Go CLI。插件发版必须使用 `plugin-v*`，不能使用 `v0.0.11`、`0.0.11`
+> `v*` tag 留给仓库里的 Go CLI。插件发版必须使用 `plugin-v*`，不能使用 `v0.0.11`、`0.0.12`
 > 或其它前缀。
 
 ## 1. 发布原则
@@ -121,7 +121,7 @@ Settings
 
 本项目使用 semver：
 
-- 修复、文案、兼容性调整：通常升 patch，例如 `0.0.10` → `0.0.11`；
+- 修复、文案、兼容性调整：通常升 patch，例如 `0.0.10` → `0.0.12`；
 - 明显新增、但保持兼容的功能：可升 minor，例如 `0.0.x` → `0.1.0`；
 - 稳定后发生破坏性变更：按团队约定升 major。
 
@@ -142,7 +142,7 @@ npm run version:set 0.0.11
 它**不会**生成 CHANGELOG 内容。必须手工在 `CHANGELOG.md` 顶部增加：
 
 ```markdown
-## package · 0.0.11 · <实际发布日期，YYYY-MM-DD>
+## package · 0.0.12 · <实际发布日期，YYYY-MM-DD>
 
 - 描述本版用户可见变化；
 - 描述兼容性、配置或安装变化；
@@ -155,7 +155,7 @@ npm run version:set 0.0.11
 
 ## 5. 标准发版流程
 
-以下示例发布 `0.0.11`。替换版本号时，命令中的版本必须全部一致。
+以下示例发布 `0.0.12`。替换版本号时，命令中的版本必须全部一致。
 
 ### 5.1 更新主分支
 
@@ -281,8 +281,8 @@ npm --prefix plugins/dsh-crwu-workbench run version:check
 然后创建并推送正确前缀的 tag：
 
 ```bash
-git tag plugin-v0.0.11
-git push origin plugin-v0.0.11
+git tag plugin-v0.0.12
+git push origin plugin-v0.0.12
 ```
 
 不要使用：
@@ -320,7 +320,7 @@ dsh-v0.0.11
 
 ```bash
 npm view dsh-crwu-workbench version dist-tags time --json
-npm view dsh-crwu-workbench@0.0.11 dist --json
+npm view dsh-crwu-workbench@0.0.12 dist --json
 ```
 
 确认：
@@ -337,7 +337,7 @@ npm CDN 或元数据可能短暂延迟。先等待并重新查询，不要立即
 
 ```bash
 dsh --profile release-smoke --from-default-profile web --dump-config
-dsh plugin --profile release-smoke add dsh-crwu-workbench@0.0.11
+dsh plugin --profile release-smoke add dsh-crwu-workbench@0.0.12
 DSH_PERMISSION_MODE=danger-full-access dsh --profile release-smoke --port 3099 --no-open
 ```
 
@@ -354,7 +354,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile release-smoke --port 3099 -
 ### 6.3 员工升级命令
 
 ```bash
-dsh plugin --profile web add dsh-crwu-workbench@0.0.11
+dsh plugin --profile web add dsh-crwu-workbench@0.0.12
 ```
 
 安装完成后重启对应 profile。只刷新浏览器不能替换已经运行的 Host 插件。
@@ -390,8 +390,8 @@ dry-run = true
 删除错误且尚未发布的 tag：
 
 ```bash
-git push origin :refs/tags/plugin-v0.0.11
-git tag -d plugin-v0.0.11
+git push origin :refs/tags/plugin-v0.0.12
+git tag -d plugin-v0.0.12
 ```
 
 执行前必须再次确认准确 tag 名以及 npm 上没有该版本。
@@ -446,7 +446,7 @@ make plugin-pack
 先查询 npm：
 
 ```bash
-npm view dsh-crwu-workbench@0.0.11 version dist --json
+npm view dsh-crwu-workbench@0.0.12 version dist --json
 ```
 
 如果新版本已经存在，**不要重跑 publish**。根据失败位置补做发布后验证或发一个修复版本。
@@ -469,7 +469,7 @@ dsh plugin --profile web add dsh-crwu-workbench@0.0.10
 确认影响范围后，可由有 npm 权限的维护者添加弃用说明：
 
 ```bash
-npm deprecate dsh-crwu-workbench@0.0.11 "存在已知问题，请使用 0.0.10 或升级到 0.0.12"
+npm deprecate dsh-crwu-workbench@0.0.12 "存在已知问题，请使用 0.0.10 或升级到 0.0.12"
 ```
 
 弃用不会从已安装机器移除该版本，也不会释放版本号。
@@ -486,7 +486,7 @@ npm deprecate dsh-crwu-workbench@0.0.11 "存在已知问题，请使用 0.0.10 �
 通知员工升级到 0.0.12
 ```
 
-不要移动已经公开使用的 `plugin-v0.0.11` tag 去指向修复提交。
+不要移动已经公开使用的 `plugin-v0.0.12` tag 去指向修复提交。
 
 ## 10. 公开分发提醒
 
@@ -510,7 +510,7 @@ npm deprecate dsh-crwu-workbench@0.0.11 "存在已知问题，请使用 0.0.10 �
 - 首次发布使用了本机 npm 登录，而不是 `plugin-v*` 自动发布链路；
 - 当时的本地 tag 是 `v0.0.10`，不会触发当前只监听 `plugin-v*` 的 workflow；
 - 不要为补历史记录再创建并推送 `plugin-v0.0.10`，否则工作流会尝试重复发布已存在版本；
-- 后续版本从 `0.0.11` 起统一按本文流程发布。
+- 后续版本从 `0.0.12` 起统一按本文流程发布。
 
 ## 12. 发布检查清单
 
@@ -554,7 +554,7 @@ npm deprecate dsh-crwu-workbench@0.0.11 "存在已知问题，请使用 0.0.10 �
 npm view dsh-crwu-workbench version
 
 # 判断目标版本是否已经存在
-npm view dsh-crwu-workbench@0.0.11 version
+npm view dsh-crwu-workbench@0.0.12 version
 
 # 修改版本
 cd plugins/dsh-crwu-workbench
@@ -573,14 +573,14 @@ npm publish --dry-run
 
 # 发布 tag
 cd "$(git rev-parse --show-toplevel)"
-git tag plugin-v0.0.11
-git push origin plugin-v0.0.11
+git tag plugin-v0.0.12
+git push origin plugin-v0.0.12
 
 # 发布后验证
 npm view dsh-crwu-workbench version dist-tags time --json
 
 # 员工升级
-dsh plugin --profile web add dsh-crwu-workbench@0.0.11
+dsh plugin --profile web add dsh-crwu-workbench@0.0.12
 ```
 
 ## 14. 权威来源
@@ -598,3 +598,69 @@ dsh plugin --profile web add dsh-crwu-workbench@0.0.11
 - Trusted Publishing：<https://docs.npmjs.com/trusted-publishers/>
 - npm publish 与版本不可复用：<https://docs.npmjs.com/cli/v11/commands/npm-publish/>
 - Access token 与直接发布弃用：<https://docs.npmjs.com/about-access-tokens/>
+
+---
+
+## 9. 0.0.12 首次引导升级与双源策略（本版权威口径）
+
+### 9.1 为什么首个自更新版本必须是 0.0.12
+
+npm 上 `0.0.10`、`0.0.11` 都已发布，且 `latest` 是 `0.0.11`；**自更新代码不在其中**。
+因此第一个"带更新器"的正式版本只能是 **`0.0.12`**（同版本不可覆盖，不允许为了"首发"重发 0.0.11）。
+
+### 9.2 首次引导升级（0.0.10 / 0.0.11 → 0.0.12）
+
+旧版本**不会**自动发现 0.0.12。用户需要手动装一次：
+
+```bash
+# <profile> 用你实际在用的 DeepSeek Harness profile 名（占位符，别照抄）
+dsh plugin --profile <profile> add dsh-crwu-workbench@0.0.12
+```
+
+装完**完全退出并重新打开** DeepSeek Harness（macOS：应用菜单 →「退出」或 **Command-Q**；关窗口不算）。
+**从 0.0.12 起**，后续稳定版本才能在界面内检查与安装。
+
+> 不要假定所有桌面用户都用 `web` 或 `desktop` profile；文档里一律用 `<profile>` 占位符。
+
+### 9.3 双源：官方 npm 是事实源，npmmirror 是加速器
+
+- **检查**：同时查询官方 registry 与 npmmirror，取**合法的更高稳定版本**（只认 `latest` 指向的稳定 SemVer）。
+  两个源同版本时优先展示 npmmirror。
+- **安装**：优先 `https://registry.npmmirror.com/`；**失败与回退由 DSH Plugin Manager 负责**，
+  插件自己不下载、不覆盖插件目录。
+- **同步延迟**：官方源出现新版本后，npmmirror **可能**还没同步到。镜像落后**不等于**没有新版本 ——
+  等待并稍后重新检查即可；因为检查**同时读两个源**，官方源已经有更高版本时依然能被发现。
+- **绝不为了催镜像而重发同一个版本**，也**不重复创建同版本 tag**（npm 上的版本不可覆盖）。
+
+### 9.4 发布后验证（两个源都要看）
+
+```bash
+npm view dsh-crwu-workbench@0.0.12 version --registry=https://registry.npmjs.org
+npm view dsh-crwu-workbench dist-tags --registry=https://registry.npmjs.org
+npm view dsh-crwu-workbench@0.0.12 version --registry=https://registry.npmmirror.com
+npm view dsh-crwu-workbench dist-tags --registry=https://registry.npmmirror.com
+```
+
+镜像那条**允许暂时 404**：那是同步延迟，不是发布失败（官方源为准）。4 条都通过后再通知员工升级。
+
+### 9.5 发布前提与本地 dry-run（每次都做）
+
+- `main` 工作区干净；CI 与测试通过；**npm 上不存在目标版本**（`npm view dsh-crwu-workbench@<版本> version` 应 404）；
+  GitHub Secret `NPM_TOKEN` 已配置；npm 版本**不可覆盖**。
+- 版本准备：先写 `CHANGELOG.md`，再 `npm run version:set -- <版本>`（脚本同时改 `package.json` /
+  `package-lock.json` / `VERSION` / `src/host/consts.ts`），然后跑 version / config / skills / typecheck /
+  test / build / pack 检查。
+- 本地 dry-run（**不得去掉 `--dry-run`**）：`npm pack --dry-run`、`npm publish --dry-run`。
+  包内**必须**有 `lib/`、`bin/`、`config/`、`cordis.patch.yml`、`skills/`、`docs/` 与必要脚本；
+  **不得**有 `src/`、`tests/`、凭据、本机状态、缓存或旧 `.tgz`。
+
+### 9.6 失败与回滚
+
+| 情况 | 处理 |
+|---|---|
+| npm 已发布版本 | **不可覆盖**；错误发布要发**修复版本**（例如 0.0.12 → 0.0.12 不可重用，改发 0.0.13） |
+| 版本明显有问题 | 必要时 `npm deprecate`（**本任务不执行**），不要重发同版本 |
+| 官方源成功、镜像延迟 | 等镜像；不要重发、不要重复打 tag；界面检查同时读两个源，仍能发现官方版本 |
+| 发布（CI）失败 | 看 Actions 日志；修好再**新建**一次 tag（不要移动已存在的 tag） |
+| 更新安装失败 | 插件保留原版本；回滚 / 恢复由 **Plugin Manager** 负责；界面如实显示安装失败与诊断分类 |
+| 安装成功但未重启 | 界面持续提示「完全退出并重新打开 DeepSeek Harness」；`awaiting-restart` 期间禁止再次安装 |
