@@ -15,7 +15,7 @@ const ROOT = new URL('../../', import.meta.url)
 
 const { createUploadWatch } = await import(new URL('src/host/oss/watch.ts', ROOT).href)
 const { normalizeAudit } = await import(new URL('src/host/state/registry.ts', ROOT).href)
-const { normalizeManifest } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
+const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 
 const SEQ = '2026-301705-LX10170'
 
@@ -38,14 +38,14 @@ function makeCtx({ withTimer = true } = {}) {
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async run(spec) {
+          async execute(spec) {
             const out = spec.command.startsWith('command -v')
               ? { stdout: '/usr/local/bin/ossutil\n' }
               : { stdout: 'ok' }
-            return {
+            return { result: async () => ({
               exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout, truncated: false }, stderr: { text: '', truncated: false },
-            }
+            }) }
           },
         }
       }
@@ -71,7 +71,7 @@ function depsOf(ctx, state) {
   return {
     ctx,
     state,
-    manifest: normalizeManifest({ oss: { enabled: true, bucket: 'bkt', prefix: 'crwu/audit', autoUpload: true } }),
+    manifest: manifestFixture({ oss: { enabled: true, bucket: 'bkt', prefix: 'crwu/audit', autoUpload: true } }),
     platform: 'darwin-arm64',
     home: '/Users/x',
     workdir: async () => '/cases/session',

@@ -55,7 +55,7 @@ CRWU 不是一个只会给出结论的聊天机器人。它由三部分组成：
 | 我想做什么 | 推荐入口 |
 | --- | --- |
 | 在 DSH 中安装完整工作台 | [工作台安装与使用](plugins/dsh-crwu-workbench/README.md) |
-| 审核一份资产评估报告 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu-audit/SKILL.md) |
+| 审核一份资产评估报告 | [`crwu-audit`](plugins/dsh-crwu-workbench/skills/crwu/crwu-audit/SKILL.md) |
 | 查看全部审核能力 | [Skills 目录](docs/skills.md) |
 | 登录氚云并查询业务数据 | [`crwu-h3yun-login`](plugins/common/skills/crwu-h3yun-login/SKILL.md) → [CLI 手册](docs/v0.0.1/cli-manual.md) |
 | 使用钉钉知识库中的实时规则 | [`crwu-dws`](plugins/common/skills/crwu-dws/SKILL.md) |
@@ -158,10 +158,11 @@ dsh plugin --profile web add ./dist/dsh-crwu-workbench-<版本>.tgz
 
 - Host 与 Client 两个构建入口；
 - 插件部署 YAML；
-- 27 个插件专属的审核与维护 Skills；
-- 3 个公共 Skills。
+- 27 个自研的审核与维护 Skills（`skills/crwu/` 层）；
+- 14 个 vendored 的钉钉 Skills（上游 `dingtalk-workspace-cli`，`skills/dws/` 层）；
+- 3 个公共的企业接入 Skills（`common/skills/` 层）。
 
-维护者可以使用 `make plugin-dist` 校验并分发插件。远端已有同版本、但内容不同的 tarball 时，命令会拒绝覆盖，必须先升级版本号。
+维护者用 `make plugin-pack` 本地打包（它先装配包内二进制再跑完整门禁），发布走 tag 触发的 npm 流程（`git tag plugin-v<版本>`）。插件**从 npm 安装**：`dsh plugin add dsh-crwu-workbench@<版本>` —— 不再往 OSS 传分发包，因为那个地址谁都能换。
 
 ### 4. 给其它 AI 宿主安装 Skills
 
@@ -169,10 +170,13 @@ dsh plugin --profile web add ./dist/dsh-crwu-workbench-<版本>.tgz
 make skills-install AGENT_DIR=~/.codex/skills
 ```
 
-目录布局就是 Skill 名单，不维护第二份清单文件：
+目录布局就是 Skill 名单，不维护第二份清单文件。技能按**层**组织，DSH 对每个技能根只扫一层，
+所以**一层一个根**：
 
+- `plugins/dsh-crwu-workbench/skills/crwu/`：本仓自研的审核能力族与维护能力；
+- `plugins/dsh-crwu-workbench/skills/dws/`：从 `dingtalk-workspace-cli` vendored 的钉钉技能
+  （上游 Apache-2.0；只由 `npm run dws:sync` 改写，`npm run dws:check` 用 provenance 摘要核对）；
 - `plugins/common/skills/`：公共的氚云与钉钉能力；
-- `plugins/dsh-crwu-workbench/skills/`：审核能力族与维护能力；
 - `plugins/dsh-crwu-workbench/common/skills/`：打包时生成的公共 Skill 同步副本，不是源文件入口。
 
 支持宿主的目录约定见 [AI 宿主目录说明](docs/agent-skill-dirs.md)。
@@ -325,7 +329,8 @@ crwu-ai/
 │       ├── src/host/                 # Host 操作、配置、状态与领域服务
 │       ├── src/client/               # 侧栏、工作台界面与浏览器状态
 │       ├── src/shared/               # Host / Client 共享协议
-│       ├── skills/                   # 27 个审核与维护 Skills
+│       ├── skills/crwu/              # 27 个审核与维护 Skills（自研层）
+│       ├── skills/dws/               # 14 个 vendored 钉钉 Skills（上游层）
 │       ├── config/                   # 唯一部署 YAML
 │       ├── tests/                    # Node 单元与集成测试
 │       └── scripts/                  # 构建、打包与发布校验
@@ -391,7 +396,7 @@ CLI 与工作台独立发版：
 | 文档 | 内容 |
 | --- | --- |
 | [工作台插件指南](plugins/dsh-crwu-workbench/README.md) | 安装、配置、开发循环、真机验收和发布。 |
-| [Skills 目录](docs/skills.md) | 30 个 Skills 的职责、触发条件与依赖边界。 |
+| [Skills 目录](docs/skills.md) | 44 个 Skills（自研 27 + vendored 14 + 公共 3）的职责、触发条件与依赖边界。 |
 | [CLI 手册](docs/v0.0.1/cli-manual.md) | 命令、参数、筛选语法、环境变量与操作流程。 |
 | [审核系统设计](docs/v0.0.1/design-crwu-audit-skills.md) | 项目画像、能力树、多轴路由和交付模型。 |
 | [实时知识协议](docs/v0.0.1/design-audit-live-kb-protocol.md) | 每次审核如何定位并获取当前知识正文。 |

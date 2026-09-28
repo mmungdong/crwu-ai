@@ -13,8 +13,6 @@ export interface WorkbenchConfig {
   configSource: string
   caseRoot: string
   preferWorkspaceTitle: string
-  manifestUrl: string
-  installDocUrl: string
   formName: string
   ossBucket: string
   ossPrefix: string

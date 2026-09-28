@@ -51,7 +51,6 @@ test('the facade sends the declared operation for every method', async () => {
     workspace: { path: '/p' },
     bindSession: { sessionId: 's' },
     trust: { h3yun: true },
-    installPrompt: {},
     dwsLogin: { device: true },
     clipboard: { text: 'x' },
     openPath: { path: '/p' },

@@ -22,6 +22,7 @@ import { AuditAnalysisDialog, type AuditAskState } from './AuditAnalysisDialog.t
 import { WorkbenchLoading } from '../workbench/LoadingPane.tsx'
 import { buildRows, menuActionsOf, pageCount, primaryActionOf, resultItems, riskBadge } from './row.ts'
 import type { AuditView, ButtonSpec, RowView, TaskRow } from './types.ts'
+import { caseDirOf } from '../../../shared/utils/case-dir.ts'
 
 /**
  * 报告页。
@@ -657,6 +658,8 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
     const task = state.tasks[rows.findIndex((row) => row.key === key)]
     return {
       seqNo: key,
+      // 本次会话唯一的读写目录（与 Host 审核提示词共用同一条约定，见 shared/utils/case-dir.ts）。
+      caseDir: caseDirOf(props.workspace.path, key),
       // 氚云记录 id：crwu 靠它列这份报告的附件。
       objectId: task?.id ?? '',
       project: task?.project ?? '',
@@ -730,6 +733,8 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         forceNew: true,
       })
       if (!created.ok) { setAiError(created.error); return }
+      // 命名失败要报：会话名就是「报告 ↔ 会话」的映射，没写上名下次点会再建一条。
+      if (created.renameError !== undefined) setAiError(created.renameError)
       const failure = await askDiscussion(props.port, created.id, discussionPrompt(facts, zhCN.aiKickoff, true))
       if (failure !== '') setAiError(failure)
       props.onOpenDiscussion(created.id)
@@ -818,6 +823,8 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       ].filter((line) => line !== '')
       const context: AuditAnalysisContext = {
         seqNo: key,
+        // 与报告讨论同一条约定：本次会话唯一的读写目录，取数规则要用它。
+        caseDir: caseDirOf(props.workspace.path, key),
         project: task === undefined ? '' : (task.project !== '' ? task.project : task.name),
         reportUpdatedAt,
         reportVersion: textOf(info.reportVersion),
@@ -905,6 +912,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         kind: 'audit_analysis',
       })
       if (!created.ok) { setAiError(created.error); return }
+      if (created.renameError !== undefined) setAiError(created.renameError)
       const failure = await askDiscussion(props.port, created.id, buildAuditContextBlock(pending.context))
       if (failure !== '') setAiError(failure)
       // Context Snapshot：以后打开这条会话时用它判"是否已经过期"。

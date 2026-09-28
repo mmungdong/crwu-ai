@@ -1,59 +1,104 @@
 import * as React from 'react'
-import { Badge, Button, Chip, LoadingBar, Meter, Notice, Section, Spinner, StatusDot, type Tone } from '../../components/primitives.tsx'
-import { CheckIcon, WarnIcon } from '../../components/icons.tsx'
+import { Badge, Button, Chip, LoadingBar, Meter, Notice, Spinner, StatusDot } from '../../components/primitives.tsx'
+import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
-import { text } from '../../../shared/utils/value.ts'
-import { envLayerSet, envTodoText, type EnvLayer, type EnvLayerId, type EnvLayerItem, type EnvLayerSet } from './layers.ts'
-import { envTally } from './status.ts'
-import type { EnvResult } from '../report-audit/api.ts'
-import { InstallPromptBlock } from './InstallPromptBlock.tsx'
-import { OssAuthCard } from './OssAuthCard.tsx'
+import { headlineOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import type { SetupItemView } from '../../../shared/environment/model.ts'
 import { WorkspaceCard } from '../workbench/WorkspaceCard.tsx'
 import type { ClientServices } from '../workbench/services.ts'
+import { IfindAuthCard } from './IfindAuthCard.tsx'
+import { OssCredCard } from './OssCredCard.tsx'
+import type { BuildSnapshot } from '../workbench/build-store.ts'
+import { DEVELOPER_CONTACT_URL } from '../../../shared/consts.ts'
+import {
+  allStepsDone, lastVerifiedAt, pickStep, setupStepInput, setupSteps, type SetupStepKind,
+} from './steps.ts'
 
 /**
- * 环境自检页。
+ * 环境信息页（2026-09-26 重排为「紧凑状态摘要 + 引导式配置工作区」）。
  *
- * 它是**所有后续操作的门禁**：`blocked` 非空时报告页不给发起审核。但它的读者是普通员工
- * （资产评估师），不是维护者 —— 所以页面按**排查顺序分四层**（工具 → 登录认证 → 上传配置 →
- * 外部数据），每层一行结论 + `x/y 已就绪`；没就绪的层默认展开、没就绪的项排在最前，并且
- * **每一项都写明"怎么配"**（按钮或填哪里）。① 案例根目录在四层之前（它是前置条件）。
+ * ## 页面结构
  *
- * 维护者信息（清单来源、sha256、会话 id、probe 原文、氚云授权开关）全部收进页脚
- * 「排查详情」，默认不展开：它们只在排查时有用，摆在员工视野里就是噪声。
+ * ```
+ * ┌ 环境状态摘要 ────────────────────────────────┐
+ * │ 环境已就绪 / 还需完成 N 项        [重新检查]  │
+ * │ 已完成 N/N · 最近真实验证时间                  │
+ * └──────────────────────────────────────────────┘
+ * ┌ 配置工作区 ──────────────────────────────────┐
+ * │ 左侧步骤导航        │ 右侧当前步骤            │
+ * │ 1 账号连接 已完成    │ 标题 + 一句用途          │
+ * │ 2 阿里云 OSS 待处理  │ 表单 / 登录按钮          │
+ * │ 3 iFinD 待处理       │ 验证过程与人话结果       │
+ * │ 4 工作空间 已完成    │ 获取方式 / 安全说明      │
+ * └──────────────────────────────────────────────┘
+ * [开发者诊断 ▾]
+ * ```
  *
- * 分层、排序、状态词、"怎么配"这四件事都在 `layers.ts` 里（纯函数、有单测），
- * 这里只负责画。
+ * ## 四条不许退回去的口径
+ *
+ * 1. **顶部不再有「进入报告审核」按钮**（用户口径：只做提示，跳转走左侧栏的统一导航门禁）；
+ * 2. **顶部不再罗列全部阻塞项**（左侧步骤已经承担状态导航），只给**第一条**明确下一步；
+ *    `平台` 这类技术指标移入开发者诊断，「最近检查」压成一行辅助文案；
+ * 3. **默认停在第一项未完成的步骤**；用户手动选过之后，后台刷新**不许**抢焦点；
+ * 4. **密钥类输入只提交、不回显**（OSS AK / iFinD API-Key）：提交后立刻清空，已保存只给掩码。
+ *
+ * 结论、通过率、"下一步"、门禁判据全部来自 Host 的**统一环境模型**（`env.state`），
+ * 这一页不再自己算任何结论。
  */
 
 export interface EnvironmentPaneProps {
   env: EnvResult | null
+  /** 当前实际运行的插件构建；开发者诊断与页面头共用同一份版本事实。 */
+  build?: BuildSnapshot
   error: string
   busy: boolean
   /** 最近一次成功自检的时刻（ISO 串）；空串表示还不知道。 */
   checkedAt?: string
+  /** 重新检查环境（会刷新宿主侧缓存，并强制重跑真实外部验证）。 */
   onRefresh: () => void
-  onCopyPrompt: () => void
-  copied: boolean
   onRelogin: () => void
   onDwsLogin: () => void
-  /** 「进入报告审核」。不通过时由工作台外壳用 loading 状态拦住，这里照旧给入口。 */
-  onEnterReport?: () => void
-  /** 被门禁拦住时的界面状态：`running` 正在自检、`blocked` 自检没过。 */
+  /** 设备码登录：浏览器打不开 / 远程无头时的退路（`dws auth login --device`）。 */
+  onDwsLoginDevice?: () => void
+  /** 最近一次登录的结果（成功、失败原因、CLI 打印的 URL 或设备码）；空串 = 还没点过。 */
+  loginMessage?: string
+  /** 被门禁拦住时的界面状态：`running` 正在检查、`blocked` 检查没过。 */
   gate?: 'idle' | 'running' | 'blocked'
-  /** 安装提示词（由外壳拉一次，复制与预览共用同一份文本）。 */
-  prompt: string
-  promptUrl: string
-  promptBusy: boolean
-  /** 唯一那枚复制按钮的结果文案（剪贴板被拒时说明可手工全选）。 */
-  promptMessage: string
+  /** 被拦时本来要去的那一页名（「进入【报告审核】前…」）。 */
+  gateTarget?: string
+  /**
+   * 统一导航层给出的**完整拦截理由**（`module-store` 的 `gateReason`）。
+   *
+   * 优先用它：iFinD 未通过时门禁会把话说具体（「进入【报告审核】前，请先完成 iFinD API-Key 验证」），
+   * 页面自己拼一句通用文案会把这层信息丢掉。
+   */
+  gateReason?: string
   /** 浏览器侧可选服务（目录选择器 / 工作空间注册表 / layout）。 */
   services: ClientServices
   wsBusy: boolean
   wsMessage: string
   onWsBusy: (busy: boolean) => void
   onWsMessage: (message: string) => void
+  /** 授权（一次性、长期有效）。 */
+  authorized?: boolean
+  authBusy?: boolean
+  authError?: string
+  authDeclined?: boolean
+  onGrantCredentials?: () => void
+  onRegrant?: () => void
+}
+
+/**
+ * 会话 id 的短显示。
+ *
+ * 审核根会话的 id 是 `session-<uuid>` 形状，直接 `slice(0, 8)` 得到的是 `session-` ——
+ * 界面上就是一串没有信息量的「· session-…」。所以先剥掉 `session-` 前缀再取 8 位，
+ * 用户才能拿它去侧栏核对。
+ */
+function shortSessionId(id: string): string {
+  const tail = id.startsWith('session-') ? id.slice('session-'.length) : id
+  return (tail === '' ? id : tail).slice(0, 8)
 }
 
 /** 本地时刻；解析不出来就原样显示（不猜）。 */
@@ -71,347 +116,448 @@ function Kv(props: { label: string; children?: React.ReactNode }): React.ReactEl
   </>
 }
 
-/** 状态圆点/胶囊色调：就绪=绿、需重新登录=黄、未配置=红。 */
-function toneOfItem(item: EnvLayerItem): Tone {
-  if (item.state === 'ok') return 'ok'
-  return item.state === 'reauth' ? 'busy' : 'bad'
+interface DiagnosticRow {
+  label: string
+  value: string
+  details?: string[]
+}
+
+/** iFinD 的凭据认证与真实取数是两层事实，不能只凭 `state` 报“已连接”。 */
+function ifindConnectionText(env: EnvResult): string {
+  if (env.external.state === 'authenticated') {
+    return env.external.dataVerified ? zhCN.envDiagIfindConnected : zhCN.envDiagIfindNoData
+  }
+  if (env.external.state === 'unconfigured') return zhCN.envIfindStateUnconfigured
+  if (env.external.state === 'invalid') return zhCN.envIfindStateInvalid
+  if (env.external.state === 'unreachable') return zhCN.envIfindStateUnreachable
+  return zhCN.envIfindStateUnverified
+}
+
+function buildVersionText(build: BuildSnapshot): string {
+  if (build.version !== '') return `v${build.version}`
+  if (build.rev.startsWith('pkg-')) return `v${build.rev.slice('pkg-'.length)}`
+  return build.rev === '' ? zhCN.versionUnknown : build.rev
 }
 
 /**
- * 会话 id 的短显示。
- *
- * 审核根会话的 id 是 `session-<uuid>` 形状，直接 `slice(0, 8)` 得到的是 `session-` ——
- * 界面上就是一串没有信息量的「· session-…」（实测：断言 `session-a` 才发现的）。
- * 所以先剥掉 `session-` 前缀再取 8 位，用户才能拿它去侧栏核对。
+ * 开发者诊断的单一事实源：页面与复制文本都从这些行生成，避免二者遗漏不同字段。
+ * 这里只接收 Host 已脱敏的视图，绝不放入 API-Key / AccessKey 明文。
  */
-function shortSessionId(id: string): string {
-  const tail = id.startsWith('session-') ? id.slice('session-'.length) : id
-  return (tail === '' ? id : tail).slice(0, 8)
+function diagnosticRows(env: EnvResult, checkedAt: string, build: BuildSnapshot): DiagnosticRow[] {
+  const health = env.state?.systemHealth
+  const integrity = env.packageIntegrity
+  const runtime = env.runtime
+  const root = env.auditRoot
+  const session = env.sessionWorkspace
+  const buildDetails = [
+    build.buildKind === '' ? '' : `${zhCN.envDiagBuildKind}：${build.buildKind}`,
+    build.rev === '' ? '' : `${zhCN.envDiagBuildRev}：${build.rev}`,
+    build.protocol === null ? '' : `${zhCN.envDiagProtocol}：${String(build.protocol)}`,
+    build.builtAt === '' ? '' : `${zhCN.envDiagBuildTime}：${localTime(build.builtAt)}`,
+  ].filter((item) => item !== '')
+  const ifindDetails = [
+    `${zhCN.envDiagIfindCredential}：${env.external.path === '' ? zhCN.envNotConfigured : env.external.path}`,
+    env.external.reason === '' ? '' : env.external.reason,
+    env.external.dataTool === '' ? '' : `${zhCN.envDiagIfindTool}${env.external.dataTool}`,
+    env.external.dataSample === '' ? '' : `${zhCN.envDiagIfindSample}${env.external.dataSample}`,
+    env.external.checkedAt === '' ? '' : `${zhCN.envIfindDataAt}${localTime(env.external.checkedAt)}`,
+  ].filter((item) => item !== '')
+  const auditRoot = root === undefined || root.sessionId === ''
+    ? zhCN.envAuditRootNone
+    : [
+        root.title || root.sessionId,
+        `${shortSessionId(root.sessionId)}…`,
+        root.workspacePath,
+        root.usable ? '' : `${zhCN.envAuditRootStale}${root.reason === '' ? '' : `（${root.reason}）`}`,
+      ].filter((item) => item !== '').join(' · ')
+
+  return [
+    { label: zhCN.envDiagWorkbenchVersion, value: buildVersionText(build), details: buildDetails },
+    {
+      label: zhCN.envDiagPackages,
+      value: `${String(integrity.tools.filter((tool) => tool.ok).length)}/${String(integrity.tools.length)} · ${integrity.ok ? zhCN.envDiagOk : zhCN.envDiagBad}`,
+      details: health === undefined || health.packageIntegrity.reason === '' ? [] : [health.packageIntegrity.reason],
+    },
+    {
+      label: zhCN.envDiagRuntime,
+      value: `${runtime.path === '' ? zhCN.envUnset : runtime.path} · ${runtime.versionText} · ${runtime.source}`,
+      details: runtime.missingPackages.length === 0 ? [] : [`${zhCN.envRuntimeMissingPackages}${runtime.missingPackages.join('、')}`],
+    },
+    { label: zhCN.envDiagPlatform, value: env.platform === '' ? zhCN.envNotResolved : env.platform },
+    {
+      label: zhCN.envDiagTools,
+      value: health === undefined ? zhCN.envDiagToolsUnknown
+        : (health.toolRegistry.state === 'ok' ? zhCN.envDiagToolsOk : itemStateText(health.toolRegistry)),
+      details: health === undefined || health.toolRegistry.reason === '' ? [] : [health.toolRegistry.reason],
+    },
+    { label: zhCN.envDiagIfindConnection, value: ifindConnectionText(env), details: ifindDetails },
+    {
+      label: zhCN.envDiagOssTarget,
+      value: `${env.delivery.probe.target === undefined || env.delivery.probe.target === '' ? zhCN.envNotConfigured : env.delivery.probe.target} · ${env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail}`,
+      details: env.delivery.probe.detail === '' ? [] : [env.delivery.probe.detail],
+    },
+    { label: zhCN.envPackagesRoot, value: integrity.packageRoot === '' ? zhCN.envNotResolved : integrity.packageRoot },
+    {
+      label: zhCN.envPackagesManifest,
+      value: `${integrity.manifestPath === '' ? zhCN.envNotResolved : integrity.manifestPath} · ${integrity.manifestFound ? zhCN.envPass : zhCN.envFail}`,
+    },
+    { label: zhCN.envHome, value: env.home },
+    { label: zhCN.envConfigSource, value: env.configSource === '' ? zhCN.envNotConfigured : env.configSource },
+    { label: zhCN.envCheckedAt, value: checkedAt === '' ? zhCN.envUnset : localTime(checkedAt) },
+    { label: zhCN.envCaseRoot, value: env.workspace.path === '' ? zhCN.envUnset : env.workspace.path },
+    { label: zhCN.envOssBucket, value: env.delivery.oss.bucket || zhCN.envNotConfigured },
+    { label: zhCN.envOssPrefix, value: env.delivery.oss.prefix },
+    { label: zhCN.envOssCredFile, value: env.delivery.ossCred.exists ? env.delivery.ossCred.path : zhCN.envOssCredMissing },
+    { label: zhCN.envAuditRoot, value: auditRoot },
+    { label: zhCN.envParentSession, value: session.parentSessionId === '' ? zhCN.envUnset : session.parentSessionId },
+    ...integrity.tools.map((tool): DiagnosticRow => ({
+      label: tool.name,
+      value: tool.present ? tool.file : zhCN.envNotInstalled,
+      details: [
+        tool.present ? `${zhCN.envPackagesSize} ${String(tool.sizeBytes)} / ${zhCN.envPackagesManifestSize} ${String(tool.manifestSizeBytes)}` : '',
+        tool.sha256 === '' ? '' : `${zhCN.envPackagesSha} ${tool.sha256}`,
+        tool.reason === '' ? '' : `${zhCN.envReason}：${tool.reason}`,
+      ].filter((item) => item !== ''),
+    })),
+    { label: zhCN.envRuntimeExpect, value: runtime.expect },
+    { label: zhCN.envRuntimeRequiredPackages, value: runtime.requiredPackages.join(' / ') },
+    {
+      label: zhCN.envRuntimeDistributions,
+      value: Object.entries(runtime.distributions).map(([name, version]) => `${name} ${version}`).join(' · ') || zhCN.envUnset,
+    },
+    {
+      label: zhCN.envProbe,
+      value: env.delivery.probe.state === '' ? (env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail) : env.delivery.probe.state,
+    },
+  ]
 }
 
-/** 一个层里的单项：状态点 + 名称 + 一句用途 + 状态词 + （没就绪时）怎么配。 */
-function LayerItemRow(props: { item: EnvLayerItem; extra?: React.ReactNode }): React.ReactElement {
+function diagnosticText(rows: DiagnosticRow[]): string {
+  return rows.map((row) => [
+    `${row.label}: ${row.value}`,
+    ...(row.details ?? []).map((detail) => `  ${detail}`),
+  ].join('\n')).join('\n')
+}
+
+/** 配置项状态 → 色调。`unverified` 是琥珀（"还没证据"），不是红色。 */
+function toneOfItem(item: SetupItemView): 'ok' | 'busy' | 'bad' {
+  if (item.state === 'ok' || item.state === 'authenticated') return 'ok'
+  if (item.state === 'unverified') return 'busy'
+  return 'bad'
+}
+
+function itemStateText(item: SetupItemView): string {
+  if (item.state === 'ok' || item.state === 'authenticated') return zhCN.envItemOk
+  if (item.state === 'unverified') return zhCN.envIfindStateUnverified
+  if (item.state === 'invalid') return zhCN.envItemMissing
+  if (item.state === 'unreachable') return zhCN.envIfindStateUnreachable
+  return zhCN.envItemMissing
+}
+
+/** 一行配置项：状态点 + 名称 + 状态 + （未就绪时）原因。 */
+function SetupRow(props: { id: string; item: SetupItemView; extra?: React.ReactNode }): React.ReactElement {
   const item = props.item
   const tone = toneOfItem(item)
-  return <div className={C.item}>
+  const notReady = tone !== 'ok'
+  return <div className={C.item} data-crwu-env-item={props.id}>
     <StatusDot tone={tone} />
     <div className={C.itemMain}>
       <div className={C.itemHead}>
-        <span className={C.itemName}>{item.name}</span>
-        <Chip text={item.stateText} tone={tone} />
+        <span className={C.itemName}>{props.id}</span>
+        <Chip text={itemStateText(item)} tone={tone} />
       </div>
-      {item.purpose === '' ? null : <div className={C.itemNote}>{item.purpose}</div>}
-      {item.meta === '' ? null : <div className={`${C.itemMeta} ${C.mono}`}>{item.meta}</div>}
-      {item.reason === '' ? null : <div className={C.itemFix}>{item.reason}</div>}
-      {item.fix === '' ? null : <div className={C.itemFix}>{item.fix}</div>}
-      {/* 工具：下载地址与安装目标路径（sha256 只进排查详情）。没有平台包时上面那句已经如实说了。 */}
-      {item.fixKind !== 'tool' || item.url === '' ? null : <div className={C.row}>
-        <span className={C.muted}>{zhCN.envDownloadUrl}</span>
-        <span className={`${C.mono} ${C.link}`}>{item.url}</span>
-      </div>}
-      {item.fixKind !== 'tool' || item.target === '' ? null
-        : <div className={`${C.muted} ${C.mono}`}>{`${zhCN.envInstallTarget} ${item.target}`}</div>}
-      {/* iFinD 的申请入口：沿用安装清单里已有的那条来源说明，不另编流程。 */}
-      {item.fixKind !== 'ifind' ? null : <div className={C.muted}>{zhCN.ifindSource}</div>}
+      {item.value === '' ? null : <div className={`${C.itemMeta} ${C.mono}`}>{item.value}</div>}
+      {notReady && item.reason !== '' ? <div className={C.itemFix}>{item.reason}</div> : null}
       {props.extra}
     </div>
   </div>
 }
 
 /**
- * 一层一张卡（受控：展开状态由页面持有）。
+ * 顶部状态摘要：一句结论 + 完成数量 + 最近真实验证时间 + **唯一**主动作「重新检查」。
  *
- * 状态放在**页面**而不是卡片里，有两个原因：① 页面才知道"这层要不要默认展开"（没就绪的展开）；
- * ② 展开状态集中一处，刷新自检后四层的展开/收起不会被各卡片各说各话。
- * 初值一律用非函数式（构建产物冒烟的极小 react 替身不认函数式初值）。
+ * 刻意**不罗列全部阻塞项**：左侧步骤导航已经回答了"哪里不对"，罗列一遍只会让顶部变成第二张清单。
+ * 被统一导航拦住时，「进入【X】前…」作为摘要内部的一条轻提示出现，而不是另一张大卡。
  */
-function LayerCard(props: {
-  layer: EnvLayer
-  open: boolean
-  onToggle: () => void
-  /** 每项下面附带的交互（③ 的登录按钮）。 */
-  extraFor?: (item: EnvLayerItem) => React.ReactNode
-  /** 层级的动作（② 的"复制安装提示词"）。 */
-  actions?: React.ReactNode
-  /** 层级的"怎么办"块（④ 的 AK 表单）。 */
-  fix?: React.ReactNode
-  /** 常驻在标题下方的补充行（③ 的"信任本机凭据"开关）：**不能**塞进标题按钮里，按钮内不许嵌交互元素。 */
-  headerExtra?: React.ReactNode
-}): React.ReactElement {
-  const layer = props.layer
-  const open = props.open
-  const countText = layer.total === 0
-    ? zhCN.envNotConfigured
-    : `${String(layer.pass)}/${String(layer.total)} ${zhCN.envLayerReady}`
-  return <div className={`${C.layer} ${layer.needsWork ? C.layerBad : C.layerOk}`}>
-    <button
-      type="button"
-      className={C.layerHead}
-      aria-expanded={open}
-      onClick={props.onToggle}
-    >
-      <StatusDot tone={layer.needsWork ? 'bad' : 'ok'} />
-      <span className={C.layerTitle}>{layer.title}</span>
-      <span className={C.layerCount}>{countText}</span>
-      <span className={C.layerToggle}>{open ? zhCN.envLayerCollapse : zhCN.envLayerExpand}</span>
-    </button>
-    {props.headerExtra === undefined ? null : <div className={C.layerHeadExtra}>{props.headerExtra}</div>}
-    {open
-      ? <div className={C.layerBody}>
-          {layer.total === 0
-            ? <div className={C.muted}>{zhCN.envNotConfigured}</div>
-            : layer.items.map((item) => <LayerItemRow key={item.id} item={item} extra={props.extraFor?.(item)} />)}
-          {props.actions === undefined ? null : <div className={C.layerActions}>{props.actions}</div>}
-          {props.fix === undefined ? null : <div className={C.layerFix}>{props.fix}</div>}
-        </div>
-      : null}
-  </div>
-}
-
-/**
- * 自检结论区：一句话结论 + 「还有 N 项要处理」 + 通过率 + 主要动作。
- *
- * 主按钮跟着结论走：没就绪时最该做的是「复制安装提示词交给 Agent」；就绪时是「进入报告审核」。
- * 没就绪时仍然保留「进入报告审核」（次要按钮）：用户刚装完最想直接再点一次，外壳会当场重新
- * 自检并给出结论，而不是让人先去别处找按钮。
- */
-function Hero(props: {
+function StatusSummary(props: {
   env: EnvResult
   checkedAt: string
   busy: boolean
-  copied: boolean
   onRefresh: () => void
-  onCopyPrompt: () => void
-  onEnterReport?: (() => void) | undefined
+  gate: 'idle' | 'running' | 'blocked'
+  gateTarget?: string | undefined
+  gateReason?: string | undefined
 }): React.ReactElement {
-  const { env } = props
-  const tally = envTally(env)
-  const blocked = env.blocked.length > 0
-  return <div className={`${C.hero} ${env.allOk ? C.heroOk : C.heroBad}`}>
-    <span className={`${C.heroMark} ${env.allOk ? C.heroMarkOk : C.heroMarkBad}`}>
-      {env.allOk ? <CheckIcon size={20} /> : <WarnIcon size={20} />}
+  const head = headlineOf(props.env)
+  const ok = head.status === 'ready' && head.proceed
+  // OSS 的探测结果里没有独立时间戳，但 `probeOss` **每次自检都真跑**（没有缓存），
+  // 所以"这次自检的时刻"（store 在应答落地时记的 `checkedAt`）就是它的真实验证时刻。
+  const verifiedAt = lastVerifiedAt(props.env, props.checkedAt ?? '')
+  // 同一必检项可能同时产生 global / external-data 两条诊断 issue（例如 iFinD）。
+  // 顶部数量必须跟 N/N 的必检项口径一致，不能把诊断作用域当成待配置项重复计数。
+  const remaining = Math.max(0, head.total - head.passed)
+  const title = ok
+    ? zhCN.envStatusReady
+    : (head.status === 'admin-required'
+      ? `${zhCN.envStatusAdmin}${String(remaining)}${zhCN.envStatusActionTail}`
+      : (head.status === 'system-blocked'
+        ? zhCN.envStatusSystem
+        : (head.status === 'check-failed'
+          ? zhCN.envStatusFailed
+          : (head.status === 'unknown' || head.status === 'checking'
+            ? zhCN.envStatusChecking
+            : `${zhCN.envStatusAction}${String(remaining)}${zhCN.envStatusActionTail}`))))
+  return <div className={`${C.status} ${ok ? C.statusOk : C.statusBad}`} data-crwu-env-status={head.status}>
+    <span className={`${C.statusMark} ${ok ? C.statusMarkOk : C.statusMarkBad}`}>
+      {ok ? <CheckIcon size={18} /> : <WarnIcon size={18} />}
     </span>
-    <div className={C.heroMain}>
-      <div className={C.heroTitle}>
-        {env.allOk ? zhCN.envHeroOk : zhCN.envHeroBad}
-        {blocked ? <Chip text={`${String(env.blocked.length)}${zhCN.items}`} tone="bad" /> : null}
-      </div>
-      <div className={C.heroSub}>{envTodoText(env)}</div>
-      {env.allOk ? null : <div className={C.muted}>{zhCN.envHeroSectionHint}</div>}
-      {/* Host 的权威阻塞清单：不单独起一个区块，但也不能丢 —— 平台未识别这类原因没有层可挂。 */}
-      {blocked
-        ? <div className={C.heroTodo}>
-            <div>{zhCN.envBlockedTitle}</div>
-            <div>{env.blocked.join('；')}</div>
-            <div className={C.muted}>{zhCN.envBlockedHint}</div>
+    <div className={C.statusMain}>
+      <div className={C.statusTitle}>{title}</div>
+      {/* 只给**第一条**明确下一步：员工不需要在这里读完所有问题。 */}
+      {ok
+        ? <div className={C.statusSub}>{zhCN.envStatusProceedHint}</div>
+        : (head.primary === null
+          ? null
+          : <div className={C.statusSub}>{`${head.primary.action}：${head.primary.message}`}</div>)}
+      {/* 被统一导航拦住时的一句轻提示（不再是一张独立的大卡）。 */}
+      {props.gate === 'blocked' && props.gateTarget !== undefined
+        ? <div className={C.statusNote} data-crwu-env-gate="blocked">
+            {/* 优先用统一导航层算好的那一句（iFinD 未通过时它指名 API-Key）。 */}
+            {props.gateReason !== undefined && props.gateReason !== ''
+              ? props.gateReason
+              : `进入【${props.gateTarget}】前，请先完成环境配置`}
           </div>
         : null}
-      <Meter ratio={tally.ratio} bad={!env.allOk} />
-      <div className={C.metrics}>
-        <div className={C.metric}>
-          <div className={C.metricValue}>{`${String(tally.passed)}/${String(tally.total)}`}</div>
-          <div className={C.metricLabel}>{zhCN.envMetricPassed}</div>
-        </div>
-        <div className={C.metric}>
-          <div className={C.metricValue}>{String(env.blocked.length)}</div>
-          <div className={C.metricLabel}>{zhCN.envMetricFailed}</div>
-        </div>
-        <div className={C.metric}>
-          <div className={C.metricValue}>{env.platform === '' ? '—' : env.platform}</div>
-          <div className={C.metricLabel}>{zhCN.envMetricPlatform}</div>
-        </div>
-        <div className={C.metric}>
-          <div className={C.metricValue}>{props.checkedAt === '' ? '—' : localTime(props.checkedAt)}</div>
-          <div className={C.metricLabel}>{zhCN.envCheckedAt}</div>
-        </div>
+      {props.gate === 'running'
+        ? <div className={C.statusNote} data-crwu-env-gate="running">
+            <Spinner />
+            <span>{zhCN.envGateRunningTitle}</span>
+          </div>
+        : null}
+      <div className={C.statusMeta}>
+        <span>{`${zhCN.envStatusSummary}${String(head.passed)}/${String(head.total)}${zhCN.envStatusSummaryTail}`}</span>
+        <span className={C.statusDot} />
+        <span>{`${zhCN.envStatusCheckedAt} ${props.checkedAt === '' ? zhCN.envUnset : localTime(props.checkedAt)}`}</span>
+        {verifiedAt === '' ? null : <>
+          <span className={C.statusDot} />
+          <span data-crwu-env-verified-at={verifiedAt}>{`${zhCN.envStatusVerifiedAt} ${localTime(verifiedAt)}`}</span>
+        </>}
       </div>
-      <div className={C.heroActions}>
-        {/* 全页**唯一**的复制入口。未就绪时它是主按钮（最该做的就是把它交给 Agent）；就绪时降为
-            次要按钮（员工要装别的东西时还用得上）。各层里未就绪项的"怎么配"都指向这一枚。 */}
-        {env.allOk
-          ? <>
-              {props.onEnterReport === undefined
-                ? null
-                : <Button label={zhCN.enterReport} tone="primary" onClick={props.onEnterReport} />}
-              <Button label={props.busy ? '…' : zhCN.refreshEnv} disabled={props.busy} onClick={props.onRefresh} />
-              <Button label={props.copied ? zhCN.copied : zhCN.envCopyInstallPrompt} onClick={props.onCopyPrompt} />
-            </>
-          : <>
-              <Button label={props.copied ? zhCN.copied : zhCN.envCopyInstallPrompt} tone="primary" onClick={props.onCopyPrompt} />
-              <Button label={props.busy ? '…' : zhCN.refreshEnv} disabled={props.busy} onClick={props.onRefresh} />
-              {props.onEnterReport === undefined
-                ? null
-                : <Button label={zhCN.enterReport} onClick={props.onEnterReport} />}
-            </>
-        }
-      </div>
+      {/* 完成数量与进度合并成一条紧凑摘要（不再有三块技术指标卡）。 */}
+      <Meter ratio={head.ratio} bad={!ok} />
+    </div>
+    <div className={C.statusAction}>
+      <Button
+        label={props.busy ? zhCN.envStatusChecking : zhCN.envActionRecheck}
+        tone="primary"
+        disabled={props.busy}
+        onClick={props.onRefresh}
+      />
     </div>
   </div>
 }
 
-/** 工具类的维护者明细：每项的版本约束 / 实际值 / sha256 / 安装目标路径。 */
-function ToolDetails(props: { env: EnvResult }): React.ReactElement {
-  return <Section title={zhCN.envDetailsTools}>
-    <div className={C.kv}>
-      {props.env.checks.map((check) => <Kv key={check.name} label={check.name}>
-        <span className={C.mono}>{check.found ? check.path : zhCN.envNotInstalled}</span>
-        {check.versionText === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${check.versionText}`}</span>}
-        {check.expect === '' ? null : <span className={C.muted}>{` · ${zhCN.envExpected} ${check.expect}`}</span>}
-        {check.actual === '' ? null : <span className={`${C.muted} ${C.mono}`}>{` · ${zhCN.envVersionText} ${check.actual}`}</span>}
-        {check.sha256 === '' ? null : <div className={`${C.muted} ${C.mono}`}>{`${zhCN.envChecksum} ${check.sha256}`}</div>}
-        {check.target === '' ? null : <div className={`${C.muted} ${C.mono}`}>{`${zhCN.envInstallTarget} ${check.target}`}</div>}
-        {check.reason === '' ? null : <div className={C.itemFix}>{`${zhCN.envReason}：${check.reason}`}</div>}
-      </Kv>)}
-    </div>
-  </Section>
-}
-
-/** 只读的环境事实：出问题时用来对账（清单来自哪、会话挂在哪个工作空间）。 */
-function InfoSection(props: {
-  env: EnvResult
-  checkedAt: string
+/** 左侧步骤导航：序号 + 名称 + 状态标签（当前项是选中态）。 */
+function StepNav(props: {
+  steps: ReturnType<typeof setupSteps>
+  active: SetupStepKind
+  onPick: (id: SetupStepKind) => void
 }): React.ReactElement {
-  const { env } = props
-  const session = env.sessionWorkspace
-  // 审核子代理挂在哪：老 Host 不带这个字段，界面按「尚未创建」显示。
-  const root = env.auditRoot
-  return <Section title={zhCN.envDetailsInfo}>
-    <div className={C.kv}>
-      <Kv label={zhCN.envMetricPlatform}>{env.platform === '' ? zhCN.envNotResolved : env.platform}</Kv>
-      <Kv label={zhCN.envHome}><span className={C.mono}>{env.home}</span></Kv>
-      <Kv label={zhCN.envManifestSource}>
-        <span className={C.mono}>{env.manifestSource === '' ? zhCN.envNotConfigured : env.manifestSource}</span>
-        <span className={C.muted}>{`（${env.manifestLoaded ? zhCN.envManifestLoaded : zhCN.envManifestBuiltin}${env.manifestKind === '' ? '' : ` · ${env.manifestKind}`}）`}</span>
-      </Kv>
-      <Kv label={zhCN.envManifestUpdated}>
-        {env.manifestUpdatedAt === '' ? zhCN.envUnset : `${localTime(env.manifestUpdatedAt)}（${env.manifestUpdatedAt}）`}
-      </Kv>
-      {env.manifestError === '' ? null : <Kv label={zhCN.envManifestError}>
-        <span className={C.error}>{env.manifestError}</span>
-      </Kv>}
-      <Kv label={zhCN.envInstallDoc}>
-        <span className={`${C.mono} ${C.link}`}>{env.installDocUrl === '' ? zhCN.envNotConfigured : env.installDocUrl}</span>
-      </Kv>
-      <Kv label={zhCN.envCheckedAt}>{props.checkedAt === '' ? zhCN.envUnset : localTime(props.checkedAt)}</Kv>
-      <Kv label={zhCN.envCaseRoot}>
-        <span className={C.mono}>{env.workspace.path === '' ? zhCN.envUnset : env.workspace.path}</span>
-      </Kv>
-      <Kv label={zhCN.envAuditRoot}>
-        {root === undefined || root.sessionId === ''
-          ? <span className={C.muted}>{zhCN.envAuditRootNone}</span>
-          : <>
-              <span>{root.title || root.sessionId}</span>
-              <span className={`${C.muted} ${C.mono}`}>{` · ${shortSessionId(root.sessionId)}…`}</span>
-              {/* 「挂在哪个工作空间」要就地看得出来：用户报的正是「没挂到我的工作空间里」，
-                  让他去比对 ① 不够直接。 */}
-              {root.workspacePath ? <span className={`${C.muted} ${C.mono}`}>{` · ${root.workspacePath}`}</span> : null}
-              {root.usable ? null : <span className={C.muted}>{zhCN.envAuditRootStale}</span>}
-            </>}
-      </Kv>
-      <Kv label={zhCN.envParentSession}>
-        <span className={C.mono}>{session.parentSessionId === '' ? zhCN.envUnset : session.parentSessionId}</span>
-      </Kv>
-      <Kv label={zhCN.envSessionCwd}>
-        <span className={C.mono}>{session.sessionCwd === '' ? zhCN.envUnset : session.sessionCwd}</span>
-      </Kv>
-      <Kv label={zhCN.envSessionWorkspaceTitle}>
-        {session.workspaceTitle === '' ? zhCN.envUnset : `${session.workspaceTitle}${session.workspacePath === '' ? '' : `（${session.workspacePath}）`}`}
-      </Kv>
-    </div>
-  </Section>
+  return <nav className={C.stepsNav} aria-label={zhCN.envStepsNavLabel} data-crwu-env-stepnav="1">
+    <ol className={C.stepsList}>
+      {props.steps.map((step) => {
+        const on = step.id === props.active
+        return <li key={step.id}>
+          <button
+            type="button"
+            className={`${C.stepItem} ${on ? C.stepItemOn : ''}`}
+            aria-current={on ? 'step' : undefined}
+            data-crwu-env-step={step.id}
+            data-state={step.state}
+            onClick={() => { props.onPick(step.id) }}
+          >
+            <span className={`${C.stepIndex} ${step.state === 'done' ? C.stepIndexDone : ''}`}>
+              {step.state === 'done' ? <CheckIcon size={13} /> : String(step.index)}
+            </span>
+            <span className={C.stepText}>
+              <span className={C.stepTitle}>{step.title}</span>
+              <span className={C.stepState}>{step.stateText}</span>
+            </span>
+          </button>
+        </li>
+      })}
+    </ol>
+  </nav>
 }
 
-/** 交付件回传的明细（AK 表单在 ④ 层里，这里只放配置事实）。 */
-function OssSection(props: { env: EnvResult }): React.ReactElement {
-  const { env } = props
-  const oss = env.oss
-  const probe = (oss.probe ?? {}) as { ok?: boolean; state?: string; detail?: string }
-  return <Section title={zhCN.envDetailsOss}>
-    <div className={C.kv}>
-      <Kv label={zhCN.envOssBucket}>
-        <span className={C.mono}>{text(oss.bucket) === '' ? zhCN.envNotConfigured : text(oss.bucket)}</span>
-      </Kv>
-      <Kv label={zhCN.envOssPrefix}><span className={C.mono}>{text(oss.prefix)}</span></Kv>
-      <Kv label={zhCN.envOssEndpoint}>
-        <span className={C.mono}>{text(oss.endpoint) === '' ? zhCN.envUnset : text(oss.endpoint)}</span>
-      </Kv>
-      <Kv label={zhCN.envOssLinkMode}>{`${text(oss.linkMode)}${text(oss.linkTtl) === '' ? '' : ` · ${text(oss.linkTtl)}${zhCN.envSeconds}`}`}</Kv>
-      <Kv label={zhCN.envOssAutoUpload}>{text(oss.autoUpload)}</Kv>
-      <Kv label={zhCN.envOssOssutil}>
-        {oss.ossutilReady === true ? zhCN.envOssReady : zhCN.envOssNotReady}
-      </Kv>
-      <Kv label={zhCN.envOssCredFile}>
-        <span className={C.mono}>{env.ossCred.exists ? env.ossCred.path : zhCN.envOssCredMissing}</span>
-      </Kv>
-      <Kv label={zhCN.envOssCredAk}>
-        <span className={C.mono}>{env.ossCred.accessKeyIdMasked === '' ? zhCN.envOssCredMissing : env.ossCred.accessKeyIdMasked}</span>
-      </Kv>
-      <Kv label={zhCN.envProbe}>
-        <Chip
-          text={probe.state === undefined || probe.state === '' ? (probe.ok === true ? zhCN.envPass : zhCN.envFail) : probe.state}
-          tone={probe.ok === true ? 'ok' : 'bad'}
-        />
-      </Kv>
+/** 当前步骤的壳：标题 + 用途说明 + （可选）当前状态标签。 */
+function StepPanel(props: {
+  step: ReturnType<typeof setupSteps>[number] | undefined
+  state?: SetupItemView
+  children: React.ReactNode
+}): React.ReactElement {
+  const step = props.step
+  return <section className={C.stepPanel} data-crwu-env-step-panel={step?.id ?? ''}>
+    <header className={C.stepPanelHead}>
+      <div className={C.stepPanelTitle}>
+        {`${zhCN.envStepOf}${String(step?.index ?? 1)}${zhCN.envStepOfTail} · ${step?.title ?? ''}`}
+      </div>
+      {props.state === undefined
+        ? null
+        : <Chip text={itemStateText(props.state)} tone={toneOfItem(props.state)} />}
+    </header>
+    {props.children}
+  </section>
+}
+
+/** 账号连接步骤：一次性授权 + 氚云 + 钉钉。 */
+function AccountsStep(props: EnvironmentPaneProps & { env: EnvResult; authorized: boolean }): React.ReactElement {
+  const authorized = props.authorized
+  return <>
+    <p className={C.stepLead}>{zhCN.envStepHintAccounts}</p>
+    {/* 一次性本机凭据授权**就放在配置流程里**（旧版是一层遮住整页的模态框）。 */}
+    <div className={C.item} data-crwu-env-item="consent">
+      <StatusDot tone={authorized ? 'ok' : 'bad'} />
+      <div className={C.itemMain}>
+        <div className={C.itemHead}>
+          <span className={C.itemName}>{zhCN.envConsentTitle}</span>
+          <Chip text={authorized ? zhCN.envItemOk : zhCN.envItemMissing} tone={authorized ? 'ok' : 'bad'} />
+        </div>
+        <div className={C.itemNote}>{zhCN.envConsentWhy}</div>
+        {props.authError === undefined || props.authError === '' ? null
+          : <Notice tone="warn">{props.authError}</Notice>}
+        {!authorized && props.authDeclined === true ? <Notice tone="warn">{zhCN.envConsentDeclined}</Notice> : null}
+        <div className={C.row}>
+          {authorized
+            ? <span className={C.authGranted}>{zhCN.envConsentDone}</span>
+            : (props.authDeclined === true
+              ? <Button label={zhCN.envConsentRegrant} small disabled={props.authBusy === true}
+                  onClick={() => { props.onRegrant?.() }} />
+              : <Button label={zhCN.envConsentAgree} tone="primary" disabled={props.authBusy === true}
+                  onClick={() => { props.onGrantCredentials?.() }} />)}
+        </div>
+      </div>
     </div>
-    {probe.detail === undefined || probe.detail === '' ? null
-      : <div className={`${C.itemMeta} ${C.mono}`}>{probe.detail}</div>}
-  </Section>
+    <SetupRow
+      id={props.env.services.find((service) => service.id === 'h3yun')?.label ?? '氚云（H3Yun）员工会话'}
+      item={props.env.state?.userSetup.h3yun ?? { state: 'unknown', value: '', reason: '', required: true }}
+      extra={<div className={C.layerActions}>
+        <Button label={zhCN.envLoginH3yun} small onClick={props.onRelogin} />
+      </div>}
+    />
+    <SetupRow
+      id={props.env.services.find((service) => service.id === 'dingtalk')?.label ?? '钉钉认证'}
+      item={props.env.state?.userSetup.dingtalk ?? { state: 'unknown', value: '', reason: '', required: true }}
+      extra={<div className={C.layerActions}>
+        <Button label={zhCN.dwsLogin} small onClick={props.onDwsLogin} />
+        {/* 默认那条会开浏览器等回调；浏览器起不来时设备码是唯一走得通的路。 */}
+        {props.onDwsLoginDevice === undefined
+          ? null
+          : <Button label={zhCN.dwsLoginDevice} small onClick={props.onDwsLoginDevice} />}
+      </div>}
+    />
+    {props.loginMessage === undefined || props.loginMessage === ''
+      ? null
+      : <div className={C.itemFix} style={{ whiteSpace: 'pre-wrap' }}>{props.loginMessage}</div>}
+  </>
 }
 
 /**
- * 排查详情（维护者看）：默认收起。
+ * 开发者诊断：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节。
  *
- * 里面是清单来源、会话 id、sha256、probe 原文这些**只有排查时才需要**的东西；
- * 默认展开会让员工一进门就看到一堆看不懂的路径与校验和（用户报的"乱"就是这个）。
+ * 普通用户默认看不到：包路径、sha256、协议版本、运行时路径、凭据路径、验证工具名与数据样本
+ * **只在这里**出现。
  */
-function MaintenanceDetails(props: {
+function DeveloperDiagnostics(props: {
   env: EnvResult
+  build?: BuildSnapshot
   checkedAt: string
   open: boolean
   onToggle: () => void
 }): React.ReactElement {
-  const open = props.open
-  return <div className={C.details}>
-    <button type="button" className={C.detailsHead} aria-expanded={open} onClick={props.onToggle}>
-      <span>{zhCN.envDetailsTitle}</span>
-      <span className={C.detailsToggle}>{open ? zhCN.envLayerCollapse : zhCN.envLayerExpand}</span>
+  const rows = diagnosticRows(props.env, props.checkedAt, props.build ?? {
+    ok: false, error: '', rev: '', version: '', buildKind: '', builtAt: '', protocol: null, parentSessionId: '',
+  })
+  const [copied, setCopied] = React.useState(false)
+  const [copyError, setCopyError] = React.useState('')
+
+  const copy = (): void => {
+    void (async () => {
+      setCopyError('')
+      const text = diagnosticText(rows)
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText !== undefined) {
+          try {
+            await navigator.clipboard.writeText(text)
+            setCopied(true)
+            return
+          } catch {
+            // 浏览器可能因为权限策略拒绝；继续走 Host 的系统剪贴板退路。
+          }
+        }
+        const result = await workbenchApi.clipboard({ text })
+        if (!result.ok) throw new Error(result.error)
+        setCopied(true)
+      } catch {
+        setCopyError(zhCN.envDiagCopyFailed)
+      }
+    })()
+  }
+
+  return <div className={C.details} data-crwu-env-diag="1">
+    <button type="button" className={C.detailsHead} aria-expanded={props.open} onClick={props.onToggle}>
+      <span className={C.detailsTitle}>
+        <DeveloperDiagnosticsIcon size={17} />
+        <span>{zhCN.envGroupMaintenance}</span>
+      </span>
+      <span className={C.detailsToggle}>{props.open ? zhCN.envLayerCollapse : zhCN.envLayerExpand}</span>
     </button>
-    {open
-      ? <div className={C.detailsBody}>
-          <ToolDetails env={props.env} />
-          <OssSection env={props.env} />
-          <InfoSection env={props.env} checkedAt={props.checkedAt} />
-        </div>
+    <a
+      className={`${C.link} ${C.detailsContact}`}
+      href={DEVELOPER_CONTACT_URL}
+      target="_blank"
+      rel="noreferrer noopener"
+    >{zhCN.envDeveloperContact}</a>
+    {props.open
+      ? <section className={C.detailsBody} data-crwu-developer-panel="1">
+          <header className={C.detailsPanelHead}>
+            <div className={C.detailsPanelTitle}>{zhCN.envDiagPanelTitle}</div>
+            <Button label={copied ? zhCN.envDiagCopied : zhCN.envDiagCopy} small onClick={copy} />
+          </header>
+          {copyError === '' ? null : <div className={C.detailsCopyError}>{copyError}</div>}
+          <div className={C.kv}>
+            {rows.map((row, index) => <Kv key={`${row.label}-${String(index)}`} label={row.label}>
+              <span className={C.mono}>{row.value}</span>
+              {(row.details ?? []).map((detail, detailIndex) => <div
+                key={`${String(index)}-${String(detailIndex)}`}
+                className={C.muted}
+              >{detail}</div>)}
+            </Kv>)}
+          </div>
+        </section>
       : null}
   </div>
-}
-
-/** 各层初始展开状态：没就绪的展开（员工一眼看到要处理什么），全就绪的收成一行。 */
-function initialOpenLayers(layers: EnvLayerSet): Record<EnvLayerId, boolean> {
-  return {
-    tools: layers.tools.needsWork,
-    auth: layers.auth.needsWork,
-    upload: layers.upload.needsWork,
-    external: layers.external.needsWork,
-  }
 }
 
 export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement {
   const { env } = props
-  // 展开状态在**页面**这一层（见 LayerCard 的注释）：初值不是函数式，替身也认。
-  const [openLayers, setOpenLayers] = React.useState<Record<EnvLayerId, boolean>>(
-    env === null ? { tools: false, auth: false, upload: false, external: false } : initialOpenLayers(envLayerSet(env)),
-  )
-  const [detailsOpen, setDetailsOpen] = React.useState(false)
+  const [developerDiagnosticsOpen, setDeveloperDiagnosticsOpen] = React.useState(false)
+  /**
+   * 用户手动选过的步骤。
+   *
+   * `null` = 还没选过 → 默认停在第一项未完成；一旦非空就**无条件**用他的选择，
+   * 后台刷新（环境结论变了、重新检查回来）都不许把他切回第一项。
+   */
+  const [manualStep, setManualStep] = React.useState<SetupStepKind | null>(null)
 
   if (env === null) {
     // 首次加载时 busy 可能还没翻成 true（状态更新是异步的），所以「没有数据 + 没有错误」
-    // 一律显示「正在自检」，避免先闪一个空面板再出现内容。
+    // 一律显示「正在检查」，避免先闪一个空面板再出现内容。
     if (props.error !== '') {
       return <div>
         <Notice tone="warn">{props.error}</Notice>
         <div className={C.row}>
-          <Button label={zhCN.recheck} onClick={props.onRefresh} />
+          <Button label={zhCN.envActionRecheck} onClick={props.onRefresh} />
         </div>
       </div>
     }
@@ -422,111 +568,114 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
   }
 
   const gate = props.gate ?? 'idle'
-  const layers = envLayerSet(env)
+  const setup = env.state?.userSetup
+  const authorized = props.authorized ?? env.trust.credentials
+  const activeStep = pickStep(setupSteps(setupStepInput(env, authorized), manualStep), manualStep)
 
   return <div>
     {props.error === '' ? null : <Notice tone="warn">{props.error}</Notice>}
-
-    {/* 被拦住的解释放在最上面：用户是从「进入报告审核」被挡回来的，要立刻知道发生了什么。 */}
-    {gate === 'idle' ? null : <div className={C.gate}>
-      {gate === 'running'
-        ? <div className={C.row}>
-            <Spinner />
-            <span className={C.gateTitle}>{zhCN.gateRunningTitle}</span>
-          </div>
-        : <div className={C.gateTitle}>{zhCN.gateBlockedTitle}</div>}
-      <div className={C.muted}>{gate === 'running' ? zhCN.gateRunningHint : zhCN.gateBlockedHint}</div>
-    </div>}
-
-    {/* 重新自检要跑 shell 探测 + 氚云/钉钉登录态 + 一次 OSS 实测，好几秒；
-        没有这条进度条，用户只会看到界面「卡住」。下面的正文同时压暗并停掉点击，防手快连点。 */}
     <LoadingBar active={props.busy} />
 
     <div className={props.busy ? C.dim : ''}>
-      <Hero
+      <StatusSummary
         env={env}
         checkedAt={props.checkedAt ?? ''}
         busy={props.busy}
-        copied={props.copied}
         onRefresh={props.onRefresh}
-        onCopyPrompt={props.onCopyPrompt}
-        onEnterReport={props.onEnterReport}
+        gate={gate}
+        gateTarget={props.gateTarget}
+        gateReason={props.gateReason}
       />
 
-      {/* ① 案例根目录：前置条件，排在四层之前（审核产物写到哪）。 */}
-      <WorkspaceCard
-        workspace={env.workspace}
-        services={props.services}
-        busy={props.wsBusy}
-        message={props.wsMessage}
-        onBusy={props.onWsBusy}
-        onMessage={props.onWsMessage}
-        onRefresh={props.onRefresh}
-      />
+      {setup === undefined
+        // 旧宿主没有统一模型：步骤导航与状态都无从谈起 —— 明说，让人重启 profile。
+        ? <Notice tone="warn">{zhCN.hostStaleHint}</Notice>
+        : <SetupWorkspace
+            {...props}
+            env={env}
+            authorized={authorized}
+            activeStep={activeStep}
+            onPick={setManualStep}
+          />}
 
-      {/* ② 工具：怎么配都一样 —— 把安装提示词交给 Agent，所以动作放在层上，缺哪个都在那一句里。 */}
-      <LayerCard
-        layer={layers.tools}
-        open={openLayers.tools}
-        onToggle={() => { setOpenLayers({ ...openLayers, tools: !openLayers.tools }) }}
-        actions={<>
-          {/* 复制安装提示词**全页只留 Hero 那一枚**：同一动作在这里再放一枚只会让人犹豫点哪个。 */}
-          <Button label={zhCN.refreshEnv} small disabled={props.busy} onClick={props.onRefresh} />
-        </>}
-      />
-
-      {/* ③ 登录认证：登录按钮就在没就绪的那一项上（不再挤在 Hero 里）。 */}
-      <LayerCard
-        layer={layers.auth}
-        open={openLayers.auth}
-        onToggle={() => { setOpenLayers({ ...openLayers, auth: !openLayers.auth }) }}
-        headerExtra={<span className={C.authGranted}>{zhCN.authGrantedLine}</span>}
-        extraFor={(item) => {
-          if (item.fixKind === 'h3yun') {
-            return <div className={C.layerActions}>
-              <Button label={zhCN.envLoginH3yun} small onClick={props.onRelogin} />
-            </div>
-          }
-          if (item.fixKind === 'dws') {
-            return <div className={C.layerActions}>
-              <Button label={zhCN.dwsLogin} small onClick={props.onDwsLogin} />
-            </div>
-          }
-          return null
-        }}
-      />
-
-      {/* ④ 上传配置（AK）：表单就嵌在这一层里 —— 审核跑完等着上传时再去找 agent 是来不及的。 */}
-      <LayerCard
-        layer={layers.upload}
-        open={openLayers.upload}
-        onToggle={() => { setOpenLayers({ ...openLayers, upload: !openLayers.upload }) }}
-        fix={<OssAuthCard
-          cred={env.ossCred}
-            onRefresh={props.onRefresh}
-        />}
-      />
-
-      {/* ⑤ 外部数据（同花顺 iFinD）。 */}
-      <LayerCard
-        layer={layers.external}
-        open={openLayers.external}
-        onToggle={() => { setOpenLayers({ ...openLayers, external: !openLayers.external }) }}
-      />
-
-      <MaintenanceDetails
+      <DeveloperDiagnostics
         env={env}
+        build={props.build}
         checkedAt={props.checkedAt ?? ''}
-        open={detailsOpen}
-        onToggle={() => { setDetailsOpen(!detailsOpen) }}
-      />
-
-      <InstallPromptBlock
-        prompt={props.prompt}
-        url={props.promptUrl}
-        busy={props.promptBusy}
-        message={props.promptMessage}
+        open={developerDiagnosticsOpen}
+        onToggle={() => { setDeveloperDiagnosticsOpen(!developerDiagnosticsOpen) }}
       />
     </div>
   </div>
+}
+
+/** 配置工作区：左侧步骤导航 + 右侧当前步骤。 */
+function SetupWorkspace(props: EnvironmentPaneProps & {
+  env: EnvResult
+  authorized: boolean
+  activeStep: SetupStepKind
+  onPick: (id: SetupStepKind) => void
+}): React.ReactElement {
+  const { env } = props
+  const setup = env.state?.userSetup
+  const input = setupStepInput(env, props.authorized)
+  const active = props.activeStep
+  const steps = setupSteps(input, active)
+  const activeView = steps.find((step) => step.id === active)
+  const done = allStepsDone(steps)
+  return <div className={C.workspace} data-crwu-env-workspace="1">
+    <StepNav steps={steps} active={active} onPick={props.onPick} />
+    <StepPanel step={activeView} state={active === 'accounts' ? undefined : setupItemOf(input, active)}>
+      {done
+        ? <p className={C.stepLead} data-crwu-env-alldone="1">{zhCN.envStepDoneSummary}</p>
+        : null}
+      {active === 'accounts'
+        ? <AccountsStep {...props} env={env} authorized={props.authorized} />
+        : null}
+      {active === 'oss'
+        ? <OssCredCard delivery={env.delivery} onSaved={props.onRefresh} />
+        : null}
+      {active === 'ifind'
+        ? <IfindAuthCard credential={env.external} onSaved={props.onRefresh} />
+        : null}
+      {active === 'workspace'
+        ? <WorkspaceCard
+            workspace={env.workspace}
+            services={props.services}
+            busy={props.wsBusy}
+            message={props.wsMessage}
+            onBusy={props.onWsBusy}
+            onMessage={props.onWsMessage}
+            onRefresh={props.onRefresh}
+            collapsed={done}
+          />
+        : null}
+      {setup === undefined ? null : null}
+    </StepPanel>
+  </div>
+}
+
+function setupItemOf(input: ReturnType<typeof setupStepInput>, id: SetupStepKind): SetupItemView {
+  if (id === 'oss') return input.oss
+  if (id === 'ifind') return input.ifind
+  if (id === 'workspace') return input.workspace
+  return input.h3yun
+}
+
+/** 只给测试与诊断用：把「账号连接」里每一项的状态词取出来（不涉及渲染细节）。 */
+export function accountStates(env: EnvResult): Record<string, string> {
+  const setup = env.state?.userSetup
+  if (setup === undefined) return {}
+  return {
+    credentialsConsent: setup.credentialsConsent.state,
+    h3yun: setup.h3yun.state,
+    dingtalk: setup.dingtalk.state,
+  }
+}
+
+/** 只给诊断用：把「交付与外部数据」里每一项的状态词取出来。 */
+export function deliveryStates(env: EnvResult): Record<string, string> {
+  const setup = env.state?.userSetup
+  if (setup === undefined) return {}
+  return { aliyunOss: setup.aliyunOss.state, ifind: setup.ifind.state }
 }

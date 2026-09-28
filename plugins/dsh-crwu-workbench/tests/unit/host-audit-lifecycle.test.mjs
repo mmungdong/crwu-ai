@@ -20,7 +20,7 @@ const { createWorkbenchState } = await import(new URL('src/host/state/store.ts',
 const { normalizeAudit } = await import(new URL('src/host/state/registry.ts', ROOT).href)
 
 const CONFIG = {
-  caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
+  caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
   autoUpload: true, requireTopLevelParent: true,
 }
@@ -35,16 +35,18 @@ function fakeWorld(patch = {}) {
 }
 
 /** ctx：shell 失败、fs 内存化、sessions/agents/subagents 按需注入。 */
-function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [] } = {}) {
+function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [], patch = {} } = {}) {
   const directories = new Set(dirs)
   const listDirs = { ...entries }
-  return {
+  /** 工具调用流水（用例据此断言各只调一次、agent scope 传对了）。 */
+  const toolCalls = []
+  const ctx = {
     get(name) {
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async run() {
-            return { exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub', truncated: false } }
+          async execute() {
+            return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub', truncated: false } }) }
           },
         }
       }
@@ -64,9 +66,46 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
       if (name === 'sessions') return sessions
       if (name === 'agents') return agents
       if (name === 'subagents') return subagents
+      if (name === 'tools') {
+        // 审核发起前要真走一遍 registry：`get` 回答可见性，`execute` 依次真调
+        // `crwu_audit_capabilities`（能力预检）与 `crwu_audit_case_bootstrap`（输入快照交接）。
+        // 替身必须同时提供这两个面，并且**记下调用**，用例才能断言「各只调一次」。
+        return {
+          get: () => ({ name: 'crwu_audit_capabilities' }),
+          async execute(input) {
+            toolCalls.push({ name: input.name, arguments: input.arguments, agent: input.agent })
+            if (input.name === 'crwu_audit_case_bootstrap') {
+              if (patch.bootstrapFails === true) {
+                return { isError: false, value: { ok: false, errorKind: 'cli', error: '取数失败：记录接口没跑起来' } }
+              }
+              const args = input.arguments ?? {}
+              return {
+                isError: false,
+                value: {
+                  ok: true, errorKind: '', error: '', reused: false,
+                  attemptId: args.attemptId ?? '', objectId: args.objectId ?? '', seqNo: args.seqNo ?? '',
+                  schemaCodeDigest: 'sha256:0000000000000000', fetchedAt: '2026-09-25T00:00:00.000Z',
+                  digest: 'sha256:1111111111111111', fieldCount: 7, attachmentCount: 2,
+                  snapshotDir: `${args.caseDir}/输入快照`,
+                  snapshotPath: `${args.caseDir}/输入快照/报告记录.json`,
+                  attachmentsPath: `${args.caseDir}/输入快照/附件清单.json`,
+                  metadataPath: `${args.caseDir}/输入快照/快照元数据.json`,
+                  routingFacts: {
+                    project: '某项目', business: '', risk: '', reviewLevel: '', reviewState: '',
+                    currentNode: '', modifiedAt: '', seqNo: args.seqNo ?? '', formName: '报告审核',
+                  },
+                },
+              }
+            }
+            return { isError: false, value: { ok: true, platform: 'darwin-arm64', binPlatform: 'darwin-arm64' } }
+          },
+        }
+      }
       return undefined
     },
   }
+  // 保持原契约：`makeCtx()` 返回的就是 ctx（用例直接当 ctx 用），工具调用流水挂在它上面。
+  return Object.assign(ctx, { toolCalls })
 }
 
 function makeState(patch = {}) {
@@ -348,7 +387,18 @@ function startDeps(patch = {}) {
     },
     sessions: { get: (id) => (id === 'parent-1' ? { header: { delegationDepth: 0 } } : undefined) },
   })
-  return { deps: { ctx, config: CONFIG, state, world: fakeWorld() }, state }
+  // 表单解析器与 DSH Python 的替身：审核启动必须在**创建子代理之前**先过这两关。
+  const form = patch.form ?? {
+    ensure: async () => ({ ok: true, code: 'FORM-1', name: '报告审核', error: '', escalated: false }),
+  }
+  const python = patch.python ?? {
+    cached: () => null,
+    check: async () => ({
+      ok: true, state: 'ok', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
+      distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stub',
+    }),
+  }
+  return { deps: { ctx, config: CONFIG, state, world: fakeWorld(), form, python }, state }
 }
 
 test('audit-start refuses without a chosen workspace', async () => {
@@ -382,6 +432,135 @@ test('audit-start hangs off the audit root, not off whichever session was bound'
   assert.equal(started.ok, true)
   assert.equal(started.parentSessionId, 'parent-1', '父级必须是根会话，不是绑定的那个会话')
   assert.equal(state.audits.k.parentSessionId, 'parent-1', '记录里也要记根会话，重启后还能找到这棵树')
+})
+
+// ── 审核启动的「报告定位交接」（2026-09-25） ────────────────────────────────
+
+/** 记录表单解析器被问了几次、以及它是否成功。 */
+function formSpy(options = {}) {
+  const calls = []
+  return {
+    calls,
+    resolver: {
+      async ensure() {
+        calls.push('ensure')
+        if (options.fails === true) return { ok: false, code: '', name: '', error: '未在氚云定位到表单「报告审核」', escalated: false }
+        return { ok: true, code: 'FORM-1', name: '报告审核', error: '', escalated: false }
+      },
+    },
+  }
+}
+
+test('formCode 已缓存时，启动审核不再去发现表单', async () => {
+  // 列表早就定位过表单（`state.formCode` 非空）→ 启动这一步必须是零成本复用，
+  // 而不是再搜一次（实测搜一次要十几到六十秒）。
+  const spy = formSpy()
+  const { deps } = startDeps({ form: spy.resolver, state: { parentSessionId: 'parent-1', formCode: 'FORM-1', formName: '报告审核' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true)
+  // 缓存的判断在解析器内部（同一份实现），所以这里断言的是「解析器真的被问到、且它只回缓存」——
+  // 真正的「不再 discoverForm」由 host-h3yun-pending.test.mjs 用真实 resolver 钉住。
+  assert.deepEqual(spy.calls, ['ensure'])
+})
+
+test('定位表单失败时在创建子代理之前终止', async () => {
+  const spy = formSpy({ fails: true })
+  const { deps, state } = startDeps({ form: spy.resolver, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /无法定位氚云表单/)
+  assert.equal(state.activeChildId, '', '定位失败不得占用门禁')
+  assert.equal(state.audits.k, undefined, '也不得留下审核记录')
+})
+
+test('输入快照交接失败时在创建子代理之前终止', async () => {
+  const ctx = makeCtx({
+    patch: { bootstrapFails: true },
+    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /输入快照交接未完成/)
+  assert.match(result.error, /取数失败/)
+  assert.equal(state.activeChildId, '')
+})
+
+test('DSH Python 不可用时在创建子代理之前终止（不许退回系统 python3）', async () => {
+  const { deps, state } = startDeps({
+    state: { parentSessionId: 'parent-1' },
+    python: {
+      cached: () => null,
+      check: async () => ({
+        ok: false, state: 'missing-package', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
+        distributions: {}, missingPackages: ['openpyxl'], error: 'DSH 自带 Python 缺少审核脚本必需的包：openpyxl',
+        source: 'stub',
+      }),
+    },
+  })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /DSH 脚本运行时不可用/)
+  assert.match(result.error, /openpyxl/)
+  assert.equal(state.activeChildId, '')
+})
+
+test('启动审核：bootstrap 只调一次、agent scope 传的是审核根 Agent、attemptId 每轮都新', async () => {
+  const ctx = makeCtx({
+    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running', ctx: { scoped: 'parent-1' } } : undefined) },
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start(_p, request) { return { id: `child-${Math.random().toString(36).slice(2, 8)}`, provider: 'spawn', dispose: async () => {}, request } } },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const first = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1', project: '某项目' })
+  assert.equal(first.ok, true)
+
+  const bootstrapCalls = ctx.toolCalls.filter((call) => call.name === 'crwu_audit_case_bootstrap')
+  assert.equal(bootstrapCalls.length, 1, '一个 attempt 只交接一次输入快照')
+  assert.equal(bootstrapCalls[0].agent.id, 'parent-1', '必须用审核根 Agent 当 scope（走完整 policy pipeline）')
+  assert.equal(bootstrapCalls[0].arguments.caseDir, '/cases/space/S1', '案例目录 = 工作空间 + 流水号')
+  assert.equal(bootstrapCalls[0].arguments.objectId, 'o1')
+  assert.equal(bootstrapCalls[0].arguments.refresh, false, '首次审核不强制刷新')
+  const firstAttempt = String(bootstrapCalls[0].arguments.attemptId)
+  assert.match(firstAttempt, /^k-a1-/)
+
+  // 重审：新 attemptId + 强制刷新，绝不复用上一轮的输入快照。
+  const again = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1', retry: true })
+  assert.equal(again.ok, true)
+  const second = ctx.toolCalls.filter((call) => call.name === 'crwu_audit_case_bootstrap')[1]
+  assert.equal(second.arguments.refresh, true, '重审必须重新取数覆盖本轮快照')
+  assert.notEqual(String(second.arguments.attemptId), firstAttempt, 'attemptId 必须每轮都新')
+  assert.match(String(second.arguments.attemptId), /^k-a2-/)
+})
+
+test('审核启动把快照路径与 DSH Python 一起写进子代理指令', async () => {
+  let prompt = ''
+  const ctx = makeCtx({
+    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        // `startChild` 把指令包成 content block 数组（DSH 的 UserMessage 形状），不是裸字符串。
+        prompt = Array.isArray(request.prompt)
+          ? request.prompt.map((block) => String(block?.text ?? '')).join('\n')
+          : String(request.prompt ?? '')
+        return { id: 'child-1', provider: 'spawn', dispose: async () => {}, request }
+      },
+    },
+  })
+  const { deps } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true)
+  assert.match(prompt, /报告已由 Host 精确定位/)
+  assert.match(prompt, /\/cases\/space\/S1\/输入快照\/报告记录\.json/)
+  assert.match(prompt, /sha256:1111111111111111/)
+  assert.match(prompt, /脚本运行时：只用 DSH 自带的 Python/)
+  assert.match(prompt, /\/dsh\/runtime\/python\/bin\/python3/)
+  // 仍然不许出现基础设施细节：schemaCode、插件 bin、PATH 注入、裸命令
+  assert.equal(/schemaCode\s*[:=]\s*[A-Za-z0-9]{8,}/.test(prompt), false, '原文 schemaCode 不得出现')
+  assert.equal(prompt.includes('bin/darwin-arm64'), false)
+  assert.equal(prompt.includes('export PATH'), false)
 })
 
 // ── audit-status / audit-stop / audit-release ───────────────────────────────
@@ -567,4 +746,66 @@ test('audit-release reports what it released and is idempotent', async () => {
   assert.deepEqual(await auditRelease(deps), { ok: true, released: 'k' })
   assert.equal(state.activeChildId, '')
   assert.deepEqual(await auditRelease(deps), { ok: true, released: '' })
+})
+
+// ── 能力门禁（在创建子代理之前）──────────────────────────────────────────────
+
+/**
+ * 这两条盯的是「**不许只靠提示词**」：子代理看不到必需的 CRWU Tool 时，
+ * 插件必须在 `subagents.start` 之前失败，而不是让它跑起来再自己去 shell 里找命令。
+ */
+function gateDeps(tools) {
+  const spawned = []
+  const state = makeState({
+    workspaceChosen: true,
+    workspacePath: '/cases/space',
+    auditRoot: { workspacePath: '/cases/space', sessionId: 'parent-1', title: '', assignedAt: '' },
+  })
+  const ctx = makeCtx({
+    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space' } } : undefined) },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_provider, request) { spawned.push(request); return { id: 'child-1', provider: 'spawn', dispose: async () => {}, request } },
+    },
+  })
+  // `tools` 由这两个用例注入；其它服务走 makeCtx 的默认面。
+  const original = ctx.get
+  ctx.get = (name) => (name === 'tools' ? tools : original(name))
+  return { deps: { ctx, config: CONFIG, state, world: fakeWorld() }, state, spawned }
+}
+
+test('audit-start refuses before spawning when a required tool is invisible', async () => {
+  const { deps, spawned } = gateDeps({
+    get: (name) => (name === 'crwu_audit_oss_publish' ? undefined : { name }),
+    async execute() { return { isError: false, value: { ok: true } } },
+  })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /crwu_audit_oss_publish/, '必须点名缺失的工具')
+  assert.equal(spawned.length, 0, '工具不可见时绝不许创建子代理')
+})
+
+test('audit-start refuses before spawning when the capability preflight reports a gap', async () => {
+  const { deps, spawned } = gateDeps({
+    get: (name) => ({ name }),
+    async execute() {
+      return {
+        isError: false,
+        value: {
+          ok: false, errorKind: 'capability-gap', error: '包内缺少二进制：dws',
+          pluginVersion: '0.0.7', platform: 'darwin-arm64', binPlatform: '',
+          supportedPlatforms: [], binaries: [], tools: [],
+          policy: { credentialsTrusted: false, workspaceKnown: true, pathSearchForAuditCli: false, sandboxEscalation: '' },
+          dwsCommands: [],
+        },
+      }
+    },
+  })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /审核能力预检未通过/)
+  assert.match(result.error, /capability gap/)
+  assert.equal(spawned.length, 0, '能力缺失时绝不许创建子代理')
 })

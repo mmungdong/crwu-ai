@@ -10,10 +10,26 @@ import test from 'node:test'
 const ROOT = new URL('../../', import.meta.url)
 
 const { loadPending } = await import(new URL('src/host/h3yun/pending.ts', ROOT).href)
+const { H3yunFormResolver } = await import(new URL('src/host/h3yun/form.ts', ROOT).href)
 const { discoverForm } = await import(new URL('src/host/h3yun/discover.ts', ROOT).href)
 const { RECORDS_STDOUT_MAX } = await import(new URL('src/host/h3yun/consts.ts', ROOT).href)
 
-const CONFIG = { caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true }
+const CONFIG = { caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true }
+
+/**
+ * 表单解析器替身：与生产用的是同一个类（`H3yunFormResolver`），所以「已缓存就不再搜」
+ * 这条规则在这里也是**真的**在跑，而不是靠假对象假装。
+ */
+function formOf(shell, state) {
+  return new H3yunFormResolver({
+    ctx: shell.ctx,
+    config: CONFIG,
+    state,
+    trusted: () => true,
+    platform: async () => 'darwin-arm64',
+    workdir: async () => '/cases/session',
+  })
+}
 
 function stateOf(patch = {}) {
   return {
@@ -34,10 +50,10 @@ function shellStub(handler) {
       get: (name) => (name === 'shell'
         ? {
             resolve(request) { specs.push(request); return request },
-            async run(spec) {
+            async execute(spec) {
               commands.push(spec.command)
               const out = handler(spec.command)
-              return {
+              return { result: async () => ({
                 exitCode: out.exitCode ?? 0,
                 signal: null,
                 timedOut: false,
@@ -45,7 +61,7 @@ function shellStub(handler) {
                 timeoutMs: 1,
                 stdout: { text: out.stdout ?? '', truncated: out.truncated === true },
                 stderr: { text: out.stderr ?? '', truncated: false },
-              }
+              }) }
             },
           }
         : undefined),
@@ -95,7 +111,7 @@ test('discoverForm surfaces that escalation is available when the keychain block
 test('loadPending locates the form once and then reuses its code', async () => {
   const shell = shellStub((command) => (command.includes('forms search') ? { stdout: FORMS_JSON } : { stdout: rowsJson([{ ObjectId: 'obj-1', Name: 'X' }], 1) }))
   const state = stateOf()
-  const deps = { ctx: shell.ctx, config: CONFIG, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' }
+  const deps = { ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
 
   const first = await loadPending(deps, {})
   assert.equal(first.ok, true)
@@ -112,7 +128,7 @@ test('loadPending locates the form once and then reuses its code', async () => {
 test('loadPending passes the filter only when the query is usable', async () => {
   const shell = shellStub(() => ({ stdout: rowsJson([], 0) }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const deps = { ctx: shell.ctx, config: CONFIG, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' }
+  const deps = { ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
 
   await loadPending(deps, { query: '2026-301705-LX10170' })
   assert.match(shell.commands[0], /--filter 'SeqNo Equal '\\''2026-301705-LX10170'\\'''/)
@@ -127,7 +143,7 @@ test('loadPending passes the filter only when the query is usable', async () => 
 test('loadPending clamps page/size and never sends NaN', async () => {
   const shell = shellStub(() => ({ stdout: rowsJson([], 0) }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const deps = { ctx: shell.ctx, config: CONFIG, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' }
+  const deps = { ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
 
   const clamped = await loadPending(deps, { page: -5, size: 9999 })
   assert.equal(clamped.page, 1)
@@ -143,14 +159,14 @@ test('loadPending clamps page/size and never sends NaN', async () => {
 test('loadPending requests the big stdout budget so a full page is not truncated', async () => {
   const shell = shellStub(() => ({ stdout: rowsJson([], 0) }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  await loadPending({ ctx: shell.ctx, config: CONFIG, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' }, {})
+  await loadPending({ ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, {})
   assert.equal(shell.specs[0].stdoutMaxBytes, RECORDS_STDOUT_MAX)
 })
 
 test('loadPending reports a truncated/failed payload with the CLI reason, not an empty list', async () => {
   const shell = shellStub(() => ({ exitCode: 0, stdout: '{"data":{"returnData":[', truncated: true }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const result = await loadPending({ ctx: shell.ctx, config: CONFIG, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' }, {})
+  const result = await loadPending({ ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, {})
   assert.equal(result.ok, false)
   assert.equal(result.rows.length, 0)
   assert.ok(result.error.length > 0, '必须带出原因，否则界面会显示「没有待办」')
@@ -164,7 +180,7 @@ test('loadPending returns the total and rows from a successful page', async () =
     ], 37),
   }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const result = await loadPending({ ctx: shell.ctx, config: CONFIG, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' }, { page: 2, size: 20 })
+  const result = await loadPending({ ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, { page: 2, size: 20 })
   assert.equal(result.ok, true)
   assert.equal(result.total, 37)
   assert.equal(result.rows.length, 2)

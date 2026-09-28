@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
@@ -25,6 +26,9 @@ const { createWorkbenchState, workspaceView } = await import(new URL('src/host/s
 const { createCoreOperations } = await import(new URL('src/host/ops/core.ts', ROOT).href)
 const { WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { readJsonBody, writeJson } = await import(new URL('src/host/http/json.ts', ROOT).href)
+// 冻结清单只有一份（工具 / 操作的名字与数量），避免各测试各写一个裸数字。
+const { FROZEN_AUDIT_TOOLS, FROZEN_AUDIT_TOOL_COUNT, FROZEN_OPERATIONS, FROZEN_OPERATION_COUNT } =
+  await import(new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
 
 const YAML_CONFIG = new URL('config/crwu-workbench.yml', ROOT)
 const YAML_RUNTIME = resolveWorkbenchConfig({ configFile: YAML_CONFIG.pathname })
@@ -104,14 +108,15 @@ test('the package YAML is the runtime source of deployment values', () => {
   const config = resolveConfig()
   assert.equal(config.configSource, YAML_CONFIG.pathname)
   assert.equal(config.caseRoot, '')
-  assert.equal(config.manifestUrl, 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-env-manifest.json')
+  assert.equal('manifestUrl' in config, false, '只读分发桶的清单地址已整体下掉')
+  assert.equal('installDocUrl' in config, false, '安装文档地址同上')
   assert.equal(config.ossBucket, 'crwu-workspace')
   assert.equal(config.ossLinkMode, 'signed')
 })
 
 test('host declares exactly the services it reads', () => {
   // 少声明 → 插件等待或运行失败；多声明 → 无谓的激活依赖。
-  assert.deepEqual(PLUGIN_INJECT, ["webServer", "shell"])
+  assert.deepEqual(PLUGIN_INJECT, ["webServer", "shell", "tools"])
   assert.equal(PLUGIN_NAME, 'crwu-workbench')
   assert.equal(WORKBENCH_ROUTE, '/api/crwu-workbench')
 })
@@ -162,8 +167,8 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
   // 所以给一个答不出话的替身比给 undefined 更接近实际。
   const stubShell = {
     resolve: (request) => request,
-    async run() {
-      return { exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }
+    async execute() {
+      return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }) }
     },
   }
   const stubFs = {
@@ -179,7 +184,22 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
     effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
     ...(sessions === undefined ? {} : { sessions }),
   }
-  return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world) }
+  // 两个实例级解析器：审核启动/记录类 Tool 依赖它们。
+  // 这里给**最小替身**（表单已缓存、Python 可用），因为这份测试盯的是操作表与包清单，
+  // 不是解析逻辑本身（那两条各有专门测试：host-audit-lifecycle / host-runtime-python）。
+  const form = {
+    async ensure() { return { ok: true, code: 'FORM-1', name: '报告审核', error: '', escalated: false } },
+  }
+  const python = {
+    cached: () => null,
+    async check() {
+      return {
+        ok: true, state: 'ok', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
+        distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stub',
+      }
+    },
+  }
+  return { state, ctx, operations: createCoreOperations(ctx, resolved, state, world, { form, python }) }
 }
 
 test('buildKind 靠包根旁边有没有 src/ 判断：源码检出 = dev，装好的包 = installed', async () => {
@@ -253,6 +273,47 @@ test('ping and boot answer with the state the panel needs to render', async () =
   assert.deepEqual(boot.ported.todo, [], '不该再有未移植的操作')
 })
 
+test('env 操作的运行时分区来自 DSH Python 解析器（接线 + refresh 透传）', async () => {
+  // 环境页 ③ 层显示什么，取决于 `apply()` 把实例级解析器接进了 `env` 操作。
+  // 这一条钉的是**接线**：解析器被调用、`refresh` 原样透传、结果落在 `runtime` 分区里。
+  // （解析器自身的行为在 host-runtime-python.test.mjs；loadEnvironment 的分区在
+  //   host-environment-env.test.mjs。）
+  const calls = []
+  const python = {
+    cached: () => null,
+    async check(options) {
+      calls.push(options)
+      return {
+        ok: true, state: 'ok', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
+        distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stubDSH',
+      }
+    },
+  }
+  const resolved = resolveConfig({})
+  const state = createWorkbenchState(resolved)
+  const world = fakeWorld()
+  const stubShell = {
+    resolve: (request) => request,
+    async execute() {
+      return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }) }
+    },
+  }
+  const ctx = {
+    get: (name) => (name === 'shell' ? stubShell : undefined),
+    effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
+  }
+  const form = { async ensure() { return { ok: true, code: 'F', name: '报告审核', error: '', escalated: false } } }
+  const operations = createCoreOperations(ctx, resolved, state, world, { form, python })
+
+  const plain = await operations.env({})
+  assert.equal(plain.runtime.ok, true, '接线后 runtime 分区应当是解析器的结论')
+  assert.equal(plain.runtime.path, '/dsh/runtime/python/bin/python3')
+  assert.deepEqual(calls.map((item) => item.refresh), [false], '默认不刷新（走缓存）')
+
+  await operations.env({ refresh: true })
+  assert.deepEqual(calls.map((item) => item.refresh), [false, true], '「重新自检」的 refresh 要透传到解析器')
+})
+
 test('the declared ported lists match which operations actually run', async () => {
   const { operations } = operationsFor()
   const boot = await operations.boot()
@@ -277,20 +338,16 @@ test('the declared ported lists match which operations actually run', async () =
   }
 })
 
-test('the Host half still registers the frozen inventory of 26 operations', async () => {
+test('the Host half still registers the frozen inventory of operations', async () => {
   // 旧形态退休后，原来「从它的源码读 handler 名单来对账」的来源没了。
-  // 保留它真正守住的东西：**操作清单不能悄悄变少或改名**。所以这里把它冻成字面量。
-  // 这份清单的来历是旧动态形态的 24 个 handler + 包形态新增的 ping（见 PORTING.md）。
-  const FROZEN = [
-    'ping', 'boot', 'workspace', 'workspace-auto', 'trust', 'bind-session', 'install-prompt', 'env', 'pending',
-    'crwu', 'audit-start', 'audit-stop', 'audit-status', 'audit-release', 'oss-index', 'oss-result', 'oss-link',
-    'oss-upload', 'oss-cred-save', 'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
-    // 第 26 个：一份报告的全部相关文件（只列举、不下载）—— 面板一打开就查。
-    'report-files',
-  ]
+  // 保留它真正守住的东西：**操作清单不能悄悄变少或改名**。名单与数量在
+  // `tests/helpers/frozen-inventory.mjs` 里只有一份（各测试共用，避免裸数字静默过期）。
   const { operations } = operationsFor()
-  assert.deepEqual(Object.keys(operations).sort(), [...FROZEN].sort())
-  assert.equal(FROZEN.length, 26, '旧形态 24 个 handler + 包形态新增 ping、whoami、report-files')
+  assert.deepEqual(Object.keys(operations).sort(), [...FROZEN_OPERATIONS].sort())
+  assert.equal(FROZEN_OPERATIONS.length, FROZEN_OPERATION_COUNT)
+  // 30 → 29：`install-prompt` 已删除（2026-09-26，「复制安装提示词」在环境页不再需要）。
+  // 同批协议号 13 → 14（旧客户端挂载时会调这个操作，必须靠协议号让"界面新、宿主旧"显形）。
+  assert.equal(FROZEN_OPERATION_COUNT, 29)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {
@@ -368,14 +425,14 @@ test('授权状态重启后仍在（从状态文件读回，不需要重新授�
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async run(spec) {
+          async execute(spec) {
             const command = String(spec.command)
             const out = command.includes('curl') ? '{}'
               : command.includes('dws auth status') ? JSON.stringify({ authenticated: true })
                 : command.includes('h3yun session status') ? JSON.stringify({ data: { userId: 'u', expiresAt: '2099-01-01T00:00:00Z' } })
                   : command.includes(' ls ') ? 'ok\n'
                     : ''
-            return { exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: out, truncated: false }, stderr: { text: '', truncated: false } }
+            return { result: async () => ({ exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: out, truncated: false }, stderr: { text: '', truncated: false } }) }
           },
         }
       }
@@ -439,26 +496,6 @@ test('bind-session rejects an empty id and tolerates a missing sessions service'
   const padded = operationsFor()
   assert.equal((await padded.operations['bind-session']({ sessionId: '   ' })).ok, true)
   assert.equal(padded.state.parentSessionId, '   ')
-})
-
-test('install-prompt resolves the URL manifest-first and keeps the legacy wording', () => {
-  // 清单优先（现拉的、随组织变），Config 兜底 —— 与 env 返回 installDocUrl 的口径一致。
-  const fromConfig = operationsFor({ installDocUrl: 'https://example.invalid/doc.md' })
-  const result = fromConfig.operations['install-prompt']({ workspace: '/cases/x' })
-  assert.equal(result.url, 'https://example.invalid/doc.md')
-  assert.match(result.prompt, /先完整阅读这份安装清单/)
-  assert.match(result.prompt, /不要凭经验跳步/)
-  assert.match(result.prompt, /密钥、令牌一律不要回显/)
-  assert.match(result.prompt, /\/cases\/x/)
-
-  // 清单里给了地址就以它为准，哪怕 Config 也写了。
-  const withManifest = operationsFor({ installDocUrl: 'https://example.invalid/doc.md' })
-  withManifest.state.manifest = { ...DEFAULT_MANIFEST, installDocUrl: 'https://manifest.invalid/doc.md' }
-  assert.equal(withManifest.operations['install-prompt']({}).url, 'https://manifest.invalid/doc.md')
-
-  // 两个来源都没有时用内置常量，而不是给一个空地址。
-  const fallback = operationsFor({ installDocUrl: '' })
-  assert.match(fallback.operations['install-prompt']({}).url, /^https:\/\//)
 })
 
 test('audit-release clears the single-audit occupancy and reports what it released', async () => {
@@ -578,9 +615,10 @@ test('package.json entry points, files and exports stay consistent', async () =>
   for (const entry of ['lib/index.js', 'lib/client.js', 'config/crwu-workbench.yml', 'cordis.patch.yml', 'LICENSE', 'SECURITY.md', 'CHANGELOG.md']) {
     assert.ok(pkg.files.includes(entry), `${entry} 不在 files 里，分发会缺件`)
   }
-  // 技能随包发布：`skills/` 是插件专属技能，`common/skills/` 是打包前从 `plugins/common/skills/`
-  // 同步进来的公共技能（npm 的 files 出不了包目录，所以必须是包内的一份真拷贝）。
-  for (const entry of ['skills/', 'common/skills/']) {
+  // 技能随包发布，按层列出：`skills/crwu/` 是本仓自研层、`skills/dws/` 是 vendored 的上游钉钉技能层、
+  // `common/skills/` 是打包前从 `plugins/common/skills/` 同步进来的公共层（npm 的 files 出不了包目录，
+  // 所以必须是包内的一份真拷贝）。一层一个技能根，缺任一层员工就少一层技能。
+  for (const entry of ['skills/README.md', 'skills/crwu/', 'skills/dws/', 'common/skills/']) {
     assert.ok(pkg.files.includes(entry), `${entry} 不在 files 里，员工装完就拿不到技能`)
   }
   for (const entry of ['tests', 'install', 'scripts', 'src']) {
@@ -589,12 +627,15 @@ test('package.json entry points, files and exports stay consistent', async () =>
   // git 安装拉的是源码：没有 prepare 就装不出 lib/；实现必须是随包发布的那个脚本
   // （npm 安装 tarball 时也会跑它，所以它不能依赖 src/ 或 tsconfig）。
   assert.equal(pkg.scripts.prepare, 'node scripts/prepare.mjs')
-  // 打包前先同步公共技能：少了这一步，tarball 里只有插件专属技能。
+  // 打包前先同步公共技能、并核对 vendored 的 dws 层内容：少了前者 tarball 里只有自研层，
+  // 少了后者上游正文被就地改过也不会有任何提示。
   assert.match(pkg.scripts.prepack, /skills:sync/)
+  assert.match(pkg.scripts.prepack, /dws:check/)
   assert.match(pkg.scripts.prepack, /config:check/)
   assert.match(pkg.scripts.prepack, /build:lib/)
   assert.match(pkg.scripts.build, /skills:sync/)
   assert.match(pkg.scripts.check, /skills:check/)
+  assert.match(pkg.scripts.check, /dws:check/)
   assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(pkg.dsh.client.platform, 'web')
 })
@@ -604,9 +645,15 @@ test('the npm release path is wired: publishable, self-checked before publish', 
   // 这个插件要长期按 npm 包分发，所以不能是 private。
   assert.notEqual(pkg.private, true, '本仓按 npm 发布分发；private 会挡住发布')
   assert.equal(pkg.publishConfig.access, 'public')
-  assert.equal(pkg.publishConfig.provenance, true)
+  // **`provenance: true` 不能写进 `publishConfig`**（2026-09-28 实测踩到）：
+  // 它会让**每一次** `npm publish` 都要求来源证明，而 `--provenance` 只在受支持的 CI
+  // （GitHub Actions 的 OIDC）里成立 —— 本机跑会直接
+  // `EUSAGE: Automatic provenance generation not supported for provider: null` 拒绝发布。
+  // 现在改为：本机引导首发不带签名；CI（release.yml，有 `id-token: write`）用 OIDC 发布，
+  // 那种情况下 npm 会**自动**附带 attestation，不需要这个开关。
+  assert.notEqual(pkg.publishConfig.provenance, true, '别把 provenance 钉在 publishConfig 里：本机就发不出去了')
   // 发布目标必须钉死在官方 registry：本机（以及国内很多开发机）的 npm registry 指向的是镜像，
-  // 不钉的话 `npm publish` 会往镜像上发，而 `--provenance` 在镜像上根本不成立。
+  // 不钉的话 `npm publish` 会往镜像上发。
   // 这里同时核对 CI 里的 registry-url，两者不一致就是「本地一套、CI 另一套」的隐患。
   assert.equal(pkg.publishConfig.registry, 'https://registry.npmjs.org')
   // 工作流在**仓库根**（`crwu-ai/.github/`），插件是子目录，所以每条 npm 命令都要靠
@@ -663,21 +710,48 @@ test('an installed tarball can actually be installed and imported', async () => 
     await stat(join(packageDir, 'lib', 'index.js'))
     await stat(join(packageDir, 'lib', 'client.js'))
     await stat(join(packageDir, 'config', 'crwu-workbench.yml'))
-    // 技能是员工侧的唯一来源：专属技能与同步进来的公共技能都必须真的在包里。
-    await stat(join(packageDir, 'skills', 'crwu-audit', 'SKILL.md'))
+    // 技能是员工侧的唯一来源：自研层、vendored 上游层与同步进来的公共层都必须真的在包里。
+    await stat(join(packageDir, 'skills', 'crwu', 'crwu-audit', 'SKILL.md'))
+    await stat(join(packageDir, 'skills', 'dws', 'dingtalk-doc', 'SKILL.md'))
     await stat(join(packageDir, 'common', 'skills', 'crwu-dws', 'SKILL.md'))
+    // 自带二进制 + 构建产物清单：发布形态必须齐备（干净发布环境的 tarball 里就该有它们）。
+    // 工作树没装配时（干净 checkout）跳过这一段，由 `npm run pack:assert:strict` 在发布链路硬卡。
+    if (existsSync(join(fileURLToPath(ROOT), 'bin', 'manifest.json'))) {
+      await stat(join(packageDir, 'bin', 'manifest.json'))
+      for (const platform of ['darwin-arm64', 'win32-x64']) {
+        for (const tool of ['crwu', 'dws', 'ossutil']) {
+          const name = platform.startsWith('win32') ? `${tool}.exe` : tool
+          await stat(join(packageDir, 'bin', platform, name))
+        }
+      }
+    }
 
+    // `tools` 是硬依赖：`apply()` 会把 CRWU 工具注册进去（注册失败就抛）。
+    // 这里的替身只做两件事：收集被注册的工具名、返回 disposer —— 这条测试要证的是
+    // 「装出来的包能从包内 YAML 激活，并且真的注册了必需工具集那么多工具」；
+    // 「注册进**真实**注册表后 schema/pipeline 的行为」由 `host-tools.test.mjs` 覆盖。
     const activate = [
       'import("dsh-crwu-workbench").then(m => {',
       'const routes = [];',
+      'const registered = [];',
+      'const tools = { register: (definition) => { registered.push(definition.name); return () => {} } };',
       'const ctx = { webServer: { register: () => { routes.push(1); return () => {} } },',
-      'get: () => undefined, on: () => () => {}, effect: (fn) => fn() };',
+      'get: (name) => (name === "tools" ? tools : undefined), on: () => () => {}, effect: (fn) => fn(),',
+      'logger: { info: () => {}, warn: () => {} } };',
       'm.apply(ctx, m.Config({}));',
-      'console.log(`${Object.keys(m).sort().join(",")}:${routes.length}`);',
+      'console.log(`${Object.keys(m).sort().join(",")}:${routes.length}:${registered.length}`);',
       '})',
     ].join('')
     const { stdout } = await run('node', ['-e', activate], { cwd: packageDir })
-    assert.equal(stdout.trim(), 'Config,ROUTE,apply,inject,name:1', '装出来的包必须从包内 YAML 激活并注册路由')
+    const [members, routes, toolCount] = stdout.trim().split(':')
+    assert.equal(members, 'Config,ROUTE,apply,inject,name', '装出来的包必须导出 DSH 插件协议的成员')
+    assert.equal(routes, '1', '装出来的包必须从包内 YAML 激活并注册路由')
+    // 数量**与 `REQUIRED_AUDIT_TOOLS` 对账**，不再写死裸数字：
+    // 以前这里写 9，加进 iFinD 之后真实值是 10，而测试照样"通过"过一次（说明没人看注释）。
+    assert.equal(toolCount, String(FROZEN_AUDIT_TOOL_COUNT),
+      `装出来的包必须把 ${String(FROZEN_AUDIT_TOOL_COUNT)} 个 CRWU 工具注册进真实注册表`)
+    assert.equal(toolCount, '10', '必需工具集当前是 10 个（含 crwu_audit_ifind_query）')
+    assert.ok(FROZEN_AUDIT_TOOLS.includes('crwu_audit_ifind_query'))
   } finally {
     await rm(workdir, { recursive: true, force: true })
   }

@@ -7,8 +7,13 @@ import type { AuditRecord, WorkbenchState } from '../state/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import { auditLabel, seqNoFromLabel } from './consts.ts'
 import { auditPrompt } from './prompt.ts'
-import { startChild, stopChild } from './spawn.ts'
+import { agentRegistry, startChild, stopChild } from './spawn.ts'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import { ensureAuditRoot } from './root.ts'
+import { auditToolsVisible, bootstrapInputSnapshot, capabilityPreflight } from './preflight.ts'
+import type { H3yunFormResolver } from '../h3yun/form.ts'
+import type { PythonRuntimeResolver } from '../runtime/python.ts'
+import { caseDirOf } from '../../shared/utils/case-dir.ts'
 import {
   applyAssessment,
   assessAudit,
@@ -37,6 +42,10 @@ export interface AuditDeps {
   config: WorkbenchConfig
   state: WorkbenchState
   world: WorldFacts
+  /** 表单 code 的实例级解析器：审核启动必须先把 `schemaCode` 解析出来，再交给 bootstrap。 */
+  form: H3yunFormResolver
+  /** DSH 自带 Python：审核脚本的运行时，启动前必须解析成功（否则子代理会去找系统 python3）。 */
+  python: PythonRuntimeResolver
   /**
    * 「出结果就传」的钩子。
    *
@@ -155,6 +164,36 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       return failed(`已有审核在进行中（${state.activeKey || state.activeChildId}）。同一时间只允许一条，等它结束或先点「停止」。`)
     }
 
+    // 硬门禁三：**结构化 Tool 链路必须在创建子代理之前证明可用**。
+    //
+    // 两件事缺一不可（见 `preflight.ts`）：
+    // 1. 全部必需 Tool 对审核根 Agent 可见 —— 看不到就绝不创建子代理，
+    //    否则子代理只能去 shell 里找命令（正是本次改造要消灭的行为）；
+    // 2. 真的通过 policy pipeline 调一次零副作用的 `crwu_audit_capabilities` ——
+    //    证明注册表、参数校验、pre/guard/post 链路与输出 schema 都对得上。
+    // 重建根时会查一次，但**复用的根不会重新预检**，所以这里每次发起都必须再查。
+    // 放在占用门禁之后：并发冲突是更早、更便宜的拒绝理由，不该被能力检查的耗时挡在后面。
+    const rootAgent = agentRegistry(ctx)?.get(parentSessionId as SessionId)
+    const gate = await capabilityPreflight(ctx, rootAgent)
+    if (!gate.ok) return failed(`审核能力预检未通过：${gate.error}`)
+
+    // 硬门禁四：**报告必须在 Host 侧精确定位并取一次数**，然后才允许创建子代理。
+    //
+    // 为什么放在创建子代理之前：原来只把 objectId/seqNo/project 交给子代理，而记录接口要
+    // `schemaCode` —— 子代理于是自己去「发现表单、列记录、在案例目录里翻找材料」，既重复取数，
+    // 也可能读到别的流水号的过期材料。`schemaCode` 是 Host 的基础设施状态，这里一次性解析好，
+    // 并把记录与附件元数据落成输入快照交给它。
+    const objectId = text(args.objectId)
+    const caseDir = caseDirOf(state.workspacePath || state.caseRoot, seqNo)
+    if (caseDir === '') return failed('缺少案例目录：请先在第 ① 步选定工作空间，并确认任务带有流水号。')
+    const form = await deps.form.ensure()
+    if (!form.ok) return failed(`无法定位氚云表单（报告审核），已终止本次审核：${form.error}`)
+
+    // DSH 自带 Python 是审核脚本的运行时。解析不出来就**不要**起子代理 ——
+    // 否则子代理会退回系统 `python3`（缺 openpyxl，结果不可信）。
+    const python = await deps.python.check({ agent: rootAgent })
+    if (!python.ok) return failed(`DSH 脚本运行时不可用，已终止本次审核：${python.error || python.state}`)
+
     const stale = await findStaleChildren(deps, key, previous, seqNo)
     // 有前一轮（记录里的或清单里的）→ 走重审提示词：从零重跑、不读旧产物。
     // 界面知道「云端已有审核意见」而 Host 不知道，所以它也显式传 retry:true。
@@ -175,19 +214,68 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
 
     const stamp = new Date()
     const manifest = state.manifest
+    // attemptId 每轮都新：重审必须得到**新的**快照，而不是复用上一轮的输入。
+    const attemptId = `${key}-a${String((previous?.attempt ?? 0) + 1)}-${stamp.getTime().toString(36)}`
+    // 重审（或任何带旧记录的情形）强制刷新快照：上一轮的记录可能已经过期。
+    const boot = await bootstrapInputSnapshot(ctx, rootAgent, {
+      objectId,
+      seqNo,
+      caseDir,
+      attemptId,
+      refresh: isRetry || previous !== undefined,
+    })
+    if (!boot.ok || boot.snapshot === null) {
+      return failed(`输入快照交接未完成，已终止本次审核（未创建子代理）：${boot.error}`)
+    }
+    const snapshot = boot.snapshot
+
     const started = await startChild(ctx, {
       label: auditLabel(seqNo, stamp),
       prompt: auditPrompt({
-        objectId: text(args.objectId),
+        objectId,
         seqNo,
         project: text(args.project),
         workspace: state.workspacePath || state.caseRoot,
         oss: normalizeOss(manifest.oss, manifest.oss),
         isRetry,
+        attemptId,
+        python: { path: python.path, versionText: python.versionText, distributions: python.distributions },
+        snapshot: {
+          attemptId: text(snapshot.attemptId) || attemptId,
+          dir: text(snapshot.snapshotDir),
+          recordPath: text(snapshot.snapshotPath),
+          attachmentsPath: text(snapshot.attachmentsPath),
+          metadataPath: text(snapshot.metadataPath),
+          digest: text(snapshot.digest),
+          fieldCount: typeof snapshot.fieldCount === 'number' ? snapshot.fieldCount : 0,
+          attachmentCount: typeof snapshot.attachmentCount === 'number' ? snapshot.attachmentCount : 0,
+          objectId: text(snapshot.objectId) || objectId,
+          seqNo: text(snapshot.seqNo) || seqNo,
+        },
       }),
       parentSessionId,
     })
     if (!started.ok) return failed(started.error)
+
+    // 硬门禁四（child scope）：provider 可能在子会话上再收窄一次工具可见范围。
+    //
+    // 根 Agent 可见 **不等于** 子代理可见 —— 子代理是新的 scope，预设/委托运行时都可能
+    // 再加一层 restriction。所以子会话一发布就按**它自己的 scope** 复查一遍；
+    // 缺任何一个就立刻停掉它并失败，不让一条注定要去找 PATH 的审核跑下去。
+    // 子 Agent 还查不到时只记一条 note（不阻断）—— 那种情况下下面的记录里会带 `childGate` 说明。
+    const childAgent = agentRegistry(ctx)?.get(started.childId as SessionId)
+    if (childAgent !== undefined) {
+      const missingInChild = auditToolsVisible(ctx, childAgent)
+      if (missingInChild.length > 0) {
+        await stopChild(ctx, started.childId, '审核子代理看不到必需的 CRWU Tool，停止这条审核', {
+          handle: started.handle,
+          parentSessionId,
+        })
+        return failed(`审核子代理看不到必需的 CRWU Tool：${missingInChild.join('、')}。已停止该子会话；请让部署方确认子代理 preset 没有收窄工具集。`)
+      }
+    } else {
+      ctx.logger?.warn?.('审核子代理 %s 的 Agent 句柄暂不可读，child-scope 工具可见性未能复查', started.childId)
+    }
 
     // 留住「可中止的信号 + run 句柄」：一次性运行没有别的停止入口
     // （subagents.interrupt 对 one-shot 是 no-op）。停止时必须先 abort 再 dispose。

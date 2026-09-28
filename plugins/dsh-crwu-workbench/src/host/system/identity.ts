@@ -1,6 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
+import { resolveBundledCommand } from '../platform/command.ts'
+import { shellQuote } from '../environment/probe.ts'
 import { runShell } from '../shell/run.ts'
 
 /**
@@ -34,6 +36,8 @@ export interface WhoamiDeps {
   ctx: Context
   workdir: () => Promise<string>
   timeoutMs?: number
+  /** 执行世界的平台，用于把 `dws` 解析成包内绝对路径；缺省时回退按名字调用。 */
+  platform?: string
 }
 
 const EMPTY: WhoamiResult = { name: '', org: '', userId: '', reason: '' }
@@ -60,7 +64,9 @@ export function readSelfDocument(payload: unknown): { name: string; org: string;
 
 export async function dwsSelf(deps: WhoamiDeps): Promise<WhoamiResult> {
   // 命令是固定的字面量（没有用户输入、没有需要转义的字符），与「钉钉认证」那条探测同样写法。
-  const run = await runShell(deps.ctx, 'dws contact user get-self --format json', {
+  // 用**包内绝对路径**：只按名字调用在 Finder 启动的桌面端会 `bash: dws: command not found`。
+  const dws = await resolveBundledCommand(deps.ctx, deps.platform ?? '', 'dws')
+  const run = await runShell(deps.ctx, `${shellQuote(dws, deps.platform ?? '')} contact user get-self --format json`, {
     workdir: await deps.workdir(),
     timeoutMs: deps.timeoutMs ?? 30_000,
     escalate: true,

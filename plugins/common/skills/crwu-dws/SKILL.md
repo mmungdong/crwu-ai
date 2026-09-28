@@ -11,7 +11,7 @@ description: >-
   仍无则如实报告"没找到"；正文一律实时从钉钉取回（永不落缓存，保证最新）。
   缓存原则：目录可缓存、正文不缓存；缓存库名与 skill 目标库名不一致 → 先清理缓存、在线重下目录结构（防跨库误命中）。对钉钉零写操作。泛化钉钉知识库/doc 管理走
   dingtalk-wiki/dingtalk-doc；审核意见不属本技能。
-  命令前缀：dws wiki / dws doc / dws drive
+  宿主分流：DSH 环境只走工作台注册的结构化 Tool；非 DSH 宿主见文末兼容层。
 metadata:
   cli_version: ">=0.2.14"
   category: crwu
@@ -21,6 +21,30 @@ metadata:
 ---
 
 # crwu-dws（钉钉知识库只读域：M1 目录查询+缓存 / M2 按清单实时下载 / M3 路径·缓存兜底查找）
+
+## 0.0 宿主分流（先读这一节）
+
+**本技能有两种执行形态，不要混用：**
+
+| 宿主 | 执行入口 | 说明 |
+| --- | --- | --- |
+| **DSH（DeepSeek Harness）** | 结构化 Tool `crwu_audit_knowledge_materialize` | **唯一**入口。空间解析、目录遍历、节点读取、文档导出/下载全部在 Tool 内部经 `ctx.shell` 完成；模型只提交 `caseDir`、`paths[]`（可选 `spaceName`）。**禁止**在 shell 里拼命令、**禁止**查找或猜命令路径、**禁止**改 PATH。 |
+| 非 DSH 宿主 | 下列 M1/M2/M3 的 CLI 路径 | 见文末「非 DSH 宿主兼容层（legacy CLI）」，保留给仍以命令行集成的宿主与人工排障。 |
+
+DSH 下的三条硬规则：
+
+1. **只调 Tool**：M2（按清单实时下载）等价于一次
+   `crwu_audit_knowledge_materialize({ caseDir, paths })` 调用；返回的
+   `manifest[]`/`counts`/`failures` 就是本文档要求的记账结果（`status` 取
+   `exported|downloaded|skipped|failed`）。
+2. **capability gap 不降级**：Tool 不可见或返回能力缺失时，如实报告
+   「capability gap：缺少 <工具名>」并停止 —— **不要**退回命令行、**不要**去搜 PATH。
+3. **兼容层不参与自动审核**：DSH 自动审核链路（`crwu-audit` 技能 + 审核子代理提示词）
+   **不引用**兼容层里的任何命令。
+
+下面 §1–§9 描述的是**语义契约**（寻址、通道分流、记账、缓存红线、完整性判定）。
+它们在两种形态下都成立；只有"用哪条命令实现"这一点在 DSH 下由 Tool 内部承担。
+
 
 ## 0. 目录结构与加载
 - `SKILL.md`（本文件，入口；三模式流程 + 取数通道分流 + 缓存语义 + 只读白名单）
@@ -48,24 +72,24 @@ metadata:
 - 不输出或记录 token 等凭据；认证/权限/profile/未知错误 → 只读 `dingtalk-shared` 对应 reference，不连续猜测；时间戳面向用户时转当前时区。
 - **对钉钉零写（硬白名单）**：wiki 域仅 `space-list/space-search/space-get/node-list/node-search/node-get`；doc 域仅 `+export`；drive 域仅 `+download`（三者均远端只读、产物落本地）。禁止其余一切命令。
 - **取数通道按节点 `extension` 分流（v0.6，硬规则）**：知识库文档并非全是钉钉在线文档——`doc +export` **只支持 `extension=adoc`**，对原生文件必失败。分流口径见 §6.2：
-  | `extension` | 通道 | 说明 |
-  | --- | --- | --- |
-  | `adoc` | `dws doc +export --export-format markdown` | 钉钉在线文档，导出为 markdown |
-  | 可读原生文本（`md`/`txt`） | `dws drive +download` | 原件即正文，**不得**再用 `doc +export` |
-  | 其它（`pdf`/`docx`/`xlsx`/`able`/`axls`/二进制 …） | 不取正文 | 记 `skipped` + 真实 `extension`，**不是 failure**、不伪造正文 |
+  | `extension` | 通道（Tool 内部实现） | manifest 里的 `channel` | 说明 |
+  | --- | --- | --- | --- |
+  | `adoc` | 导出为 markdown | `export` | 钉钉在线文档 |
+  | 可读原生文本（`md`/`txt`） | 原样取回 | `download` | 原件即正文，**不得**走导出通道 |
+  | 其它（`pdf`/`docx`/`xlsx`/`able`/`axls`/二进制 …） | 不取正文 | `skipped` | 记 `skipped` + 真实 `extension`，**不是 failure**、不伪造正文 |
   禁止"先用 `doc +export` 试、失败再换通道"的试错式取数：通道必须由 `extension` 判定（真实返回，缺席时按 §6.2 第 2 步补查），试错会把必然失败记成 failure 并污染 manifest。
 - 本技能唯一的"写" = 本地：① 目录缓存写入/清理（M1/M3 刷新；库名不一致清理见 §5.0）② 当前审核工作集（M2）③ 临时区（正文实时取用，用后即弃）。**正文永不写入目录缓存**（红线：references/02 §1.2）。
 
 ## 3. P1 库解析（三模式共用，只读）
 1. 确认 profile；M2 额外确认案例目录（§6.1）；M3 输入 = 精确文件名 / nodeId / **库内层级路径（文件级或目录前缀）**（用户/调用方给出，不猜近似）。
-2. 分范围全量取空间并精确名匹配：`dws wiki +space-list --type orgWikiSpace|myWikiSpace --limit 50 --page-all --format json`（`+space-search` 仅候选浏览，不作唯一性证据）。
+2. 分范围（组织 / 个人）**全量**取空间并精确名匹配；候选浏览不能作为唯一性证据。DSH 下这一步由 `crwu_audit_knowledge_materialize` 内部完成，并把命中的库写进返回的 `spaces[]`。
 3. 判据：`requestedType` 与请求范围一致；`autoPageComplete=true` 才可用"缺席"证无；命中 0 → 报告范围+相似候选，不编造；命中 ≥1 → 全部进入处理列表，保留真实 `workspaceId/spaceType`（只取服务端真实返回）与范围标注。
 
 ## 4. P2 目录遍历（三模式共用，只读，DFS 递归）
-1. 根层与每一层都用同一条命令，**`--workspace` 是必填**（`+node-list --help` 明示；只给 `--folder` 会 `rc=3`）：
-   `dws wiki +node-list --workspace <ID> --page-all --page-limit 200 --format json`
-   （子层追加 `--folder <folderId>`），直至无 folder。
-   **`--page-limit` 默认仅 20 页**（× `--limit` 50 = 最多 1000 条），大库必须显式放大，否则会静默截断成"遍历完成"。
+1. 根层与每一层都用同一种「按库（`workspace`）+ 可选父目录」的完整分页列举，直至无 folder。
+   **分页页数上限必须显式放大**（默认只翻 20 页，大库会被静默截断成"遍历完成"）。
+   DSH 下这一步由 `crwu_audit_knowledge_materialize` 内部完成；遍历不完整时它返回
+   `complete=false` 并逐条记 failures，不会把截断报成全量。
 2. 纪律：每层记录分页证据并写入快照；`hasChildren` 仅提示不作剪枝；folder 按 nodeId 去重（二次展开停+标注）；节点字段只取真实返回，未知 type 原样保留；**文档节点必须同时记录 `extension`/`contentType`**（服务端真实返回，缺席记 `null` 不推断）——它们是 §6.2 取数通道分流的唯一判据；体量上限 10,000 节点 / 20 层 → 停止并如实报告部分结果。
 3. 遍历结果 = 内存树（前序展开序）；任何一次**成功完整遍历**都更新目录缓存（P3-M1 原子替换）。
 
@@ -98,9 +122,9 @@ metadata:
    - 单文件清单项 → 只处理精确命中的该节点；命中 folder 或歧义多节点则记 failure，不猜；
    - 目录清单项 → 展开为该目录下**全部**支持的正文文件（folder 递归至无子目录）并逐一实时下载，展开内容如实记账；
 2. **通道判定 + 实时下载**（逐节点、串行；通道由 `extension` 决定，禁止试错）：
-   - **取 `extension`**：目录缓存条目带 `extension` → 直接用（快路径）；缺失/`null`（旧缓存）→ 对该 nodeId 补一次 `dws wiki +node-get --format json` 读真实 `extension`/`contentType`（只读、逐节点、结果写入 manifest evidence），仍为 `null` → 记 `skipped`（"类型不可判定"），**不猜、不试**；
-   - `extension=adoc` → `dws doc +export --node <nodeId> --export-format markdown`，落地为 `knowledge/<同构层级路径>.md`；
-   - `extension ∈ {md, txt}`（可读原生文本）→ `dws drive +download --node <nodeId> --output knowledge/<同构层级路径>.<extension>`，**原件即正文，不做格式转换**；
+   - **取 `extension`**：目录缓存条目带 `extension` → 直接用（快路径）；缺失/`null`（旧缓存）→ 对该 nodeId 补一次节点元数据读取（只读、逐节点、结果写入 manifest evidence），仍为 `null` → 记 `skipped`（"类型不可判定"），**不猜、不试**；DSH 下这一步由 Tool 内部完成；
+   - `extension=adoc` → 走**导出**通道，落地为 `knowledge/<同构层级路径>.md`（manifest 里 `channel=export`、`status=exported`）；
+   - `extension ∈ {md, txt}`（可读原生文本）→ 走**原样下载**通道，落地为 `knowledge/<同构层级路径>.<extension>`（`channel=download`、`status=downloaded`），**原件即正文，不做格式转换**；
    - 其余类型 → 记 `skipped`（原因含真实 `extension`），**不下载、不伪造正文**；
    - 两条通道的 `--output` 均为**工作目录内相对路径**，因此命令在 `<案例目录>` 下执行；回执 `localPath`+`sizeBytes>0` 即终态；同 nodeId 已存在 → 原位覆盖=更新；异 nodeId 同名 → 追加 `-<nodeId前8>`；
 3. 记账 `.crwu-manifest.jsonl`（每文件 entry：nodeId/name/**extension**/**channel**/folderPath/localPath/**exportedAt**/evidence；`skipped` 单独成行；下载失败 → failure 行不中断；认证类系统性错误 → 停止，读 dingtalk-shared）；
@@ -144,3 +168,41 @@ metadata:
 4. M3 缓存损坏/缺失：按 §7.1 视为未命中自动刷新；刷新也失败 → §7.5 降级，不假装权威。缓存 meta 缺失/损坏（身份不可证实）且目录名 ≠ 目标库名 → 按 §5.0 视为不一致，清理后在线重下。
 5. 缓存目录不可写：报告路径问题请用户处理；不静默改落点、不把正文改存他处以绕过红线。
 6. 未知 flag/命令：只查当前 leaf Help/一次 shortcut 清单；不跨产品试探。
+
+<!-- crwu-cli-guard:legacy-compat-start -->
+## 非 DSH 宿主兼容层（legacy CLI）
+
+以下命令形态**只**适用于非 DSH 宿主与人工排障。DSH 环境下这些步骤全部由
+`crwu_audit_knowledge_materialize` 内部完成，**不要在 DSH 里执行它们**。
+
+- M1/P1 库解析（分范围全量取空间，精确名匹配）：
+
+  ```bash
+  dws wiki +space-list --type orgWikiSpace --limit 50 --page-all --format json
+  dws wiki +space-list --type myWikiSpace --limit 50 --page-all --format json
+  ```
+
+- P2 目录遍历（`--workspace` 必填；子层追加 `--folder`；页数上限显式放大）：
+
+  ```bash
+  dws wiki +node-list --workspace <ID> --page-all --page-limit 200 --format json
+  dws wiki +node-list --workspace <ID> --folder <folderId> --page-all --page-limit 200 --format json
+  ```
+
+- M2/M3 取节点元数据（判 `extension`）：
+
+  ```bash
+  dws wiki +node-get --node <nodeId> --format json
+  ```
+
+- M2/M3 双通道取正文：
+
+  ```bash
+  dws doc +export --node <nodeId> --export-format markdown --output <相对路径>
+  dws drive +download --node <nodeId> --output <相对路径>
+  ```
+
+- 缓存兜底查找（M3）：先用 `dws wiki +node-search` 在库内按关键词找候选，
+  再按同一 `by_path` 口径精确定位；未命中就刷新缓存后重查，仍无则如实报告"未找到"。
+
+<!-- crwu-cli-guard:legacy-compat-end -->

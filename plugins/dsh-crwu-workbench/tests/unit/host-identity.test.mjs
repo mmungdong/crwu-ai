@@ -39,14 +39,14 @@ function makeCtx({ stdout = '', down = '' } = {}) {
   const specs = []
   const shell = {
     resolve(request) { specs.push(request); return request },
-    async run(spec) {
+    async execute(spec) {
       commands.push(spec.command)
       if (down !== '' && spec.command.includes(down)) throw new Error('sandbox unavailable')
-      return {
+      return { result: async () => ({
         exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
         stdout: { text: stdout, truncated: false },
         stderr: { text: '', truncated: false },
-      }
+      }) }
     },
   }
   return {

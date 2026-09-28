@@ -20,6 +20,7 @@ import { asRecord, textOf } from './audit-summary.ts'
 import { freshnessOf, type AuditContextSnapshot, type FreshnessStatus, type FreshnessVerdict, type VersionEvidence } from './audit-freshness.ts'
 import { formatDateTime, stampValue } from './time.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
+import { fetchRules } from './assistant-context.ts'
 
 /**
  * 一条资料的**远端来源**（用户 §10）。
@@ -309,6 +310,13 @@ export function saveSnapshot(snapshot: AuditContextSnapshot): void {
 // ── 上下文包（首轮注入；**不改历史审核产物**）──────────────────────────────────
 
 export interface AuditAnalysisContext {
+  /**
+   * 本次会话的案例目录（`<工作空间>/<流水号>`）。
+   *
+   * 与报告讨论走**同一段**取数规则（`fetchRules`）：只允许在这一个目录里读本次下载的材料，
+   * 不许扫描本机目录。空串时整段不写。
+   */
+  caseDir: string
   seqNo: string
   project: string
   reportUpdatedAt: string
@@ -393,6 +401,7 @@ export function buildAuditContextBlock(context: AuditAnalysisContext): string {
     `${zhCN.auditCtxSourceHead}（${String(context.sources.length)}）：`,
     ...sources,
     ...missing,
+    ...fetchRules(context.caseDir),
   ].join('\n')
 }
 

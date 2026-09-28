@@ -1,11 +1,16 @@
 import type { EnvManifest } from '../environment/manifest-default.ts'
 import type { WorkbenchConfig } from './config.ts'
 
-/** 让 YAML 管住部署值；远程清单只补充工具、服务及其它环境信息。 */
+/**
+ * 把 YAML 的部署值盖到内置清单上。
+ *
+ * 现在只有**一个**数据源：包内 YAML（部署可变值）+ 代码里的内置清单（工具/服务/工作空间偏好）。
+ * 原来还会去只读 OSS 拉一份远程清单，2026-09-25 已整体下掉 —— 二进制随包发布，服务与 OSS
+ * 都在 YAML 里，远程清单只剩「能让别人远程改你机器上的解释权」这一条，不再需要。
+ */
 export function applyDeploymentConfig(manifest: EnvManifest, config: WorkbenchConfig): EnvManifest {
   return {
     ...manifest,
-    installDocUrl: config.installDocUrl || manifest.installDocUrl,
     workspace: {
       ...manifest.workspace,
       preferTitle: config.preferWorkspaceTitle || manifest.workspace.preferTitle,
@@ -20,7 +25,8 @@ export function applyDeploymentConfig(manifest: EnvManifest, config: WorkbenchCo
       linkMode: config.ossLinkMode,
       linkTtl: config.ossLinkTtlSeconds,
       autoUpload: config.autoUpload,
-      // 远程只读清单是数据源，不是宿主 Shell 脚本分发渠道。
+      // 内置清单里的 `probeCommand` 永远为空：它等价于「宿主 Shell 自由脚本」，
+      // 只允许来自受信的部署配置，不接受任何远程数据。
       probeCommand: '',
     },
   }

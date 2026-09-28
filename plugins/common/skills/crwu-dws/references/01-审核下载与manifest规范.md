@@ -22,8 +22,8 @@
 - folder 映射本地目录；**文档按 `extension` 分流**（SKILL.md §2/§6.2）：
   | `extension` | 通道 | 落地 |
   | --- | --- | --- |
-  | `adoc` | `dws doc +export --export-format markdown` | `<节点名>.md` |
-  | `md` / `txt` | `dws drive +download` | `<节点名>.<extension>`（**原件即正文，不转换**） |
+  | `adoc` | 导出通道（`channel=export`） | `<节点名>.md` |
+  | `md` / `txt` | 原样下载通道（`channel=download`） | `<节点名>.<extension>`（**原件即正文，不转换**） |
   | 其余 | 不取正文 | 记 `skipped` + 真实 `extension`，不伪造正文 |
 - `knowledge/` 不是知识库副本。它只包含本次清单命中的正文，跨审核或重跑必须重新从钉钉下载。
 - `dws-dir-cache/` 只存目录元数据，禁止接收 M2 正文。
@@ -105,3 +105,11 @@
 - 知识正文唯一来源是钉钉知识库。
 - M2 产物不得复制到任何目录缓存或作为后续审核的正文来源。
 - 远端节点在审核过程中被删除或改变时，以本次实际导出结果和 `exportedAt` 为准；不使用历史正文补齐。
+
+<!-- crwu-cli-guard:legacy-compat-start -->
+> **非 DSH 宿主兼容层（legacy CLI）**：上表的两个通道在非 DSH 宿主分别对应
+> `dws doc +export --export-format markdown`（adoc 导出）与
+> `dws drive +download`（原生文本原样取回）。DSH 环境下两者都由
+> `crwu_audit_knowledge_materialize` 内部完成，技能正文不再给出命令。
+
+<!-- crwu-cli-guard:legacy-compat-end -->

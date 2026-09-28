@@ -9,6 +9,118 @@
 
 ---
 
+## 2026-09-25 · fix(plugin) · 审核启动的报告定位交接 + DSH 自带 Python + 环境页分层（插件 `dsh-crwu-workbench` 0.0.8）
+
+- **报告定位交接**（用户报「自动审核启动后子代理重新定位/搜索报告」）：新增实例级
+  `H3yunFormResolver`（`state.formCode` 非空直接复用；为空只调一次 `discoverForm`，并发共享同一个
+  in-flight Promise；失败不缓存），列表与记录类 Tool 共用；`crwu_h3yun_record_get` /
+  `crwu_h3yun_files_list` 的**参数里删掉 `schemaCode`**（改由 Host 状态注入）；
+  新增第 9 个 Tool `crwu_audit_case_bootstrap`：按精确 `objectId` 各取一次记录与附件元数据，
+  落盘 `<案例目录>/输入快照/{报告记录,附件清单,快照元数据}.json`，只回紧凑摘要
+  （`snapshotPath`/`digest`/`fieldCount`/`attachmentCount`/`routingFacts`），
+  同 `attemptId` 幂等、`refresh` 才覆盖，元数据只放 `schemaCode` 指纹。
+  审核启动新增门禁（都在创建子代理之前）：表单 code 解析 → `bootstrapInputSnapshot()`
+  （经 `ctx.tools.execute()`、以审核根 Agent 为 scope）→ DSH Python 可用；指令新增
+  「报告已由 Host 精确定位」一节（以快照为唯一记录来源、禁止重新定位、附件只按清单 `fileId` 取、
+  快照与任务不符即停）。重审每轮新 `attemptId` 并强制刷新快照，仍不读上一轮产物与 `复核-人工/`。
+- **DSH 自带 Python**：新增实例级 `WorkspaceRuntimeResolver`（`load_workspace_dependencies` 只调一次、
+  只缓存成功、失败可显式刷新；校验路径是可执行文件、校验至少含 `openpyxl`），不硬编码安装路径、
+  不改 PATH、不复制 Python 进包、不做 pip 自动安装。审核启动前解析，失败不建子代理；指令新增
+  「脚本运行时：只用 DSH 自带的 Python」一节。自研技能（`crwu-audit` / `crwu-audit-datacheck` /
+  `crwu-audit-external-data` / 两个维护元技能）改为「自动审核用注入的绝对路径；独立使用先调一次
+  `load_workspace_dependencies` 并复用；禁止裸解释器名字/解释器查找/静默降级」。
+- **环境检查与环境页分层**：环境清单拆成 `packaged[]`（随包 crwu/dws/ossutil）与
+  `runtime.python`（DSH 自带），删掉 `binaries[]` 混装与裸 `python3` 检查项；
+  `env` 结果分区为 `packageIntegrity` / `runtime` / `services`（氚云 + 钉钉）/ `delivery`（OSS）/
+  `external`（iFinD）/ `workspace`；页面改为 ① 案例工作空间 + ② 插件内置组件 / ③ DSH 脚本运行时 /
+  ④ 登录与凭据授权 / ⑤ OSS 交付配置 / ⑥ 外部数据。② 只 `stat` 包内文件并与 `bin/manifest.json`
+  比对字节数，**不** `command -v`、**不**回退 PATH、**不**执行 `dws version`（避免 `.dws/` 残留），
+  缺失只说「插件包不完整/平台不受支持」；平台探测去掉 `python3` 探针（Host 事实优先、`uname -sm` 兜底）；
+  `blocked` 口径改为「包不完整算一个、运行时不可用算一个」，vendored dws 的 PATH 兼容性不再阻断。
+  跨进程契约变化 → `WORKBENCH_PROTOCOL` 11 → 12。
+- **影响门禁/命令**：`npm test`（643 条）新增 `host-runtime-python.test.mjs` 等；
+  `host-tools` / `host-audit-lifecycle` / `host-audit-prompt` / `host-environment-*` / `client-env-layers`
+  同批更新；`smoke:built` 与 `host-package` 的注册工具数 8 → 9；`install/browser-check.mjs` 的环境页
+  断言由四层改五层。
+- **vendored 层未改**：`plugins/dsh-crwu-workbench/skills/dws/**` 正文与 provenance 一字未动
+  （`npm run dws:check` 逐文件比对通过）。
+- **同步面**：插件 `AGENTS.md`（§3 清单分区、§4.5 第 11/12 条、§7.15/§7.16）、
+  `docs/development-notes.md`（常见坑 4 行）、插件 `README.md`、`install/INSTALL-PROMPT.md`、
+  `install/browser-check.mjs`、`docs/v0.0.1/CHANGELOG.md`、插件 `CHANGELOG.md`（第十/十一节）。
+  带日期的历史记录不回改。
+
+## 2026-09-25 · refactor(plugin) · 自研审核链路改结构化 Tool 优先（插件 `dsh-crwu-workbench` 0.0.8）
+
+- **新增 8 个业务级 Tool**（`plugins/dsh-crwu-workbench/src/host/tools/`）：`crwu_audit_capabilities`（零副作用）、
+  `crwu_h3yun_record_get` / `crwu_h3yun_files_list` / `crwu_h3yun_file_get`、
+  `crwu_audit_knowledge_materialize`、`crwu_audit_oss_publish`、`crwu_audit_dingtalk_archive`、
+  `crwu_audit_dingtalk_notify_self`。全部经 `defineTool()` + `ctx.tools.register()` 注册（`apply()` 生命周期内，
+  卸载时逆序注销），**没有任何通用逃生工具**，schema 里没有 binary / argv / command / sandbox 模式 /
+  bucket / 组织 / 团队空间等字段。
+- **执行层唯一入口**：新增 `src/host/dws/`（argv 前缀白名单 + `ctx.shell`）；审核 Tool 用
+  `requireBundledCommand` **严格要求包内二进制存在**，缺失即 `capability-gap`，不回退裸命令名；
+  `runShell` 增加 `signal`（透传 `exec.signal`）与 `aborted` 结果位；`runCrwu` 增加 `signal` 并统一提权注释
+  （白名单未扩大）；失败分 `approval` / `infrastructure` / `cli` 三类。
+- **审核链路**：审核提示词删除插件二进制目录、`export PATH`、裸 `crwu`/`dws`/`ossutil` 命令块与
+  `upload_audit_result.py` 依赖，改为逐条 Tool 调用要求；新增 `src/host/audit/preflight.ts` 的确定性能力门禁
+  （发起审核前检查必需 Tool 对根 Agent 可见 + 真调一次能力自检；子代理发布后按 child scope 复查），
+  缺任何一项都在**创建子代理之前**失败。
+- **技能**：`crwu-audit` 的 `SKILL.md` / `references/00` / `references/13` 改为 Tool 契约；公共技能
+  `crwu-dws`、`crwu-h3yun-login`、`crwu-h3yun-query` 顶部声明「DSH：只用结构化 Tool」，原 CLI 方式移入
+  明确标注的**非 DSH 宿主兼容层**；新增静态守卫 `scripts/check-skill-cli-guard.mjs`
+  （`npm run skills:cli-guard`，进 `check` 与 CI），`skills/dws/**` 明确排除。
+  **`skills/dws/**` 的正文与 provenance 未改动**（仍由 `npm run dws:check` 守）。
+- **二进制供应链**：新增 `bin/manifest.json`（来源/版本/target/commit/最终 size + sha256）；
+  `sync-binaries.mjs --check` 改为按清单重算最终文件哈希；`assert-pack.mjs` 新增 `--strict`
+  （`npm run pack:assert:strict`，`prepublishOnly` 与 `make plugin-check` 使用）；
+  `release.yml` 新增 `binaries` job（macOS 交叉编译 + 装配 + 自检 + artifact），发布作业用严格模式复验。
+- **影响命令**：新增 `npm run skills:cli-guard` / `bin:check` / `pack:assert:strict`；
+  `npm run check` 增加 `skills:cli-guard`；`prepublishOnly` 改为严格模式；`make plugin-check` 增加严格模式自检。
+- **登录与 PATH 口径**：安装提示词不再让 agent 手工跑 `crwu h3yun session login` / `dws auth login`，
+  改为在面板「③ 登录认证」里点登录按钮（并说明首次需「同意并继续」授权）；`install/INSTALL-PROMPT.md`
+  同步为「按面板引导完成登录与密钥」，并明确禁止搜索可执行文件 / 改 PATH / 往 `~/bin` 拷副本。
+  员工机器上因此**不需要任何 PATH 配置**（`~/.zshrc` 里指向插件 bin 目录的那条注入已按此口径移除）。
+- **同步面**：插件 `AGENTS.md`（§4.5 新增、§6.3 测试表、§7.10 预检、§8.2 发布形态）、
+  `plugins/AGENTS.md`（§5.6 新增）、`docs/development-notes.md`（§12 新增 + 常见坑速查）、
+  插件 `README.md` / `README.en.md`、插件 `CHANGELOG.md`、包版本 `0.0.8`。带日期的历史记录不回改。
+
+## 2026-09-23 · refactor(skills) · 技能分层：自研层 `skills/crwu/` + 上游 vendored 层 `skills/dws/` + 公共层
+
+- **目录分层（`git mv` 保历史）**：`plugins/dsh-crwu-workbench/skills/<技能>/` →
+  `plugins/dsh-crwu-workbench/skills/crwu/<技能>/`（27 个审核/维护技能原样搬迁）；
+  新增 `plugins/dsh-crwu-workbench/skills/dws/`（vendored 的上游钉钉技能 14 个，集合 `multi`）；
+  `plugins/common/skills/`（公共层）位置不变。
+- **为什么必须一层一个技能根**：`@deepseek-ai/dsh-skill-filesystem` 的 `discoverRoot()` 对每个技能根
+  **只扫一层**、不递归。`cordis.patch.yml` 因此从 2 个根改为 3 个（`skills/crwu`、`skills/dws`、
+  `common/skills`）—— 只注册上层 `skills/` 会把 `skills/crwu/` 当成"没有 `SKILL.md` 的技能"跳过，
+  整层**静默消失**（与 2026-09-22 的 `baseUrl` 陷阱同症状：装配成功、技能表 0 个、日志干净）。
+  包内技能总数 30 → 44（自研 27 + vendored 14 + 公共 3）。
+- **`dws` 层的可复现内容治理**：新增 `scripts/sync-dws-skills.mjs`（`npm run dws:sync`）从本机 `dws`
+  的上游副本同步，并写 `skills/dws/provenance.json`（上游包名 / 版本 `1.0.61` / 集合 / 逐技能 sha256 /
+  LICENSE、NOTICE 摘要）；`npm run dws:check` 只对照 provenance 逐文件比对（不需要上游），已接入
+  `npm run check` 与 `prepack`；版本或集合变化必须显式 `--allow-version-change` / `--allow-set-change`。
+  上游 Apache-2.0 的 `LICENSE` / `NOTICE` 随技能保留。该层是上游正文，按 `skills/README.md` 的口径
+  **豁免**本仓 Skill 自洽性 lint（门禁只跑自研层与公共层）。
+- **影响门禁/命令（路径随分层改变，漏改会静默失效）**：
+  - `make plugin-check` / CI：`kb_tool.py validate --skill-root skills/crwu` 与
+    `--skill-root plugins/common/skills`（**逐层各一次**；传上层会静默扫 0 个技能）；新增 `make plugin-dws`；
+  - `make skills-install`：改为 `find plugins -name SKILL.md` 收技能（任何层都收到，层目录本身不会被误认）；
+  - `check_audit_skill_mappings.py`：技能根候选改为 `skills/crwu` + `common/skills`，硬编码的
+    `skills/crwu-audit/...`、`skills/crwu-dws` 等改为按根解析；
+  - 三个源仓契约测试：`_skill_roots()` 改为按"根里直接放着技能"识别所有层并**跨层**查找
+    （自研层与公共层不再同级；不修会让整组断言静默 skip）；
+  - `kb_tool.py` 的仓库引用规则新增 `skills/<层>/` 形态；
+  - `scripts/assert-pack.mjs`（三层各钉代表文件）、`scripts/smoke-built.mjs`、`host-package` /
+    `host-audit-prompt` / `host-skills-patch` 单测同批同步。
+- **运行时**：`src/host/audit/skill-paths.ts` 的包内解析改到 `skills/crwu/`（`$SKILLS_ROOT` 占位语义不变）；
+  `crwu-audit-external-data` 的 `connector_probe.py` 改为在"本技能所在层 + 同级层 + 公共层 + 常见位置"
+  找 `ifind-finance-data`。
+- **同步面**：`skills/README.md`（新增）、根 / `plugins/` / 插件三处 `AGENTS.md`、`docs/skills.md`、
+  `docs/agent-skill-dirs.md`、根 `README.md` + `README.zh-CN.md`、插件 `README.md` + `README.en.md`、
+  `docs/development-notes.md`、插件 `CHANGELOG.md` 与包版本 `0.0.5`。带日期的历史记录不回改。
+- **验证**：`make plugin-check` 全过（`npm run check` 548 项测试、`pack:assert` 450 文件 / 解包 5664KB、
+  两层 `kb_tool validate` error=0、三个契约测试 66/21/12 全过、分发守卫自检 4 条）；`git diff --check` 干净。
+
 ## 2026-09-19 · refactor(skills) · 审核族前缀归组：维护器移入 `crwu-dev-audit-*`，通用准则回到 `crwu-audit-*`
 
 - **改名（`git mv` 保历史）**：`skills/crwu-audit-skill-maintainer/` → `skills/crwu-dev-audit-skill-maintainer/`；

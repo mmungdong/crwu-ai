@@ -29,11 +29,22 @@ export interface WorkspaceCardProps {
   onMessage: (message: string) => void
   /** 选定/恢复后刷新自检页（Host 的 workspace 视图变了）。 */
   onRefresh: () => void
+  /**
+   * 已就绪时**压缩成一行摘要**（需求口径：「自动识别成功时压缩成摘要，只有缺失、失效或用户
+   * 要更换时才展开」）。缺省 false = 老样子（完整卡片），环境页传 true。
+   *
+   * 为什么不是直接删掉那几行：用户要**更换**工作空间时仍然需要完整的操作集合（选目录 / 新建 /
+   * 恢复自动识别 / 在案例根目录里打开），所以收起只是默认视图，不是删功能。
+   */
+  collapsed?: boolean
 }
 
 export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
   const status = workspaceStatus(props.workspace)
   const servicesReady = props.services.uiWorkspace !== undefined && props.services.workspaces !== undefined
+  // 摘要态只在"已就绪 + 调用方要求收起"时生效：缺失/失效永远展开（那是要用户处理的状态）。
+  const [expanded, setExpanded] = React.useState(false)
+  const summaryOnly = props.collapsed === true && status.chosen && !status.missing && !expanded
 
   /** 把「一个有绝对路径的目录」登记为工作空间并通知 Host。 */
   const adopt = React.useCallback(async (path: string, created: boolean): Promise<void> => {
@@ -103,18 +114,19 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
       .finally(() => { props.onBusy(false) })
   }
 
-  const openInWorkspace = (): void => {
-    const uiWorkspace = props.services.uiWorkspace
-    const id = String(props.workspace?.id ?? '')
-    if (uiWorkspace?.openWorkspace === undefined || id === '') {
-      props.onMessage(zhCN.wsServiceUnavailable)
-      return
-    }
-    uiWorkspace.openWorkspace(id)
-      .then(() => { props.onMessage(`${zhCN.wsOpenedSession}${status.path}`) })
-      .catch((cause: unknown) => {
-        props.onMessage(`${zhCN.wsFailed}${cause instanceof Error ? cause.message : String(cause)}`)
-      })
+  if (summaryOnly) {
+    return <Card
+      title={zhCN.wsSectionTitle}
+      extra={<Badge text={`${zhCN.wsChosen}${status.sourceLabel === '' ? '' : ` · ${status.sourceLabel}`}`} tone="ok" />}
+    >
+      <div className={C.row}>
+        <span className={C.mono} style={{ fontWeight: 600 }}>{status.path}</span>
+        <span className={C.grow} />
+        <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={() => { setExpanded(true) }} />
+      </div>
+      <div className={C.muted}>{artifactHint(status.path)}</div>
+      {props.message === '' ? null : <div className={C.muted}>{props.message}</div>}
+    </Card>
   }
 
   return <Card
@@ -145,7 +157,6 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
             <div className={C.muted}>{artifactHint(status.path)}</div>
             <div className={C.row} style={{ marginTop: '6px' }}>
               <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={() => pick(false)} />
-              <Button label={zhCN.wsOpenSession} small disabled={props.busy} onClick={openInWorkspace} />
               {status.canAuto ? <Button label={zhCN.wsAuto} small disabled={props.busy} onClick={auto} /> : null}
             </div>
           </>

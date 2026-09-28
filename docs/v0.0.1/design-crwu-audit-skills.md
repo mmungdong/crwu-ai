@@ -46,10 +46,10 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 
 ## 3. 命名与目录规范
 
-- `skills/crwu-audit/SKILL.md` —— 总路由（key 无后缀；含全量路由注册表）。
-- `skills/crwu-audit-<大方向>/SKILL.md` —— L1 大方向技能（可独立运行其通用审核逻辑）。
-- `skills/crwu-audit-<大方向>-<细分>/SKILL.md` —— L2 细分能力（挂在父大方向下，父级通用逻辑可降级复用）。
-- 新增任何能力（大方向或细分）必须：① 在 `skills/crwu-audit/SKILL.md` 路由注册表登记；② 在
+- `skills/crwu/crwu-audit/SKILL.md` —— 总路由（key 无后缀；含全量路由注册表）。
+- `skills/crwu/crwu-audit-<大方向>/SKILL.md` —— L1 大方向技能（可独立运行其通用审核逻辑）。
+- `skills/crwu/crwu-audit-<大方向>-<细分>/SKILL.md` —— L2 细分能力（挂在父大方向下，父级通用逻辑可降级复用）。
+- 新增任何能力（大方向或细分）必须：① 在 `skills/crwu/crwu-audit/SKILL.md` 路由注册表登记；② 在
   本文件 §4 树中登记；③ `skills/README.md` 注册；④ 命名/边界经质控确认。
 - 所有 crwu-audit-* 只读引用钉钉知识库规则/清单（编号+库内层级路径寻址、经 crwu-dws 按本次审核清单实时下载，禁止复制规则正文进技能；三不写 lint 由 kb_tool validate --skill-root 校验）。
 - v0.3：`crwu-audit` 入口精简（≤300 行）+ `references/` 运行材料（00 schema/01 角度词表/02 覆盖层/99 维护说明）；**改前先读 99**；分发运行材料不再放 docs/（docs 只放族设计与变更记录）。
@@ -63,7 +63,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 | L2 | ~~crwu-audit-realestate-rent~~ | 房地产大方向内 ×（商铺/办公/公寓等经营性物业出租场景 × 租金或市场价值） | 组合模型废止；租赁类业务要求改由业务轴 Skill 承载 | ❌ 2026-09-10 下架 |
 | L2 能力 | crwu-audit-datacheck | 跨方向 · 材料含测算/明细/汇总表（任何对象） | M-数据校对口径：C1–C6 差异清单（**仅可见区**；H0：人工隐藏区 sheet/行/列/折叠组 强制跳过、禁读禁报） | ✅ v0.1 |
 | L2 能力（public） | crwu-audit-public-general-standards | 任何报告形态（与对象/业务/方法/监管无关，恒装配） | `06-规则库/02-通用准则-报告与披露/`（`RULE-01-02-251~279`）＋`06-规则库/03-通用准则-程序与档案/`（程序准则旧版 `101~127`、2026 版 `001~028`、质控指南 `401~456`） | ✅ 2026-09-10（P0-1：通用披露层归属 + 同型程序质控层同批认领） |
-| L2 能力（public） | crwu-audit-external-data | 跨方向 · `methods[]` 命中收益法/市场法（是否取数再由其按知识库表 A 三条自行判定） | `06-规则库/M-外部数据核验/01-模块-外部数据核验`（表 A 触发范围 / 表 B 数据项触及 / 表 C 组合映射 / 表 D 源启用条件与降级 / 留痕 / 未检查项 / 员工补录）；唯一数据源为**同花顺 iFinD**（取数路径随宿主而异：WorkBuddy 宿主连接器 `ifind-mcp` / DeepSeek Harness 的 `ifind-finance-data` 技能），不启用万得，以报告基准日为锚；交付 HTML《外部数据核验》区 | ✅ 2026-09-15 v0.1（v0.2：单源 iFinD + 两条取数路径） |
+| L2 能力（public） | crwu-audit-external-data | 跨方向 · `methods[]` 命中收益法/市场法（是否取数再由其按知识库表 A 三条自行判定） | `06-规则库/M-外部数据核验/01-模块-外部数据核验`（表 A 触发范围 / 表 B 数据项触及 / 表 C 组合映射 / 表 D 源启用条件与降级 / 留痕 / 未检查项 / 员工补录）；唯一数据源为**同花顺 iFinD**（取数入口随宿主而异：WorkBuddy 宿主连接器 `ifind-mcp` / DeepSeek Harness 的结构化 Tool `crwu_audit_ifind_query`），不启用万得，以报告基准日为锚；交付 HTML《外部数据核验》区 | ✅ 2026-09-15 v0.1（v0.2：单源 iFinD + 两条宿主入口） |
 | L1 | crwu-audit-enterprise-value | 评估报告 × 企业价值（股权/产权转让、股东变动、收购并购、增资主线） | 企业价值 50 | 🅿️ P1 |
 | L1 | crwu-audit-intangible | 评估报告 × 无形资产 | 知识产权 42；无形资产总纲待精编 | 🅿️ |
 | L1 | crwu-audit-equipment | 评估报告 × 设备/存货等单项资产（含报废残值处置） | 空白（先补 L2+精编）；基线第二大对象 1,882 | 🅿️ P1 |
@@ -127,7 +127,7 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 - 新能力 = 在 §4 表 + crwu-audit 路由注册表 + skills README 三处登记后创建目录；
 - 公共逻辑只在大方向技能维护一份；细分能力只写自己的增量清单/关注点，禁止复制大方向正文；
 - 规则/覆盖/路径类优化统一经 `crwu-dev-audit-optimize`（族维护元技能，不经路由）：先输出拟改文件方案、
-  用户确认后按 99 流程执行并跑 `skills/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py` 校验回归（validate error=0 / 装配两跑一致 / 试点回归不劣化）；
+  用户确认后按 99 流程执行并跑 `skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py` 校验回归（validate error=0 / 装配两跑一致 / 试点回归不劣化）；
 - 审核后存在人工复核文件时，`crwu-dev-audit-optimize` 进入 AI—人工差距分析模式：用同次 `knowledge/` + manifest
   做历史归因，并用 crwu-dws 最新只读正文判断缺口现状；报告以固定 HTML 模板输出表格、ECharts 和
   `L-* → 根因 → FIX-*` 关系。知识库项只生成 `manual_only` 人工修复单，AI 不写知识库；Skill 项逐项批准后才可改源仓；
@@ -190,16 +190,16 @@ crwu-audit（L0 总路由：统一维护"全部审核能力 skill 路由"注册�
 ## 8. 本期交付
 
 - [x] 本文档 v0.2（分层路由模型）
-- [x] `skills/crwu-audit/SKILL.md`（L0 总路由：全量路由注册表 + 分层分发/降级/汇总/引用文件清单汇总）
-- [x] `skills/crwu-audit-asset-realestate/SKILL.md`（一级资产 Skill：`02-资产类型/房地产/` 一级根；2026-09-10 由 realestate 更名而来）
+- [x] `skills/crwu/crwu-audit/SKILL.md`（L0 总路由：全量路由注册表 + 分层分发/降级/汇总/引用文件清单汇总）
+- [x] `skills/crwu/crwu-audit-asset-realestate/SKILL.md`（一级资产 Skill：`02-资产类型/房地产/` 一级根；2026-09-10 由 realestate 更名而来）
 - [x] 11 个一级资产 Skill（2026-09-11）：`crwu-audit-asset-{equipment,enterprise-value,intangible,mining-right,inventory,debt,portfolio,transport-equipment,asset-group-goodwill,scrap-materials,other}`，映射 `02-资产类型/02~12-*/` 一级根，见 §7.4
-- [x] ~~`skills/crwu-audit-realestate-rent/SKILL.md`~~（L2 商铺租金/经营性物业市值专项）——**2026-09-10 下架**：资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载
-- [x] `skills/crwu-audit-datacheck/SKILL.md`（跨轴数据/表格勾稽能力）
-- [x] `skills/crwu-audit/scripts/media_extract.py`（2026-09-16，v0.1）：**媒体证据通道**（xlsx 锚点图 / docx·doc 正文图 / PDF 内嵌图 / 独立图片 / 复核件图导出 + 放行清单 `媒体索引.json`；H0 锚点跳过与 fail-closed）；见 §7.5
-- [x] `skills/crwu-dev-audit-public-general-standards/`（2026-09-10，P0-1）：公共轴通用准则能力（报告披露层 + 程序质控层），`public` 轴无条件装配；见 §7.3
-- [x] `skills/crwu-audit-external-data/`（2026-09-15，v0.2 单源化）：公共轴外部数据核验能力（`methods[]` 命中收益法/市场法时装配）；装配知识库 `M-外部数据核验` 模块规程；唯一数据源为同花顺 iFinD，取数路径发现覆盖 WorkBuddy 宿主连接器与 DeepSeek Harness 的 `ifind-finance-data` 技能（`references/01-connector-access.md` + `scripts/connector_probe.py`，只读、不读凭据）；**不启用万得、不做双源复核**；两条取数路径都不可用时按库内降级口径降级并在交付 HTML《外部数据核验》区显式声明；AuditResult 增 `externalDataVerification`（`11-html-delivery-spec.md` §05b）。**待办（知识库侧，用户操作）**：`审核模块注册表` §1 与 `标签词典` §5 登记 `M-外部数据核验`，并按总纲 §3.2 三处登记；库内 `M-外部数据核验` 模块规程按单源修订稿 `docs/2026-09-15-M-外部数据核验-模块规程-v0.2.md` 人工更新（表 B 去万得列、表 C 源列统一 iFinD、表 D 改为取数失败与降级）
+- [x] ~~`skills/crwu/crwu-audit-realestate-rent/SKILL.md`~~（L2 商铺租金/经营性物业市值专项）——**2026-09-10 下架**：资产×业务组合模型废止，租赁类业务要求改由业务轴 Skill 承载
+- [x] `skills/crwu/crwu-audit-datacheck/SKILL.md`（跨轴数据/表格勾稽能力）
+- [x] `skills/crwu/crwu-audit/scripts/media_extract.py`（2026-09-16，v0.1）：**媒体证据通道**（xlsx 锚点图 / docx·doc 正文图 / PDF 内嵌图 / 独立图片 / 复核件图导出 + 放行清单 `媒体索引.json`；H0 锚点跳过与 fail-closed）；见 §7.5
+- [x] `skills/crwu/crwu-dev-audit-public-general-standards/`（2026-09-10，P0-1）：公共轴通用准则能力（报告披露层 + 程序质控层），`public` 轴无条件装配；见 §7.3
+- [x] `skills/crwu/crwu-audit-external-data/`（2026-09-15，v0.2 单源化）：公共轴外部数据核验能力（`methods[]` 命中收益法/市场法时装配）；装配知识库 `M-外部数据核验` 模块规程；唯一数据源为同花顺 iFinD，取数入口发现覆盖 WorkBuddy 宿主连接器与 DeepSeek Harness 的结构化 Tool `crwu_audit_ifind_query`（`references/01-connector-access.md` + `scripts/connector_probe.py` 只读探测 WorkBuddy 宿主声明、不读凭据）；**不启用万得、不做双源复核**；所有宿主入口都不可用时按库内降级口径降级并在交付 HTML《外部数据核验》区显式声明；AuditResult 增 `externalDataVerification`（`11-html-delivery-spec.md` §05b）。**待办（知识库侧，用户操作）**：`审核模块注册表` §1 与 `标签词典` §5 登记 `M-外部数据核验`，并按总纲 §3.2 三处登记；库内 `M-外部数据核验` 模块规程按单源修订稿 `docs/2026-09-15-M-外部数据核验-模块规程-v0.2.md` 人工更新（表 B 去万得列、表 C 源列统一 iFinD、表 D 改为取数失败与降级）
 - [x] `crwu-audit/references/` 四件 v0.1 落地（00 schema / 01 词表 / 02 覆盖层 / 99 维护说明，2026-09-07）
-- [x] `skills/crwu-audit-skill-maintainer/scripts/kb_tool.py`：**2026-09-10 收窄**为 `validate --skill-root`（引用卫生 + 实时协议 lint）；随本地知识库根模型废止，删除 index/assemble/query/resolve/release/extract/selftest（装配清单改由叶子 `01-kb-assembly.md` 声明、crwu-dws 实时下载）
-- [x] `skills/crwu-dev-audit-optimize/`（2026-09-15）：族维护/优化入口（常规反馈定位与分桶；审核后 AI—人工差距分析；固定 HTML 模板 + 离线 ECharts；`L-* ↔ FIX-*` 双向追踪；知识库 `manual_only`、Skill 逐项确认后执行；不经 crwu-audit 路由、不产审核判断）
+- [x] `skills/crwu/crwu-audit-skill-maintainer/scripts/kb_tool.py`：**2026-09-10 收窄**为 `validate --skill-root`（引用卫生 + 实时协议 lint）；随本地知识库根模型废止，删除 index/assemble/query/resolve/release/extract/selftest（装配清单改由叶子 `01-kb-assembly.md` 声明、crwu-dws 实时下载）
+- [x] `skills/crwu/crwu-dev-audit-optimize/`（2026-09-15）：族维护/优化入口（常规反馈定位与分桶；审核后 AI—人工差距分析；固定 HTML 模板 + 离线 ECharts；`L-* ↔ FIX-*` 双向追踪；知识库 `manual_only`、Skill 逐项确认后执行；不经 crwu-audit 路由、不产审核判断）
 - [ ] references 试点回测：跨形态 8~10 条 + BG8169/300673 回归
 - [ ] 后续：案例 B/BG8169/BG4468 试点正式化 → 补齐 enterprise-value/equipment/advisory/财务报告 等大方向

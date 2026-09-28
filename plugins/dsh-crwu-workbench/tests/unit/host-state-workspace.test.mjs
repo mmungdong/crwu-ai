@@ -51,7 +51,7 @@ function memoryFs(initial = {}, dirs = []) {
   }
 }
 
-const CONFIG = { caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true }
+const CONFIG = { caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '', ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600, autoUpload: true, requireTopLevelParent: true }
 
 function makeState(patch = {}) {
   return { ...createWorkbenchState(CONFIG), ...patch }

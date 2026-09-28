@@ -6,6 +6,7 @@ import { parseSessionOutput, type H3yunSession } from '../h3yun/session.ts'
 import { readOssCred, type OssCredView } from '../oss/cred.ts'
 import { shellQuote } from '../environment/probe.ts'
 import { runShell } from '../shell/run.ts'
+import { resolveBundledCommand } from '../platform/command.ts'
 import { defaultCaseRoot } from '../audit/state.ts'
 import type { WorkbenchState } from '../state/types.ts'
 
@@ -118,7 +119,9 @@ function tails(run: { stdout?: unknown; stderr?: unknown }): { stdoutTail: strin
 
 /** 钉钉登录。`--device` 走设备码流程（无浏览器时用）。 */
 export async function dwsLogin(deps: SystemDeps, args: Record<string, unknown>): Promise<LoginResult> {
-  const argv = ['dws', 'auth', 'login']
+  // 用**包内绝对路径**：只按名字调用在 Finder 启动的桌面端会 `bash: dws: command not found`，
+  // 表现就是「点了钉钉登录没有任何反应」（客户端此前又把返回值丢掉了，所以连错误都看不到）。
+  const argv = [await resolveBundledCommand(deps.ctx, deps.platform, 'dws'), 'auth', 'login']
   if (args.device === true) argv.push('--device')
   const run = await runShell(deps.ctx, argv.map((item) => shellQuote(item, deps.platform)).join(' '), {
     workdir: await deps.workdir(),

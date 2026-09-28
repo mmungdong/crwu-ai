@@ -7,6 +7,652 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.10 · 2026-09-27
+
+环境信息页进一步收敛普通员工不需要关注的技术说明：
+
+- 删除「包内组件、DSH Runtime、平台与 Tool 可见性；员工日常不需要看。」在诊断区内与页面底部的重复提示；
+- 将「维护者诊断」更名为「开发者诊断」，并加入与现有图标体系一致的终端 SVG 标志；
+- 入口降级到内容区右下角的轻量按钮：自适应宽度、无整行虚线框、非悬浮；展开后「收起」仍停在原位置；
+- 将全部开发信息收进一个大面板，加入一键复制；补回 CRWU Workbench 版本与同花顺 iFinD 真实连接状态；
+- 在开发者诊断入口下加入「联系开发同学排查」链接，使用用户公开分享的钉钉个人名片地址；
+- 用户可见名称统一为「同花顺 iFinD」，并修复 iFinD 的 global / external-data 双作用域 issue 被顶部重复计数的问题：8/9 时只显示「还需完成 1 项」。
+
+## package · 0.0.9 · 2026-09-26（续：iFinD 改为必检 + 两项真实外部验证 + 环境页引导式重排）
+
+**协议号 15**（见 `src/shared/consts.ts` 的版本注：iFinD 语义 + 阻塞项 + `externalData` 不再恒真 +
+OSS 探测归因字段）。
+
+1. **iFinD 从"可选外部数据能力"改成环境必检、必通过项**（产品口径覆盖了旧的 OPT-006-R1 · F-008）：
+   - `DEFAULT_MANIFEST.ifind.required = true`；`IfindCheck.required` / `userSetup.ifind.required`
+     随之为 true，**进必需项分母**（必需项 8 → 9）；
+   - 未通过即**阻塞**，归属按原因分派：没填 / API-Key 无效或过期 → `user`；
+     账号无数据权益 → `admin`；网络 / 超时 / 协议 / 上游不可达 → `system`；
+   - issue 双写 `global` + `external-data` 两个 scope：`global` 让统一导航把受保护页面拦回环境页，
+     `external-data` 让 `auditCore` 一起关掉（光关外部数据却放行审核是自相矛盾的）；
+   - `capabilities.externalData` 不再恒为 true；`degraded` 只留给将来真正的可选能力，
+     **不再由"只有 iFinD 缺失"产生**；
+   - 门禁提示**整句**就是「进入【报告审核】前，请先完成 iFinD API-Key 验证。」
+     （`environmentGate` 算好整句，`navigateModuleIn` 不再往外套一层通用模板 ——
+     套起来会变成「请先完成环境配置。（…iFinD API-Key 验证。）」，第一眼仍是笼统的话）；
+   - 拦截说明**当场出现**：环境页直接读统一导航层记下的 `blocked` / `pendingTarget` / `gateReason`，
+     不再需要用户自己再点一次「重新检查」才看到"为什么没进去"。
+2. **两项凭据都改成真实外部请求验证**（不允许"文件在 / 字段非空 / 命令能启动"就算过）：
+   - OSS：用**包内绝对路径**的 `ossutil` 对 `oss://<bucket>/<配置前缀>/` 做一次只读列举
+     （`--limited-num 1`，**空目录也算成功**，不再打桶根），并把失败**结构化归因**为
+     `credential` / `permission` / `config` / `infrastructure`（`ServiceCheck.errorKind` + `target`）；
+   - iFinD：判定标准钉死为 `tools/call` 返回非错误、非空内容（`dataVerified`），
+     只有它才能让必检项通过；四个阶段（会话初始化 / 工具清单 / 取数 RPC / 取数内容）归因一致；
+   - 两者都是：保存后**立刻**验证；点「重新检查」传 `force` **绕过缓存**再验一次；
+     界面显示"最近真实验证时间"，不把缓存命中说成刚刚重新请求。
+   - 脱敏收敛到一处：`src/host/oss/sanitize.ts` 的 `sanitizeOssError`（AK / Secret / STS Token /
+     Signature / 签名 URL），环境探测与上传共用。
+3. **环境页重排为"紧凑状态摘要 + 引导式配置工作区"**：
+   - 顶部只有一条结论、完成数量、最近检查 / 最近真实验证时间，和**唯一**主动作「重新检查」；
+     **删掉「进入报告审核」按钮**（连 `onEnterReport` 属性、处理函数与相关断言一起），
+     就绪时只写一句「配置已完成。你可以从左侧进入报告审核。」；
+   - 删除三块技术指标卡（平台移入维护者诊断、最近检查压成一行辅助文案、数量与进度合并成一条摘要）；
+   - 主区改成**左侧步骤导航 + 右侧当前步骤**：1 账号连接 / 2 阿里云 OSS / 3 iFinD / 4 工作空间，
+     默认停在第一项未完成，**用户手动选过之后后台刷新不得抢焦点**；窄屏（≤860px）改成顶部横向
+     步骤条，375px 无横向滚动；
+   - OSS 表单：真实 `<label>`、两个字段纵向排布、主按钮「保存并验证」、
+     保存中「正在连接 OSS 并验证权限…」、成功「验证成功，可以访问交付目录。」，
+     失败按凭据 / 权限 / 配置 / 网络分别给人话；
+   - iFinD 卡：统一叫 **API-Key**（不再出现「SK」「auth_token」「MCP 配置文件」），
+     明说用途、从哪里获得、怎么填、不要把 API-Key 发到对话里；验证中
+     「正在连接 iFinD，并读取一条测试数据…」，成功「验证成功，已读取到测试数据。」；
+   - 技术信息（工具名、数据样本、协议版本、凭据路径、Bucket / Endpoint / 前缀）**只在维护者诊断里**。
+4. 文档与测试同批更新：`AGENTS.md` §4.5 / §4.6 / §4.7、`README.md`、`README.en.md`、
+   `docs/ui-design-guidelines.md`、`docs/development-notes.md`、`docs/PRD-workbench-sidebar-modules.md`；
+   新增 `tests/unit/client-env-steps.test.mjs`（步骤模型纯函数），
+   `install/browser-check.mjs` 的环境阶段按新结构重写（四个步骤 + 无「进入报告审核」按钮 +
+   375px 无横向溢出），仍**不触发** `audit-start`。
+
+## package · 0.0.9 · 2026-09-26
+
+**环境配置体验重做：插件自带运行能力，员工只处理账号与密钥；门禁上提到统一导航层。**
+
+协议号 12 → 14（13 增加 `env.state`；14 删除 `install-prompt` 操作）。
+
+### 一、环境领域模型（新增 `src/shared/environment/model.ts`）
+
+旧的 `allOk + blocked[]` 一个数组要同时承担四种语义（谁该处理 / 拦不拦 / 拦哪一块 / 怎么修），
+于是同一屏能同时出现「环境就绪」与「7/8 通过」。现在事实与解释分开：
+
+- `userSetup`（workspace / credentialsConsent / h3yun / dingtalk / aliyunOss / ifind）、
+  `systemHealth`（packageIntegrity / dshRuntime / platform / toolRegistry）、
+  `capabilities`（global / auditCore / delivery / externalData）、`issues[]`
+  （`id` / `owner: user|admin|system` / `blocking` / `scope` / `action` / `message`）；
+- 总状态 `unknown` / `checking` / `ready` / `degraded` / `action-required` / `admin-required`
+  / `system-blocked` / `check-failed` 由 issues **推出来**（纯函数，可单测）；
+- **只有 iFinD 缺失 = `degraded`**，不进 `blocked`、不拦任何导航；氚云 / 钉钉 / OSS / 工作空间
+  缺失仍是阻塞；
+- 包内组件 / DSH Runtime / 平台故障归 `system`，员工页面**不提示**安装二进制、装系统 Python
+  或改 PATH；
+- **通过率只统计必需项** —— 「环境就绪」与「N/N 通过」永远同时成立；
+- iFinD 与 OSS 都区分「未填写 / 已保存未验证 / 已认证 / 认证失败 / 网络不可达」五态。
+
+### 二、iFinD 由插件 Host 集成（不再读技能目录）
+
+- **删除**对 `~/.agents/skills/ifind-finance-data/mcp_config.json` 的运行时依赖；
+- SK 改由插件 Host 保存在**插件状态目录**（`<home>/.dsh/crwu-workbench/ifind-credential.json`），
+  原子写入 + `chmod 600` 并回读核对；优先 DSH 凭据服务，当前版本没有该服务时落到插件自有文件；
+- 新增 4 个 Host 操作：`ifind-status` / `ifind-credential-save`（保存后**立刻真实探测**）/
+  `ifind-credential-clear`（要求显式 `confirm`）/ `ifind-probe`；
+- `crwu_audit_ifind_query` 增加 `describe_tool`：对单个真实工具返回**脱敏、限深、限长**的
+  `inputSchema`（此前只回工具名与描述，模型知道有这个工具却不知道怎么填参数）；
+- MCP `protocolVersion` 跟随官方 1.4.0 客户端改为 **`2025-03-26`**，并做**显式协商**
+  （服务端回受支持集合内的版本就用它；回不认识的版本按协议错误失败，**不再静默假设**
+  `2024-11-05` 永远有效）；
+- 401 归 `credential`、403 权益受限归 `entitlement`、网络 / 超时 / 协议错误归 `infrastructure`，
+  三者不混；探测结论里不回显 token / session / Authorization（净化器覆盖 schema 出口）。
+
+### 三、统一全局环境门禁
+
+- 模块元数据新增 `requiresEnvironment` / `requirement`（`modules.ts`）；
+- **所有入口**都走同一个 `navigateModule(target)`：侧栏子项、报告页内跳转、环境页
+  「进入报告审核」、以后新增的页；
+- 目标需要环境且当前不是 `ready/degraded` 时：不进入目标页 → 记 `pendingTarget` → 落到 `env`
+  → 显示「进入【目标页】前，请先完成环境配置」→ 给「重新检查」；
+- 检查通过后**只恢复最近一次被拦的目标**；用户中途主动改去别处即取消自动恢复
+  （绝不无条件把用户弹走）；`env` 页始终可进；
+- **Host 侧也有能力门禁**（`src/host/environment/gate.ts`）：`audit-start` 等敏感操作复用
+  workspace / 授权 / 包内能力 / Runtime / 必需 Tool 的统一判据；用**带 60s 失效策略的快照**
+  而不是每个操作重跑一遍完整自检；拿不到快照或自检失败一律 fail closed。
+  停止审核与释放占用锁**不判门禁**（它们是安全出口）。
+
+### 四、环境信息页重排
+
+页面顺序改成员工的操作顺序（旧版是维护者排查顺序，员工第一眼看到的是自己修不了的东西）：
+
+1. 顶部**紧凑状态卡**：一句结论 + 通过率 + 最近检查时间 + **唯一**主动作；
+2. **账号连接**：一次性授权整合进配置流程（**不再用模态层遮住整页**）+ 氚云扫码 + 钉钉登录
+   （保留设备码备用）；
+3. **交付与外部数据**：阿里云 AK 表单（向管理员获取）+ **新增 `IfindAuthCard.tsx`**
+   （password 输入、保存中禁用、提交后清空本地、保存即真实验证、只显示「已认证」或脱敏摘要、
+   可替换 SK、错误就地显示且不回显、给官方入口但不代填不索取）；
+4. **工作空间**：自动识别成功时压成一行摘要，缺失 / 失效 / 要更换时才展开；
+5. **维护者诊断**（默认收起）：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 包路径、清单、哈希；
+6. 「复制安装提示词」整块**删除**（同日追加）：`install-prompt` 宿主操作、
+   `src/host/environment/install-prompt.ts` 与 `InstallPromptBlock.tsx` 一并删除，
+   对应的 8 条单测（`host-install-prompt.test.mjs`）也随之删除 —— 二进制随包发布、
+   登录与密钥都在界面上完成之后，那段提示词没有运行时用途，只把员工指去绕路。
+   ① 工作空间的「在新会话中打开」按钮同样删除（多余：选目录那一步已经在案例根目录里打开了工作台）。
+   操作清单 30 → 29；`boot.ported.done`、客户端门面与 `tests/helpers/frozen-inventory.mjs` 同步。
+7. **iFinD 改名 API-Key，并把「环境校验」升级成真实取数验证**：
+   - 界面与文案统一叫 **API-Key**（不再是"SK"）：输入框标签、状态词、错误提示、官方入口链接；
+   - **每次环境校验都真的取一次 iFinD 数据**（`initialize` → `tools/list` → `tools/call`），
+     不再是"只认证不看数据"；`dataVerified` / `dataTool` / `dataSample` 三个字段进线协议，
+     `dataSample` 是**脱敏后**的短摘要（上游回显的 token 会被净化掉）；
+   - 两截结论分开：`ok`（认证）与 `dataVerified`（取数）。认证通过但没取到数据时状态是
+     `unverified` + 明确的 `errorKind`，界面说「认证通过，但这次没有取到数据」并给处置，
+     **绝不显示成「已认证」**；
+   - 失败归因在**四个阶段**一致（会话初始化 / 工具清单 / 取数 RPC / 取数内容）：先看 401/403，
+     再看消息指纹；`credential` / `entitlement` / `infrastructure` 给三种不同的员工动作文案；
+   - 试取工具由 `pickProbeTool` 从真实 `inputSchema` 挑（只读、必填 ≤ 1、无开关参数），
+     写/批量/导入导出类一律不碰；挑不出来就如实报"权益可能未开通"；
+   - **30s TTL 探测缓存**（按凭据指纹作键）避免面板反复刷新打上游，"重新检查"传 `force` 绕过缓存。
+
+`AuthorizationGate` 模态层、`layers.ts`（五层规则）、`OssAuthCard.tsx` 随之下线。
+
+### 五、测试与交付
+
+- 新增 `tests/unit/client-env-model.test.mjs`（状态 / 通过率 / 门禁纯函数）、
+  `client-module-gate.test.mjs`（统一导航）、`client-ifind-card.test.mjs`（SK 卡片）、
+  `tests/helpers/ifind-fixture.mjs`（内存凭据 + MCP 传输替身）、
+  `tests/helpers/frozen-inventory.mjs`（Tool / 操作名单只此一份）；
+- `host-environment-env.test.mjs` 改为对着**模型**断言（degraded vs blocked、owner、
+  通过率自洽）；`host-ifind-tool.test.mjs` 重写并覆盖保存 / 清除 / 探测五态；
+- `install/browser-check.mjs`：环境页阶段改成新的四分组结构，并新增**全局门禁**阶段
+  （人为降级环境应答 → 点报告审核 → 断言落到环境页且出现目标页名 → 恢复后自动继续），
+  仍不触发 `audit-start`；
+- `host-package.test.mjs` 的工具数量断言改为与 `REQUIRED_AUDIT_TOOLS` / 冻结清单对账
+  （此前写死 9，实际 10 —— 裸数字已经漂移过一次）。
+- `WORKBENCH_PROTOCOL` 12 → 13；插件版本 0.0.8 → 0.0.9。
+
+## package · 0.0.8 · 2026-09-25
+
+**自研审核链路改为结构化 Tool 优先：审核子代理不再查找、拼接或执行任何业务 CLI。**
+
+### 一、新增 8 个业务级 Tool（`src/host/tools/`）
+
+`apply()` 里经 `ctx.tools.register()` 注册，插件卸载时逐个注销；schema 自动进 Agent 的
+system prompt。**没有任何通用逃生工具**（不存在 `crwu_exec({argv})` / `shell_exec` 这类形状），
+schema 里也没有 binary / argv / command / sandbox 模式 / bucket / 组织 / 团队空间等字段。
+
+| Tool | 作用 |
+| --- | --- |
+| `crwu_audit_capabilities` | 零副作用能力自检：受支持平台、三个自带二进制是否在包内、必需 Tool 对当前 Agent 是否可见、策略事实。**不返回二进制路径**。 |
+| `crwu_h3yun_record_get` | 按 `schemaCode` + `objectId` 一次取回记录全字段 |
+| `crwu_h3yun_files_list` | 只回附件元数据；不下载、不回显带会话鉴权的下载 URL |
+| `crwu_h3yun_file_get` | 单附件定向下载，目标必须落在案例目录内；**没有整单下载回退** |
+| `crwu_audit_knowledge_materialize` | 知识库 M2：解析库（组织 + 个人全范围精确名匹配）→ 递归遍历 → 按 `extension` 分流导出/下载 → 写 manifest 证据。模型只提交 `caseDir` + `paths[]`。 |
+| `crwu_audit_oss_publish` | 从受信配置读 bucket/endpoint/prefix；只接受 `caseDir` + `seqNo`（或显式交付件名）；上传后**真的列举**核对对象与字节数；错误脱敏 |
+| `crwu_audit_dingtalk_archive` | 组织唯一 / 默认账号唯一 / 团队空间唯一 / 年月目录 / 唯一远端名 / 写后验证；`profile`、`spaceId`、`nodeId` 全部来自真实返回 |
+| `crwu_audit_dingtalk_notify_self` | get-self → 人员精确定位 → 发 HTML 到自己单聊 → 读回 conversationId/messageId → 转**应用内** DING；单案例幂等 + 进程内串行 |
+
+### 二、执行层
+
+- 新增 `src/host/dws/`（`consts.ts` / `run.ts` / `plan.ts` / `knowledge-tree.ts`）：
+  `dws` 的**唯一**调用点，argv 白名单前缀匹配（表外默认拒绝），最终经 `ctx.shell` 执行。
+- `requireBundledCommand`：审核 Tool 严格要求包内二进制存在，缺失时回 `capability-gap`，
+  **绝不回退裸命令名**（回退会让模型看到 `command not found` 然后去搜 PATH）。
+- `runShell` 新增可选 `signal`（透传 `ShellExecRequest.signal`）与 `aborted` 结果位；
+  Tool 的 `exec.signal` 一路传到 shell。
+- `runCrwu` 新增 `signal`，并把文件头自相矛盾的提权注释改成与实现一致的口径
+  （`effective = (trusted ∧ 白名单) ∨ 显式 escalate`）；**白名单本身没有扩大**。
+- 失败分成三类并在返回值里标明：审批拒绝（`approval`）/ shell 基础设施故障
+  （`infrastructure`）/ CLI 非零退出（`cli`），另有 `input` / `capability-gap` / `policy` /
+  `not-found` / `cancelled`。
+- 默认操作走默认沙箱；只有本机凭据命令、且已授权（`trustCredentials`）、且 `workspaceRoot`
+  已知时才申请 `danger-full-access`。模型无法通过参数提权。
+
+### 三、审核子代理链路
+
+- 审核指令**删除**插件二进制目录、`export PATH`、`<binDir>/dws` 与全部裸 `crwu`/`dws`/`ossutil`
+  命令块，改写成逐条 Tool 调用要求；不再依赖 `upload_audit_result.py`。
+- 审核根会话的 hello 预检扩为「`pwd` + 实际调用 `crwu_audit_capabilities`」。
+- 新增**确定性能力门禁**（`src/host/audit/preflight.ts`）：发起审核前按
+  `ctx.tools.get(name, agent)` 检查全部必需 Tool 对审核根 Agent 可见，并通过
+  `ctx.tools.execute()` 真调一次零副作用的能力自检（证明注册表与 policy pipeline 通得过）；
+  缺任何一个就在**创建子代理之前**失败并列出缺失的工具名。
+- 子代理发布后按**它自己的 scope** 复查一次工具可见性；被收窄时立即停掉该子会话并失败。
+
+### 四、技能
+
+- `crwu-audit` 的 `SKILL.md`、`references/00`、`references/13` 改为 Tool 契约。
+- 公共技能 `crwu-dws` / `crwu-h3yun-login` / `crwu-h3yun-query` 顶部新增「DSH 环境：只用结构化 Tool」，
+  原 CLI 方式移入明确标注的**非 DSH 宿主兼容层**（`<!-- crwu-cli-guard:legacy-compat-start -->` 区块）。
+- 新增静态守卫 `scripts/check-skill-cli-guard.mjs`（`npm run skills:cli-guard`，进 `check` 与 CI）：
+  扫描非 vendored 技能文档的**活跃指令**，拦截裸 `crwu`/`dws`/`ossutil`、`which`、`command -v`、
+  `export PATH=`、包内 `bin/<平台>/`、`~/bin/<命令>`；`skills/dws/**` 明确排除（vendored 上游正文）。
+
+### 五、二进制供应链
+
+- 新增 `bin/manifest.json`（`crwu.plugin-bin-manifest.v1`）：每个平台每个工具的来源、版本、
+  构建 target/commit、**最终文件 size 与 sha256**，下载型二进制另记归档哈希。
+- `sync-binaries.mjs --check` 改为**按清单重算最终文件哈希**（不再只看存在/非空）；
+  新增 `CRWU_BIN_DIR` 以便发布矩阵汇总产物与单测覆盖失败分支。
+- `assert-pack.mjs` 新增 `--strict`（`npm run pack:assert:strict`，`prepublishOnly` 与
+  Makefile 的 `plugin-check` 都用它）：要求两平台六个二进制 + manifest 都在真实 tarball 里，
+  解包后逐个重算 size/sha256，且 `bin/` 下没有未声明的运行残留。正式发布不再把「完全没有 bin」
+  当警告。
+- `.github/workflows/release.yml`：新增 `binaries` job（macos-14 上 `make build` 交叉编译出
+  darwin + windows 两份 crwu，再 `sync-binaries.mjs` 装配并自检），产物作为 artifact 交给
+  `publish` job；发布前跑严格模式自检。
+
+### 十、报告定位交接：Host 定位 + 输入快照（2026-09-25）
+
+用户报「自动审核启动后子代理重新定位/搜索报告」。根因是交接不完整：`auditStart` 只把
+`objectId` / `seqNo` / `project` 交给子代理，而记录接口要 `schemaCode` —— 子代理于是自己去
+发现表单、列记录、在案例目录里翻找材料。
+
+- 新增 **`H3yunFormResolver`**（`src/host/h3yun/form.ts`，插件实例级）：`state.formCode` 非空直接复用；
+  为空才调一次 `discoverForm`，**并发共享同一个 in-flight Promise**；失败不缓存。
+  `loadPending` 与全部记录类 Tool 共用它（原来 `loadPending` 自己发现一次）。
+- **模型可见参数里删掉 `schemaCode`**：`crwu_h3yun_record_get` / `crwu_h3yun_files_list` 改为
+  `{ objectId, caseDir? }`，Tool 内部从解析器取 code；命令里的 `--schema` 来自 Host。
+- 新增 **`crwu_audit_case_bootstrap`**（第 9 个 Tool）：按精确 `objectId` **各调一次**
+  `records get` 与 `files list`（固定 argv，禁止 `records list` / 搜表单 / 扫目录），
+  写 `<案例目录>/输入快照/{报告记录,附件清单,快照元数据}.json`，只回紧凑摘要
+  （`snapshotPath` / `digest` / `fieldCount` / `attachmentCount` / `routingFacts`）。
+  同一 `attemptId` 重复调用返回上次摘要（`reused:true`）；`refresh:true` 才覆盖。
+  元数据里只有 `schemaCode` 的**指纹**，原文不落盘、不进上下文；`downloadUrl` 同样丢弃。
+- **审核启动新增三道门禁**（都在创建子代理之前）：表单 code 解析、`bootstrapInputSnapshot()`
+  （经 `ctx.tools.execute()`、以审核根 Agent 为 scope）、DSH Python 可用（见第十一节）。
+  成功后把 `snapshotPath` / `digest` / `objectId` / `seqNo` / `attemptId` / Python 路径写进指令。
+- **重审**：`attemptId` 每轮都新（`<key>-a<attempt>-<time36>`），bootstrap 强制 `refresh:true`
+  覆盖本轮快照；仍不得读取上一轮审核产物与 `复核-人工/`。
+- **指令新增「报告已由 Host 精确定位」一节**：以输入快照为唯一记录来源、不得重新定位或重复取数、
+  附件只按清单 `fileId` 取、快照与任务不一致时立即停止并报「数据边界错误」。
+- 技能同步：`crwu-audit/SKILL.md` 步骤 1 由「按输入类型定位 + 提交 schemaCode」改为
+  「消费 Host 已准备的输入快照」；`references/00` 的脚本命令改为注入解释器占位符。
+- 测试：`host-tools.test.mjs` 新增 4 条（schema 无 `schemaCode`、`--schema` 来自解析器、
+  定位失败不调 CLI、bootstrap 幂等/重审刷新/落盘内容）；`host-audit-lifecycle.test.mjs` 新增 6 条
+  （缓存复用、定位失败中止、交接失败中止、Python 不可用中止、只调一次且 agent scope 正确、
+  指令含快照与指纹）；`host-audit-prompt.test.mjs` 新增 3 条逐字断言。
+
+### 十一、DSH 自带 Python：审核脚本不再依赖系统 python3（2026-09-25）
+
+- 新增 **`WorkspaceRuntimeResolver`**（`src/host/runtime/python.ts`，插件实例级）：经
+  `ctx.tools.execute()` 调 `load_workspace_dependencies`（审核启动带审核根 Agent 作为 scope），
+  校验 `python` **是存在的普通文件**并真能跑出版本，校验 `pythonDistributions` 至少含 `openpyxl`
+  （缺则 `missing-package`）；顺带记录 `python-docx` / `python-pptx` / `Pillow` / `lxml` / `numpy` /
+  `pandas` / `XlsxWriter` 版本。**只缓存成功结果**，失败可在「重新自检」时 `refresh:true` 重试。
+  不硬编码安装路径、不读 `process.argv`、不改 PATH、不复制 Python 进包、不做 pip 自动安装。
+- **审核启动前解析**：失败**不创建子代理**（否则子代理会退回系统解释器）；成功后把绝对路径写进
+  `AuditPromptTask.python`，指令新增「脚本运行时：只用 DSH 自带的 Python」一节
+  （含「禁止裸解释器名字 / 任何解释器查找 / 静默降级」与 capability gap 规则）。
+- 技能同步（自研层，vendored `skills/dws/**` 不动）：`crwu-audit` 新增「脚本运行时（Python）」一节；
+  `crwu-audit-datacheck`、`crwu-audit-external-data` 与两个维护元技能的运行时命令改为
+  「注入的绝对路径 / 先调一次 `load_workspace_dependencies` 并复用」，并删掉 pip 安装建议。
+- 测试：新增 `tests/unit/host-runtime-python.test.mjs`（7 条：只解析一次 + 显式刷新、agent scope、
+  capability gap 文案、路径校验（不存在/非文件/不能执行）、缺 openpyxl 且失败不缓存、版本表归一、
+  源码不硬编码路径/不改 PATH）。
+
+### 九、讨论会话的资料来源：远端 only + 唯一案例目录（2026-09-25）
+
+用户报「这两个与 DeepSeek 对话的按钮里工具好像还是调不动」+「每次新建对话都必须束缚 DeepSeek
+不能从我电脑的目录里去找已有的文件，需要重新从远端下载」。**先看真实会话记录再改**：
+
+- **工具是通的**（记录原话）：`crwu_audit_capabilities` 返回 8 个工具 `available:true`；
+  5 个氚云附件全部由 `crwu_h3yun_file_get` 从远端下回（`ok:true` + 真实字节数）；
+  会话标题正确写为 `报告讨论 · <流水号>`。看起来"没调工具"，是因为模型**同时**在用
+  `bash`/`read` 翻本机目录。
+- **真正要修的是目录**：模型 `pwd; ls -la` → `find cases -maxdepth 4` → `mkdir -p cases/<流水号>/材料-源`，
+  把材料下到了 `<工作空间>/cases/<流水号>`；而审核链路一直用 `<工作空间>/<流水号>`。
+
+改动：
+
+- 新增 `src/shared/utils/case-dir.ts` 的 `caseDirOf(workspacePath, seqNo)`：案例目录约定**只定义一次**，
+  Host 审核提示词与 Client 两条讨论提示词共用（原来是两处各拼一次，这次漂移就是它的产物）。
+- 两条讨论提示词（报告讨论 `discussionBrief`、审核分析 `buildAuditContextBlock`）都追加
+  `fetchRules()`：唯一案例目录 + `crwu_h3yun_file_get({fileId, caseDir, relativePath: "材料-源/<原名>"})`
+  逐件下载 + **每次新建对话都重新下载**（磁盘上的同名文件可能是上一轮/别的报告的过期件）+
+  **禁止** `ls`/`find`/`grep`/`glob` 扫描本机 + 不要自己建目录树 + 清单外一律「当前不可用」。
+  `caseDir` 为空时整段不写。7 条规则逐字断言。
+- 新增文案 `aiCaseDirHead` / `aiFetchRulesHead` / `aiFetchRules`（`zh-CN.ts`）。
+- 测试口径更新：原来断言「上下文里不许出现任何本地路径」，现在改为**只允许出现案例目录这一条**
+  （用正则抽出全部本机路径再去重断言），并在 `client-assistant.test.mjs` 增加一条
+  「Host 审核指令与讨论上下文算出同一个案例目录」的防漂移断言。
+
+### 八、修复「点讨论/复核跳不到会话、也建不出新对话」（2026-09-25）
+
+用户报：在报告审核里点「与 DeepSeek 讨论报告」/「复核 AI 审核结果」跳不到对应会话，
+也创建不出新对话。两个独立根因，都在客户端会话接线：
+
+- **`sessions` 上没有 `open()`**：早期按「客户端会话服务有 open」写成 `sessions?.open?.(sessionId)`，
+  而真实实现 `ClientSessions` 只有 `retain / using / binding / list / create / fork / scope /
+  sessionOf / search / subagentAddress …`。可选链把它变成**静默 no-op**，只剩半截
+  `layout.selectPanel(null)` —— 所以「点下去什么都不发生」。现在跳转统一走
+  **`uiWorkspace.openSession(id)`**（内部 `replaceMain(…, 'reveal')` = 设置主会话 + 切回原生对话；
+  左侧会话列表被点也是走它）。`DiscussionPort` 里**删除** `open`，只保留服务上真实存在的
+  `create` / `using` / `binding` / `list`；新增 `discussionPortOf()` 做**逐方法、经接收者**的适配
+  （不 `{...sessions}`、不把方法取出来再调 —— 这些方法都依赖 `this`）。
+- **会话 face 取错**：`binding(id)` 是 `this.scopes.get(id)?.binding`，**只有已被 retain 的会话**
+  才有值，而刚 `create()` 出来的还没 retain → rename 被静默跳过（会话没名字 → 下次按名字找不到、
+  只能再建一条），kickoff prompt 也根本没发出去（用户看到的第二半症状）。现在 `rename` / `prompt`
+  一律经 **`sessions.using(id, {source}, op)`**（retain → 跑 → release），`binding` 只作旧宿主退路；
+  改名失败会带 `aiRenameFailed` 文案如实报出来，而不是悄悄咽掉。
+- **职责收敛**：`ensureDiscussion` 只负责「建/复用 + 命名」，**不再自己跳**；「跳」由面板的
+  `onOpenDiscussion` 单独负责（两处都跳会连线两次 `replaceMain`）。
+- **测试替身也一起修**：原 `fakePort` 给每条会话都预置了 binding，比真服务宽容 —— 这正是缺陷漏过门禁
+  的原因。`client-assistant.test.mjs` 改为按真实语义建模的 `FakeSessions`（`create` 不 retain、
+  `binding` 只对有 retain 的 id 有值、放一个诱饵 `open`）；`client-package.test.mjs` 另加两条：
+  适配器只转发真实动词且不解绑 `this`、以及「从面板点小鲸鱼一路到 `openSession` 恰好一次」。
+- 跨进程契约未变，`WORKBENCH_PROTOCOL` 不动（纯客户端行为）。
+
+### 七、登录与 PATH 口径（2026-09-25 收尾）
+
+结构化 Tool 化之后，「把插件 bin 目录挂到 shell PATH」这条老拐杖必须一起去掉，否则
+「模型手工拼命令行」看起来可用，等于绕过沙箱与审批。
+
+- **安装提示词（`src/host/environment/install-prompt.ts`）不再让 agent 手工跑登录命令**：
+  原来第 1、2 项写的是 `crwu h3yun session login` / `dws auth login`，现在改为
+  「在面板 ③ 登录认证 里点『氚云登录』/『钉钉登录』」+「首次先点『同意并继续』完成插件授权」，
+  并显式禁止「搜索可执行文件 / 改 PATH / 往 `~/bin` 拷副本 / 为了让它能跑而调环境」。
+  逐条断言在 `host-install-prompt.test.mjs`（含「不许出现可直接照抄的登录命令」）。
+- **`install/INSTALL-PROMPT.md`（发给收件人 agent 的装插件提示词）同步**：不再写
+  「装 crwu / dws / ossutil」，改为「按面板引导完成登录与密钥」，并加一条禁止去找命令路径。
+- 面板里的登录按钮本来就经 `resolveBundledCommand` / `runCrwu` 用**包内绝对路径**发起，
+  所以这两处改动之后，员工机器上**不需要任何 PATH 配置**。
+
+### 六、测试
+
+新增/改写：`host-tools.test.mjs`（25 条：注册与注销、无逃生字段、包内路径、signal 透传、
+默认沙箱与提权白名单、钉钉归档/通知、OSS 写后校验、失败三分类、纯计划逻辑）、
+`host-bin-manifest.test.mjs`（6 条）、`host-skills-guard.test.mjs`（6 条，含守卫证伪），
+`host-audit-prompt.test.mjs` 重写为「Tool 名 + 无路径泄漏」断言，
+`host-audit-lifecycle.test.mjs` 增加 2 条「缺 Tool / 能力缺失时不得创建子代理」。
+
+### 十二、环境自检分层：packaged / runtime / auth / delivery / external（2026-09-25）
+
+**旧的 `env.checks[]` 把四类东西混装成一列命令清单**：随包组件（`crwu` / `dws` / `ossutil`）、
+系统运行时探针（`python3`）、以及靠 PATH 解析的命令。界面只能平铺成「命令 + 路径 + 版本」，
+员工看到 `python3 未安装` 就去装 Python、看到 `ossutil` 就去找安装包 —— 而这两个都不是他们的活。
+
+- **清单拆成显式分区（`crwu.env-manifest.v3`）**：`packaged[]`（`crwu` / `dws` / `ossutil`，
+  只有 `name` / `label` / `note` / `expectedVersion`，**没有** `command` / `versionArgs` / `expect`）
+  与 `runtime.python`（**DSH 自带**解释器 + 版本约束 + `requiredPackages`，至少含 `openpyxl`）。
+  `binaries[]` 整个删除，**裸 `python3` 不再是检查项**。
+- **packaged 的检查规则**（`environment/probe.ts`）：只 `stat` 包内 `bin/<平台>/<文件>` 并与包内
+  `bin/manifest.json` 比对**字节数**；`sha256` 从清单读出来进维护者详情，**不**每次自检重算
+  （三个二进制一百多 MB，哈希是发布门禁的事）。**不得** `command -v`、**不得**回退 PATH 上的同名
+  命令、**不得**执行 `dws version`（会在二进制旁落 `.dws/` 状态目录，`pack:assert` 判成运行残留）。
+  缺失文案统一为「插件包不完整 / 平台不受支持」，绝不提示员工安装命令。
+- **`resolveOssutil` 同样只认包内**（删掉 PATH 回退），失败文案改成插件包口径；
+  导出名与 `{ path, error }` 形状保持不变，所以 `oss/ops.ts` / `oss/auto.ts` 不需要改。
+- **`env` 的返回改成六块分区**：`packageIntegrity` / `runtime` / `services`（氚云 + 钉钉，**不含 oss**）/
+  `delivery`（OSS 配置 + 凭据 + 连通性）/ `external`（iFinD）/ `workspace`；`checks` / `ifindKey` /
+  顶层 `oss` 整体消失。**协议号 +1（11 → 12）**：旧宿主仍会回 `checks[]`，新界面读到 `undefined`
+  只会画出一整页假故障，必须由协议号自己喊出来。
+- **`blocked` 口径**：插件包不完整只算**一个**故障（`插件内置组件`）、DSH 运行时不可用只算
+  **一个**故障（`DSH 脚本运行时`）；三件组件不再各占一项，vendored dws 的 PATH 兼容性也不再
+  阻断 CRWU 自动审核。
+- **`env` 接受 `{ refresh?: boolean }`**：界面「重新自检」传 `true`，让宿主重解析 DSH 自带运行时
+  （首次进入用缓存）。`EnvDeps.pythonRuntime` 是**可选依赖**，缺它或它报 `capability-gap` 时
+  如实显示 capability gap，**不是**「未安装 python3」。
+- **平台探测（`platform/detect.ts`）去掉 `python3` 探针**：本地 Desktop 优先
+  `process.platform` + `process.arch`（受支持时**一次 shell 都不跑**），只有 Host 事实不在
+  `BUNDLED_BIN_PLATFORMS` 里时才跑**一次** `uname -sm` 作执行世界诊断；执行世界与包内二进制
+  不可混用（包内二进制属于插件进程所在机器），所以 `uname` 给出另一个受支持平台时**不采纳**。
+- **页面改成 ① + 五层**：① 案例根目录（`WorkspaceCard`）+ ② 插件内置组件（**一个**聚合项，
+  显示 `插件内置组件 3/3 完整`）+ ③ DSH 脚本运行时（明写来源是 DSH 自带，列出 `openpyxl` 等版本）
+  + ④ 登录与凭据授权 + ⑤ OSS 交付配置 + ⑥ 外部数据；`EnvLayerId` 随之改名，
+  `envTally` / `blocked` 口径同步。安装提示词里的层号也一起改到 ④ / ⑤。
+- **测试**：`host-environment-probe.test.mjs` 重写（只认包内、不跑 shell、不比 sha256、
+  PATH 上有同名命令也不认）、`host-environment-env.test.mjs`（六分区、不跑 `command -v python3`、
+  不跑 `dws version`、capability gap 两种、`blocked` 只算一项）、新增
+  `host-environment-platform.test.mjs`（受支持不跑 shell / 不受支持只跑一次 `uname -sm`）、
+  `client-env-layers.test.mjs` 重写（五层顺序与计数、聚合项、不出现「请安装 crwu/dws/ossutil」）。
+  以上关键断言逐条**注入缺陷证伪过一次**（回退 PATH、跑 `dws version`、系统 python3 兜底、
+  组件各占一项、总跑 uname、多塞一层）。
+
+## package · 0.0.7 · 2026-09-25
+
+- **只读 OSS 分发桶（`crwu-only-workspace`）整体下掉。** 它此前有四个消费者，这次全部切断：
+
+  | # | 原来的用途 | 现在怎么办 |
+  | --- | --- | --- |
+  | 1 | 二进制下载元数据（远端清单里的 `~/bin/crwu`、`crwuPlatforms()` 的 url/sha256） | 二进制随包发布在 `bin/<平台>/`（0.0.6 已做），元数据整组删除 |
+  | 2 | 远端环境清单拉取（`manifestUrl`） | 清单只有内置一份（`DEFAULT_MANIFEST`），`loadManifest` / `normalizeManifest` / `resolveBinary` / `resolvePlatformEntry` 全删 |
+  | 3 | 安装文档 URL（`installDocUrl`） | 安装提示词改为**整篇自述**，一个外链都没有 |
+  | 4 | 插件 TGZ 分发（`pluginPrefix`） | **改从 npm 安装**；`scripts/dist-plugin.mjs` 与 `plugin-dist` 目标删除 |
+
+  **为什么值得动这一刀**：那四个用途都建立在「员工机器的行为依赖一个远端对象」之上，而那个桶是匿名可读、
+  **地址谁都能换** —— 换掉清单就能改员工认哪些二进制、装到哪儿；换掉安装文档就能改 agent 照着做什么；
+  换掉 TGZ 就能换掉插件本体。少一个远端数据源就少一条这样的通道。现在只剩**审核产物**那一个私有桶
+  （员工自己的 AK 上传，`oss.protected`）。
+
+- **安装提示词重写（这是安全相关的改动，逐条钉在 `host-install-prompt.test.mjs` 里）。**
+
+  旧版第一篇是「**第一步：先完整阅读这份安装清单 —— `<url>`**」，并声明「清单里的下载地址、校验要求、
+  目录约定、硬性约束都以它为准」—— 那份清单就是上面那个可被替换的远端对象。新版不再外链任何东西，
+  因为 `crwu` / `dws` / `ossutil` 随包自带，剩下的只有登录与密钥：
+
+  - 明说三个命令**随包自带**，要求 agent **不要**下载/安装/升级，也不要往 `~/bin` 或系统目录放副本；
+  - OSS AK 与 iFinD 密钥改成「**你不要索取、不要代填、不要回显**，交给员工自己填 / 停下来问我」；
+  - 逐字保留两条踩过坑的安全措辞：「**GitHub 一律按不可达处理**」（去探测会白等）、
+    「**密钥、令牌一律不要回显**」。
+  - 新增两条断言盯着「提示词里不许出现任何 URL」与「生成函数只收工作空间一个参数」——
+    少一个参数就少一条「把地址换成任意 URL」的通道。
+
+- **协议号 +1（9 → 10）**：`env` 的清单来源字段整组消失（`manifestSource` / `manifestKind` /
+  `manifestLoaded` / `manifestError` / `manifestUpdatedAt` / `installDocUrl`），换成 `configSource`
+  （部署 YAML 路径，故障对账时看的就是它）；`EnvCheckView` 去掉 `url` / `sha256` / `target`；
+  `install-prompt` 的 `url` 恒为空。宿主与客户端分开加载，这一代必须靠协议号把「界面是新的、宿主是旧的」挡在门外。
+
+- **`env` 自检的探测顺序简化为两条**：① 插件自带的 `bin/<平台>/`，② 执行世界自己的 PATH。
+  第三条「清单里写的安装目标」（`~/bin/...`）随元数据一起删除 —— 留着它就等于留着「各自装一份」那条老路。
+  `resolveOssutil` / `probeOss` 同步收窄（不再接受 `manifest` / `home` 选项）。
+
+- **配置文件与校验**：`config/crwu-workbench.yml` 删掉 `oss.readonly` 整段；
+  `src/host/config/yaml.ts` 删掉 `ReadonlyOssConfig` / `distributionTargets` / `objectUrl`；
+  `check-config.mjs` 只打印私有桶。`WorkbenchConfig` 不再有 `manifestUrl` / `installDocUrl`。
+
+- **界面**：环境自检页去掉「下载地址 / 安装到 / SHA256」与「环境清单来源 / 清单更新时间 / 清单错误 /
+  安装文档」四行，换成一行「部署配置」（YAML 路径）；工具没就绪时的文案从
+  「点上面『复制安装提示词』让 Agent 装上」改成「随插件自带，请重新安装插件或联系管理员」。
+
+- **清理**：删 `scripts/dist-plugin.mjs`、`scripts/plugin-distribution-config.mjs`、
+  `tests/unit/dist-config.test.mjs`；Makefile 去掉 `plugin-dist` 与 `PLUGIN_CONFIG`，
+  `plugin-pack` 变成「先 `plugin-bin` 再 `plugin-check` 再 `npm pack`」并提示走 tag 发布；
+  CI 去掉 dist 守卫自检步骤；root READMEs 与 `plugins/AGENTS.md` 同步（两桶 → 一桶）。
+
+- **`node` 从环境清单里整个移除 —— 它从来不是这个插件的依赖，而且会假阻塞。**
+
+  旧条目的理由是「最上游运行时：dws（npm 包）与 iFinD 的 Node 路径都依赖它」。那在当时是准确的：
+  `~/bin/dws` 是个 `#!/usr/bin/env node` 的 **npm 包装脚本**。0.0.6 把二进制打进包之后这条就不成立了，
+  逐条实测确认：
+
+  1. **三个自带二进制都是原生可执行文件**（`cffa edfe` = Mach-O；Windows 侧是 PE）。
+     `env -i PATH=/usr/bin:/bin ./bin/darwin-arm64/dws version` —— **PATH 里根本没有 node**，
+     照样输出 `v1.0.61`。`dws` 用的是上游 `vendor/dws` 的 Go 程序，不是那个 npm 包装器；
+     `crwu` / `ossutil` 本来就是 Go 二进制。
+  2. **打包的技能里没有任何地方调用 node**：grep 出来的 `--node <ID>` 是 `dws` 的参数，
+     `wiki node list` 是知识库节点，`#!/usr/bin/env node` 零命中。技能脚本全是 Python。
+  3. 所以真必需项是 **`python3`**，而它本来就在清单里（`required: true`）。平台探测也只靠它：
+     `python3 -c 'import sys,platform;print(sys.platform+"-"+platform.machine())'` → `darwin-arm64`，
+     正是本清单 `platforms` 用的键。
+
+  因此同时删掉了 `detectPlatform` / `detectHome` 里的 node 探测快路 —— 它们只是冗余，
+  而**可用性取决于 DSH 是从 Finder 还是终端启动**（实测同一个桌面安装：Finder 起的 PATH 只有
+  `/usr/bin:/bin:/usr/sbin:/sbin`，`node` 解析不到；终端起会带上 fnm 的 node）。
+  同一台机器、同一份插件，只因为启动方式不同就红一项 —— 正是本仓反复要求避免的谎报。
+
+  **顺带修了界面口径**：`envLayers` 的 `pass` / `total` / `needsWork` 现在**只数必需项** ——
+  Host 的 `blocked` 只看 `required`，层也必须只看 `required`，否则会出现「Hero 说环境已就绪、
+  某一层却显示 4/5 并默认展开」的自相矛盾。清单当前没有可选项，所以这条用一个合成的
+  `required: false` 记录钉成不变量，并**证伪过一次**（把 `layerOf` 改回全量计数即变红）。
+
+  **协议号 +1（10 → 11）。** `env.checks` 的字段形状没变，但**语义变了**：旧宿主仍把 node 当必需项
+  并放进 `blocked`，界面于是显示「还差 node」。实测踩到这一刻：宿主比磁盘产物旧一版时，客户端因为
+  形状没变而**不报警**，安静地显示一个假阻塞项（用户看到的就是「为什么还要我提供 node」）。
+  所以这里必须 +1，让「界面是新的、宿主是旧的」由协议号自己喊出来（AGENTS.md §7.12）。
+
+- **修「氚云登录 / 钉钉登录点了没有任何反应」。** 两个独立根因叠在一起：
+
+  1. **命令按名字调用，而 PATH 里没有它。** 0.0.6 把 `crwu` / `dws` 从 `~/bin` 挪进包内 `bin/<平台>/`，
+     但 `runCrwu`、`dwsSelf`、`dws auth status`、`dws auth login` 全都还在**按名字**拼命令、靠 PATH 找。
+     桌面端从 Finder 启动时 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin` —— 实测运行中的宿主报
+     `h3yun → bash: crwu: command not found`、`dingtalk → bash: dws: command not found`，
+     而同一份清单里的 `ossutil` 正常（`resolveOssutil` 早就改成优先包内绝对路径了）。
+     现在统一走 `resolveBundledCommand`：**能证实包内有就用绝对路径，否则回退按名字**
+     （SSH / 容器执行世界里包内路径不存在，回退分支必须留着）。
+     `.zshrc` 里那条 export 对 Finder 启动的 GUI 进程无效 —— 依赖 PATH 这件事本身就不成立。
+  2. **客户端把返回值丢掉了。** `onRelogin` / `onDwsLogin` 写的是
+     `.then(() => envStatus.refresh())`，`ok` / `error` / `timedOut` / `stdoutTail` / `stderrTail` 全部丢弃 ——
+     命令没跑起来时用户看到的就是「点了没反应」。现在把结果**显示在环境自检页**：成功一句话、
+     失败带真实原因、CLI 打到 stdout 的 URL / 设备码原样带出来（浏览器打不开时那是员工唯一能走下去的路）。
+
+  顺带补了**设备码登录**入口：门面一直支持 `dwsLogin({ device: true })`（`dws auth login --device`，
+  官方文档写明给「SSH 远程 / 无头 / 本地浏览器够不到 127.0.0.1」用），但界面上从来没有入口 ——
+  默认那条是 OAuth loopback 流、要开浏览器等回调。现在钉钉那一行多一枚「设备码登录」按钮。
+
+- **审核子代理现在知道自带二进制在哪了。** 提示词里原先有两句**假话**：
+
+  - 「凭据已经配在本机 `~/.ossutilconfig`，直接用 `ossutil` 即可」
+  - 「**`dws` 已在 PATH 里**」
+
+  子代理跑在 DSH 自己的 shell 里，PATH 是 DSH 继承来的、插件改不了 —— 桌面端从 Finder 启动时
+  只有 `/usr/bin:/bin:/usr/sbin:/sbin`，`dws` / `ossutil` 都不在里面。于是提示词让它跑的命令
+  （钉钉回传、OSS 上传）实际只会拿到 `command not found`。
+
+  而插件**本来就知道**它们在 `<包根>/bin/<平台>`。现在提示词最前面多一段「命令在哪」：
+  给出真实目录、绝对路径用法（推荐），以及「脚本内部还会调 `dws` 时」在同一条命令里
+  `export PATH="<目录>:$PATH"` 的用法；并明确**不要**往 `~/bin` 或系统目录拷副本。
+  `binDir` 为空（平台不受支持）时整段不出现 —— 不编路径。
+  新增两条断言（写入真实目录 / 缺平台时不出段）并**证伪过一次**。
+
+## package · 0.0.6 · 2026-09-25
+
+- **兼容 DSH 升至 `0.1.7-rc.2`（cordis `4.0.4`）。这不是例行跟进 —— 0.1.7 起 peer 变成了硬门禁。**
+
+  `peerDependencies` / `devDependencies` 里的 `@deepseek-ai/dsh-*` 从 `0.1.5-rc.2` 升到 `^0.1.7-rc.2`。
+  依据是 0.1.7-rc.2 自带文档里的原文：
+
+  > Before a profile imports a plugin, DSH checks its `peerDependencies` on `@deepseek-ai/dsh` and
+  > `@deepseek-ai/dsh-*` against the single runtime version returned by `getDshRuntimeVersion()`.
+  > **Every declared range must match; prereleases participate in range matching.** …
+  > an incompatible bundle without an exemption is **skipped** like an unreadable one and listed in `skippedBundles`.
+
+  旧 peer 钉死 `0.1.5-rc.2`，在 `0.1.7-rc.2` 的运行时上**整个 bundle 被跳过** —— 症状是「插件装上了、
+  界面里什么都没有」，而启动日志没有任何报错。写 `^0.1.7-rc.2` 而不是钉死，是为了让同一条 0.1.7 线上的
+  rc 补丁与正式版都能过闸；`^0.1.7-rc.2` = `>=0.1.7-rc.2 <0.2.0`，预发布只在同一 `[major,minor,patch]`
+  元组内参与匹配，所以 `0.1.8-rc.1` **不会**被放行。另加 `engines.dsh` 作声明口径 —— 但门禁读的是
+  peer，`engines.dsh` / `dsh.manifestVersion` 在 0.1.7 上**只是声明、不强制**
+  （`dsh-package-manifest` README 原文：「Current installers and loaders do not enforce」）。
+
+- **修 0.1.7 的 shell 契约破坏性变更：`ShellExecutor.run(spec)` 已不存在。** 新形状是
+  `execute(spec)` 返回进程句柄，前台结果（stdout/stderr/timedOut）在句柄的 `result()` 上，
+  `ShellExecSpec` 另增 `onExpiry`。`src/host/shell/run.ts` 是唯一调用点，已改为两步；
+  `tests/unit/*` 里 20 处 shell 替身同步改成 `execute().result()`（0.1.5 的 `run` 形状在 0.1.7 上
+  直接 `is not a function`，实测过的报错原文）。**这一条是本次唯一的 API 破坏点** —— 其余 peer 与
+  client UI / `ctx.fs` / `ctx.webServer` / `ctx.locale` / 槽位 API 在 0.1.7 上类型与行为都兼容，
+  由 `tsc` + 548 条单测 + `smoke:built` 一起证明。
+
+- **`crwu` / `dws` / `ossutil` 三个二进制改为随插件发布（`bin/<平台>/`），不再依赖员工各自的 `~/bin`。**
+
+  先确认了「DSH 会不会把插件里的 bin 挂上 PATH」——**不会**，四条路都实测堵死：
+  `dsh-package-manifest` 不认 `bin` 字段、`dsh-bash-local` 的 `Config` 只有
+  `cwd/timeoutMs/maxTimeoutMs/maxOutputBytes/maxSpillBytes/graceMs`、`dsh-shell-env` 只接收 `DSH_*` 键
+  （`lib/index.js` 里前缀校验会直接抛错）、`.env` 明确拒绝 `PATH`（文档原话「export them instead」）。
+  所以「员工零安装」只能靠插件按平台解析包内绝对路径，前提是文件真在包里。
+
+  目录按 `normalizePlatform()` 的键命名，两个平台：`bin/darwin-arm64/{crwu,dws,ossutil}`、
+  `bin/win32-x64/{crwu.exe,dws.exe,ossutil.exe}`。**软链接落不了地**：实测 `npm pack` 会**静默丢弃**
+  符号链接（相对与绝对都不在 tarball 里，只有真实文件会），所以一律落真实文件 —— 开发机也是拷贝，
+  避免「本机能用、员工装上少文件」。
+
+  装配由 `scripts/sync-binaries.mjs` 负责（`make plugin-bin`），来源都可复现、都不依赖开发机预装：
+  `crwu` 取本仓构建产物、`ossutil` 取阿里云官方包（URL/sha256 直接读内置清单，**同一事实源**）、
+  `dws` 取 `dingtalk-workspace-cli@1.0.61` 的 `assets/dws-*`（sha256 对照包内 `checksums.txt`，校验的是
+  **归档**而不是解包结果）。`--check` 只校验已装配内容，供发布前核对。
+
+  `src/host/platform/bin-dir.ts` / `package-root.ts` 负责定位（`import.meta.url` 上溯找 `package.json`，
+  构建产物 1 层与源码 3 层都落到同一个包根）；`probeEnv` 与 `resolveOssutil` **优先自带**、
+  查不到才回退 PATH 与清单 `target` —— 执行世界是 SSH/容器时自带二进制在宿主上用不到，回退分支必须留着。
+
+- **`assert-pack` 增加自带二进制断言**：本地装配了 `bin/<平台>/` 就必须逐个出现在真实 tarball 里，
+  没装配只提示不失败（CI 不做 `make build` + 110MB 下载这一套）。解包体积上限从 8MB 提到 160MB
+  —— 两个平台三件套本身约 108MB，这里的上限是防「误打了别的大家伙」，不是追求包小。
+  `files` 增 `bin/`，`FORBIDDEN` 增 `.cache/` 与几个同步脚本。
+
+- **Makefile**：新增 `plugin-bin` / `plugin-bin-check`；`plugin-dist` 改为**显式**先 `plugin-bin` 再
+  `plugin-check`（并列 prerequisites 在 `make -j` 下会并行，门禁可能跑在装配之前）；
+  `plugin-clean` 连同 `bin/`、`.cache/` 一起清。
+
+- **本机迁移（开发机）**：`~/bin` 下的 `crwu`、`dws`、`ossutil` 三个入口删除（`ossutil` 与包内副本
+  逐字节相同、`sha256` 比对确认；`dws` 只删软链、不动 `~/.workbuddy` 里的真实安装），
+  改为在 shell 配置里 export 一条指向 `plugins/dsh-crwu-workbench/bin/darwin-arm64` 的 PATH。
+  这条 export 是**必需**的：审核子代理跑 vendored `skills/dws/` 里的 `dws ...` 用的是 DSH shell 的
+  PATH（本会话实测 `/usr/bin:/bin:/usr/sbin:/sbin`），插件无法只给自己注入。
+
+## package · 0.0.5 · 2026-09-23
+
+- **技能重构为「分层目录 + 一层一个技能根」。** 原来包内只有 `skills/`（自研 27 个）与 `common/skills/`
+  （公共 3 个）两个技能根；现在按归属分层：
+
+  | 层 | 目录 | 内容 |
+  | --- | --- | --- |
+  | 自研层 | `skills/crwu/` | 原有 27 个 crwu-audit / crwu-dev-audit 技能（`git mv` 原样搬迁） |
+  | 上游层（新） | `skills/dws/` | vendored 的 `dingtalk-workspace-cli` 钉钉技能 14 个（集合 `multi`） |
+  | 公共层 | `common/skills/` | `crwu-dws` / `crwu-h3yun-*`（位置不变） |
+
+  **为什么必须一层一个根**：`@deepseek-ai/dsh-skill-filesystem` 的 `discoverRoot()` 对每个技能根
+  **只扫一层**（`readdir(root)` → `<子目录>/SKILL.md`），不递归。只注册 `skills/` 会把 `skills/crwu/`
+  当成"一个没有 `SKILL.md` 的技能"跳过，**整层静默消失**（症状与 2026-09-22 的 `baseUrl` 陷阱完全一样：
+  provider 装配成功、技能表里 0 个技能、日志干净）。所以 `cordis.patch.yml` 的 `customSkillDirs`
+  改成返回 `skills/crwu`、`skills/dws`、`common/skills` 三个根。
+- **`dws` 层只由同步脚本改写，可复现、可审计。** 新增 `scripts/sync-dws-skills.mjs`
+  （`npm run dws:sync`）从本机 `dws` 的上游副本同步，并写 `skills/dws/provenance.json`
+  （上游包名 / 版本 `1.0.61` / 集合 / 逐技能 sha256 / LICENSE、NOTICE 摘要）；
+  `npm run dws:check` 只对照 provenance 逐文件比对（不需要上游，CI 与员工机器都能跑），已接入
+  `npm run check` 与 `prepack`。上游版本或集合变化必须显式 `--allow-version-change` / `--allow-set-change`，
+  否则拒绝写入 —— 上游静默换版不会悄悄改掉随包内容。上游以 Apache-2.0 发布，`LICENSE` / `NOTICE`
+  随技能保留。这一层是上游正文，按 `skills/README.md` 的口径**豁免**本仓 Skill 自洽性 lint
+  （上游按自己的跨技能相对链接组织），门禁只跑自研层与公共层。
+- **共用的摘要/枚举逻辑提取**到 `scripts/lib/skill-digest.mjs`，两个同步脚本不再各写一份
+  （`sync-common-skills.mjs` 改为复用，`--check` 语义不变）。
+- **门禁与源仓工具改为按层寻址**（同一类"静默扫 0 个技能"的坑）：
+  - `Makefile` / CI 的 `kb_tool.py validate` 改为 `--skill-root skills/crwu` 与 `--skill-root common/skills`
+    各一次（传上层 `skills/` 会静默扫 0 个技能）；新增 `make plugin-dws`；
+  - `Makefile` 的 `skills-install` 改为 `find plugins -name SKILL.md` 收集技能 —— 任何层都被收到，
+    层目录自己不会被误当成技能；
+  - `check_audit_skill_mappings.py` 的技能根候选改为 `skills/crwu` + `common/skills`，硬编码的
+    `skills/crwu-audit/...`、`skills/crwu-dws` 等 label 改为按根解析；
+  - 三个源仓契约测试的 `_skill_roots()` 改为按"根里直接放着技能"识别所有层并跨层查找
+    （自研层与公共层不再同级；不修会让整组断言静默 skip）；
+  - `kb_tool.py` 的仓库引用规则新增 `skills/<层>/` 形态（分层后跨层引用同样要拦）。
+- **运行时路径与跨层依赖**：`src/host/audit/skill-paths.ts` 的包内解析改到 `skills/crwu/`
+  （`prompt.ts` 的 `$SKILLS_ROOT` 占位语义不变，指自研层）；
+  `crwu-audit-external-data` 的 `connector_probe.py` 改为在"本技能所在层 + 同级层 + 公共层 +
+  常见位置"里找 `ifind-finance-data`（iFinD 与本技能不再同层）。
+- **交付形状护栏**：`package.json` 的 `files` 显式列出 `skills/README.md`、`skills/crwu/`、
+  `skills/dws/`；`assert-pack.mjs` 三层各钉代表文件 + `provenance.json`；`smoke-built.mjs` /
+  `host-audit-prompt.test.mjs` / `host-package.test.mjs` / `host-skills-patch.test.mjs`
+  （三个根、逐层技能数与 `SKILL.md`）同步。
+- **文档**：新增 `skills/README.md`（分层契约、`dws` 层同步与升级、豁免口径）；
+  同步 `AGENTS.md`（根 / `plugins/` / 插件各一处）、`docs/skills.md`（分层表 + `dws` 层目录）、
+  `docs/agent-skill-dirs.md`、`README.md` + `README.zh-CN.md`、`README.en.md`、
+  `docs/development-notes.md`（`baseUrl` 之外新增"少注册一层"这一同类坑）。
+- **维护规程**：`plugins/AGENTS.md` 新增 §5.5「新增技能层或技能时的改动清单」—— 把本次逐项踩出来的
+  改动面（技能根 / `files` / 打包断言 / 单测计数 / skills/README / 文档 / 版本）、自研层与 vendored 层
+  的两条分叉、"不用改"的自动发现面，以及四个会咬人的坑固化成清单；插件 `AGENTS.md` §4.1.3 加了指针。
+- 顺手修复一处既有缺陷：`crwu-audit/scripts/test_audit_delivery.py` 的 v1.6 目录同步断言读的是
+  早已不存在的旧路径（`skills/README.md`、`docs/CHANGELOG.md`），一直以 `FileNotFoundError` 失败；
+  改为从技能目录上溯定位源仓文档（`docs/skills.md` 与 `docs/v0.0.1/CHANGELOG.md`），
+  安装副本内显式 skip。
+
+### 验证（0.0.5）
+
+- `npm run check`（版本一致 + 配置 + 公共技能同步 + `dws:check` + typecheck + 单测 + build + 产物冒烟）
+  与 `npm run pack:assert`（三方加载契约 + 三层文件清单）在本轮全过。
+- 技能门禁：自研层与公共层 `kb_tool.py validate` 均 `error=0`；
+  `test_audit_skill_maintainer.py`、`test_audit_multiaxis_router.py`、`test_dws_source_contract.py`
+  全过（跨层查找生效，未被静默 skip）。
+- `git diff --check` 干净。
+
 ## package · 0.0.4 · 2026-09-22
 
 - **DeepSeek 会话统一数据边界：报告业务会话只允许用「本次会话注入的远端资料」**（2026-09-23 用户强制口径）。

@@ -7,7 +7,6 @@ import { workspaceView } from '../state/store.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { finiteNumber, text } from '../../shared/utils/value.ts'
 import { auditRelease, auditStart, auditStatus, auditStop } from '../audit/ops.ts'
-import { DEFAULT_INSTALL_DOC, buildInstallPromptText } from '../environment/install-prompt.ts'
 import { WORKBENCH_PROTOCOL } from '../../shared/consts.ts'
 import { ensureRegistry } from '../state/registry.ts'
 import { writeWorkbenchConfig } from '../state/persist.ts'
@@ -22,7 +21,15 @@ import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '
 import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { loadEnvironment } from '../environment/ops.ts'
+import { createCapabilityGate, guardOperation } from '../environment/gate.ts'
+import { ifindCredentialClear, ifindCredentialSave, ifindProbe, ifindStatus, type IfindOpsDeps } from '../tools/ifind-ops.ts'
+import { createIfindProbeCache } from '../ifind/env.ts'
+import { ifindCredentialView } from '../ifind/store.ts'
+import { missingAuditTools } from '../tools/register.ts'
+import type { IfindTransport } from '../ifind/mcp.ts'
 import { loadPending } from '../h3yun/pending.ts'
+import type { H3yunFormResolver } from '../h3yun/form.ts'
+import type { PythonRuntimeResolver } from '../runtime/python.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import type { OperationMap } from './types.ts'
 
@@ -54,12 +61,41 @@ function sessionDelegation(ctx: Context, id: string): DelegationView {
   return result
 }
 
-/** 创建包形态当前已经支持的操作表。 */
+/**
+ * 创建包形态当前已经支持的操作表。
+ *
+ * `IfindOps` 与 `auditTools` 都是**可注入**的：
+ * - `ifind.transport` 让单测用内存替身（永不访问真实网络）；
+ * - `ifind.timeoutMs` 让单测用短超时；
+ * - `auditTools` 让「必需 Tool 是否可见」这件事在自检里有真实事实（替身里也可以模拟收窄）。
+ */
+export interface CoreDeps {
+  ifindTransport?: IfindTransport
+  ifindTimeoutMs?: number
+  /**
+   * iFinD 探测缓存（插件实例级）：
+   * - 不传时每个 `createCoreOperations()` 自建一份（**同一个插件实例共用**，
+   *   所以面板反复刷新不会重复打上游）；
+   * - 传 `null` 表示不缓存（单测里想看每次调用都真探）。
+   */
+  ifindProbeCache?: import('../ifind/env.ts').IfindProbeCache | null
+  auditTools?: (options: { refresh: boolean }) => Promise<{ missing: string[]; checked: boolean }>
+}
+
+export interface HostResolvers {
+  /** 氚云表单 code 的实例级解析器（列表 / 审核启动 / 业务 Tool 共用）。 */
+  form: H3yunFormResolver
+  /** DSH 自带 Python 的实例级解析器（审核启动与环境页共用）。 */
+  python: PythonRuntimeResolver
+}
+
 export function createCoreOperations(
   ctx: Context,
   config: WorkbenchConfig,
   state: WorkbenchState,
   world: WorldFacts,
+  resolvers: HostResolvers,
+  extra: CoreDeps = {},
 ): OperationMap {
   /**
    * OSS 操作的依赖。
@@ -87,12 +123,73 @@ export function createCoreOperations(
   let meCache: WhoamiResult | null = null
   const identity = async (): Promise<WhoamiResult> => {
     if (meCache !== null) return meCache
-    const me = await dwsSelf({ ctx, workdir: () => world.workdir() })
+    const me = await dwsSelf({ ctx, workdir: () => world.workdir(), platform: await world.platform() })
     if (me.name !== '') meCache = me
     return me
   }
   // 定时器必须随插件生命周期释放；这里只登记释放动作，启动由 audit-start 触发。
   ctx.effect(() => watch.stop, 'crwu-workbench: upload watch')
+
+  /**
+   * 环境自检的唯一入口（`env` 操作与能力门禁共用）。
+   *
+   * 共用是刻意的：门禁必须与界面看到的是**同一份事实**；各跑一套的结果是
+   * 「界面说没配好、Host 放行」或者反过来（见 `environment/gate.ts`）。
+   */
+  const loadEnv = async (options: { refresh: boolean; probeIfind?: boolean }): Promise<Record<string, unknown>> => {
+    const [platform, home] = [await world.platform(), await world.home()]
+    return await loadEnvironment(
+      // 「我是谁」跟着自检一起拿（见 identity 的注释）：自检本来就要问一次钉钉登录态。
+      {
+        ctx, config, state, home, platform,
+        sessionRoot: () => world.workdir(),
+        identity,
+        // DSH 自带 Python 由实例级解析器给（成功缓存、失败可显式刷新）。
+        pythonRuntime: (request: { refresh: boolean }) => resolvers.python.check({ refresh: request.refresh }),
+        // 必需 Tool 的可见性：默认按根 Agent 查一次；宿主可注入替身用于测试收窄场景。
+        ...(extra.auditTools === undefined
+          ? { auditTools: async () => ({ missing: missingAuditTools(ctx, undefined), checked: true }) }
+          : { auditTools: extra.auditTools }),
+        ...(extra.ifindTransport === undefined ? {} : { ifindTransport: extra.ifindTransport }),
+        ...(probeCache === undefined ? {} : { ifindProbeCache: probeCache }),
+      },
+      {
+        ...(options.refresh ? { refresh: true } : {}),
+        // `probeIfind` 只由界面在「保存 SK 之后」与「重新验证」时传：默认不主动打外部网络。
+        ...(options.probeIfind === true ? { probeIfind: true } : {}),
+      },
+    ) as unknown as Record<string, unknown>
+  }
+  /**
+   * 能力门禁：**带失效策略的快照**（默认 60s），敏感操作复用它而不是各自重跑一遍自检。
+   * 会改变环境事实的操作（授权、选工作空间、保存凭据、登录）之后调 `invalidate()`。
+   */
+  const gate = createCapabilityGate(async (options) => {
+    const result = await loadEnv(options)
+    const state = result.state as import('../../shared/environment/model.ts').EnvironmentStateView | undefined
+    return state ?? null
+  })
+  // 探测结果缓存：同一个插件实例共用一份（30s TTL），保存 / 清除凭据后由指纹自然失效。
+  const probeCache = extra.ifindProbeCache === null
+    ? undefined
+    : (extra.ifindProbeCache ?? createIfindProbeCache())
+  const ifindDeps: IfindOpsDeps = {
+    ctx,
+    home: () => world.home(),
+    platform: () => world.platform(),
+    ...(extra.ifindTransport === undefined ? {} : { transport: extra.ifindTransport }),
+    ...(extra.ifindTimeoutMs === undefined ? {} : { timeoutMs: extra.ifindTimeoutMs }),
+  }
+
+  /**
+   * 敏感操作的 Host 侧门禁：被拒绝时返回失败信封，放行返回 null。
+   *
+   * 判据是**同一份环境快照**（`gate`），所以不会为每个操作重跑一遍昂贵自检；
+   * 拿不到快照或自检失败一律 fail closed。
+   */
+  const guard = async (operation: string): Promise<Record<string, unknown> | null> =>
+    await guardOperation(gate, operation)
+
   return {
     // `rev` 只反映包版本，同一轮开发里两次 build 完全相同；`builtAt` 是这份产物的写入时间，
     // 用来回答「重启之后生效的是不是我刚 build 的那份」（见 AGENTS.md §7 的本地开发循环）。
@@ -128,7 +225,7 @@ export function createCoreOperations(
         // 只列包形态真的实现了的操作。曾经把 clipboard 列进 done，但操作表里没有它，
         // 于是客户端点「复制提示词」时拿到 404 —— 声明必须跟着实现走。
         done: ['ping', 'boot', 'workspace', 'workspace-auto', 'bind-session', 'trust',
-          'install-prompt',
+
           // 第 2 层：氚云表单定位 + 待审核列表 + 受白名单约束的 crwu 直通。
           'pending', 'crwu',
           // 第 1 层收尾：环境自检聚合（清单 / 二进制 / 氚云 / 钉钉 / OSS / iFinD / 工作空间）。
@@ -139,6 +236,8 @@ export function createCoreOperations(
           'oss-index', 'oss-result', 'oss-link', 'oss-upload', 'oss-cred-save',
           // 第 4 层补：一份报告的全部相关文件（只列举、不下载）。
           'report-files',
+          // 第 6 层：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是「读技能目录里的文件」）。
+          'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
           'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred'],
         // 24 个 legacy RPC 已全部搬完；这里保留空数组，是为了让「声明跟着实现走」的测试继续成立。
@@ -146,14 +245,25 @@ export function createCoreOperations(
       },
       }
     },
-    workspace: async (args) => await pickWorkspace({ ctx, config, state, world }, args),
+    // 换工作空间会改掉案例根目录（审核产物写到哪）：先落盘再作废快照。
+    workspace: async (args) => {
+      const result = await pickWorkspace({ ctx, config, state, world }, args)
+      gate.invalidate()
+      return result
+    },
 
-    'workspace-auto': async () => await autoWorkspace({ ctx, config, state, world }),
+    'workspace-auto': async () => {
+      const result = await autoWorkspace({ ctx, config, state, world })
+      gate.invalidate()
+      return result
+    },
 
     trust: async (args) => {
       // `h3yun` 是旧客户端的字段名，继续接受（协议号已 +1，但没必要为一个布尔值让旧页面报错）。
       const granted = args.credentials === true || args.h3yun === true
       state.trustCredentials = granted
+      // 授权改变了"读本机凭据"这条事实：作废旧快照，下一次操作重新自检。
+      gate.invalidate()
       // **落盘**：一次授权长期有效，否则员工每次重启 profile 都要重新授权（用户 2026-09-22 口径）。
       const saved = await writeWorkbenchConfig(ctx, await world.home(), { trustCredentials: granted })
       return {
@@ -189,29 +299,16 @@ export function createCoreOperations(
         sessionWorkspace: sessionWorkspaceInfo(ctx, state),
       }
     },
-    'install-prompt': (args) => {
-      // 清单优先：它是从组织自己的 OSS 现拉的，比部署配置更新；Config 是兜底覆盖。
-      // 与 `env` 返回 installDocUrl 的口径保持一致（同一个值有两个来源时不能各写一套）。
-      const url = state.manifest.installDocUrl || config.installDocUrl || DEFAULT_INSTALL_DOC
-      const workspace = text(args.workspace) || state.workspacePath || state.caseRoot
-      return { ok: true, url, prompt: buildInstallPromptText(url, workspace) }
-    },
-
-    env: async (args) => {
-      // 自检要探测平台、主目录、工作空间；三者都按实例缓存，避免每次刷新都跑一串子进程。
-      const [platform, home] = [await world.platform(), await world.home()]
-      return await loadEnvironment(
-        // 「我是谁」跟着自检一起拿（见 identity 的注释）：自检本来就要问一次钉钉登录态。
-        { ctx, config, state, home, platform, sessionRoot: () => world.workdir(), identity },
-        args,
-      )
-    },
+    env: async (args) => await loadEnv({
+      refresh: args.refresh === true,
+      ...(args.probeIfind === true ? { probeIfind: true } : {}),
+    }),
 
     pending: async (args) => {
       // 平台探测要跑子进程，所以按实例缓存一次；提权执行必须带工作区，由 loadPending 统一解析。
       const platform = await world.platform()
       return await loadPending(
-        { ctx, config, state, trusted: state.trustCredentials, platform, sessionRoot: () => world.workdir() },
+        { ctx, state, trusted: state.trustCredentials, platform, sessionRoot: () => world.workdir(), form: resolvers.form },
         args,
       )
     },
@@ -230,13 +327,19 @@ export function createCoreOperations(
       })
     },
     'audit-start': async (args) => {
-      const result = await auditStart({ ctx, config, state, world }, args)
+      // Host 侧门禁：工作空间 + 授权 + 包内能力 + DSH Runtime + 必需 Tool + 氚云/钉钉，一次判完。
+      // 界面上的门禁只负责体验，**这里才是真实性与绕过防护**（同源路由是公开契约）。
+      const blocked = await guard('audit-start')
+      if (blocked !== null) return blocked
+      const result = await auditStart({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }, args)
       // 起了审核就开始盯交付件：子会话跑完不会回调，只能轮询。
       if (result.ok) watch.start()
       return result
     },
     'audit-stop': async (args) => {
-      const result = await auditStop({ ctx, config, state, world }, args)
+      // **不判门禁**：停止正在跑的审核是安全动作。环境刚坏了（AK 被撤、登录过期）时更要能停，
+      // 判门禁会把人锁在外面，只能重启 profile。
+      const result = await auditStop({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }, args)
       // 手动停止后把看门狗也停掉（legacy 行为）：这条审核已经不活动了，
       // 定时器留着只是空转。真正已产出的交付件仍会被 audit-status 的每轮触发上传。
       if (result.ok) watch.stop()
@@ -248,13 +351,16 @@ export function createCoreOperations(
         config,
         state,
         world,
+        form: resolvers.form,
+        python: resolvers.python,
         autoUpload: async (record) => await maybeAutoUpload(await ossDeps(), record),
       }, args)
       // 状态轮询本来就每 10 秒一次，顺手踢一脚看门狗，不必再等满 30 秒。
       await watch.kick()
       return result
     },
-    'audit-release': async () => await auditRelease({ ctx, config, state, world }),
+    // 同上：释放占用锁是应急出口，不判门禁。
+    'audit-release': async () => await auditRelease({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }),
     'report-files': async (args) => await reportFiles(
       {
         ctx,
@@ -272,8 +378,18 @@ export function createCoreOperations(
     'oss-index': async (args) => await ossIndex(await ossDeps(), args),
     'oss-result': async (args) => await ossResult(await ossDeps(), args),
     'oss-link': async (args) => await ossLink(await ossDeps(), args),
-    'oss-upload': async (args) => await ossUpload(await ossDeps(), args, state),
-    'oss-cred-save': async (args) => await ossCredSave(await ossDeps(), args),
+    'oss-upload': async (args) => {
+      const blocked = await guard('oss-upload')
+      if (blocked !== null) return blocked
+      return await ossUpload(await ossDeps(), args, state)
+    },
+    // 保存 AK 本身**不**判门禁（它就是修复交付能力的入口，判它会锁死自己）；
+    // 但保存成功后要作废快照，因为 OSS 的连通性事实变了。
+    'oss-cred-save': async (args) => {
+      const result = await ossCredSave(await ossDeps(), args)
+      gate.invalidate()
+      return result
+    },
     'open-path': async (args) => await openPath(
       { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
       args,
@@ -282,15 +398,53 @@ export function createCoreOperations(
       { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
       args,
     ),
-    relogin: async () => await relogin({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() }),
-    'dws-login': async (args) => await dwsLogin(
-      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
-      args,
-    ),
+    // 登录成功 = 登录态事实变了：作废快照，下一次自检才能看到真结论。
+    relogin: async () => {
+      const result = await relogin({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() })
+      gate.invalidate()
+      return result
+    },
+    'dws-login': async (args) => {
+      const result = await dwsLogin(
+        { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+        args,
+      )
+      gate.invalidate()
+      return result
+    },
     session: async () => await sessionStatus({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() }),
     'oss-cred': async () => await ossCred(
       { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
       await world.home(),
     ),
+
+    // ⑥ 外部数据（iFinD）的凭据生命周期。**不是模型可见的 Tool**：界面把 SK 交给 Host，
+    // Host 校验 → 写盘（0600）→ 收紧权限 → 立刻真实探测；返回值只有状态与脱敏摘要。
+    // 这三条也顺手作废能力快照：凭据变了，之前那份环境结论就不再可信。
+    'ifind-status': async () => {
+      const status = await ifindStatus(ifindDeps)
+      const credential = await ifindCredentialViewFor(ifindDeps)
+      // `ok` 放最后：`ifindStatus` 自己会回"凭据是否可用"，那个才是界面要的判据。
+      return { ...status, credential, ok: true }
+    },
+    'ifind-credential-save': async (args) => {
+      const result = await ifindCredentialSave(ifindDeps, args)
+      gate.invalidate()
+      return result as unknown as Record<string, unknown>
+    },
+    'ifind-credential-clear': async (args) => {
+      const result = await ifindCredentialClear(ifindDeps, args)
+      gate.invalidate()
+      return result as unknown as Record<string, unknown>
+    },
+    'ifind-probe': async (args) => {
+      const result = await ifindProbe(ifindDeps, args)
+      return { ...result, ok: true }
+    },
   }
+}
+
+/** iFinD 凭据的脱敏视图（只给界面看，**没有明文**）。 */
+async function ifindCredentialViewFor(deps: IfindOpsDeps): Promise<Record<string, unknown>> {
+  return await ifindCredentialView(deps.ctx, await deps.home()) as unknown as Record<string, unknown>
 }

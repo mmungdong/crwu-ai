@@ -49,8 +49,6 @@ export async function maybeAutoUpload(deps: AutoUploadDeps, record: AuditRecord)
   record.uploading = true
   try {
     const lookup = await resolveOssutil(deps.ctx, oss, deps.platform, {
-      manifest: deps.manifest,
-      home: deps.home,
       workdir: await deps.workdir(),
     })
     // 「环境还没准备好」同样是**没有东西可传**，不算上传失败 —— 环境自检页会单独报缺 ossutil。

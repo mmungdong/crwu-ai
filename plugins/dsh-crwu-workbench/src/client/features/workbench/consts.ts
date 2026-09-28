@@ -256,6 +256,41 @@ export const WORKBENCH_CLASSES = {
   heroSub: 'crwu-audit-hero-sub',
   heroActions: 'crwu-audit-hero-actions',
 
+  /* 环境页（2026-09-26 重排）：紧凑状态摘要 + 引导式配置工作区（左侧步骤导航 / 右侧当前步骤）。
+     顶部不再有「进入报告审核」按钮，也不再有三块技术指标卡。 */
+  status: 'crwu-audit-status',
+  statusOk: 'crwu-audit-status-ok',
+  statusBad: 'crwu-audit-status-bad',
+  statusMark: 'crwu-audit-status-mark',
+  statusMarkOk: 'crwu-audit-status-mark-ok',
+  statusMarkBad: 'crwu-audit-status-mark-bad',
+  statusMain: 'crwu-audit-status-main',
+  statusTitle: 'crwu-audit-status-title',
+  statusSub: 'crwu-audit-status-sub',
+  statusNote: 'crwu-audit-status-note',
+  statusMeta: 'crwu-audit-status-meta',
+  statusDot: 'crwu-audit-status-dot',
+  statusAction: 'crwu-audit-status-action',
+  workspace: 'crwu-audit-workspace',
+  stepsNav: 'crwu-audit-steps',
+  stepsList: 'crwu-audit-steps-list',
+  stepItem: 'crwu-audit-step',
+  stepItemOn: 'crwu-audit-step-on',
+  stepIndex: 'crwu-audit-step-index',
+  stepIndexDone: 'crwu-audit-step-index-done',
+  stepText: 'crwu-audit-step-text',
+  stepTitle: 'crwu-audit-step-title',
+  stepState: 'crwu-audit-step-state',
+  stepPanel: 'crwu-audit-step-panel',
+  stepPanelHead: 'crwu-audit-step-panel-head',
+  stepPanelTitle: 'crwu-audit-step-panel-title',
+  stepLead: 'crwu-audit-step-lead',
+  stepCard: 'crwu-audit-step-card',
+  stepHead: 'crwu-audit-step-card-head',
+  stepFields: 'crwu-audit-fields',
+  field: 'crwu-audit-field',
+  fieldLabel: 'crwu-audit-field-label',
+
   meter: 'crwu-audit-meter',
   meterFill: 'crwu-audit-meter-fill',
   meterFillBad: 'crwu-audit-meter-fill-bad',
@@ -271,22 +306,18 @@ export const WORKBENCH_CLASSES = {
   layerToggle: 'crwu-audit-layer-toggle',
   layerBody: 'crwu-audit-layer-body',
   layerHeadExtra: 'crwu-audit-layer-head-extra',
-  trustRow: 'crwu-audit-trust-row',
-  authMask: 'crwu-audit-auth-mask',
-  authBlocked: 'crwu-audit-auth-blocked',
-  authCard: 'crwu-audit-auth-card',
-  authTitle: 'crwu-audit-auth-title',
-  authLead: 'crwu-audit-auth-lead',
-  authSection: 'crwu-audit-auth-section',
-  authText: 'crwu-audit-auth-text',
-  authActions: 'crwu-audit-auth-actions',
   authGranted: 'crwu-audit-auth-granted',
   layerActions: 'crwu-audit-layer-actions',
   layerFix: 'crwu-audit-layer-fix',
   details: 'crwu-audit-details',
   detailsHead: 'crwu-audit-details-head',
+  detailsTitle: 'crwu-audit-details-title',
   detailsToggle: 'crwu-audit-details-toggle',
   detailsBody: 'crwu-audit-details-body',
+  detailsPanelHead: 'crwu-audit-details-panel-head',
+  detailsPanelTitle: 'crwu-audit-details-panel-title',
+  detailsCopyError: 'crwu-audit-details-copy-error',
+  detailsContact: 'crwu-audit-details-contact',
 
   metrics: 'crwu-audit-metrics',
   metric: 'crwu-audit-metric',
@@ -892,6 +923,116 @@ export const WORKBENCH_STYLE_TEXT = `
 .crwu-audit-hero-sub { color: var(--dsw-alias-label-secondary); margin-top: 2px; }
 .crwu-audit-hero-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 
+/* ════════════════════════════════════════════════════════════════════
+   环境页（2026-09-26 重排）：紧凑状态摘要 + 引导式配置工作区
+   ────────────────────────────────────────────────────────────────────
+   办公 + Apple 设置页的层级感：
+   - 顶部摘要**一条带**（不罗列全部阻塞项，不给「进入报告审核」按钮）；
+   - 工作区是**一个** surface，左 260px 步骤导航（发丝分隔线分区，不各自套卡片），
+     右侧当前步骤；窄屏（<=860px）改成顶部横向步骤条 + 下方详情，绝不横向溢出；
+   - 分层只靠 1px 发丝线、留白与最轻一档阴影；状态色只出现在小图标 / 状态点 / 短标签上。
+   ──────────────────────────────────────────────────────────────────── */
+.crwu-audit-status {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 16px; margin-bottom: 14px;
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv1);
+}
+.crwu-audit-status-ok { border-left: 3px solid var(--dsw-alias-state-success-primary); }
+.crwu-audit-status-bad { border-left: 3px solid var(--dsw-alias-state-warn-primary); }
+.crwu-audit-status-mark {
+  flex: none; width: 32px; height: 32px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.crwu-audit-status-mark-ok {
+  color: var(--dsw-alias-state-success-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+}
+.crwu-audit-status-mark-bad {
+  color: var(--dsw-alias-state-warn-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+}
+.crwu-audit-status-main { flex: 1 1 auto; min-width: 0; }
+.crwu-audit-status-title { font-size: 15px; font-weight: 600; line-height: 22px; color: var(--crwu-text-primary); }
+.crwu-audit-status-sub { margin-top: 2px; font-size: 13px; line-height: 19px; color: var(--crwu-text-secondary); }
+.crwu-audit-status-note {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; padding: 6px 10px; border-radius: 8px;
+  font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+}
+.crwu-audit-status-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-top: 8px; font-size: 12px; line-height: 18px; color: var(--crwu-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.crwu-audit-status-dot {
+  width: 3px; height: 3px; border-radius: 50%; flex: none;
+  background: var(--crwu-text-tertiary);
+}
+.crwu-audit-status-action { flex: none; display: flex; align-items: flex-start; padding-top: 2px; }
+
+.crwu-audit-workspace {
+  display: grid; grid-template-columns: 260px minmax(0, 1fr);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv1);
+  overflow: hidden;
+}
+.crwu-audit-steps { min-width: 0; border-right: 1px solid var(--crwu-border); background: var(--crwu-surface-subtle); }
+.crwu-audit-steps-list { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.crwu-audit-step {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 44px; padding: 6px 10px; border: none; border-radius: 10px;
+  background: transparent; color: var(--crwu-text-secondary);
+  font-family: inherit; font-size: 13px; line-height: 18px; text-align: left; cursor: pointer;
+  transition: background 140ms var(--crwu-ease), color 140ms var(--crwu-ease);
+}
+.crwu-audit-step:hover { background: var(--crwu-hover); color: var(--crwu-text-primary); }
+.crwu-audit-step:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
+.crwu-audit-step-on, .crwu-audit-step-on:hover {
+  background: var(--crwu-surface); color: var(--crwu-text-primary); font-weight: 600;
+  box-shadow: var(--crwu-shadow-tab);
+}
+.crwu-audit-step-index {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--crwu-text-tertiary);
+  border: 1px solid var(--crwu-border-strong); background: var(--crwu-surface);
+}
+/* 已完成：实心绿点（状态色只出现在这枚小图标上，不铺底）。 */
+.crwu-audit-step-index-done {
+  color: var(--dsw-alias-state-success-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+}
+.crwu-audit-step-text { min-width: 0; display: flex; flex-direction: column; }
+.crwu-audit-step-title { font-size: 13px; line-height: 18px; }
+.crwu-audit-step-state { font-size: 11px; line-height: 16px; color: var(--crwu-text-tertiary); font-weight: 400; }
+.crwu-audit-step-panel { min-width: 0; padding: 16px 18px; }
+.crwu-audit-step-panel-head {
+  display: flex; align-items: center; gap: 10px;
+  padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--crwu-border);
+}
+.crwu-audit-step-panel-title { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 600; }
+.crwu-audit-step-lead { margin: 0 0 12px; font-size: 13px; line-height: 20px; color: var(--crwu-text-secondary); }
+/* 步骤内的表单块：与「一行配置项」同一套语言，但自带一段引导文案。 */
+.crwu-audit-step-card { display: block; }
+.crwu-audit-step-card-head { display: flex; align-items: center; gap: 10px; }
+.crwu-audit-fields { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.crwu-audit-field { display: flex; flex-direction: column; gap: 4px; }
+.crwu-audit-field-label { font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary); }
+/* 窄屏：左侧导航变成顶部横向步骤条，绝不横向溢出。 */
+@media (max-width: 860px) {
+  .crwu-audit-workspace { grid-template-columns: minmax(0, 1fr); }
+  .crwu-audit-steps { border-right: none; border-bottom: 1px solid var(--crwu-border); }
+  .crwu-audit-steps-list { flex-direction: row; overflow-x: auto; }
+  .crwu-audit-step { width: auto; flex: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crwu-audit-step, .crwu-audit-step:hover { transition: none; }
+}
+
 .crwu-audit-meter {
   height: 6px; border-radius: 999px; overflow: hidden; margin-top: 12px;
   background: var(--dsw-alias-interactive-bg-hover);
@@ -911,10 +1052,10 @@ export const WORKBENCH_STYLE_TEXT = `
 .crwu-audit-metric-label { color: var(--dsw-alias-label-caption); font-size: 11px; }
 
 /* ════════════════════════════════════════════════════════════════════
-   12. 环境自检的四层（工具 / 登录认证 / 上传配置 / 外部数据）
+   12. 环境自检的五层（插件内置组件 / DSH 脚本运行时 / 登录与凭据授权 / OSS 交付配置 / 外部数据）
    ────────────────────────────────────────────────────────────────────
    每层一张卡：标题 + x/y 已就绪 + 层级色；**没就绪的层默认展开**，全部就绪的收成一行。
-   层级色只用在左边框上（不整块染色）：一页四层时整块染色会喧宾夺主，左边一条足够分层次。
+   层级色只用在左边框上（不整块染色）：一页五层时整块染色会喧宾夺主，左边一条足够分层次。
    ──────────────────────────────────────────────────────────────────── */
 .crwu-audit-layer {
   border: 1px solid var(--dsw-alias-border-l1); border-left-width: 3px; border-radius: 14px;
@@ -938,28 +1079,53 @@ export const WORKBENCH_STYLE_TEXT = `
   padding: 7px 14px; font-size: 12px; color: var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-bg-layer-2); border-top: 1px solid var(--dsw-alias-border-l1);
 }
-.crwu-audit-trust-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .crwu-audit-layer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 /* 层里嵌的"怎么办"块（例如 ④ 的 AK 表单）：左侧一条竖线 + 去掉内层卡片的重复边框感。 */
 .crwu-audit-layer-fix { margin-top: 10px; padding-left: 12px; border-left: 2px solid var(--dsw-alias-border-l2); }
 .crwu-audit-layer-fix .crwu-audit-card { margin-bottom: 0; box-shadow: none; }
 
 /* ════════════════════════════════════════════════════════════════════
-   13. 排查详情（维护者看）
+   13. 开发者诊断
    ────────────────────────────────────────────────────────────────────
-   默认收起：sha256、清单来源、会话 id 这些是维护者信息，普通员工一进来不该看到。
+   默认收起在内容区右下角：sha256、清单来源、会话 id 这些是开发信息，普通员工不需要注意。
+   展开内容保持全宽并排在入口上方，入口本身不悬浮、不遮挡员工表单。
    ──────────────────────────────────────────────────────────────────── */
-.crwu-audit-details { margin-bottom: 14px; }
-.crwu-audit-details-head {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 14px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 10px;
-  background: transparent; color: var(--dsw-alias-label-secondary);
-  font-family: inherit; font-size: 12px; text-align: left; cursor: pointer;
-  transition: background 0.14s ease;
+.crwu-audit-details {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  margin-top: 4px;
 }
-.crwu-audit-details-head:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.crwu-audit-details-toggle { margin-left: auto; color: var(--dsw-alias-link); font-size: 11.5px; white-space: nowrap; }
-.crwu-audit-details-body { padding: 12px 0 0; }
+.crwu-audit-details-head {
+  display: flex; align-items: center; gap: 8px; width: auto; min-height: 34px;
+  padding: 6px 9px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-tertiary);
+  font-family: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.crwu-audit-details-head:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+.crwu-audit-details-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.crwu-audit-details-title svg { flex: 0 0 auto; color: currentColor; }
+.crwu-audit-details-toggle { margin-left: auto; color: currentColor; font-size: 11.5px; white-space: nowrap; }
+.crwu-audit-details-contact {
+  padding: 0 9px 4px; color: var(--dsw-alias-label-secondary); font-size: 12px;
+  text-decoration: none; text-underline-offset: 3px;
+}
+.crwu-audit-details-contact:hover { color: var(--dsw-alias-link); text-decoration: underline; }
+.crwu-audit-details-contact:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; border-radius: 4px; }
+.crwu-audit-details-body {
+  align-self: stretch; order: -1; width: 100%; box-sizing: border-box;
+  padding: 16px 18px 18px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv1);
+}
+.crwu-audit-details-panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.crwu-audit-details-panel-title { color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 600; }
+.crwu-audit-details-copy-error { margin: -4px 0 10px; color: var(--dsw-alias-state-error-primary); font-size: 12px; }
+.crwu-audit-details-body .crwu-audit-kv { margin-top: 0; }
 .crwu-audit-hero-todo { margin-top: 8px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1081,31 +1247,6 @@ export const WORKBENCH_STYLE_TEXT = `
    授权是本插件的硬前置：没有它取不到氚云待办、发不出钉钉回传，所以未授权时
    直接把整个面板挡住（Host 侧另有一条 blocked 兜底，防止绕过 UI 调操作）。
    ──────────────────────────────────────────────────────────────────── */
-.crwu-audit-auth-mask {
-  position: fixed; inset: 0; z-index: 950;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px; background: var(--dsw-alias-bg-mask-1);
-  backdrop-filter: var(--dsw-mask-blur);
-}
-.crwu-audit-auth-blocked {
-  position: fixed; inset: 0; z-index: 950;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px; background: var(--dsw-alias-bg-layer-1);
-}
-.crwu-audit-auth-card {
-  box-sizing: border-box; width: min(560px, 100%); max-height: 100%; overflow: auto;
-  display: flex; flex-direction: column; gap: 12px;
-  padding: 24px; border-radius: 16px;
-  background: var(--dsw-alias-bg-layer-1);
-  border: 1px solid var(--dsw-alias-border-l1);
-  box-shadow: var(--dsw-shadow-lv3);
-  animation: crwu-audit-rise 0.18s ease-out;
-}
-.crwu-audit-auth-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--dsw-alias-label-primary); }
-.crwu-audit-auth-lead { color: var(--dsw-alias-label-secondary); }
-.crwu-audit-auth-section { margin-top: 4px; font-weight: 600; color: var(--dsw-alias-label-primary); }
-.crwu-audit-auth-text { color: var(--dsw-alias-label-secondary); }
-.crwu-audit-auth-actions { display: flex; gap: 8px; margin-top: 10px; }
 .crwu-audit-auth-granted { color: var(--dsw-alias-label-caption); }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1952,9 +2093,6 @@ body[data-ds-dark-theme] .crwu-audit-root {
    这一段只做"别名映射"：把别人写死 dsw 语义色的地方落到 --crwu-*，
    **不重声明 .crwu-audit-btn 这类基础样式**（那会压过 §18 的双类变体）。 */
 .crwu-audit-card, .crwu-audit-section, .crwu-audit-layer, .crwu-audit-hero,
-.crwu-audit-trust-row, .crwu-audit-auth-card, .crwu-audit-metric {
-  background: var(--crwu-surface); border-color: var(--crwu-border);
-}
 /* 注意：这里**不含** .crwu-audit-side-drawer / .crwu-audit-drawer —— 抽屉的面由 §17 定义
    （--crwu-surface）。早先这条把它们一起改成了 surface-subtle，于是抽屉比面板底色浅一档、
    里面的 .crwu-audit-drawer 又叠一层，出现"两层纸"的观感。 */
@@ -1963,7 +2101,6 @@ body[data-ds-dark-theme] .crwu-audit-root {
 }
 .crwu-audit-layer-head-extra, .crwu-audit-details-head { background: transparent; border-color: var(--crwu-border); }
 .crwu-audit-layer-head:hover, .crwu-audit-details-head:hover { background: var(--crwu-hover); }
-.crwu-audit-auth-mask { background: var(--crwu-scrim); }
 .crwu-audit-eval-icon { background: var(--crwu-surface-subtle); border-color: var(--crwu-border); }
 .crwu-audit-metric { background: var(--crwu-surface-subtle); }
 .crwu-audit-badge { background: var(--crwu-surface-subtle); border-color: var(--crwu-border); color: var(--crwu-text-secondary); }

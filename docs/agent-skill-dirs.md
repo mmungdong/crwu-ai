@@ -8,8 +8,8 @@
 目录布局本身就是名单，不再需要"分发器技能"去拉一份 `skills/`）：
 
 ```bash
-make skills-install AGENT_DIR=~/.codex/skills    # 其它宿主：拷全部技能
-make plugin-pack                                 # DSH：打成插件包，技能随包发布
+make skills-install AGENT_DIR=~/.codex/skills    # 其它宿主：拷全部技能（各层扁平化，按技能名落盘）
+make plugin-pack                                 # DSH：打成插件包，技能按层随包发布
 ```
 
 ## 目录表
@@ -19,7 +19,7 @@ make plugin-pack                                 # DSH：打成插件包，技�
 | workbuddy | `~/.workbuddy/skills/` | — | https://www.workbuddy.cn/docs/cli/skills |
 | codex | `~/.codex/skills/` | — | Codex CLI 官方文档 skills 一节 |
 | opencode | `~/.config/opencode/skills/` | — | https://opencode.ai/docs/skills/ |
-| deepseek harness (dsh) | 随**插件包**发布，不再手拷：插件把 `<包内>/skills/` 与 `<包内>/common/skills/` 注册成技能根 | `$DSH_HOME` | 本机 DSH `@deepseek-ai/dsh-skill-filesystem`（`customSkillDirs` 配置项） |
+| deepseek harness (dsh) | 随**插件包**发布，不再手拷：插件把包内 `skills/crwu/`、`skills/dws/`、`common/skills/` **各注册成一个技能根**（一层一个根，DSH 对每个根只扫一层） | `$DSH_HOME` | 本机 DSH `@deepseek-ai/dsh-skill-filesystem`（`customSkillDirs` 配置项） |
 
 ## 补充说明
 
@@ -41,5 +41,6 @@ make plugin-pack                                 # DSH：打成插件包，技�
 
 - **更新模式 = 同名技能全量替换**：`rm -rf <TARGET>/<name>` 后再 `cp -R`，保证
   `references/` 等子文件夹也被覆盖、旧文件不残留。`make skills-install` 就是这么做的。
-- 只安装含 `SKILL.md` 的子目录；`plugins/*/skills/*` 这个 glob 同时覆盖插件专属技能与
-  `plugins/common/skills/` 下的公共技能，不需要任何名单文件。
+- 只安装含 `SKILL.md` 的目录：`make skills-install` 用 `find plugins -name SKILL.md` 收技能，
+  因此**任何层**（插件自研层、上游 vendored 层、`plugins/common/skills/` 公共层）都会被收到，
+  层目录自己（没有 `SKILL.md`）不会被误当成技能，不需要任何名单文件。

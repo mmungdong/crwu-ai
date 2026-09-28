@@ -1,0 +1,27 @@
+{
+  "package": "dingtalk-workspace-cli",
+  "upstream": "https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli",
+  "version": "1.0.61",
+  "license": "Apache-2.0",
+  "set": "multi",
+  "skills": {
+    "dingtalk-aisearch": "sha256:2534c4ec3ed0040b39544b20b2baafc079e59326acb9cd7533a3289cf318e47c",
+    "dingtalk-aitable": "sha256:98e24c31c01b67dbcb6d9fd629ef1b2bde51bdb1f7561dbc3fa4585a79b31dbf",
+    "dingtalk-calendar": "sha256:9f11ad79798b04cd6b9bc1ac079cf169faa221eff31f9bd355caee40e36ca024",
+    "dingtalk-chat": "sha256:c8c4e66c0996fc54224b881d79f295b3e0e4a3ed74368b1a425540e6594811f2",
+    "dingtalk-contact": "sha256:c40b0c779eae5ef8dcb44af26df79e00c4baaee2bc3e1b220e9c27ab5704b91b",
+    "dingtalk-doc": "sha256:67a6131dbc55e2f49eb2aa9cce2a76b0c9b358cc5a840c0e8928d74267018404",
+    "dingtalk-drive": "sha256:6ae00de95df8d07e9c6a9c6cc7ceea13b3e5c30b276bb14b3a6a80f3c133ab37",
+    "dingtalk-event": "sha256:e62227de7409b983d931cd837a16bb1b21bd30f10f39287e8c646efb9ca38a14",
+    "dingtalk-mail": "sha256:8128b0e9fee0f9190336a861beb77e9480d0d5ae86455e582a343f209b09ae0a",
+    "dingtalk-minutes": "sha256:8f046a995a1daf562b15342098d92cb86638650f501faf9c7b8a70400efbe2d9",
+    "dingtalk-misc": "sha256:961890f96867e0bb9f998ee2b65f5546cabccdd4f38294f0eef953687e8813a1",
+    "dingtalk-shared": "sha256:0c0476fb3b416048d1177954285c65f76694813aedde36610f3a47b4effdba77",
+    "dingtalk-todo": "sha256:4cd3bb62440e30bb8bf982c6378e067ed04bf6e760838a708720eeb0917fe6bf",
+    "dingtalk-wiki": "sha256:5702281c6a28d04c6faf6d877e6abab44a3657a64672398d78ecaf4f77210fa3"
+  },
+  "files": {
+    "LICENSE": "sha256:1d951e8ca1019e1ad6fc14b8450df1b7ba788b9f242002873ca79df70ee376fd",
+    "NOTICE": "sha256:857324ddd7206bdc1c25a2aba90a81367b7d172f000e7a35741cb5557003b587"
+  }
+}

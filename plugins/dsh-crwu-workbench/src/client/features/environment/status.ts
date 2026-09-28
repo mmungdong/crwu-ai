@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import { environmentStateOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import { requiredTallyOf, type EnvironmentTally } from '../../../shared/environment/model.ts'
 
 /**
  * 环境自检的**共享状态**。
@@ -32,8 +33,14 @@ export interface EnvStatusStore {
   get(): EnvSnapshot
   /** 订阅变化；返回解除订阅的函数（组件卸载时必须调用）。 */
   subscribe(listener: () => void): () => void
-  /** 跑一次自检。并发的调用共享同一次请求，不会把 shell 探测打两遍。 */
-  refresh(): Promise<EnvResult | null>
+  /**
+   * 跑一次自检。并发的调用共享同一次请求，不会把 shell 探测打两遍。
+   *
+   * `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存
+   * （首次进入页面用缓存，避免每次开面板都问一次 DSH）。若已有一次自检在飞，仍然共享它 ——
+   * 双击「重新自检」不该把整轮探测打两遍。
+   */
+  refresh(options?: { refresh?: boolean }): Promise<EnvResult | null>
 }
 
 function describe(cause: unknown): string {
@@ -61,11 +68,11 @@ export function createEnvStatusStore(): EnvStatusStore {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh() {
+    refresh(options) {
       // 并发去重：会话头的灯与面板几乎同时挂载时，只应该有一次真实自检。
       if (inflight !== null) return inflight
       patch({ busy: true, error: '' })
-      inflight = workbenchApi.env()
+      inflight = workbenchApi.env(options?.refresh === true ? { refresh: true } : {})
         .then((env) => {
           patch({ env, busy: false, error: '', checkedAt: new Date().toISOString() })
           return env
@@ -105,27 +112,21 @@ export function envLampOf(snapshot: EnvSnapshot): EnvLampTone {
   // 有一次自检在跑时先亮黄：结论还没出来就继续显示上一次的绿/红会骗人
   // （重新自检的那几秒里，界面上到底是不是「现在这个结论」必须看得出来）。
   if (snapshot.busy) return 'busy'
-  return snapshot.env.allOk === true ? 'ok' : 'bad'
+  // 判据优先走统一环境模型（`state.status`），旧宿主没有 `state` 时才回落到 `allOk` ——
+  // 「就绪」必须与门禁（`statusProceedable`）说同一件事，否则灯是绿的而页面进不去。
+  const state = snapshot.env.state
+  if (state === undefined) return snapshot.env.allOk === true ? 'ok' : 'bad'
+  return state.status === 'ready' ? 'ok' : 'bad'
 }
 
-export interface EnvTally {
-  /** 参与计数的检查项总数（二进制 + 服务 + iFinD + 工作空间 + 平台）。 */
-  total: number
-  passed: number
-  /** 通过率，0~1；没有检查项时是 0。 */
-  ratio: number
-}
-
-/** 通过率只用于展示；**门禁判断一律看 `env.allOk`**（那是 Host 给的权威结论）。 */
-export function envTally(env: EnvResult | null): EnvTally {
-  if (env === null) return { total: 0, passed: 0, ratio: 0 }
-  const results = [
-    ...env.checks.map((check) => check.ok === true),
-    ...env.services.map((service) => service.ok === true),
-    env.ifindKey.ok === true,
-    env.workspace.chosen === true,
-    env.platform !== '',
-  ]
-  const passed = results.filter((ok) => ok).length
-  return { total: results.length, passed, ratio: results.length === 0 ? 0 : passed / results.length }
+/**
+ * 通过率：**只有必需项**参与（唯一口径在 `shared/environment/model.ts` 的 `requiredTallyOf`）。
+ *
+ * 这里保留一个同名包装是为了让界面只认识 store 这一层；实现不再自己数 —— 以前界面各算一套，
+ * 于是出现过「环境已就绪」与「7/8 通过」同屏这种自相矛盾的画面。
+ */
+export function envTally(env: EnvResult | null): EnvironmentTally {
+  const state = environmentStateOf(env)
+  if (state === null) return { total: 0, passed: 0, ratio: 0 }
+  return requiredTallyOf({ systemHealth: state.systemHealth, userSetup: state.userSetup })
 }

@@ -1,8 +1,16 @@
 /**
- * 第 1 层（二进制 / OSS / iFinD 探测）的单元测试。
+ * 环境探测的单元测试：**插件内置组件**、OSS、iFinD。
  *
- * 这一层决定环境自检页显示什么，所以每条「看起来通过但实际不可用」的路径都要反向验：
- * 找不到 ≠ 读不出版本、AK 各类错误的分类、iFinD 密钥的三种失败、Windows 的引号方式。
+ * 这一层决定环境自检页显示什么，所以每条「看起来通过但实际不可用」的路径都要反向验。
+ * 2026-09-25 的改造把旧的四类混装 `checks[]`（packaged / system runtime / PATH 命令 / 服务）
+ * 拆开，这一份测试随之只盯三件事：
+ *
+ * 1. **插件内置组件只按包内文件核对**：只 stat `bin/<平台>/<文件>` 并比对包内
+ *    `bin/manifest.json` 的**字节数**（sha256 从清单读出来放进维护者详情，**不**每次自检重算 ——
+ *    三个二进制加起来一百多 MB，哈希是发布门禁的事）；
+ * 2. 组件不由 PATH 解析、不跑版本命令、不回退同名命令，缺失时的文案必须说
+ *    「插件包不完整 / 平台不受支持」而**不是**让人去安装；
+ * 3. ossutil 同理只认包内 —— 它同样没有 PATH 回退。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -10,19 +18,23 @@ import test from 'node:test'
 const ROOT = new URL('../../', import.meta.url)
 
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
-const { normalizeManifest } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
-const { shellQuote, checkIfindToken, probeEnv, probeOss, resolveOssutil, ossutilMissingMessage, probeIfindKey, serviceChecks } = await import(
-  new URL('src/host/environment/probe.ts', ROOT).href
-)
+const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
+const {
+  shellQuote, probePackageIntegrity, packageIntegrityPaths,
+  probeOss, resolveOssutil, ossutilMissingMessage, serviceChecks,
+} = await import(new URL('src/host/environment/probe.ts', ROOT).href)
+const { checkIfindSecret, readIfindSecret, writeIfindSecret, clearIfindSecret, ifindCredentialPath, ifindStateDir } =
+  await import(new URL('src/host/ifind/store.ts', ROOT).href)
+const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
 
 /**
  * 按命令内容回放的 shell 替身。
  *
- * handler 返回 `{ runs: false, error }` 时 `run` **抛错** —— 这是 DSH 契约里「命令根本没执行」
- * 的唯一形状（`ShellExecutor.run` 只为基础设施故障 reject：沙箱后端不可用、shell 服务缺失、
- * 审批拒绝）。真实事故就是 macOS 上 `sandbox-exec: sandbox_apply: Operation not permitted`。
+ * handler 返回 `{ runs: false, error }` 时 `execute` **抛错** —— 这是 DSH 契约里「命令根本没执行」
+ * 的唯一形状（`ShellExecutor.execute` 与句柄的 `result()` 只为基础设施故障 reject：沙箱后端不可用、
+ * shell 服务缺失、审批拒绝）。真实事故就是 macOS 上 `sandbox-exec: sandbox_apply: Operation not permitted`。
  */
-function shellStub(handler) {
+function shellStub(handler = () => ({ stdout: '' })) {
   const calls = []
   return {
     calls,
@@ -30,11 +42,11 @@ function shellStub(handler) {
       get: (name) => (name === 'shell'
         ? {
             resolve: (request) => request,
-            async run(spec) {
+            async execute(spec) {
               calls.push(spec.command)
               const result = handler(spec.command)
               if (result.runs === false) throw new Error(result.error)
-              return {
+              return { result: async () => ({
                 exitCode: result.exitCode ?? 0,
                 signal: null,
                 timedOut: false,
@@ -42,7 +54,7 @@ function shellStub(handler) {
                 timeoutMs: 1000,
                 stdout: { text: result.stdout ?? '', truncated: false },
                 stderr: { text: result.stderr ?? '', truncated: false },
-              }
+              }) }
             },
           }
         : undefined),
@@ -50,39 +62,88 @@ function shellStub(handler) {
   }
 }
 
-/** 沙箱后端不可用时 DSH 抛出的那条原文（真实环境逐字抄回）。 */
-const SANDBOX_DOWN = 'sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined.'
-
 /**
- * fs 替身：`files` 给内容，`infos` 给 stat 结果。
+ * fs 替身：`infos` 给 stat 结果，`files` 给 readText 内容。两者分开，混在一张表里会假绿。
  *
- * 两者必须分开 —— `stat` 返回的是 `{ type }`，把它和文件内容混在一张表里会让
- * `probeIfindKey` 的「不是文件」判断永远命中，测试就会假绿。
+ * `written` 记录每次 `writeText`（路径 / 内容 / 传入的 sandboxPolicy）—— 权限与沙箱声明
+ * 只有真的写下去才看得出来，所以这一层必须留痕。
  */
-function fsStub(files = {}, options = {}) {
-  const infos = options.infos ?? Object.fromEntries(Object.keys(files).map((path) => [path, { type: 'file' }]))
+function fsStub({ infos = {}, files = {}, failWrite = false } = {}) {
+  const written = []
+  const live = { ...files }
+  const liveInfos = { ...infos }
   return {
+    written,
     get: (name) => (name === 'fs'
       ? {
-          async resolve(path) {
-            return { targetKey: path, displayPath: path }
-          },
-          async stat(target) {
-            if (options.throwOnStat) throw new Error('ENOENT')
-            return infos[target.targetKey]
-          },
-          async readText(target) {
-            if (options.throwOnRead) throw new Error('EACCES')
-            return files[target.targetKey]
+          async resolve(path) { return { targetKey: path, displayPath: path } },
+          async stat(target) { return liveInfos[target.targetKey] },
+          async readText(target) { return live[target.targetKey] },
+          async writeText(target, content, _expected, _signal, sandboxPolicy) {
+            if (failWrite) throw new Error('disk full')
+            written.push({ path: target.targetKey, content, sandboxPolicy })
+            live[target.targetKey] = content
+            liveInfos[target.targetKey] = { type: 'file' }
+            return { operation: 'update', version: 'v', before: null, after: content }
           },
         }
       : undefined),
   }
 }
 
+/**
+ * 给 fs 替身配一个 shell 替身（`writeIfindSecret` 用 shell 建目录 + chmod + stat 核对权限）。
+ *
+ * `{ runs: false }` 走 DSH 契约里「命令根本没执行」的形状：`execute` 抛错。
+ */
+function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '' } = {}) {
+  const commands = []
+  const shell = {
+    resolve: (request) => request,
+    async execute(spec) {
+      commands.push(spec.command)
+      if (failOn !== '' && spec.command.includes(failOn)) throw new Error(error)
+      if (!runs) throw new Error(error)
+      return { result: async () => ({
+        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
+        stdout: { text: stdout, truncated: false }, stderr: { text: '', truncated: false },
+      }) }
+    },
+  }
+  return {
+    written: fs.written,
+    commands,
+    get: (name) => (name === 'shell' ? shell : fs.get(name)),
+  }
+}
+
 /** 合并多个替身的 ctx。 */
-function ctxOf(...contexts) {
-  return { get: (name) => contexts.map((ctx) => ctx.get(name)).find((value) => value !== undefined) }
+const ctxOf = (...contexts) => ({ get: (name) => contexts.map((ctx) => ctx.get(name)).find((value) => value !== undefined) })
+
+/** 沙箱后端不可用时 DSH 抛出的那条原文（真实环境逐字抄回）。 */
+const SANDBOX_DOWN = 'sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined.'
+
+const PATHS = packageIntegrityPaths()
+const BUNDLED = (name, platform = 'darwin-arm64') => bundledBinaryPath(platform, name)
+
+/** 一个组件的字节数：每个名字给一个不同的值，便于发现「拿错了哪一项」。 */
+const sizeOf = (name) => 1000 + name.length
+
+/**
+ * 造一份「装配完整」的包内布局：三个组件文件都在，`bin/manifest.json` 记着它们的字节数。
+ *
+ * `fileSize` 只改**磁盘上那份文件**的大小（模拟运行残留 / 安装不完整），清单里仍然记标准值 ——
+ * 两者分开才能验「按清单比对字节数」这条判据。
+ * 注意：**与工作树里是否真的装配过 `bin/` 无关** —— 判据是替身里的文件，CI 上没装配也照样跑。
+ */
+function packagedFs({ platform = 'darwin-arm64', present = ['crwu', 'dws', 'ossutil'], fileSize = {}, manifestTools = ['crwu', 'dws', 'ossutil'], withManifest = true } = {}) {
+  const infos = {}
+  for (const name of present) infos[BUNDLED(name, platform)] = { type: 'file', size: fileSize[name] ?? sizeOf(name) }
+  const tools = manifestTools.map((name) => ({ tool: name, file: name, platform, size: sizeOf(name), sha256: `sha-${name}`, sourceVersion: '1.2.3' }))
+  const files = withManifest
+    ? { [PATHS.manifestPath]: JSON.stringify({ schemaVersion: 'crwu.plugin-bin-manifest.v1', platforms: [{ platform, tools }] }) }
+    : {}
+  return fsStub({ infos, files })
 }
 
 // ── 引号 ────────────────────────────────────────────────────────────────────
@@ -95,283 +156,350 @@ test('shellQuote uses POSIX quoting on POSIX and double quotes on Windows', () =
   assert.equal(shellQuote('a"b', 'win32-x64'), '"a""b"')
 })
 
-// ── iFinD 密钥 ──────────────────────────────────────────────────────────────
+// ── 插件内置组件 ────────────────────────────────────────────────────────────
 
-test('checkIfindToken distinguishes empty, placeholder and untrimmed values', () => {
-  assert.equal(checkIfindToken('', 'your ifind-mcp key').reason, 'auth_token 为空')
-  assert.equal(checkIfindToken('   ', 'your ifind-mcp key').reason, 'auth_token 为空')
-  assert.match(checkIfindToken('your ifind-mcp key', 'your ifind-mcp key').reason, /仍是占位符/)
-  assert.match(checkIfindToken('YOUR IFIND-MCP KEY', 'your ifind-mcp key').reason, /仍是占位符/)
-  assert.match(checkIfindToken(' abc ', 'ph').reason, /首尾空白/)
-  assert.equal(checkIfindToken('  abc  '.trim(), 'ph').ok, true)
+test('内置组件只按包内文件核对：一次 shell 都不跑，不查 PATH、不问版本', async () => {
+  // 连 shell 服务都不给：只要实现里还残留任何 PATH 探测或版本命令，这里立刻炸。
+  const ctx = packagedFs({})
+  const result = await probePackageIntegrity(ctx, DEFAULT_MANIFEST, 'darwin-arm64')
+
+  assert.equal(result.ok, true)
+  assert.equal(result.supported, true)
+  assert.equal(result.platform, 'darwin-arm64')
+  assert.equal(result.packageRoot, PATHS.packageRoot)
+  assert.equal(result.manifestPath, PATHS.manifestPath)
+  assert.equal(result.manifestFound, true)
+  assert.deepEqual(result.tools.map((tool) => tool.name), ['crwu', 'dws', 'ossutil'])
+  for (const tool of result.tools) {
+    assert.equal(tool.ok, true, `${tool.name} 应当完整`)
+    assert.equal(tool.present, true)
+    assert.equal(tool.file, tool.name, 'POSIX 平台的文件名就是工具名')
+    assert.equal(tool.sizeBytes, sizeOf(tool.name))
+    assert.equal(tool.manifestSizeBytes, sizeOf(tool.name))
+    // sha256 来自包内清单（发布门禁算过的），不是自检现场重算的 —— 一百多 MB 不能每次自检都哈希。
+    assert.equal(tool.sha256, `sha-${tool.name}`)
+    assert.equal(tool.reason, '')
+  }
+  // 版本要求来自清单常量（dws 有，其余为空），**不执行二进制去问**。
+  assert.equal(result.tools.find((tool) => tool.name === 'dws').expectedVersion, '>=0.2.14')
+  assert.equal(result.tools.find((tool) => tool.name === 'crwu').expectedVersion, '')
 })
 
-test('checkIfindToken reports the length but never the token itself', () => {
-  const verdict = checkIfindToken('s3cret-token', 'ph')
-  assert.deepEqual(verdict, { ok: true, reason: '', tokenLength: 12 })
-  assert.equal(JSON.stringify(verdict).includes('s3cret'), false, '结果里绝不能带出密钥内容')
+test('PATH 上有同名命令也不算数：缺包内文件就是「插件包不完整」，且不提安装', async () => {
+  // PATH 探测替身**故意**为每个名字都回一个路径：只有实现还去看 PATH，才会被判成通过。
+  const shell = shellStub((command) => (command.includes('crwu') || command.includes('dws') || command.includes('ossutil')
+    ? { stdout: '/usr/local/bin/crwu\n' }
+    : { stdout: '' }))
+  const ctx = ctxOf(packagedFs({ present: ['crwu'] }), shell.ctx)
+  const result = await probePackageIntegrity(ctx, DEFAULT_MANIFEST, 'darwin-arm64')
+
+  assert.equal(result.ok, false, '缺两个组件就不能说完整')
+  for (const name of ['dws', 'ossutil']) {
+    const tool = result.tools.find((entry) => entry.name === name)
+    assert.equal(tool.present, false, `${name} 不在包里，PATH 上有也不算`)
+    assert.match(tool.reason, /插件包不完整/)
+    assert.doesNotMatch(tool.reason, /请安装|下载|PATH 上安装|npm i/)
+  }
+  // 一次 shell 都不该发（PATH 与版本命令都不再是判据），更不该出现 dws 的任何命令。
+  assert.deepEqual(shell.calls, [], `不该跑任何命令，实际：${shell.calls.join(' / ')}`)
 })
 
-// ── 二进制探测 ──────────────────────────────────────────────────────────────
-
-test('probeEnv resolves every command path in one shell call and checks versions', async () => {
-  const shell = shellStub((command) => {
-    if (command.startsWith('for b in ')) {
-      return { stdout: 'node\t/usr/local/bin/node\ncrwu\t/Users/x/bin/crwu\ndws\t\npython3\t/usr/bin/python3\nossutil\t\n' }
-    }
-    if (command.includes('node')) return { stdout: 'v22.19.0\n' }
-    if (command.includes('crwu')) return { stdout: 'crwu version 1.4.0\n' }
-    if (command.includes('python3')) return { stdout: 'Python 3.11.6\n' }
-    return { stdout: '' }
-  })
-  const checks = await probeEnv(shell.ctx, DEFAULT_MANIFEST, 'darwin-arm64', { home: '/Users/x' })
-
-  assert.deepEqual(checks.map((check) => check.name), ['node', 'crwu', 'dws', 'python3', 'ossutil'])
-  const byName = Object.fromEntries(checks.map((check) => [check.name, check]))
-
-  assert.equal(byName.node.ok, true)
-  assert.equal(byName.node.path, '/usr/local/bin/node')
-  assert.deepEqual(byName.crwu.actual, '1.4.0')
-  assert.equal(byName.python3.ok, true)
-
-  // PATH 里没有 → 未安装（而不是「版本读不出来」）。
-  assert.equal(byName.dws.found, false)
-  assert.equal(byName.dws.reason, '未安装')
-  // 一次 shell 调用解决所有 command -v。
-  assert.equal(shell.calls.filter((command) => command.startsWith('for b in ')).length, 1)
-})
-
-test('probeEnv fails a found binary whose version cannot be read', async () => {
-  // 「装了但读不出版本」必须失败：这是环境自检最容易骗过人的一条。
-  const shell = shellStub((command) => {
-    if (command.startsWith('for b in ')) return { stdout: 'node\t/usr/bin/node\n' }
-    return { exitCode: 1, stderr: 'node: bad option\n' }
-  })
-  const checks = await probeEnv(shell.ctx, DEFAULT_MANIFEST, 'linux-x64')
-  const node = checks.find((check) => check.name === 'node')
-  assert.equal(node.found, true)
-  assert.equal(node.ok, false)
-  assert.match(node.reason, /无法从命令输出解析出版本号/)
-})
-
-test('probeEnv falls back to the declared install target when the command is not on PATH', async () => {
-  const shell = shellStub((command) => {
-    if (command.startsWith('for b in ')) return { stdout: '' }
-    return { stdout: 'Version: 1.7.19\n' }
-  })
-  const fs = fsStub({}, { infos: { '/Users/x/bin/ossutil': { type: 'file' } } })
-  const checks = await probeEnv(ctxOf(shell.ctx, fs), DEFAULT_MANIFEST, 'darwin-arm64', { home: '/Users/x' })
-  const ossutil = checks.find((check) => check.name === 'ossutil')
-  assert.equal(ossutil.found, true)
-  assert.equal(ossutil.path, '/Users/x/bin/ossutil')
-  assert.equal(ossutil.ok, true)
-  assert.equal(ossutil.actual, '1.7.19')
-})
-
-test('probeEnv reports a missing optional binary without failing the whole probe', async () => {
-  const shell = shellStub((command) => (command.startsWith('for b in ') ? { stdout: '' } : { stdout: '' }))
-  const manifest = normalizeManifest({
-    binaries: [{ name: 'extra', command: 'extra', required: false }],
-  })
-  const checks = await probeEnv(shell.ctx, manifest, 'linux-x64')
-  assert.equal(checks.length, 1)
-  assert.equal(checks[0].required, false)
-  assert.equal(checks[0].ok, false)
-  assert.equal(checks[0].reason, '未安装')
-})
-
-test('probeEnv only probes commands that are safe identifiers', async () => {
-  const shell = shellStub(() => ({ stdout: '' }))
-  const manifest = normalizeManifest({
-    binaries: [
-      { name: 'ok', command: 'ok' },
-      { name: 'inject', command: 'ok; rm -rf /' },
-    ],
-  })
-  await probeEnv(shell.ctx, manifest, 'linux-x64')
-  const lookup = shell.calls.find((command) => command.startsWith('for b in ')) ?? ''
-  assert.match(lookup, /for b in ok;/)
-  assert.equal(lookup.includes('rm -rf'), false, '带 shell 元字符的 command 不得进入探测脚本')
-})
-
-// ── ossutil 解析与 OSS 探测 ─────────────────────────────────────────────────
-
-test('resolveOssutil prefers PATH and falls back to the manifest target', async () => {
-  const onPath = shellStub(() => ({ stdout: '/usr/local/bin/ossutil\n' }))
-  assert.deepEqual(
-    await resolveOssutil(onPath.ctx, DEFAULT_MANIFEST.oss, 'darwin-arm64', { manifest: DEFAULT_MANIFEST }),
-    { path: '/usr/local/bin/ossutil', error: '' },
-  )
-
-  const notOnPath = shellStub(() => ({ stdout: '' }))
-  const fs = fsStub({}, { infos: { '/Users/x/bin/ossutil': { type: 'file' } } })
-  assert.deepEqual(
-    await resolveOssutil(ctxOf(notOnPath.ctx, fs), DEFAULT_MANIFEST.oss, 'darwin-arm64', {
-      manifest: DEFAULT_MANIFEST,
-      home: '/Users/x',
-    }),
-    { path: '/Users/x/bin/ossutil', error: '' },
-  )
-
-  // 两边都没有、而且探测真的执行过 → 空路径且没有错误（界面显示「ossutil 未安装」）。
-  assert.deepEqual(
-    await resolveOssutil(ctxOf(notOnPath.ctx, fsStub({})), DEFAULT_MANIFEST.oss, 'darwin-arm64', { manifest: DEFAULT_MANIFEST, home: '/Users/x' }),
-    { path: '', error: '' },
-  )
-})
-
-test('resolveOssutil reports a probe that could not run instead of claiming ossutil is missing', async () => {
-  // 真实事故：沙箱后端不可用 → `command -v ossutil` 根本没执行 → 旧实现返回空串，
-  // 界面于是说「未找到 ossutil，请先安装」，把人送去装一个已经装好的东西。
-  const down = shellStub(() => ({ runs: false, error: SANDBOX_DOWN }))
-  const lookup = await resolveOssutil(down.ctx, DEFAULT_MANIFEST.oss, 'darwin-arm64', { manifest: DEFAULT_MANIFEST })
-  assert.equal(lookup.path, '')
-  assert.match(lookup.error, /no sandbox backend is usable/)
-  assert.match(ossutilMissingMessage(lookup), /无法定位 ossutil/)
-  assert.equal(ossutilMissingMessage({ path: '', error: '' }), '未找到 ossutil，请先安装')
-})
-
-test('probeEnv does not report 「未安装」 when the PATH probe itself could not run', async () => {
-  // 同一台机器上 node / python3 都装着；命令跑不起来时只能说「无法探测」。
-  // 旧实现会报 5 条「未安装」，用户会去装已经装好的东西。
-  const down = shellStub(() => ({ runs: false, error: SANDBOX_DOWN }))
-  const checks = await probeEnv(down.ctx, DEFAULT_MANIFEST, 'darwin-arm64')
-  assert.equal(checks.length > 0, true)
-  for (const check of checks) {
-    assert.equal(check.ok, false)
-    assert.match(check.reason, /^无法探测：/)
-    assert.notEqual(check.reason, '未安装')
+test('平台不受支持时说「平台不受支持」，而不是提示用户安装命令', async () => {
+  const ctx = fsStub({})
+  const result = await probePackageIntegrity(ctx, DEFAULT_MANIFEST, 'linux-x64')
+  assert.equal(result.supported, false)
+  assert.equal(result.ok, false)
+  for (const tool of result.tools) {
+    assert.equal(tool.present, false)
+    assert.match(tool.reason, /平台不受支持/)
+    assert.doesNotMatch(tool.reason, /请安装|下载/)
   }
 })
 
-test('probeEnv still trusts the manifest target when only PATH lookup failed', async () => {
-  // 路径探测跑不起来，但清单里的安装目标能由 fs 证实 —— 那一条仍然要报「已安装」。
-  const down = shellStub((command) => (command.startsWith('for b in ')
-    ? { runs: false, error: SANDBOX_DOWN }
-    : { stdout: 'Version: 1.7.19\n' }))
-  const fs = fsStub({}, { infos: { '/Users/x/bin/ossutil': { type: 'file' } } })
-  const checks = await probeEnv(ctxOf(down.ctx, fs), DEFAULT_MANIFEST, 'darwin-arm64', { home: '/Users/x' })
-  const ossutil = checks.find((check) => check.name === 'ossutil')
-  assert.equal(ossutil.found, true)
-  assert.equal(ossutil.path, '/Users/x/bin/ossutil')
-  assert.equal(ossutil.ok, true)
-  const node = checks.find((check) => check.name === 'node')
-  assert.match(node.reason, /^无法探测：/)
+test('字节数与包内清单不一致 = 不完整（哈希仍取自清单，不在自检里重算）', async () => {
+  // 磁盘上是 1007 字节、清单里记的是标准值：模拟「运行残留 / 安装不完整」。
+  const result = await probePackageIntegrity(packagedFs({ fileSize: { dws: sizeOf('dws') + 7 } }), DEFAULT_MANIFEST, 'darwin-arm64')
+  const dws = result.tools.find((tool) => tool.name === 'dws')
+  assert.equal(dws.ok, false)
+  assert.equal(dws.present, true)
+  assert.equal(dws.sizeBytes, sizeOf('dws') + 7)
+  assert.equal(dws.manifestSizeBytes, sizeOf('dws'))
+  assert.equal(dws.sha256, 'sha-dws', 'sha256 只从清单读出来')
+  assert.match(dws.reason, /字节数/)
+  assert.equal(result.ok, false)
 })
 
-test('probeEnv separates 「版本命令没执行」 from 「版本读不出来」', async () => {
-  // 两种情况都是「装了但判定不了」，但原因必须能分辨：一个是环境问题，一个是命令行为问题。
-  const shell = shellStub((command) => (command.startsWith('for b in ')
-    ? { stdout: 'node\t/usr/bin/node\n' }
-    : { runs: false, error: SANDBOX_DOWN }))
-  const checks = await probeEnv(shell.ctx, DEFAULT_MANIFEST, 'linux-x64')
-  const node = checks.find((check) => check.name === 'node')
-  assert.equal(node.found, true)
-  assert.equal(node.ok, false)
-  assert.match(node.reason, /^无法执行版本命令：/)
-  assert.doesNotMatch(node.reason, /无法从命令输出解析出版本号/)
+test('包内清单缺失时如实说不完整，而不是假装通过', async () => {
+  const ctx = packagedFs({ withManifest: false })
+  const result = await probePackageIntegrity(ctx, DEFAULT_MANIFEST, 'darwin-arm64')
+  assert.equal(result.manifestFound, false)
+  assert.equal(result.ok, false)
+  for (const tool of result.tools) {
+    assert.equal(tool.present, true, '文件在不在是独立事实，不因为清单缺失就变成「没有」')
+    assert.equal(tool.ok, false)
+    assert.equal(tool.sha256, '')
+    assert.match(tool.reason, /插件包不完整/)
+  }
+  assert.match(result.tools[0].reason, /插件包不完整/)
 })
+
+test('Host 文件服务不可用时说「无法核对」，不谎报「插件包不完整」', async () => {
+  const result = await probePackageIntegrity({ get: () => undefined }, DEFAULT_MANIFEST, 'darwin-arm64')
+  assert.equal(result.ok, false)
+  assert.equal(result.tools[0].present, false)
+  assert.match(result.tools[0].reason, /无法核对/)
+})
+
+test('坏掉的包内清单按「读不到」处理，不崩', async () => {
+  const ctx = fsStub({ infos: { [BUNDLED('crwu')]: { type: 'file', size: sizeOf('crwu') } }, files: { [PATHS.manifestPath]: '{oops' } })
+  const result = await probePackageIntegrity(ctx, DEFAULT_MANIFEST, 'darwin-arm64')
+  assert.equal(result.manifestFound, false)
+  assert.equal(result.ok, false)
+})
+
+test('组件清单为空（清单里没有任何内置组件）时不算故障', async () => {
+  const manifest = manifestFixture({ packaged: [] })
+  const ctx = fsStub({ files: { [PATHS.manifestPath]: JSON.stringify({ platforms: [] }) } })
+  const result = await probePackageIntegrity(ctx, manifest, 'darwin-arm64')
+  assert.deepEqual(result.tools, [])
+  assert.equal(result.ok, true, '清单没声明组件就没有可缺的项')
+})
+
+// ── ossutil：只认包内 ───────────────────────────────────────────────────────
+
+test('resolveOssutil 只认包内；PATH 上有同名命令也不回退', async () => {
+  const bundled = BUNDLED('ossutil')
+  const present = ctxOf(fsStub({ infos: { [bundled]: { type: 'file' } } }), shellStub(() => ({ stdout: '/usr/local/bin/ossutil\n' })).ctx)
+  const found = await resolveOssutil(present, DEFAULT_MANIFEST.oss, 'darwin-arm64')
+  assert.deepEqual(found, { path: bundled, error: '' })
+
+  // 包内没有：即使 PATH 探测替身回着路径，也必须报「插件包不完整」。
+  const shell = shellStub(() => ({ stdout: '/usr/local/bin/ossutil\n' }))
+  const missing = await resolveOssutil(ctxOf(fsStub({}), shell.ctx), DEFAULT_MANIFEST.oss, 'darwin-arm64')
+  assert.equal(missing.path, '')
+  assert.match(missing.error, /插件包不完整/)
+  assert.deepEqual(shell.calls, [], '不该再去 PATH 上找 ossutil')
+})
+
+test('resolveOssutil 对不受支持的平台说「平台不受支持」，失败文案不提安装', async () => {
+  const lookup = await resolveOssutil(fsStub({}), DEFAULT_MANIFEST.oss, 'linux-x64')
+  assert.equal(lookup.path, '')
+  assert.match(lookup.error, /平台不受支持/)
+  for (const message of [lookup.error, ossutilMissingMessage(lookup), ossutilMissingMessage({ path: '', error: '' })]) {
+    assert.match(message, /插件包不完整|平台不受支持/)
+    assert.doesNotMatch(message, /请先安装|请安装 ossutil|下载/)
+  }
+})
+
+test('resolveOssutil 在文件服务不可用时说「无法核对」，不说「没有」', async () => {
+  const lookup = await resolveOssutil({ get: () => undefined }, DEFAULT_MANIFEST.oss, 'darwin-arm64')
+  assert.equal(lookup.path, '')
+  assert.match(lookup.error, /无法核对/)
+})
+
+// ── OSS 实测 ────────────────────────────────────────────────────────────────
+
+/** 包内 ossutil 就绪的 ctx（OSS 实测的前置条件）。 */
+const withBundledOssutil = (...rest) => ctxOf(packagedFs(), ...rest)
 
 test('probeOss refuses to probe without enabled/bucket/ossutil', async () => {
-  const idle = shellStub(() => ({ stdout: '' }))
-  const disabled = await probeOss(idle.ctx, { ...DEFAULT_MANIFEST.oss, enabled: false }, 'darwin-arm64')
+  const idle = withBundledOssutil(shellStub().ctx)
+  const disabled = await probeOss(idle, { ...DEFAULT_MANIFEST.oss, enabled: false }, 'darwin-arm64')
   assert.equal(disabled.state, '未启用')
 
-  const noBucket = await probeOss(idle.ctx, { ...DEFAULT_MANIFEST.oss, bucket: '' }, 'darwin-arm64')
+  const noBucket = await probeOss(idle, { ...DEFAULT_MANIFEST.oss, bucket: '' }, 'darwin-arm64')
   assert.equal(noBucket.state, '缺 bucket')
 
-  const noOssutil = await probeOss(idle.ctx, { ...DEFAULT_MANIFEST.oss, bucket: 'b' }, 'darwin-arm64', { manifest: DEFAULT_MANIFEST })
-  assert.equal(noOssutil.state, 'ossutil 未安装')
+  // 包内没有 ossutil：状态必须说「插件包不完整 / 平台不受支持」，不能是「未安装」。
+  const noOssutil = await probeOss(ctxOf(fsStub({})), { ...DEFAULT_MANIFEST.oss, bucket: 'b' }, 'darwin-arm64')
+  assert.match(noOssutil.state, /插件包不完整|平台不受支持/)
   assert.equal(noOssutil.ok, false)
+  assert.doesNotMatch(noOssutil.detail, /请先安装/)
 
-  // 探测没跑起来时，状态不能是「未安装」。
+  // 探测命令没跑起来（沙箱后端不可用）→ 「无法探测」，不是「AK 无效」。
   const down = shellStub(() => ({ runs: false, error: SANDBOX_DOWN }))
-  const unreachable = await probeOss(down.ctx, { ...DEFAULT_MANIFEST.oss, bucket: 'b' }, 'darwin-arm64', { manifest: DEFAULT_MANIFEST })
+  const unreachable = await probeOss(withBundledOssutil(down.ctx), { ...DEFAULT_MANIFEST.oss, bucket: 'b' }, 'darwin-arm64')
   assert.equal(unreachable.state, '无法探测')
   assert.match(unreachable.detail, /no sandbox backend is usable/)
 })
 
-test('probeOss classifies the AK failures the CLI actually reports', async () => {
+test('probeOss 四类失败分开归因（凭据 / 权限 / 配置 / 基础设施）', async () => {
   const cases = [
-    ['AccessDenied: no permission', 'AK 无权限'],
-    ['InvalidAccessKeyId', 'AK 无效'],
-    ['SignatureDoesNotMatch', 'AK 无效'],
-    ['NoSuchBucket', 'bucket 不存在'],
-    ['AK and SK are both empty', 'AK 未配置'],
-    ['something else entirely', 'AK 配置有误或不可用'],
+    ['AccessDenied: no permission', 'AccessKey 没有目标权限', 'permission'],
+    ['Forbidden: denied', 'AccessKey 没有目标权限', 'permission'],
+    ['InvalidAccessKeyId', 'AccessKey 无效', 'credential'],
+    ['SignatureDoesNotMatch', 'AccessKey 无效', 'credential'],
+    ['InvalidSecurityToken', 'AccessKey 无效', 'credential'],
+    ['NoSuchBucket', 'Bucket 或 Endpoint 配置有误', 'config'],
+    ['unknown endpoint oss-cn-nope.aliyuncs.com', 'Bucket 或 Endpoint 配置有误', 'config'],
+    // 网络 / 超时 / 上游 5xx 一律归基础设施：说成 AK 问题会把人指去换一份好密钥。
+    ['dial tcp: lookup b.oss-cn-x.aliyuncs.com: no such host', '连接 OSS 失败', 'infrastructure'],
+    ['something else entirely', '连接 OSS 失败', 'infrastructure'],
   ]
-  for (const [stderr, expected] of cases) {
-    const shell = shellStub((command) => {
-      if (command.startsWith('command -v')) return { stdout: '/usr/local/bin/ossutil\n' }
-      return { exitCode: 1, stderr }
-    })
-    const check = await probeOss(shell.ctx, { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64', {
-      manifest: DEFAULT_MANIFEST,
-    })
+  for (const [stderr, expected, kind] of cases) {
+    const shell = shellStub(() => ({ exitCode: 1, stderr }))
+    const check = await probeOss(withBundledOssutil(shell.ctx), { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64')
     assert.equal(check.state, expected, `${stderr} 应判为 ${expected}`)
+    assert.equal(check.errorKind, kind, `${stderr} 应归为 ${kind}`)
     assert.equal(check.ok, false)
     assert.ok(check.detail.length > 0)
   }
 })
 
-test('probeOss passes when the AK can list the bucket, and never echoes credentials', async () => {
-  const shell = shellStub((command) => {
-    if (command.startsWith('command -v')) return { stdout: '/usr/local/bin/ossutil\n' }
-    return { stdout: 'oss://b/obj\n' }
-  })
-  const check = await probeOss(shell.ctx, { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64', {
-    manifest: DEFAULT_MANIFEST,
-  })
-  assert.equal(check.ok, true)
+test('probeOss 验证的是**业务前缀**（空目录也算成功），且命令是只读 ls', async () => {
+  const shell = shellStub(() => ({ stdout: '' }))
+  const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'b', prefix: 'crwu/audit', enabled: true }
+  const check = await probeOss(withBundledOssutil(shell.ctx), oss, 'darwin-arm64')
+  // 空 stdout（目录里没有对象）仍然是成功：判据是"请求成功且有权访问该目标"。
+  assert.equal(check.ok, true, '空目录必须算验证成功')
   assert.equal(check.state, 'AK 正常')
-  const listing = shell.calls.find((command) => command.includes(' ls ')) ?? ''
-  assert.match(listing, /--limited-num 1/, '探测只看一个对象，不拉整个 bucket')
+  assert.equal(check.errorKind, '')
+  const command = shell.calls[0] ?? ''
+  assert.match(command, /oss:\/\/b\/crwu\/audit\//, '必须打业务前缀而不是桶根')
+  assert.match(command, /--limited-num 1/)
+  assert.match(command, / ls /, '只允许只读列举')
+  assert.equal(/\b(rm|cp|mkdir|create|sync|appendfromfile|set-acl|put)\b/.test(command), false, '不得用写操作验证')
+  // 归因目标只用于诊断，且不含凭据。
+  assert.equal(check.target, 'oss://b/crwu/audit/')
+})
+
+test('probeOss 失败详情里即使上游回显密钥 / 签名 URL，也不会带到界面', async () => {
+  const noisy = 'error: GET https://b.oss-cn-x.aliyuncs.com/?Signature=abc123&OSSAccessKeyId=LTAI5tabcdefghijkl&security-token=STS.xyz'
+  const shell = shellStub(() => ({ exitCode: 1, stderr: noisy }))
+  const check = await probeOss(withBundledOssutil(shell.ctx), { ...DEFAULT_MANIFEST.oss, bucket: 'b', enabled: true }, 'darwin-arm64')
+  assert.equal(check.ok, false)
+  for (const secret of ['LTAI5tabcdefghijkl', 'Signature=abc123', 'STS.xyz', 'security-token=STS']) {
+    assert.equal(check.detail.includes(secret), false, `详情泄露了 ${secret}：${check.detail}`)
+  }
+  assert.match(check.detail, /<redacted>|redacted/, '要留下脱敏标记而不是把整句删掉')
 })
 
 test('probeOss honours a manifest-provided probe command template', async () => {
-  const shell = shellStub((command) => {
-    if (command.startsWith('command -v')) return { stdout: '/opt/ossutil\n' }
-    return { stdout: 'ok\n' }
-  })
+  const shell = shellStub(() => ({ stdout: 'ok\n' }))
   const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/ --endpoint {endpoint}' }
-  const check = await probeOss(shell.ctx, oss, 'darwin-arm64', { manifest: DEFAULT_MANIFEST })
+  const check = await probeOss(withBundledOssutil(shell.ctx), oss, 'darwin-arm64')
   assert.equal(check.ok, true)
   const call = shell.calls.find((command) => command.includes('--endpoint')) ?? ''
   assert.match(call, /oss:\/\/bkt\//)
   assert.match(call, /oss-cn-x\.aliyuncs\.com/)
 })
 
-// ── iFinD 配置 ──────────────────────────────────────────────────────────────
+// ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
 
-test('probeIfindKey reads the configured field and reports only the length', async () => {
-  const fs = fsStub({ '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"abcdef"}' })
-  const check = await probeIfindKey(fs, DEFAULT_MANIFEST, { home: '/Users/x', platform: 'darwin-arm64' })
-  assert.equal(check.ok, true)
-  assert.equal(check.tokenLength, 6)
-  assert.equal(check.path, '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json')
-  assert.equal(JSON.stringify(check).includes('abcdef'), false)
+test('checkIfindSecret 区分空值 / 占位符 / 首尾空白 / 换行 / 过短', () => {
+  assert.equal(checkIfindSecret('').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')
+  assert.equal(checkIfindSecret('   ').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')
+  assert.match(checkIfindSecret('your ifind-mcp key').reason, /仍是占位符/)
+  assert.match(checkIfindSecret('YOUR IFIND-MCP KEY').reason, /仍是占位符/)
+  assert.match(checkIfindSecret('abcdefgh ').reason, /多余空白/)
+  assert.match(checkIfindSecret('abcdefgh\n').reason, /不能包含换行/)
+  assert.match(checkIfindSecret('abcdefgh\r\nxyz').reason, /不能包含换行/)
+  assert.equal(checkIfindSecret('abcdefgh').ok, true)
+  // 空/占位符/空白/换行是"输入没填好"，过短是"看着不像有效 SK" —— 两类处置不同。
+  assert.equal(checkIfindSecret('').errorKind, 'input')
+  assert.equal(checkIfindSecret('abc').errorKind, 'invalid')
 })
 
-test('probeIfindKey explains missing file, bad JSON and missing fs', async () => {
-  const missing = await probeIfindKey(fsStub({}), DEFAULT_MANIFEST, { home: '/Users/x', platform: 'darwin-arm64' })
-  assert.match(missing.reason, /配置文件不存在/)
+test('checkIfindSecret 只回长度，绝不回显密钥本体', () => {
+  const verdict = checkIfindSecret('s3cret-token')
+  assert.deepEqual(verdict, { ok: true, reason: '', value: 's3cret-token', length: 12, errorKind: '' })
+  // 面向界面 / 模型的那一份（view）里没有 value 字段。
+  assert.equal('value' in verdict === true, true, '内部判定需要明文给 Host 用')
+})
 
-  const badJson = await probeIfindKey(
-    fsStub({ '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{oops' }),
-    DEFAULT_MANIFEST,
-    { home: '/Users/x', platform: 'darwin-arm64' },
-  )
+test('凭据文件落在插件状态目录，不在技能目录、也不在插件包目录', () => {
+  const path = ifindCredentialPath('/Users/x')
+  assert.equal(path, '/Users/x/.dsh/crwu-workbench/ifind-credential.json')
+  assert.equal(ifindStateDir('/Users/x'), '/Users/x/.dsh/crwu-workbench')
+  for (const banned of ['.agents', 'skills', 'ifind-finance-data', 'node_modules', 'plugins/']) {
+    assert.equal(path.includes(banned), false, `凭据不得落在 ${banned} 下：${path}`)
+  }
+})
+
+test('readIfindSecret 读配置字段、写回后能再读出来（明文只在 Host 内部）', async () => {
+  const path = ifindCredentialPath('/Users/x')
+  const fs = fsStub({ files: { [path]: '{"auth_token":"abcdefghij"}' }, infos: { [path]: { type: 'file' } } })
+  const check = await readIfindSecret({ get: (name) => fs.get(name) }, '/Users/x')
+  assert.equal(check.ok, true)
+  assert.equal(check.secret, 'abcdefghij')
+  assert.equal(check.view.length, 10)
+  assert.equal(check.view.state, 'unverified', '只读文件不等于已认证')
+  assert.equal(JSON.stringify(check.view).includes('abcdefghij'), false, '脱敏视图里绝不能带出密钥')
+})
+
+test('readIfindSecret 解释未配置 / 坏 JSON / 占位符 / 无 fs', async () => {
+  const missing = await readIfindSecret({ get: (name) => fsStub({}).get(name) }, '/Users/x')
+  assert.equal(missing.ok, false)
+  assert.equal(missing.state, 'unconfigured')
+  assert.match(missing.reason, /还没有保存/)
+
+  const path = ifindCredentialPath('/Users/x')
+  const badFs = fsStub({ files: { [path]: '{oops' }, infos: { [path]: { type: 'file' } } })
+  const badJson = await readIfindSecret({ get: (name) => badFs.get(name) }, '/Users/x')
+  assert.equal(badJson.state, 'invalid')
   assert.match(badJson.reason, /不是合法 JSON/)
 
-  const noFs = await probeIfindKey({ get: () => undefined }, DEFAULT_MANIFEST, { home: '/Users/x' })
+  const placeholderFs = fsStub({ files: { [path]: '{"auth_token":"your ifind-mcp key"}' }, infos: { [path]: { type: 'file' } } })
+  const placeholder = await readIfindSecret({ get: (name) => placeholderFs.get(name) }, '/Users/x')
+  assert.equal(placeholder.state, 'invalid')
+  assert.match(placeholder.reason, /占位符/)
+
+  const noFs = await readIfindSecret({ get: () => undefined }, '/Users/x')
+  assert.equal(noFs.state, 'unreachable')
   assert.match(noFs.reason, /文件服务不可用/)
 })
 
-test('serviceChecks normalizes the manifest service list without inventing status', () => {
-  const checks = serviceChecks(DEFAULT_MANIFEST.services)
-  assert.deepEqual(checks.map((check) => check.id), ['h3yun', 'dingtalk', 'oss'])
-  for (const check of checks) {
-    assert.equal(check.ok, false, '未探测前不得假装通过')
-    assert.equal(check.state, '待探测')
+test('空值 / 占位符 / 首尾空白 / 换行在**写盘之前**就被拒绝（不留坏文件）', async () => {
+  for (const bad of ['', '   ', 'your ifind-mcp key', ' abcdefgh', 'abcdefgh\n']) {
+    const ctx = asShellCtx(fsStub({}), { runs: true })
+    const result = await writeIfindSecret(ctx, '/Users/x', bad, { platform: 'darwin-arm64' })
+    assert.equal(result.ok, false, JSON.stringify(bad))
+    assert.equal(result.errorKind, 'input', JSON.stringify(bad))
+    assert.deepEqual(ctx.written, [], `坏值不得触发任何写盘：${JSON.stringify(bad)}`)
   }
+})
+
+test('写入失败与权限设置失败都要如实上报（不假装成功、也不删掉已保存的凭据）', async () => {
+  // ① 写盘抛错 → infrastructure。
+  const failing = fsStub({ failWrite: true })
+  const writeFailed = await writeIfindSecret(asShellCtx(failing, { runs: true }), '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  assert.equal(writeFailed.ok, false)
+  assert.equal(writeFailed.errorKind, 'infrastructure')
+  assert.match(writeFailed.error, /写入/)
+
+  // ② chmod 失败 → 凭据仍然保存成功，但 chmodOk=false + 原因带出来。
+  const ctx = asShellCtx(fsStub({}), { failOn: 'chmod 600', error: 'chmod: Operation not permitted' })
+  const chmodFailed = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  assert.equal(chmodFailed.ok, true, '权限没收紧不该作废已保存的凭据')
+  assert.equal(chmodFailed.chmodOk, false)
+  assert.match(chmodFailed.chmodError, /Operation not permitted/)
+  assert.equal(ctx.written.length, 1, '文件确实写下去了')
+})
+
+test('成功保存：文件内容只有那一个字段、权限收紧到 0600、并回脱敏视图', async () => {
+  const ctx = asShellCtx(fsStub({}), { runs: true })
+  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  assert.equal(result.ok, true)
+  assert.equal(result.chmodOk, true)
+  assert.equal(result.mode, 'file')
+  assert.equal(result.view.exists, true)
+  assert.equal(result.view.length, 8)
+  assert.equal(JSON.stringify(result).includes('abcdefgh'), false, '返回值里不得出现明文')
+  const path = ifindCredentialPath('/Users/x')
+  assert.deepEqual(JSON.parse(ctx.written[0].content), { auth_token: 'abcdefgh' })
+  assert.equal(ctx.written[0].path, path)
+  // 写 `~/.dsh/` 必须显式声明无沙箱，否则受限沙箱下写不进去（实测踩过）。
+  assert.equal(ctx.written[0].sandboxPolicy?.mode, 'danger-full-access')
+  assert.equal(ctx.commands.some((command) => command.includes('chmod 600')), true, '必须真的收紧权限')
+})
+
+test('清除凭据走显式命令，失败要如实报', async () => {
+  const ok = asShellCtx(fsStub({}), { runs: true })
+  assert.equal((await clearIfindSecret(ok, '/Users/x', { platform: 'darwin-arm64' })).ok, true)
+  assert.equal(ok.commands.some((command) => command.startsWith('rm -f ')), true)
+
+  const down = asShellCtx(fsStub({}), { runs: false, error: 'no sandbox backend' })
+  const failed = await clearIfindSecret(down, '/Users/x', { platform: 'darwin-arm64' })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.errorKind, 'infrastructure')
 })

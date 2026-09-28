@@ -21,6 +21,8 @@ const { discussionBrief, discussionPrompt, discussionTitle, findDiscussions, nex
 const { askDiscussion, ensureDiscussion } = await import(
   new URL('src/client/features/report-audit/assistant-session.ts', ROOT).href
 )
+const { caseDirOf } = await import(new URL('src/shared/utils/case-dir.ts', ROOT).href)
+const { auditPrompt } = await import(new URL('src/host/audit/prompt.ts', ROOT).href)
 
 const FACTS = {
   seqNo: '2026-302441-LX9967-BG8790',
@@ -88,33 +90,111 @@ test('首轮提问 = 上下文 + 开场问题；后续轮次只发问题；空�
 
 // ── 3. 会话接线（假 port） ───────────────────────────────────────────────────
 
-function fakePort(options = {}) {
-  const calls = { create: [], rename: [], open: [], prompt: [] }
-  const bindings = new Map()
-  const make = () => ({
-    session: {
-      rename: async (title) => { calls.rename.push(title) },
-      prompt: async (content, mode) => { calls.prompt.push({ content, mode }) },
-    },
-  })
-  const port = {
-    create: async (input) => {
-      calls.create.push(input)
-      if (options.createFails === true) throw new Error('宿主拒绝')
-      bindings.set('session-new', make())
-      return 'session-new'
-    },
-    open: (id) => { calls.open.push(id) },
-    binding: (id) => bindings.get(id),
-    list: { getSnapshot: () => ({ ids: [], byId: {} }) },
+/**
+ * **忠实**的客户端 `sessions` 服务替身。
+ *
+ * 2026-09-25 的教训：上一版的假 port 用 `bindings.set(id, face)` 把**每条**会话都预置了 binding，
+ * 比真实服务宽容 —— 真实实现（DSH `ClientSessions`）是：
+ *
+ * - `binding(id)` = `this.scopes.get(id)?.binding`：**只有被 retain 过的会话**才有值；
+ * - `create()` 只登记清单，**不 retain** → 刚建出来的会话 `binding(id)` 是 `undefined`；
+ * - `using(id, {source}, op)` = `retain` + 等 `ready` + 跑 `op(reference)` + `release`，
+ *   是唯一对「刚建出来的会话」也成立的取 face 路径；
+ * - 上面**没有** `open()`；切会话是 `uiWorkspace.openSession(id)`。
+ *
+ * 替身宽容 = 缺陷漏过门禁。所以这里把四件事都按真实语义建模，包括一个「诱饵 open」：
+ * 谁要是回去写 `sessions.open(...)`，用例会红。
+ */
+class FakeSessions {
+  constructor(options = {}) {
+    this.calls = { create: [], using: [], rename: [], prompt: [], decoyOpen: [] }
+    // `known` = 会话控制器认识的 id（清单里的 + 刚 create 的）；`scopes` = **当前被 retain** 的。
+    this.known = new Set()
+    this.scopes = new Map()
+    this.options = options
+    if (options.existing !== undefined) this.known.add(options.existing)
+    this.list = { getSnapshot: () => ({ ids: [...this.known], byId: {}, phase: 'ready' }) }
   }
-  if (options.existing !== undefined) bindings.set(options.existing, make())
-  return { port, calls }
+  create(input = {}) {
+    this.calls.create.push(input)
+    if (this.options.createFails === true) return Promise.reject(new Error('宿主拒绝'))
+    // 真实实现：create 只登记清单/摘要，**不** retain —— 所以紧接着 `binding(id)` 是 undefined。
+    this.known.add('session-new')
+    return Promise.resolve('session-new')
+  }
+  /** 只有**当前被 retain** 的 id 才有 binding —— 真实实现就是这个语义。 */
+  binding(id) { return this.scopes.get(id) }
+  /** retain → 跑 op(reference) → release。已知的 id 都能 retain（真实实现会 materializeScope）。 */
+  async using(id, options, operation) {
+    this.calls.using.push({ id, source: options?.source })
+    if (!this.known.has(id)) throw new Error(`Session reference "${id}" is released`)
+    this.scopes.set(id, this.face(id))
+    try {
+      return await operation({ binding: this.scopes.get(id) })
+    } finally {
+      this.scopes.delete(id)
+    }
+  }
+  /** 诱饵：真实服务上不存在这个方法。 */
+  open(id) { this.calls.decoyOpen.push(id) }
+  face(id) {
+    const calls = this.calls
+    return {
+      session: {
+        rename: async (title) => {
+          if (this.options.renameFails === true) throw new Error('改名被拒绝')
+          calls.rename.push({ id, title })
+        },
+        prompt: async (content, mode) => {
+          if (this.options.promptFails === true) throw new Error('发送被拒绝')
+          calls.prompt.push({ id, content, mode })
+        },
+      },
+    }
+  }
+}
+
+/** 真实的「切会话」入口：uiWorkspace.openSession。 */
+function fakeUiWorkspace() {
+  const opened = []
+  return { opened, service: { openSession: (id) => { opened.push(id) } } }
+}
+
+/**
+ * 把会话服务适配成 port —— 与 `src/client/features/workbench/services.ts` 的 `discussionPortOf` 同形：
+ * **只转发真实存在的四个动词**。「跳到会话」不在这里（由面板的 `onOpenDiscussion` 负责）。
+ */
+function portOf(sessions) {
+  const port = {}
+  if (sessions === undefined) return port
+  port.create = (input) => sessions.create(input)
+  port.using = (id, options, operation) => sessions.using(id, options, operation)
+  port.binding = (id) => sessions.binding(id)
+  port.list = sessions.list
+  return port
+}
+
+/** 只提供 `binding`（没有 `using`）的旧宿主。 */
+function legacyPort(bindings) {
+  const calls = { rename: [], prompt: [], open: [] }
+  return {
+    calls,
+    port: {
+      create: async () => 'session-new',
+      open: (id) => { calls.open.push(id) },
+      binding: (id) => bindings.get(id),
+    },
+  }
+}
+
+function fakePort(options = {}) {
+  const sessions = new FakeSessions(options)
+  return { port: portOf(sessions), calls: sessions.calls, workspace: fakeUiWorkspace() }
 }
 
 const BASE = { seqNo: FACTS.seqNo, workspaceId: 'ws-1', workspacePath: '/Users/me/中瑞世联工作空间' }
 
-test('已经有讨论会话就复用（不新建、只 open）', async () => {
+test('已经有讨论会话就复用（不新建）', async () => {
   const { port, calls } = fakePort({ existing: 'session-old' })
   const sessions = [{ id: 'session-old', displayTitle: discussionTitle(FACTS.seqNo) }]
   assert.deepEqual(
@@ -122,7 +202,7 @@ test('已经有讨论会话就复用（不新建、只 open）', async () => {
     { ok: true, id: 'session-old', created: false },
   )
   assert.deepEqual(calls.create, [], '复用时不许再建一条')
-  assert.deepEqual(calls.open, ['session-old'])
+  assert.deepEqual(calls.using, [], '复用时连 retain 都不用做')
 })
 
 test('forceNew（气泡里选「新建对话」）：有旧的也新建，并命名成下一条序号', async () => {
@@ -133,16 +213,17 @@ test('forceNew（气泡里选「新建对话」）：有旧的也新建，并命
   ]
   const result = await ensureDiscussion({ port, sessions, ...BASE, forceNew: true })
   assert.deepEqual(result, { ok: true, id: 'session-new', created: true })
-  assert.deepEqual(calls.rename, [discussionTitle(FACTS.seqNo, 3)], '已是第 2 条，新建就是第 3 条')
+  assert.deepEqual(calls.rename, [{ id: 'session-new', title: discussionTitle(FACTS.seqNo, 3) }], '已是第 2 条，新建就是第 3 条')
 })
 
 test('没有讨论会话就新建：建在工作空间下、按流水号命名、并设为当前会话', async () => {
-  const { port, calls } = fakePort()
+  const { port, calls, workspace } = fakePort()
   const result = await ensureDiscussion({ port, sessions: [], ...BASE })
   assert.deepEqual(result, { ok: true, id: 'session-new', created: true })
   assert.deepEqual(calls.create, [{ workspaceId: 'ws-1' }])
-  assert.deepEqual(calls.rename, [discussionTitle(FACTS.seqNo)])
-  assert.deepEqual(calls.open, ['session-new'])
+  assert.deepEqual(calls.rename, [{ id: 'session-new', title: discussionTitle(FACTS.seqNo) }])
+  // 跳转归调用方：`ensureDiscussion` 只负责「建好 + 命名」，返回 id 让面板去 openSession。
+  assert.deepEqual(calls.decoyOpen, [], 'sessions 上没有 open：不许走那条不存在的路')
 })
 
 test('没有工作空间不新建；只有路径时退化用 cwd', async () => {
@@ -175,8 +256,79 @@ test('建会话失败、服务缺席：都要说得出原因，不抛到界面�
 test('发问：文本块 + queue 模式；空提问不发；port 缺席不炸', async () => {
   const { port, calls } = fakePort({ existing: 'session-old' })
   assert.equal(await askDiscussion(port, 'session-old', '要发出去的话'), '')
-  assert.deepEqual(calls.prompt, [{ content: [{ type: 'text', text: '要发出去的话' }], mode: 'queue' }])
+  assert.deepEqual(calls.prompt, [{ id: 'session-old', content: [{ type: 'text', text: '要发出去的话' }], mode: 'queue' }])
   assert.equal(await askDiscussion(port, 'session-old', ''), '')
   assert.equal(calls.prompt.length, 1, '空提问不该真的发一次')
   assert.equal(await askDiscussion(undefined, 'session-old', '你好'), zhCN.aiUnsupported)
+})
+
+// ── 4. 真实客户端服务的两条硬约束（2026-09-25 用户报的两个症状） ─────────────
+
+test('刚 create 出来的会话还没被 retain：rename 与 prompt 都必须经 using 拿到 face', async () => {
+  // 症状：点小鲸鱼「创建不出新对话」——旧实现 `port.binding(id)?.session` 在 create 之后拿到
+  // undefined，于是 rename 被静默跳过（会话没名字 → 下次找不到、只能再建一条），
+  // kickoff prompt 也根本没发出去（面板报「这个宿主版本不支持…」）。
+  const { port, calls } = fakePort()
+  const created = await ensureDiscussion({ port, sessions: [], ...BASE })
+  assert.equal(created.ok, true)
+  assert.equal(created.renameError, undefined, '正常路径不该报改名失败')
+  assert.deepEqual(calls.using.map((row) => row.id), ['session-new'], '必须经 using retain 一次')
+  assert.deepEqual(calls.rename.map((row) => row.title), [discussionTitle(FACTS.seqNo)], '名字是复用的唯一凭据，必须真的写上')
+
+  assert.equal(await askDiscussion(port, 'session-new', '要发出去的话'), '')
+  assert.deepEqual(calls.prompt.map((row) => row.id), ['session-new'], 'prompt 也必须经 using')
+})
+
+test('改名失败要如实报出来（它是「下次会再建一条」的根因），但不阻断本次会话', async () => {
+  const { port } = fakePort({ renameFails: true })
+  const created = await ensureDiscussion({ port, sessions: [], ...BASE })
+  assert.equal(created.ok, true, '改名失败不该把会话判成失败')
+  assert.ok(created.renameError !== undefined && created.renameError.includes('改名被拒绝'))
+})
+
+test('port 上不许出现「服务里没有的方法」（open 就是这么变成静默 no-op 的）', async () => {
+  // 症状：点小鲸鱼「跳不到对应的会话」——真实 ClientSessions 上**没有** open()，
+  // `sessions?.open?.(id)` 被可选链吞掉，只剩半截 selectPanel。
+  // 现在 port 只含真实存在的四个动词，跳转由面板 onOpenDiscussion → uiWorkspace.openSession 负责。
+  const { port } = fakePort()
+  assert.deepEqual(Object.keys(port).sort(), ['binding', 'create', 'list', 'using'])
+  assert.equal('open' in port, false)
+})
+
+test('旧宿主只有 binding 时仍能对已 retain 的会话改名/发问（退路不许一起删掉）', async () => {
+  const face = { session: { rename: async (title) => { face.renamed = title }, prompt: async () => { face.asked = true } } }
+  const { port, calls } = legacyPort(new Map([['session-old', face]]))
+  const reused = await ensureDiscussion({
+    port, sessions: [{ id: 'session-old', displayTitle: discussionTitle(FACTS.seqNo) }], ...BASE,
+  })
+  assert.deepEqual(reused, { ok: true, id: 'session-old', created: false })
+  void calls
+  assert.equal(await askDiscussion(port, 'session-old', '你好'), '')
+  assert.equal(face.asked, true)
+})
+
+// ── 5. 案例目录：Host 审核提示词与客户端讨论提示词必须同一条约定 ────────────────
+
+test('案例目录约定只有一份：Host 审核指令与讨论上下文算出的是同一个路径', async () => {
+  // 漂移的代价实测过（2026-09-25）：审核链路用 `<工作空间>/<流水号>`，而讨论会话没人告诉它目录，
+  // 模型自己 ls + find 去猜，猜成了 `cases/<流水号>` —— 既扫了磁盘，又把材料下到错的地方。
+  const ws = '/Users/me/中瑞世联工作空间/'
+  const seq = 'S-1'
+  const expected = '/Users/me/中瑞世联工作空间/S-1'
+  assert.equal(caseDirOf(ws, seq), expected, '去掉工作空间末尾斜杠后拼接')
+  assert.equal(caseDirOf('', seq), '', '没工作空间就不给半截路径')
+  assert.equal(caseDirOf(ws, ''), '', '没流水号也不给')
+
+  const { discussionBrief } = await import(new URL('src/client/features/report-audit/assistant-context.ts', ROOT).href)
+  const hostText = auditPrompt({
+    objectId: 'obj-1', seqNo: seq, project: '某项目', workspace: ws,
+    oss: { bucket: '', prefix: '', endpoint: '', enabled: false }, isRetry: false,
+  })
+  const clientText = discussionBrief({
+    seqNo: seq, objectId: '', project: '', name: '', risk: '', reviewLevel: '', reviewState: '',
+    currentNode: '', modifiedAt: '', formName: '', caseDir: caseDirOf(ws, seq),
+    files: [], fetchedAt: '', sources: [],
+  })
+  assert.equal(hostText.includes(`**本案例目录必须是：${expected}**`), true, 'Host 侧用这条约定')
+  assert.equal(clientText.includes(`${zhCN.aiCaseDirHead}${expected}`), true, '客户端侧用同一条约定')
 })

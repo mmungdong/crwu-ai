@@ -17,11 +17,11 @@ const { subscribeAuditEvents } = await import(new URL('src/host/audit/events.ts'
 const { auditStatus } = await import(new URL('src/host/audit/ops.ts', ROOT).href)
 const { normalizeAudit } = await import(new URL('src/host/state/registry.ts', ROOT).href)
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
-const { normalizeManifest } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
+const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const { assessAudit } = await import(new URL('src/host/audit/state.ts', ROOT).href)
 
 const CONFIG = {
-  caseRoot: '/cases', formName: '报告审核', installDocUrl: '', manifestUrl: '', preferWorkspaceTitle: '',
+  caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
   ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
   autoUpload: true, requireTopLevelParent: true,
 }
@@ -58,14 +58,14 @@ function makeCtx({ withAgents = true, agentStatus = 'running', files = {}, entri
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async run(spec) {
+          async execute(spec) {
             const out = spec.command.startsWith('command -v')
               ? { stdout: '/usr/local/bin/ossutil\n' }
               : { stdout: 'ok' }
-            return {
+            return { result: async () => ({
               exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout, truncated: false }, stderr: { text: '', truncated: false },
-            }
+            }) }
           },
         }
       }
@@ -260,4 +260,4 @@ test('audit-status works without the optional upload hook', async () => {
   assert.equal(result.ok, true)
 })
 
-void normalizeManifest
+void manifestFixture

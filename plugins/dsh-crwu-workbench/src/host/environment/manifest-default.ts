@@ -1,33 +1,53 @@
-import { DEFAULT_INSTALL_DOC } from './install-prompt.ts'
-
 /**
- * 单个二进制的按平台下载信息。
+ * 内置环境清单：工作台需要哪些工具、哪些服务、OSS 怎么配。
  *
- * `target` 里允许写 `~/bin/ossutil`：主目录由 `expandLocal` 按执行世界展开，
- * 这里不把绝对路径写死（换机器/换用户就失效）。
+ * **这里只有内置一份，不再有远程清单。** 2026-09-25 起整条只读 OSS 依赖被下掉：
+ * `crwu` / `dws` / `ossutil` 三个二进制随插件发布在 `bin/<平台>/`（`make plugin-bin` 装配），
+ * 服务清单与 OSS 参数在 `config/crwu-workbench.yml`，两处都不需要再从远端拉。
+ *
+ * 因此清单里**没有下载地址、没有安装目标、也没有 `command`** —— 那种字段的存在本身就会把
+ * 「员工各自装到 `~/bin`」这条老路带回来（也正是要删掉的东西）。
+ *
+ * **2026-09-25 第二次改造：把四类混装的 `binaries[]` 拆开。** 旧清单里同时住着两种完全不同的东西：
+ *
+ * - `crwu` / `dws` / `ossutil`：**随插件发布的组件**（packaged）。它们不由 PATH 解析、不跑版本命令，
+ *   只按包内绝对路径 `bin/<平台>/<文件>` 使用；
+ * - `python3`：**运行时**（runtime）。旧清单把它当成一条 PATH 命令来探，于是「系统里有没有 python3」
+ *   变成了环境自检的结论 —— 而本插件的技能脚本用的是 **DSH 自带 Python**，系统那一份根本不是依赖。
+ *
+ * 两类混在一张 `binaries[]` 里，界面就必然把它们平铺成一列「命令清单」：员工看到 `python3 未安装`
+ * 会去装 Python，看到 `ossutil` 会去找安装包。现在分成 `packaged[]` 与 `runtime.python`：
+ * 语义不同、检查方式不同（一个 stat 文件比字节数，一个解析 DSH 运行时），**失败文案也不同**。
+ *
+ * node 从 2026-09-25 起不在清单里（当时已移除，理由见 CHANGELOG）：三个自带二进制都是**原生可执行文件**
+ * （Mach-O / PE），打包技能里没有任何地方调用 node，技能脚本是 Python。反过来把 node 标成必需会造成
+ * 假阻塞：shell 的 PATH 里有没有 node 取决于 DSH 是**从 Finder 还是终端**启动的。
  */
-export interface PlatformEntry {
-  url: string
-  sha256: string
-  target?: string
-  archive?: string
-  member?: string
+
+/** 随插件发布的组件：只说「叫什么、干什么、要求什么版本」，没有 command / versionArgs / expect。 */
+export interface PackagedToolSpec {
+  name: string
+  label: string
+  note: string
+  /**
+   * 期望版本，仅用于**维护者详情**。
+   *
+   * 为什么不做成 `expect` 并现场校验：查版本必须执行二进制，而 `dws version` 会在二进制旁落一个
+   * `.dws/` 状态目录 —— `bin/` 会整包带走，`pack:assert:strict` 会把它判成运行残留。
+   * 版本一致性是**发布门禁**的事（`bin/manifest.json` 记 sourceVersion + sha256），不是每次自检的事。
+   * 空串 = 不声明要求。
+   */
+  expectedVersion: string
 }
 
-export interface BinarySpec {
-  name: string
-  command: string
-  versionArgs: string[]
-  /** 版本约束，如 `>=16.7`；空串 = 不校验。 */
-  expect: string
-  url: string
-  sha256: string
-  target: string
-  archive: string
-  member: string
-  platforms: Record<string, PlatformEntry> | null
+/** DSH 自带 Python 运行时（技能脚本用它，**不用系统 Python**）。 */
+export interface RuntimePythonSpec {
   required: boolean
+  /** 版本约束，如 `>=3.10`；空串 = 不校验。 */
+  expect: string
   note: string
+  /** 必需的关键包；至少含 `openpyxl`（审核表格链路要用）。 */
+  requiredPackages: string[]
 }
 
 export interface ServiceSpec {
@@ -36,11 +56,23 @@ export interface ServiceSpec {
   required: boolean
 }
 
-export interface IfindKeySpec {
-  required: boolean
-  path: string
+/**
+ * iFinD（同花顺）SK 的声明。
+ *
+ * **没有 `path` 字段是刻意的**（2026-09-26 改造）：凭据不再读 `ifind-finance-data` 技能目录里的
+ * `mcp_config.json`，改由插件 Host 自己保管在**插件状态目录**
+ * （`<home>/.dsh/crwu-workbench/ifind-credential.json`，0600，见 `host/ifind/store.ts`）。
+ * 路径由那一处算，清单只声明"它是什么、是不是必需、入口在哪" —— 把路径塞回清单等于又开了
+ * 第二个事实源，而地址漂移正是这次要消灭的东西。
+ */
+export interface IfindSpec {
+  label: string
   field: string
   placeholder: string
+  /** **条件能力**：缺失只降级（`degraded`），不阻塞审核入口。 */
+  required: boolean
+  /** 「获取 SK」的官方入口（页面上的链接文案用；Host 不代填、不索取）。 */
+  applyUrl: string
 }
 
 export interface OssSpec {
@@ -59,149 +91,79 @@ export interface OssSpec {
 
 export interface EnvManifest {
   schema: string
-  updatedAt: string
-  installDocUrl: string
-  binaries: BinarySpec[]
-  ifindKey: IfindKeySpec
+  /** 随插件发布的组件（按包内绝对路径使用）。 */
+  packaged: PackagedToolSpec[]
+  /** 运行时：DSH 自带 Python。 */
+  runtime: { python: RuntimePythonSpec }
+  /** ⑥ 外部数据：iFinD（同花顺）SK 的声明（凭据位置在 host/ifind/store.ts）。 */
+  ifind: IfindSpec
+  /**
+   * 需要「登录 / 授权」的服务。
+   *
+   * `oss` 也在这一列里，但它**只喂 ⑤ 交付层的门禁**（`required` 的取值来源）：
+   * 环境结果里的 `services` 分区只呈现氚云与钉钉这两条登录，OSS 归 `delivery`。
+   */
   services: ServiceSpec[]
   oss: OssSpec
   workspace: { preferTitle: string; preferPath: string }
 }
 
-/** ossutil 版本与两个下载源；换版本只改这三处。 */
-export const OSSUTIL_VERSION = '1.7.19'
-export const OSSUTIL_BASE = `https://gosspublic.alicdn.com/ossutil/${OSSUTIL_VERSION}`
-export const CRWU_BASE = 'https://crwu-only-workspace.oss-cn-beijing.aliyuncs.com/crwu-bin'
-
-/** crwu CLI 的预编译包：目前只有 mac arm64 与 windows x64。 */
-export function crwuPlatforms(): Record<string, PlatformEntry> {
-  return {
-    'darwin-arm64': {
-      url: `${CRWU_BASE}/mac/crwu`,
-      sha256: '3ab83144f2fd6de2e40f6cac03a8cf1f9b6a0716db797126dfcd14111efc7040',
-      target: '~/bin/crwu',
-    },
-    'win32-x64': {
-      url: `${CRWU_BASE}/windows/crwu.exe`,
-      sha256: '321c6775d65a5153880315800540257ae21cba346138dffbfbed2b4b5221b438',
-      target: '~/bin/crwu.exe',
-    },
-  }
-}
-
-/** ossutil 官方包的按平台表。 */
-export function ossutilPlatforms(): Record<string, PlatformEntry> {
-  const version = OSSUTIL_VERSION
-  const posix = '~/bin/ossutil'
-  const windows = '~/bin/ossutil.exe'
-  const zip = (suffix: string, sha256: string, member: string, target: string): PlatformEntry => ({
-    url: `${OSSUTIL_BASE}/ossutil-v${version}-${suffix}.zip`,
-    sha256,
-    member,
-    archive: 'zip',
-    target,
-  })
-  return {
-    'darwin-arm64': zip('mac-arm64', '10ece4d328c5d2440833adc5f4167168e9b2a4c5d364f673b0c45bcc4fd02ec5', 'ossutil', posix),
-    'darwin-x64': zip('mac-amd64', '9cf82a53fe24d8b5cc3dfb441787e0ea19c24dd7a1246653d5f1a28b7923d6fe', 'ossutil', posix),
-    'linux-x64': zip('linux-amd64', 'dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343', 'ossutil', posix),
-    'linux-arm64': zip('linux-arm64', 'f612c2a88d4d28363e254168d521fac5df632f2547ba84eaebacf6497dc04d57', 'ossutil', posix),
-    'linux-arm': zip('linux-arm', 'ffe8b479e5fd3c0e146a14cd32e8ef5736d23f6c8de157944288ee09db2d7b1d', 'ossutil', posix),
-    'linux-ia32': zip('linux-386', 'f8a4a7e1df8529b06a3f3cca194a1c99163cb3b8ab3b5d64228c207c3ae63b86', 'ossutil', posix),
-    'win32-x64': zip('windows-amd64', '8e9176aedc87d230ccd97dc7236b16564f2a068609ed301acdc73dc27faf7e77', 'ossutil.exe', windows),
-    'win32-ia32': zip('windows-386', '772469ef02b91e893f7211acf732c2c07cd93214552ed7cf84157d3d9b9fb799', 'ossutil.exe', windows),
-  }
-}
+/**
+ * 「DSH 自带运行时」的标准说法。
+ *
+ * 宿主与界面共用同一个来源口径：写「系统 Python」会让员工去装一份插件根本不会用的东西。
+ */
+export const DSH_RUNTIME_SOURCE = 'DSH 自带（bundled runtime）'
 
 /**
  * 内置默认清单。
  *
- * 远程清单（`manifestUrl`）拿不到时回退到它 —— 所以它必须自洽：二进制、服务、OSS、
- * 工作空间偏好都得有可用默认值，不能出现空字段让调用方去猜。
+ * 它是**唯一**的清单来源，所以必须自洽：组件、运行时、服务、OSS、工作空间偏好都得有可用默认值，
+ * 不能出现空字段让调用方去猜。
  */
 export const DEFAULT_MANIFEST: EnvManifest = {
-  schema: 'crwu.env-manifest.v1',
-  updatedAt: '',
-  // 内置清单里的这一项原来留空，违反了「内置默认必须自洽」这条自己定的规则：
-  // 拿不到远程清单时，安装提示词里的清单地址就是空的，agent 没有可照做的文档。
-  installDocUrl: DEFAULT_INSTALL_DOC,
-  binaries: [
-    {
-      name: 'node',
-      command: 'node',
-      versionArgs: ['--version'],
-      expect: '>=16.7',
-      url: '',
-      sha256: '',
-      target: '',
-      archive: '',
-      member: '',
-      platforms: null,
-      required: true,
-      note: '最上游运行时：dws（npm 包）与 iFinD 的 Node 路径都依赖它',
-    },
+  schema: 'crwu.env-manifest.v4',
+  packaged: [
     {
       name: 'crwu',
-      command: 'crwu',
-      versionArgs: ['version'],
-      expect: '',
-      url: '',
-      sha256: '',
-      target: '',
-      archive: '',
-      member: '',
-      platforms: crwuPlatforms(),
-      required: true,
-      note: '审核编排 CLI（crwu-audit 全流程）。mac 包为 arm64；Intel mac / Linux 暂无预编译包。',
+      label: '审核编排 CLI（crwu）',
+      note: '审核编排 CLI（crwu-audit 全流程）。随插件发布在 bin/<平台>/，员工机器上零安装。',
+      expectedVersion: '',
     },
     {
       name: 'dws',
-      command: 'dws',
-      versionArgs: ['version'],
-      expect: '>=0.2.14',
-      url: '',
-      sha256: '',
-      target: '',
-      archive: '',
-      member: '',
-      platforms: null,
-      required: true,
-      note: '钉钉 CLI（npm 包 dingtalk-workspace-cli）',
-    },
-    {
-      name: 'python3',
-      command: 'python3',
-      versionArgs: ['--version'],
-      expect: '>=3.8',
-      url: '',
-      sha256: '',
-      target: '',
-      archive: '',
-      member: '',
-      platforms: null,
-      required: true,
-      note: '技能自带脚本运行时',
+      label: '钉钉 CLI（dws）',
+      note: '钉钉 CLI（上游 dingtalk-workspace-cli 的 vendored 二进制）。随插件发布在 bin/<平台>/，'
+        + '版本要求以清单常量为准，不在自检里执行二进制去问。',
+      expectedVersion: '>=0.2.14',
     },
     {
       name: 'ossutil',
-      command: 'ossutil',
-      versionArgs: ['--version'],
-      expect: '',
-      url: '',
-      sha256: '',
-      target: '',
-      archive: '',
-      member: '',
-      platforms: ossutilPlatforms(),
-      required: true,
-      note: '阿里云 OSS 上传（按平台自动选用对应包）',
+      label: '阿里云 OSS 上传工具（ossutil）',
+      note: '阿里云 OSS 上传。随插件发布在 bin/<平台>/，员工机器上零安装。',
+      expectedVersion: '',
     },
   ],
-  ifindKey: {
+  runtime: {
+    python: {
+      required: true,
+      expect: '>=3.10',
+      note: '审核技能脚本用的 Python 运行时与关键依赖包，由 DSH 自带（bundled runtime）提供；'
+        + '本插件不使用系统 Python，也不需要员工安装或配置 PATH。',
+      requiredPackages: ['openpyxl', 'python-docx', 'python-pptx', 'Pillow', 'lxml', 'numpy', 'pandas', 'XlsxWriter'],
+    },
+  },
+  ifind: {
+    label: '同花顺 iFinD（外部数据）',
+    // **必需项**（2026-09-26 产品口径覆盖了旧的 OPT-006-R1 · F-008）：
+    // iFinD 不再是"可选外部数据能力"，而是环境必检、必通过项。未通过时：
+    // 记阻塞 issue（owner 按 credential / entitlement / infrastructure 分派给 user / admin / system）、
+    // 关闭 global / auditCore / externalData 能力、进必需项分母，并让统一导航拦回环境页。
+    // 判据是**真的取到一次数据**（`initialize → tools/list → tools/call`），不是"文件在、字段非空"。
     required: true,
-    path: '~/.agents/skills/ifind-finance-data/mcp_config.json',
     field: 'auth_token',
     placeholder: 'your ifind-mcp key',
+    applyUrl: 'https://mcp.51ifind.com/',
   },
   services: [
     { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true },

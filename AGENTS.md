@@ -27,7 +27,9 @@ This repository contains AI-related tools, including Skills and MCP servers.
 
 ## Skill Self-Containment
 
-Every Skill under `skills/<skill>/` must work when installed as a copy on its own — agents install each Skill into their own skills root, so nothing outside the Skill directory exists at that point. This is a hard rule, enforced by a machine gate.
+Every Skill under a **skill layer** (`plugins/<plugin>/skills/<layer>/<skill>/`, or `plugins/common/skills/<skill>/` for the shared layer) must work when installed as a copy on its own — agents install each Skill into their own skills root, so nothing outside the Skill directory exists at that point. This is a hard rule, enforced by a machine gate.
+
+> Layers exist because DSH registers **one skill root per layer** and scans exactly one level below each root. The upstream `dws` layer (`plugins/dsh-crwu-workbench/skills/dws/`) is vendored `dingtalk-workspace-cli` content: it is exempt from this lint and gated by `npm run dws:check` instead. See [`plugins/AGENTS.md`](plugins/AGENTS.md) §1 and §5.
 
 Never, in `SKILL.md`, `references/*` or the Skill's own `scripts/*`:
 
@@ -50,7 +52,7 @@ Two exceptions, and only these two:
 - **External tools** that genuinely ship outside this repository (for example a deployment-side script): the Skill must state that this repository does not provide them and that they do not install with the Skill.
 - **Source-repository contract tests / maintenance tools**: `.py` files that only run while maintaining this repository, that the runtime never needs and that `SKILL.md` never references as a runtime step, may locate the repository after declaring `源仓契约测试` or `源仓维护工具` within their first 30 lines. Any assertion about repository documents must skip explicitly when they are absent, so that an installed copy skips instead of failing.
 
-Machine gate: `python3 <skills root>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <skills root>` must report `error=0`; its self-containment lint enforces the list above over Skill content and Skill-owned scripts (`plugins/AGENTS.md` and `docs/skills.md` are repository documents, not Skills). The full checklist, the "what to write instead" table and the migration steps are in [`plugins/AGENTS.md`](plugins/AGENTS.md) §「技能自洽性」.
+Machine gate: `python3 <layer>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <layer>` must report `error=0` for **every non-vendored layer** (the self-owned layer and the shared `plugins/common/skills/` layer; pass one `--skill-root` per layer, since the lint treats a root's direct children as Skills). Its self-containment lint enforces the list above over Skill content and Skill-owned scripts (`plugins/AGENTS.md` and `docs/skills.md` are repository documents, not Skills). The full checklist, the "what to write instead" table and the migration steps are in [`plugins/AGENTS.md`](plugins/AGENTS.md) §「技能自洽性」.
 
 ## CLI Command Contract
 
