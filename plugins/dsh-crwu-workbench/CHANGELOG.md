@@ -63,6 +63,105 @@ UnexpectedToken`），相关按钮点下去也不会有结果；macOS 上完全�
   （一条静态守卫，钉死「模板以 `${shellQuote(` 开头」与「`argv.map(…shellQuote…).join(' ')`」
   这两种会复发的写法）、`host-crwu-h3yun.test.mjs`（按员工报的原文断言 Windows 命令形状）。
 
+### Windows 全面适配（同一版本的第二批，2026-09-28）
+
+0.0.13 只修好了「最直接的那一类」PowerShell 调用（命令位置与参数引用）。这一批把剩下的四个
+风险层一起收掉：安装兼容、命令方言不统一、本地路径按 POSIX 规则处理、CI 与发布门禁没有真的
+模拟 DSH 的 Windows 语义。**一个版本的完整说明必须能回答「Windows 上到底能不能用」**，
+所以下面按风险层分组。
+
+#### 安装兼容
+
+- `22b31b9` 的 peer 双线区间之外，新增 `scripts/check-dsh-compat.mjs`（`npm run compat:dsh`）：
+  在干净临时工程里**真的**装齐 DSH `0.1.7-rc.2` 与 `0.2.0-rc.1` 的完整 peer 集（依赖表由
+  peer + dependencies + devDependencies + `src/` 里真实 import 的 `@deepseek-ai/*` 共同生成，
+  逐个钉版本），把 `npm pack` 出的 tarball 装进去，再调用 DSH 自己的
+  `evaluatePluginCompatibility()` 断言**不会被 skip / disable**，并用**该版本**的 DSH 类型跑
+  一次 `tsc --noEmit`。显式关掉 `legacy-peer-deps`，并反向断言 `0.3.0-rc.1` 会被判不兼容。
+- 补上漏声明的 `@deepseek-ai/dsh-util-values`（`src/` 里 5 处 `import type { JsonValue }`，
+  此前只能靠传递依赖拿类型）。
+
+#### 命令方言（Shell）
+
+- 新增 `src/host/platform/shell.ts`：**唯一**的方言适配器 —— `shellDialect` / `shellQuote` /
+  `shellInvoke` / `mkdirCommand` / `removeFileCommand` / `openExternalCommand` /
+  `clipboardCommand` / `homeProbeCommand` / `privateFileCommand` / `privateFileMechanism`。
+  NUL 明确拒绝，换行等控制字符由单引号安全表示；平台一律由调用方注入。
+- 迁移全部调用点：`tools/case-files.ts`、`system/ops.ts`、`oss/ops.ts`、`ifind/store.ts`、
+  `platform/home.ts`、`audit/root.ts`、`environment/probe.ts`，以及 `dws`/`crwu`/`oss`/Python/
+  身份查询的执行入口。**删除** `environment/manifest.ts` 的 `quoteArg` 与 `ifind/store.ts` 的
+  本地 `shellQuote`（第二、第三个引用实现就是绕过 Windows 的后门）。
+- 不再出现 `cmd /c …`、`Start-Process` 与建目录/删除/权限命令的手工拼接（有静态门禁）。
+  Windows 打开文件改用 `Start-Process -FilePath`；删除改用
+  `if (Test-Path -LiteralPath …) { Remove-Item … -ErrorAction Stop }` —— **不再用
+  `SilentlyContinue` 把真实失败吞成成功**。
+- `tools/case-files.ts` 不再吞错：只把「目标已经是我们要的状态」视为成功，并用 `ctx.fs.stat`
+  **回读后置条件**（命令返回 0 不等于目录真的在 / 文件真的没了）。
+- `oss.probeCommand` 模板降级为 deprecated 兼容路径：结构化 `executable/args` 是默认形状，
+  模板的每个占位符**逐个按平台引用**，未知占位符 / 换行 / 空可执行文件一律拒绝。
+- `platform/home.ts` 按平台只跑一条探测：Windows 只问 PowerShell 的 `$env:USERPROFILE`，
+  不再先试 `python3` / `printf`（那两条在 Windows 上只是两次 command-not-found）。
+
+#### 本地路径
+
+- 新增 `src/shared/utils/local-path.ts`（不引用 Node 模块，Client 也能用）：
+  `isWindowsStylePath` / `isAbsoluteLocalPath` / `trimTrailingSeparators` / `localSeparator` /
+  `joinLocalPath` / `basenameLocalPath`，另有仅供展示层前缀匹配的 `isLocalPathUnder`
+  （**明确标注不是安全边界**）。`joinLocalPath` 对绝对片段与 `..` 片段**抛错而不是静默清洗**。
+- `shared/utils/case-dir.ts` 的 `caseDirOf` 改走它（Windows 上给出 `C:\Work\<流水号>`），
+  新增 `caseDirName`；`host/audit/case.ts` 的 `caseNameOf` 改走 `basenameLocalPath`
+  （旧实现 `split('/')` 在 Windows 上把整条路径当目录名）。
+- `host/report/files.ts` 的拼接走 `joinLocalPath`，工作空间**包含判断从字符串前缀改为
+  `ctx.fs.contains`**；`host/workspace/resolve.ts` 的最长前缀匹配改 `isLocalPathUnder`。
+- **本地路径与 OSS object key 分开命名**：`host/oss/ops.ts` 里 `localPath` 随平台、
+  `objectKey` 永远 `/`。
+- **UNC 策略**：不自行判死 —— 交给底层 `fs` 解析（DSH 在 Windows 上原生支持 `\\server\share`），
+  解析不了时回稳定的「案例目录不可解析：…（原因）」，**不生成损坏路径**。
+
+#### audit 预检与凭据权限
+
+- 审核根预检的提示词不再写死「用 bash 执行 `pwd`」（Windows 上 DSH 挂的是 PowerShell，
+  宿主自检全绿而 Agent 预检必然失败）：改为按平台生成（Windows `Get-Location`、POSIX `pwd`），
+  并把平台事实逐层传到 `probeMessage` / `preflight`。
+- 技能正文与公共层里的 ```bash 代码块改为 ```text；`crwu-audit` 增加 §1.1「命令块按当前平台
+  shell 执行」。vendored `skills/dws/**` 不动（上游正文，由 `dws:check` 按 provenance 守）。
+- **凭据权限结论结构化**（协议 16 → 17）：`chmodOk: boolean` / `chmodError: string` 换成
+  `permission: CredentialPermission`（`status: verified|inherited|failed` + `mechanism` +
+  `message`）。Windows 上没有 POSIX 权限位、也没有 `chmod`，跳过之后旧字段只能报 `true`，
+  字段名读起来是「chmod 成功了」—— 现在如实报 `inherited / windows-acl`
+  （「使用当前 Windows 账户 ACL；POSIX 0600 不适用」）。**本轮不调用 `icacls`**。
+
+#### 构建与发布门禁
+
+- `scripts/prepare.mjs` 不再 `spawnSync('tsdown', { shell: process.platform === 'win32' })`：
+  新增 `scripts/lib/cli-entry.mjs`（解析包的 JS 入口，命中 `.cmd`/`.ps1` shim 时明确报错、
+  **不退回 shell**），用 `process.execPath` 直接执行。**过 shell 会让项目路径里的空格与单引号
+  被第二套规则改写** —— 这是安装链路的第一跳。`scripts/lib/cli-entry.mjs` 随包发布
+  （`files` + `pack:assert` 的 REQUIRED 都钉住了）。
+- `tests/windows/powershell-contract.test.mjs`：把适配器生成的命令真的交给 shell 执行
+  （与 DSH 同形：整串命令作为**一个** argv 元素给 `pwsh -Command`），覆盖命令位置（可执行文件
+  路径含空格/引号/`$`/方括号/中文）、参数原样往返（含 `;` 与 `$(…)` 注入金丝雀）、
+  mkdir/remove 幂等与后置条件、**真实失败必须非零退出**。POSIX 侧本机跑，Windows 侧在 CI 跑。
+- `scripts/smoke-windows-binaries.mjs`（`npm run bin:smoke`）：在 Windows runner 上把
+  `crwu.exe` / `ossutil.exe` / `dws.exe` 真的启动一次（核对 manifest 与 SHA-256、
+  断言发布树无运行残留、对未声明平台明确失败）。
+- CI：新增 `windows-powershell` job（**不设 job 级 `shell: bash`**，runner 默认 pwsh，
+  先断言 PowerShell 7，再跑静态门禁 + 原生合同 + build + smoke + 全量 `npm test`）；
+  plugin 矩阵的 Node 22 上跑 `npm run compat:dsh`；`release.yml` 新增
+  `windows-binary-smoke`，`publish` 改为 `needs: [binaries, windows-binary-smoke]`。
+
+#### 已知限制
+
+- **`win32-arm64` 明确不支持**：随包二进制只有 `darwin-arm64` 与 `win32-x64`。arm64 Windows 上
+  插件如实回 capability gap，**不会**静默用 x64 顶上（有单测钉住文案与「不发任何命令」）。
+- **UNC 未在真实共享上做过端到端验收**：策略是「交给底层 fs 解析，失败给可读错误」，
+  真实 `\\server\share` 的读写仍未在 CI 或真机覆盖。
+- **没有 `icacls` 收紧 ACL**：Windows 上凭据文件的权限继承自当前账户 ACL，插件不擅自重写
+  （企业域策略下这不该由插件决定）。真要「收紧 ACL」需要另做设计与域环境测试。
+- **干净 Windows 用户配置的端到端验收（装插件 → 选工作空间 → 建案例 → 跑审核 → 回传）
+  尚未执行**：本机是 macOS，可机器验证的部分已交给上面的三个 Windows job；
+  人工验收按 `docs/windows-acceptance.md` 的清单逐项记录。
+
 ## package · 0.0.12 · 2026-09-28
 
 **首个包含自更新能力的正式版本。** 0.0.10 / 0.0.11 用户需要**手动完成一次**引导升级

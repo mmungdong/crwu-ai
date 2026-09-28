@@ -173,6 +173,14 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 | 想在插件面板里内嵌 DSH 原生对话 | `main` 槽位只有保留键 `conversation` 有会话绑定；客户端产物只能 `require('react')`，装不进 `ui-chat`；右栏是资源标签页、没有对话类型 | 自绘外壳 + 挂**真实会话**：`services.sessions` 的 `create/open/binding/list`（见下条），对话正文按会话事件流自己渲染 |
 | 自绘面板里读会话事件流总是空 | 会话的**事件窗口只对当前会话打开**（stage 语义），而且绑定与历史是**异步**就绪的 | 绑定/发问前调 `sessions.open(id)`（只切会话选中，**不动主面板**）；读一次 + 挂订阅不够 —— 再加一路 1.2s 轮询（引用比较，没变化不重渲染）；`create` 不支持标题，建完要 `rename`，会话名就是复用凭据 |
 | 事件映射一条都匹配不上（面板空着，控制台也不报错） | 会话事件是**信封 + data**：`{type, seq, time, data:{…}}`，字段在 `data` 里，不在顶层 | 先取 `event.data` 再读 `content/source/message/name`；**单测样本抄真实事件**（真机探针打印一条即可），想当然的平铺样本会让单测全绿而真机全空 |
+| **Windows 上环境页/按钮报 `ParserError`、`意外的标记`，macOS 全绿** | 有调用点**绕过**了中央适配器自己拼命令（模板以 `` `${shellQuote(` `` 开头、`argv.map(…).join(' ')`、`cmd /c …`） | 所有经 `ctx.shell` 的命令只从 `src/host/platform/shell.ts` 生成；`host-platform-shell.test.mjs` 有两条静态门禁盯着（一条历史守卫在 `host-shell-fs.test.mjs`）。新增调用点先看这两处 |
+| 命令返回 0，但目录其实没建出来 / 文件其实没删掉 | 只信退出码 | `ensureDirectory` / `removeFileIfExists` 会用 `ctx.fs.stat` **回读后置条件**；只有「目标已是我们要的状态」才算成功。测试替身必须模拟 shell 副作用（`tests/helpers/shell-effects.mjs`），否则替身会造出「命令成功但文件系统没变」的假机器 |
+| Windows 上案例名/目录名变成一整条路径 | `path.split('/')`（Windows 分隔符是 `\`） | 用 `shared/utils/local-path.ts` 的 `basenameLocalPath` / `joinLocalPath`；跨端拼接也走它 |
+| `C:\` 被裁成 `C:`（盘符相对路径），或 UNC 根被裁坏 | `replace(/[\\/]+$/, '')` | 用 `trimTrailingSeparators`（保留 `/`、`C:\`、`\\server\` 这些根本身） |
+| Windows 上说「凭据权限已收紧到 0600」 | `chmodOk: boolean`：Windows 没有 `chmod`，跳过之后只能是 `true` | 协议 17 起用结构化 `permission`（`verified` / `inherited` / `failed` + `mechanism`）；Windows 报 `inherited / windows-acl`，界面文案由 `features/environment/credential-permission.ts` 决定 |
+| 装上 tarball 时 `prepare` 报找不到 `tsdown`，或项目路径被拆成两截 | `spawnSync('tsdown', { shell: true })`：一过 shell，路径里的空格与单引号就被第二套规则改写 | 用 `scripts/lib/cli-entry.mjs` 解析 JS 入口 + `process.execPath` 执行，**不传 `shell`**；`host-prepare-script.test.mjs` 会在带空格与单引号的目录里真构建一次 |
+| 加了 DSH 兼容线，装到真机上却被禁用 | 只写了「读区间字符串」的单测 | `npm run compat:dsh`：干净工程里真的装两条线的完整 peer 集 + `npm pack` 的 tarball，再调 DSH 自己的 `evaluatePluginCompatibility()` 断言不 skip/disable，并用该版本类型跑 tsc |
+| 审核根预检在 Windows 上直接失败，错误里出现 `bash` | 预检提示词写死了「用 bash 执行 `pwd`」 | 预检由 `auditRootProbe(platform)` 按平台生成（Windows `Get-Location` / POSIX `pwd`）；`host-audit-root.test.mjs` 断言两个平台都不出现 bash |
 | 审核子代理「重新定位/搜索报告」：自己发现表单、列记录、翻案例目录 | 交接不完整：启动只给 objectId/seqNo/project，而记录接口要 `schemaCode` | Host 先解析表单 code（实例级 `H3yunFormResolver`，只发现一次、并发共享），再用 `crwu_audit_case_bootstrap` 按精确 objectId 取一次数落成 `输入快照/`；`schemaCode` 不进任何 Tool 参数（`host-tools.test.mjs` 逐字断言） |
 | 新报告点「AI 审核」必失败：`输入快照交接失败（input）：案例目录不存在或不是目录：<工作空间>/<流水号>`（审过的报告却好好的） | `<工作空间>/<流水号>` **谁都没建**：案例内每个 Tool 都过 `requireCaseDir`（要求目录已存在），而 bootstrap 又必须在子代理之前落快照 —— 旧形态是子代理自己 `mkdir -p`，结构化 Tool 化之后那条路没了，于是只有目录已存在的（审过的）报告能再发起 | `audit-start` 在 bootstrap **之前**由 Host 建目录（`tools/case-files.ts` 的 `ensureDirectory`，`mkdir -p`，workdir = 工作空间），失败就在创建子代理之前报 `创建案例目录失败：<路径>（原因）`；`host-audit-lifecycle.test.mjs` 用 trace 钉死「mkdir → bootstrap → start」的次序 |
 | 技能脚本报缺 `openpyxl` / 结果不可信 | 用了系统 `python3`：它不是审核运行时 | 只用 `load_workspace_dependencies` 返回的 DSH Python（实例级解析、只缓存成功）；审核启动解析不出来就不建子代理；技能正文禁止裸解释器名字与静默降级 |
@@ -330,3 +338,42 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 它的 `dws …` 命令是给非 DSH 宿主与人工用的，内容一致性由 `npm run dws:check` 按 provenance 守。
 所以正确的说法是：**CRWU 自研自动审核链路不依赖 PATH；vendored DWS 技能仍是命令行兼容层。**
 不要对外说「整个插件摆脱了 PATH」—— 那不是事实。
+
+## 13. Windows 适配（2026-09-28）
+
+这一节是「为什么这么写」的落点；改命令生成、本地路径、凭据权限或 CI 之前先读它。
+
+### 13.1 三条边界各自只有一份实现
+
+| 关注点 | 唯一实现 | 不许再出现 |
+| --- | --- | --- |
+| 命令方言（引用、命令位置、建目录/删除/打开/剪贴板/主目录探测/权限命令） | `src/host/platform/shell.ts` | `cmd /c …`、`SilentlyContinue`、`Start-Process`、`New-Item`/`Remove-Item`、`mkdir -p`、`rm -f`、`chmod`、`xdg-open`/`pbcopy`/`xclip`、旧 `quoteArg`（静态门禁逐条钉住） |
+| 本地展示路径 | `src/shared/utils/local-path.ts` | `split('/')`、`+ '/'`、`replace(/[\\/]+$/,'')`、`startsWith(parent + '/')` |
+| 凭据文件权限结论 | `src/host/platform/credential-permission.ts` | 任何形式的 `chmodOk: boolean` |
+
+`platform` 一律**由调用方注入**（`world.platform()` / 操作参数）：业务函数里回退 `process.platform`
+会让单测与真实运行使用不同方言，Windows 分支永远测不到 —— 静态门禁会红。
+
+### 13.2 平台事实从哪来
+
+- 插件**进程所在机器**的下标事实决定随包二进制与方言（`platform/detect.ts`）。
+- shell 可能在别的执行世界（SSH / 容器）里跑 —— 那时自带二进制用不上，只能回退到那台机器的
+  PATH，而**审核链路不这么干**（它是结构化 Tool + 包内绝对路径）。这一段差异写在
+  `platform/bin-dir.ts` 头部。
+
+### 13.3 CI 的三个 Windows 面
+
+| job | 在验什么 | 为什么不能省 |
+| --- | --- | --- |
+| `plugin` 矩阵（`windows-latest`，job 级 `shell: bash`） | 跨平台单元/集成测试（含 `npm pack` + `install` 回归） | 覆盖依赖安装与打包形状 |
+| `windows-powershell`（不设 `shell:`，runner 默认 pwsh） | 静态门禁 + 方言表格 + `tests/windows/powershell-contract.test.mjs`（把生成的命令真的交给 `pwsh -Command`）+ build/smoke + 全量 `npm test` | Git Bash 验证的是 bash 的解析，**不是 DSH 在 Windows 上的语义** |
+| `release.yml` 的 `windows-binary-smoke` | 发布二进制在 Windows 上真的启动一次 + `win32-arm64` 明确被拒 | 哈希一致只证明「文件没变」，不证明「能跑」 |
+
+`npm run compat:dsh`（CI 里在 plugin 矩阵的 Node 22 上跑）覆盖的是**安装期**的兼容判定，
+与上面三个面互补：它回答「DSH 会不会加载这个包」。
+
+### 13.4 人工验收
+
+机器能验的部分全在 CI；「干净 Windows 用户配置装插件 → 选工作空间 → 建案例 → 跑审核 → 回传」
+只能在真实 Windows 上做，清单与脱敏日志模板见
+[`windows-acceptance.md`](windows-acceptance.md)。

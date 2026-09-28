@@ -311,7 +311,7 @@ dsh plugin --profile web remove dsh-crwu-workbench
 
 - 它建在插件选定的**工作空间**里（`cwd = 案例根目录`），是个普通顶层会话，侧栏里归在该工作空间下；
 - 命名 `审核子代理根节点 · MM-DD HH:mm`，见名知义；所有审核子代理都挂在它下面，形成一棵树；
-- 建的时候先跑一句 hello 预检（模型链路 + bash + 沙箱 + cwd），跑不通就不发起审核；
+- 建的时候先跑一句 hello 预检（模型链路 + **当前平台的 shell** + 沙箱 + cwd），跑不通就不发起审核；
 - 稳定优先：能用就复用；不能用（进程重启 / 换工作空间）就新建一个，旧的树留着；
 - 界面位置：⑧ 运行环境信息里的「审核根会话」。
 
@@ -504,6 +504,32 @@ npm 安装**已发布的 tarball** 时也会执行 `prepare`，而 tarball 里�
 三条分发路径（npm / tarball / git）与安装后的操作见 **第二节「安装」**。
 
 ### 版本兼容
+
+### 支持矩阵
+
+| 维度 | 支持 | 说明 |
+| --- | --- | --- |
+| Windows | **10 / 11 x64** | DSH 在 Windows 上把整条命令作为一个 argv 元素交给 `pwsh -NoLogo -NoProfile -NonInteractive -Command <整串>`；插件按 PowerShell 语义拼命令（`&` 调用运算符、单引号字面量），**不假定 `cmd.exe` 或 Git Bash**。需要 PowerShell 7（`pwsh`）。 |
+| macOS / Linux | darwin-arm64 / linux-x64 | POSIX 方言；随包二进制只有 `darwin-arm64`。 |
+| CPU | `win32-x64` / `darwin-arm64` | **`win32-arm64` 明确不支持**：插件如实回 capability gap，不会静默用 x64 顶上。 |
+| Node.js | `^22.19.0 \|\| >=24` | CI 在 Linux / Windows 上各跑 22 与 24。 |
+| DSH | `0.1.7-rc.2` 线、`0.2.0-rc.1` 线 | `npm run compat:dsh` 会**真的**在干净工程里装这两条线的完整 peer 集并调用 DSH 自己的兼容判定；`0.3.x` 不在声明范围内。 |
+| 本地路径 | 盘符绝对路径、空格、中文、单引号 | 例：`C:\Users\张三\Case's Work`。 |
+| UNC | `\\server\share\…` | **交给底层 DSH `fs` 解析**；解析不了时返回可读的「案例目录不可解析：…（原因）」，不生成损坏路径。尚未在真实共享上做端到端验收。 |
+
+### Windows 故障排查
+
+| 症状 | 先查什么 | 处置 |
+| --- | --- | --- |
+| 插件装上了、界面里什么都没有，启动日志干净 | 是否被 DSH 判为**不兼容**（`skippedBundles` / 插件管理器标「与 DSH `<版本>` 不兼容」并禁用） | 判据是 `peerDependencies`（**不是** `engines.dsh`）：本包写 `^0.1.7-rc.2 \|\| ^0.2.0-rc.1`。升级 DSH 后出现就先升插件；应急用 profile 的 `compatibility.json` 精确豁免。跑 `npm run compat:dsh` 复现判定 |
+| 报 `表达式或语句中包含意外的标记` / `ParserError` / `UnexpectedToken` | 命令是不是以引号包住的路径开头（PowerShell 里那是字符串表达式，不是命令调用） | 升级到 0.0.14+：所有命令都由 `src/host/platform/shell.ts` 生成（Windows 上带 `&`）。若仍出现，说明有调用点绕过了适配器 —— `host-platform-shell.test.mjs` 的静态门禁会先红 |
+| 报「参数名不明确」/ `mkdir` 不是内部或外部命令 | 有没有混用 POSIX 写法（`mkdir -p`、`chmod`、`rm -f`、`cmd /c …`） | 同上：这些字面量只允许出现在适配器里；静态门禁会在 PR 阶段拦住 |
+| 命令「成功」了但文件其实没动 | 是否被 `-ErrorAction SilentlyContinue` 之类吞掉 | 0.0.14+ 已去掉；`case-files.ts` 还会用 `ctx.fs.stat` 回读后置条件 |
+| 路径被截断、目录名变成一长串 | 是不是按 POSIX 规则拼/取本地路径 | 0.0.14+ 统一走 `shared/utils/local-path.ts`；安全判定走 `ctx.fs.check` 之外的 `fs.contains`，不用字符串前缀 |
+| 二进制启动报「不是有效的 Win32 应用程序」/ 缺 DLL | 发布形态的架构是否匹配（`win32-x64` vs `win32-arm64`） | `win32-arm64` 不支持（设计如此）；`npm run bin:smoke` 会在 Windows runner 上真的启动一次发布二进制 |
+| 凭据文件权限看不到「600」 | Windows 没有 POSIX 权限位、也没有 `chmod` | 界面会明说「使用当前 Windows 账户 ACL；POSIX 0600 不适用」（协议 17 的 `permission.status = inherited`）——这不是失败，也不是「已验证」 |
+| 安装/`prepare` 报找不到 `tsdown` 或路径被拆坏 | 构建命令是否经过 shell | 0.0.14+ 用 `process.execPath` 直接执行 tsdown 的 JS 入口（`scripts/lib/cli-entry.mjs`），**不经过 shell**，所以路径里的空格与单引号不会被改写 |
+
 
 `peerDependencies` 覆盖**两条 DSH 线**：`@deepseek-ai/dsh-*@^0.1.7-rc.2 || ^0.2.0-rc.1`（cordis `^4.0.4`）。
 一条线一个 `^` 区间并列，而不是 `>=… <…` 一把梭 —— 后者会顺带放行还没验证过的 0.3 线。
