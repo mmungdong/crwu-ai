@@ -383,8 +383,22 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 
 `plugin-v*` tag 会触发仓根的 [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
 （`v*` 留给仓里的 Go CLI，两条发布线分开）：先断言
-**tag 与 `package.json` / `VERSION` 一致**，再跑完整门禁与产物自检，最后
-`npm publish --provenance`（需要仓库 secret `NPM_TOKEN`，并附构建来源证明）。
+**tag 与 `package.json` / `VERSION` 一致**，再跑完整门禁与产物自检，最后发布。
+
+**首次发布（引导）必须在本机做，而且不能带 `--provenance`**（2026-09-28 实测）：
+`--provenance` 只在受支持的 CI（GitHub Actions 的 OIDC）里成立，本机 provider 是 `null`，
+npm 会直接以 `EUSAGE: Automatic provenance generation not supported for provider: null` 拒绝发布。
+所以 `publishConfig` 里**不要**写 `provenance: true`（有测试钉住这一点），本机首发用：
+
+```bash
+npm login --registry=https://registry.npmjs.org
+npm run build && npm run check && npm run pack:assert:strict
+npm publish                      # 不带 --provenance
+```
+
+首发成功后包就存在了，再到 npm 网页给这个包配 **Trusted Publisher**（repo `mmungdong/crwu-ai`
++ workflow `release.yml`）；之后的版本由 CI 用 **OIDC** 发布 —— 不需要任何长期 token，
+npm 会**自动**附带 provenance attestation，`NPM_TOKEN` secret 也可以删掉。
 也可以在 Actions 里用 `workflow_dispatch` 跑一次 dry-run：只打包与校验，不发。
 
 **`prepublishOnly` 会挡住不该发的包**：先 `pack:assert`（缺入口、误打 `tests/`/`install/`

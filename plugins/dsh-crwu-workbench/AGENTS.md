@@ -934,7 +934,8 @@ npm run pack:assert
 npm publish --dry-run
 ```
 
-`npm publish --dry-run` 会真的跑完 `prepublishOnly`（= `pack:assert:strict` + `check`）并打印将要发布的清单，
+`npm publish --dry-run` 会真的跑完 `prepublishOnly`（= `check` + `pack:assert:strict`，**先构建再自检**）
+并打印将要发布的清单，
 但**不上传**。期望看到 `Publishing to https://registry.npmjs.org …(dry-run)`。
 
 **发布前必须先装配自带二进制**（`make plugin-pack` 会先跑 `plugin-bin`），否则包里没有它们。
@@ -959,11 +960,14 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 1. 断言 tag 与 `package.json` / `VERSION` 一致（CHANGELOG 由 `check` 里的 `version:check` 覆盖）；
 2. `binaries` job 先在 macOS 上交叉编译并按 manifest 装配六个二进制，作为 artifact 交给发布 job；
    再跑 `npm run check` + `npm run pack:assert:strict`（tag 可能指向没经过 CI 的提交，所以这里再跑一遍）；
-3. `npm publish --provenance`，走仓库 secret `NPM_TOKEN`，附构建来源证明。
+3. `npm publish`（CI 在 GitHub Actions 里跑，`permissions: id-token: write` ⇒ npm 用 **OIDC**
+   自动附 provenance attestation；**不要把 `provenance: true` 写进 `publishConfig`** ——
+   那样本机 `npm publish` 会以 `EUSAGE: ... provider: null` 拒绝发布，首发引导就做不了了）。
 
 也可以在 Actions 里 `workflow_dispatch` 手动跑：`dry-run` 默认 true，只打包与校验、不发布。
 
-**不要手工 `npm publish`**：`prepublishOnly` 会重跑两道门禁，但绕过 tag 就绕过了「tag 与版本一致」
+**不要手工 `npm publish`**（首发那次引导例外，见 README §五）：`prepublishOnly` 会重跑两道门禁，
+但绕过 tag 就绕过了「tag 与版本一致」
 和 CI 的构建来源，而且本机 registry 未必是官方源（见下）。
 **`git push` 与发版都要等用户明确说**（§7.4）。
 
@@ -977,7 +981,9 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
   + 手写 CHANGELOG 一节，然后 `make plugin-pack`（它会先 `plugin-bin` 再 `plugin-check`）。
 - 「同版本只发一次」这条纪律现在由 **npm 自己**守住：已发布的版本号不能覆盖，改了内容只能发新版本号。
   **不要手工 `npm publish`** —— 走 §8.3 的 tag 流程，那里同时校验 tag 与版本一致并附构建来源证明。
-- 本地要空跑一遍：`npm publish --dry-run`（会真跑 `prepublishOnly` = `pack:assert:strict` + `check`，但不上传）。
+- 本地要空跑一遍：`npm publish --dry-run`（会真跑 `prepublishOnly` = `check` + `pack:assert:strict`，但不上传）。
+  注意 `--dry-run` 也会走到"要不要生成 provenance"那一步，所以本机**必须先**去掉 `publishConfig.provenance`
+  （见 §8.1；`host-package.test.mjs` 有断言钉住它不许回来）。
 - 员工侧升级 = 装新版本号再重启 profile。
 
 ### 8.4 发布目标固定为官方 registry

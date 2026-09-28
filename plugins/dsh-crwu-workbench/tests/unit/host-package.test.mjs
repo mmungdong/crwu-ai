@@ -645,9 +645,15 @@ test('the npm release path is wired: publishable, self-checked before publish', 
   // 这个插件要长期按 npm 包分发，所以不能是 private。
   assert.notEqual(pkg.private, true, '本仓按 npm 发布分发；private 会挡住发布')
   assert.equal(pkg.publishConfig.access, 'public')
-  assert.equal(pkg.publishConfig.provenance, true)
+  // **`provenance: true` 不能写进 `publishConfig`**（2026-09-28 实测踩到）：
+  // 它会让**每一次** `npm publish` 都要求来源证明，而 `--provenance` 只在受支持的 CI
+  // （GitHub Actions 的 OIDC）里成立 —— 本机跑会直接
+  // `EUSAGE: Automatic provenance generation not supported for provider: null` 拒绝发布。
+  // 现在改为：本机引导首发不带签名；CI（release.yml，有 `id-token: write`）用 OIDC 发布，
+  // 那种情况下 npm 会**自动**附带 attestation，不需要这个开关。
+  assert.notEqual(pkg.publishConfig.provenance, true, '别把 provenance 钉在 publishConfig 里：本机就发不出去了')
   // 发布目标必须钉死在官方 registry：本机（以及国内很多开发机）的 npm registry 指向的是镜像，
-  // 不钉的话 `npm publish` 会往镜像上发，而 `--provenance` 在镜像上根本不成立。
+  // 不钉的话 `npm publish` 会往镜像上发。
   // 这里同时核对 CI 里的 registry-url，两者不一致就是「本地一套、CI 另一套」的隐患。
   assert.equal(pkg.publishConfig.registry, 'https://registry.npmjs.org')
   // 工作流在**仓库根**（`crwu-ai/.github/`），插件是子目录，所以每条 npm 命令都要靠

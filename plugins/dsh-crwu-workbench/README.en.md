@@ -141,7 +141,9 @@ A `plugin-v*` tag triggers the repository-root [`.github/workflows/release.yml`]
 tag matches `package.json` / `VERSION`, builds and stages both platforms' binaries in a separate job,
 recomputes every staged hash against `bin/manifest.json`, runs the full gate and the **strict** packed-artifact
 check, then publishes
-with `--provenance` (needs an `NPM_TOKEN` repository secret). `workflow_dispatch` runs the same pipeline
+on GitHub Actions with OIDC (which attaches a provenance attestation automatically; no long-lived
+`NPM_TOKEN` needed). The very first release has to be published locally **without** `--provenance`,
+because npm only generates attestations inside a supported CI provider. `workflow_dispatch` runs the same pipeline
 as a dry run. `prepublishOnly` re-runs the artifact check and the gate, so a manual publish cannot skip them.
 
 ### One trap worth knowing: npm runs `prepare` on install too

@@ -94,7 +94,8 @@ const FORBIDDEN = [
 ]
 
 // `--ignore-scripts` 很重要：`prepare`/`prepack` 会把构建日志写进 stdout，把 --json 打坏。
-// 调用方负责先构建（prepublishOnly 里 pack:assert 在前、check 里的 build 在后）。
+// **调用方负责先构建**：`prepublishOnly` 现在是 `check`（含 build）在前、`pack:assert:strict` 在后
+// —— 反过来的话，在一份没构建过的工作树上必然先红，而那和"包有没有问题"无关。
 const npm = npmInvocation()
 const { stdout } = await run(npm.command, [...npm.args, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
   cwd: ROOT,
@@ -209,9 +210,23 @@ if (strict && problems.length > 0) {
       maxBuffer: 64 * 1024 * 1024,
     })
     const { readdir, readFile: readTarball } = await import('node:fs/promises')
-    const tarball = (await readdir(work)).find((name) => name.endsWith('.tgz'))
+    const produced = await readdir(work)
+    const tarball = produced.find((name) => name.endsWith('.tgz'))
     if (tarball === undefined) {
+      // 诊断信息必须够定位：`pack` 命令明明退出 0（在真 npm 上已实测），却在这里找不到 .tgz ——
+      // 只报一句"没有产出 tarball"让人无从下手。所以把「打到哪个目录」「那个目录里实际有什么」
+      // 「npm 是怎么被调起来的」「当前有哪些会改变 pack 行为的 npm_config_*」全打出来。
+      const packEnvs = Object.entries(process.env)
+        .filter(([key]) => key.startsWith('npm_config_'))
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .sort()
       problems.push('严格模式：npm pack 没有产出 tarball')
+      console.error(`         目的地：${work}`)
+      console.error(`         目录内容：${produced.length === 0 ? '（空）' : produced.slice(0, 20).join(', ')}`)
+      console.error(`         调用方式：${npm.command} ${[...npm.args, 'pack', '--pack-destination', '<work>', '--ignore-scripts'].join(' ')}（cwd=${ROOT}）`)
+      console.error(`         npm_config_*：${packEnvs.length === 0 ? '（无）' : packEnvs.join(' ')}`)
+      console.error('         自查：直接在本包目录跑 `npm pack --pack-destination "$(mktemp -d)"` 看 .tgz 落在哪；'
+        + '若只落到了包目录（`ls *.tgz`），说明 --pack-destination 没被这份 npm 采纳。')
     } else {
       const { join } = await import('node:path')
       const { mkdir } = await import('node:fs/promises')
