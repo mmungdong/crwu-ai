@@ -137,3 +137,13 @@ export function privateFileCommand(path: string, platform: string): string {
   if (shellDialect(platform) === 'powershell') return ''
   return `chmod 600 ${shellQuote(path, platform)}`
 }
+
+/**
+ * 该平台用哪种机制保护凭据文件 —— 与 `privateFileCommand` **同一判据**。
+ *
+ * 拆出来是因为调用方要把「谁在负责」写进结构化的权限结论（`CredentialPermission.mechanism`），
+ * 而不是只看命令字符串空不空。
+ */
+export function privateFileMechanism(platform: string): 'posix-0600' | 'windows-acl' {
+  return shellDialect(platform) === 'powershell' ? 'windows-acl' : 'posix-0600'
+}

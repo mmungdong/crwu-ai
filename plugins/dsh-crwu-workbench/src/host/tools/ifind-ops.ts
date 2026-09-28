@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { clearIfindSecret, ifindCredentialView, readIfindSecret, writeIfindSecret } from '../ifind/store.ts'
+import type { CredentialPermission } from '../../shared/types.ts'
 import { defaultIfindTransport, probeIfind, IFIND_SERVER_TYPES, type IfindServerType, type IfindTransport } from '../ifind/mcp.ts'
 
 /**
@@ -35,9 +36,11 @@ export interface IfindSaveResult {
   errorKind: string
   /** 脱敏视图：路径 + 是否存在 + 状态 + 长度。**没有明文**。 */
   view: { path: string; exists: boolean; state: string; length: number; reason: string }
-  /** 权限是否真的收紧到 0600。 */
-  chmodOk: boolean
-  chmodError: string
+  /**
+   * 凭据文件的权限结论（协议 17，结构化）：`verified` / `inherited` / `failed`。
+   * 旧的 `chmodOk: boolean` 已删除 —— Windows 上它只能是 `true`，读起来像「chmod 成功了」。
+   */
+  permission: CredentialPermission
   /** 落盘模式：`host`（DSH 凭据服务）或 `file`（插件自有文件）。 */
   mode: string
   /** 保存后立刻做的**真实**探测结果。 */
@@ -113,7 +116,7 @@ export async function ifindCredentialSave(
 
   const failedView = (errorKind: string, error: string): IfindSaveResult => ({
     ok: false, error, errorKind, view: written.view,
-    chmodOk: written.chmodOk, chmodError: written.chmodError, mode: written.mode,
+    permission: written.permission, mode: written.mode,
     probe: { ok: false, state: 'unconfigured', errorKind: errorKind === 'input' ? 'unconfigured' : 'infrastructure',
       error, toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: '',
       dataVerified: false, dataTool: '', dataSample: '' },
@@ -121,17 +124,19 @@ export async function ifindCredentialSave(
   if (!written.ok) return failedView(written.errorKind || 'infrastructure', written.error)
 
   // 权限没收紧成功：**不作废已保存的凭据**（员工刚填好），但必须如实报告 ——
-  // 0600 是这份文件的安全边界，不能静默放过。
+  // 0600 是这份文件的安全边界，不能静默放过。`inherited`（Windows 账户 ACL）不是失败，
+  // 不进 `error`；界面按 `permission.status` 决定说什么。
   const probe = await probeIfind(deps.transport ?? defaultIfindTransport(), await readSecretFor(deps), {
     ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
   })
   return {
     ok: true,
-    error: written.chmodOk ? '' : `凭据已保存，但权限没有收紧到 0600：${written.chmodError}`,
+    error: written.permission.status === 'failed'
+      ? `凭据已保存，但权限没有收紧到 0600：${written.permission.message}`
+      : '',
     errorKind: '',
     view: { ...written.view, state: probe.state },
-    chmodOk: written.chmodOk,
-    chmodError: written.chmodError,
+    permission: written.permission,
     mode: written.mode,
     probe: probeViewOf(probe),
   }

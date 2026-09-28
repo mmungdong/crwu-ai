@@ -1340,7 +1340,7 @@ test('the AK form posts the credential and never keeps the secret in state', asy
       ok: true,
       status: 200,
       async json() {
-        return { ok: true, path: '/Users/x/.ossutilconfig', chmodOk: true, probe: { ok: true, state: 'AK 正常' } }
+        return { ok: true, path: '/Users/x/.ossutilconfig', permission: { status: 'inherited', mechanism: 'windows-acl', message: '使用当前 Windows 账户 ACL；POSIX 0600 不适用' }, probe: { ok: true, state: 'AK 正常' } }
       },
     }
   }

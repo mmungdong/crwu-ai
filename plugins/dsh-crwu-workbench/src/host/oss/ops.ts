@@ -5,7 +5,8 @@ import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import type { EnvManifest, OssSpec } from '../environment/manifest-default.ts'
 import { ossutilMissingMessage, probeOss, resolveOssutil } from '../environment/probe.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { openExternalCommand, privateFileCommand, shellInvoke } from '../platform/shell.ts'
+import { openExternalCommand, privateFileMechanism, shellInvoke } from '../platform/shell.ts'
+import { enforceCredentialPermission } from '../platform/credential-permission.ts'
 import { runShell } from '../shell/run.ts'
 import { ossConfigPath, readOssCred, type OssCredView } from './cred.ts'
 import {
@@ -14,6 +15,7 @@ import {
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { inspectCase } from '../audit/case.ts'
 import { auditInfoFromResult } from '../audit/summary.ts'
+import type { CredentialPermission } from '../../shared/types.ts'
 
 /**
  * OSS 交付件相关的操作。
@@ -353,15 +355,16 @@ export interface CredSaveResult {
   error: string
   path: string
   operation: string
-  chmodOk: boolean
-  chmodError: string
+  /** 凭据文件的权限结论（协议 17，结构化）：`verified` / `inherited` / `failed`。 */
+  permission: CredentialPermission
   probe: Record<string, unknown> | null
   cred: OssCredView | null
 }
 
 export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>): Promise<CredSaveResult> {
   const failed = (error: string): CredSaveResult => ({
-    ok: false, error, path: '', operation: '', chmodOk: false, chmodError: '', probe: null, cred: null,
+    ok: false, error, path: '', operation: '',
+    permission: { status: 'failed', mechanism: 'posix-0600', message: error }, probe: null, cred: null,
   })
   const accessKeyId = text(args.accessKeyId).trim()
   const accessKeySecret = text(args.accessKeySecret).trim()
@@ -395,8 +398,7 @@ export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>):
     error: probe.ok ? '' : (probe.detail || probe.state || 'OSS 验证未通过'),
     path: written.path,
     operation: written.operation,
-    chmodOk: written.chmodOk,
-    chmodError: written.chmodError,
+    permission: written.permission,
     probe: probe as unknown as Record<string, unknown>,
     cred: await readOssCred(deps.ctx, deps.home),
   }
@@ -407,49 +409,45 @@ interface WriteCredOutcome {
   error: string
   path: string
   operation: string
-  chmodOk: boolean
-  chmodError: string
+  permission: CredentialPermission
 }
 
-/** 写 `~/.ossutilconfig`，并把权限收紧到 600。 */
+/** 写 `~/.ossutilconfig`，并把权限收紧到 600（Windows 上如实报「继承账户 ACL」）。 */
 async function writeOssCred(
   deps: OssDeps,
   input: { accessKeyId: string; accessKeySecret: string; stsToken: string; endpoint: string },
 ): Promise<WriteCredOutcome> {
   const fs = fileSystem(deps.ctx)
-  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用', path: '', operation: '', chmodOk: false, chmodError: '' }
+  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用', path: '', operation: '', permission: failedPermission('Host 文件服务不可用', deps.platform) }
   const path = ossConfigPath(deps.home)
   const built = buildConfigContent(input)
-  if (!built.ok) return { ok: false, error: built.error, path: '', operation: '', chmodOk: false, chmodError: '' }
+  if (!built.ok) return { ok: false, error: built.error, path: '', operation: '', permission: failedPermission(built.error, deps.platform) }
 
   let operation = ''
   try {
     const outcome = await fs.writeText(await resolveTarget(deps.ctx, path), built.content)
     operation = text(outcome?.operation)
   } catch (error) {
-    return { ok: false, error: `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, path: '', operation: '', chmodOk: false, chmodError: '' }
+    const message = `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`
+    return { ok: false, error: message, path: '', operation: '', permission: failedPermission(message, deps.platform) }
   }
-  // Windows 没有 POSIX 权限位，也没有 `chmod` 命令：`privateFileCommand` 返回空串表示**不适用**
-  // （凭据文件在用户配置目录内，由用户 ACL 保护），而不是伪造一条必然失败的命令。
-  let chmodOk = true
-  let chmodError = ''
-  const chmodCommand = privateFileCommand(path, deps.platform)
-  if (chmodCommand !== '') {
-    const chmodRun = await runShell(deps.ctx, chmodCommand, {
-      workdir: await shellWorkdir(deps),
-      timeoutMs: 15_000,
-    })
-    chmodOk = chmodRun.ok
-    chmodError = chmodRun.ok ? '' : (text(chmodRun.stderr) || text(chmodRun.error) || '权限设置失败').slice(0, 200)
-  }
+  // 权限结论由 `enforceCredentialPermission` 统一给出（三条结局各有名字，见 shared/types.ts）：
+  // Windows 上报 `inherited / windows-acl`，POSIX 上失败或成功都如实说。
+  const permission = await enforceCredentialPermission(deps.ctx, path, deps.platform, {
+    workdir: await shellWorkdir(deps),
+  })
   return {
     ok: true,
     error: '',
     path,
     operation,
-    chmodOk,
-    chmodError,
+    permission,
   }
+}
+
+/** 写盘都没走到权限那一步时的失败信封（mechanism 与平台一致，status 恒为 failed）。 */
+function failedPermission(message: string, platform: string): CredentialPermission {
+  return { status: 'failed', mechanism: privateFileMechanism(platform), message }
 }
 
 /** 生成 ossutil 配置内容（`[Credentials]` 段）。 */

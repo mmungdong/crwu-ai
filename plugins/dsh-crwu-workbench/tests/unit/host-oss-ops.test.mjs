@@ -483,7 +483,8 @@ test('oss-cred-save writes the config, tightens permissions and re-probes', asyn
   const result = await ossCredSave(deps, { accessKeyId: 'AKID1234567890', accessKeySecret: 'SECRET', endpoint: 'oss-cn-x.aliyuncs.com' })
   assert.equal(result.ok, true)
   assert.equal(result.path, '/Users/x/.ossutilconfig')
-  assert.equal(result.chmodOk, true)
+  assert.equal(result.permission.status, 'verified')
+  assert.equal(result.permission.mechanism, 'posix-0600')
   assert.equal(commands.some((command) => command.startsWith('chmod 600')), true, '凭据文件必须收紧到 600')
   const written = writes[0].content
   assert.match(written, /accessKeyID=AKID1234567890/)

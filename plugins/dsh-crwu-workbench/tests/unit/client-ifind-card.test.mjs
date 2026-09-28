@@ -164,7 +164,7 @@ test('API-Key 输入是 password 类型，且空值时保存按钮禁用', () =>
 test('保存过程中按钮禁用；客户端提交后立刻丢掉本地那一份 API-Key', async () => {
   const posts = stubOps({
     'ifind-credential-save': () => ({
-      ok: true, error: '', errorKind: '', mode: 'file', chmodOk: true, chmodError: '',
+      ok: true, error: '', errorKind: '', mode: 'file', permission: { status: 'verified', mechanism: 'posix-0600', message: '' },
       view: { path: '/cfg', exists: true, state: 'authenticated', length: 12, reason: '' },
       probe: { ok: true, state: 'authenticated', errorKind: '', error: '', toolCount: 7, toolNames: [], protocolVersion: '2025-03-26', checkedAt: '2026-09-26T10:00:00.000Z',
         dataVerified: true, dataTool: 'get_stock_summary', dataSample: '{"v":1}' },
@@ -210,7 +210,7 @@ test('保存过程中按钮禁用；客户端提交后立刻丢掉本地那一�
 test('保存成功但**探测失败**：如实显示原因，不说"已认证"', async () => {
   stubOps({
     'ifind-credential-save': () => ({
-      ok: true, error: '', errorKind: '', mode: 'file', chmodOk: true, chmodError: '',
+      ok: true, error: '', errorKind: '', mode: 'file', permission: { status: 'verified', mechanism: 'posix-0600', message: '' },
       view: { path: '/cfg', exists: true, state: 'invalid', length: 10, reason: '' },
       probe: { ok: false, state: 'invalid', errorKind: 'credential', error: 'API-Key 无效或已过期（HTTP 401）', toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: '',
         dataVerified: false, dataTool: '', dataSample: '' },
@@ -245,7 +245,7 @@ test('写入失败：错误就地显示（错误分类来自 Host），且不回
       ok: false, error: '写入 /Users/x/.dsh/crwu-workbench/ifind-credential.json 失败：disk full',
       errorKind: 'infrastructure',
       view: { path: '/cfg', exists: false, state: 'unconfigured', length: 0, reason: '' },
-      chmodOk: false, chmodError: '', mode: 'file',
+      permission: { status: 'failed', mechanism: 'posix-0600', message: 'chmod: Operation not permitted' }, mode: 'file',
       probe: { ok: false, state: 'unconfigured', errorKind: 'infrastructure', error: '', toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: '',
         dataVerified: false, dataTool: '', dataSample: '' },
     }),
@@ -373,4 +373,57 @@ test('取消（组件卸载）之后到达的应答不写状态', async () => {
   assert.ok(true, '卸载后到达的应答被忽略（没有抛错、没有 setState）')
   void tree
   void fakeReact
+})
+
+// ── 凭据权限结论（协议 17）：三种结局各自说话 ─────────────────────────────────
+
+test('权限结论按 status 说话：Windows 的 inherited 不得说成成功', async () => {
+  stubOps({
+    'ifind-credential-save': () => ({
+      ok: true, error: '', errorKind: '', mode: 'file',
+      permission: { status: 'inherited', mechanism: 'windows-acl', message: '使用当前 Windows 账户 ACL；POSIX 0600 不适用' },
+      view: { path: 'C:\\x\\ifind-credential.json', exists: true, state: 'unauthenticated', length: 8, reason: '' },
+      probe: { ok: false, state: 'unreachable', errorKind: 'infrastructure', error: '暂时无法连接', toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: '',
+        dataVerified: false, dataTool: '', dataSample: '' },
+    }),
+  })
+  const props = { credential: credential(), onSaved: () => {} }
+  const { tree, instance } = render(IfindAuthCard, props)
+  instance.state[0] = 'abcdefgh'
+  instance.cursor = 0
+  const filled = rerender(IfindAuthCard, props)
+  buttonLike(filled, zhCN.envIfindSubmit).props.onClick()
+  await settle()
+  const text = textOf(rerender(IfindAuthCard, props))
+  assert.equal(text.includes(zhCN.envCredInheritedWindowsAcl), true, '必须说清权限由当前账户 ACL 负责')
+  assert.equal(/0600 (已生效|成功)/.test(text), false, '不得把「不适用」说成已收紧')
+})
+
+test('权限结论为 failed 时逐字显示原因，为 verified 时不多说一句', async () => {
+  const saveWith = (permission) => stubOps({
+    'ifind-credential-save': () => ({
+      ok: true, error: '', errorKind: '', mode: 'file', permission,
+      view: { path: '/cfg', exists: true, state: 'unauthenticated', length: 8, reason: '' },
+      probe: { ok: false, state: 'unreachable', errorKind: 'infrastructure', error: '暂时无法连接', toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: '',
+        dataVerified: false, dataTool: '', dataSample: '' },
+    }),
+  })
+  const click = async (permission) => {
+    saveWith(permission)
+    const props = { credential: credential(), onSaved: () => {} }
+    const { tree, instance } = render(IfindAuthCard, props)
+    instance.state[0] = 'abcdefgh'
+    instance.cursor = 0
+    buttonLike(rerender(IfindAuthCard, props), zhCN.envIfindSubmit).props.onClick()
+    await settle()
+    void tree
+    return textOf(rerender(IfindAuthCard, props))
+  }
+
+  const failed = await click({ status: 'failed', mechanism: 'posix-0600', message: 'chmod: Operation not permitted' })
+  assert.equal(failed.includes('chmod: Operation not permitted'), true, '安全边界没守住就要逐字说原因')
+
+  const verified = await click({ status: 'verified', mechanism: 'posix-0600', message: '' })
+  assert.equal(verified.includes(zhCN.envCredInheritedWindowsAcl), false)
+  assert.equal(verified.includes(zhCN.envCredHardeningFailed), false)
 })

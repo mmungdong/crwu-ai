@@ -741,8 +741,8 @@ test('19. 四个操作的响应里没有 URL、凭据、日志、命令、reques
   }
 })
 
-test('20. 协议号精确为 16', () => {
-  assert.equal(WORKBENCH_PROTOCOL, 16)
+test('20. 协议号精确为 17（凭据权限结论结构化）', () => {
+  assert.equal(WORKBENCH_PROTOCOL, 17)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

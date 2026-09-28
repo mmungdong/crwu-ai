@@ -534,12 +534,13 @@ test('写入失败与权限设置失败都要如实上报（不假装成功、�
   assert.equal(writeFailed.errorKind, 'infrastructure')
   assert.match(writeFailed.error, /写入/)
 
-  // ② chmod 失败 → 凭据仍然保存成功，但 chmodOk=false + 原因带出来。
+  // ② chmod 失败 → 凭据仍然保存成功，但权限结论必须是 failed + 原因带出来。
   const ctx = asShellCtx(fsStub({}), { failOn: 'chmod 600', error: 'chmod: Operation not permitted' })
   const chmodFailed = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
   assert.equal(chmodFailed.ok, true, '权限没收紧不该作废已保存的凭据')
-  assert.equal(chmodFailed.chmodOk, false)
-  assert.match(chmodFailed.chmodError, /Operation not permitted/)
+  assert.equal(chmodFailed.permission.status, 'failed')
+  assert.equal(chmodFailed.permission.mechanism, 'posix-0600')
+  assert.match(chmodFailed.permission.message, /Operation not permitted/)
   assert.equal(ctx.written.length, 1, '文件确实写下去了')
 })
 
@@ -547,7 +548,7 @@ test('成功保存：文件内容只有那一个字段、权限收紧到 0600、
   const ctx = asShellCtx(fsStub({}), { runs: true })
   const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
   assert.equal(result.ok, true)
-  assert.equal(result.chmodOk, true)
+  assert.deepEqual(result.permission, { status: 'verified', mechanism: 'posix-0600', message: '' })
   assert.equal(result.mode, 'file')
   assert.equal(result.view.exists, true)
   assert.equal(result.view.length, 8)
@@ -585,9 +586,11 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
     true,
     `建目录必须是幂等的 PowerShell 写法：${ctx.commands.join(' | ')}`,
   )
-  // Windows 没有 POSIX 权限位：这一项不适用，报「没有未收紧的权限」而不是伪造失败。
-  assert.equal(result.chmodOk, true)
-  assert.equal(result.chmodError, '')
+  // Windows 没有 POSIX 权限位：结论必须是 **inherited / windows-acl** ——
+  // 既不说成「已验证」（旧 chmodOk:true 的毛病），也不说成失败。
+  assert.deepEqual(result.permission, {
+    status: 'inherited', mechanism: 'windows-acl', message: '使用当前 Windows 账户 ACL；POSIX 0600 不适用',
+  })
 
   await clearIfindSecret(ctx, home, { platform: 'win32-x64' })
   const remove = ctx.commands.find((command) => command.startsWith('if (Test-Path -LiteralPath ')) ?? ''
@@ -595,4 +598,35 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
   assert.match(remove, /-ErrorAction Stop \}$/, '真实失败必须能传播（不能 SilentlyContinue）')
   assert.equal(remove.includes('SilentlyContinue'), false)
   assert.equal(ctx.commands.some((command) => command.startsWith('rm -f ')), false)
+})
+
+test('Windows 上凭据落盘本身失败仍是操作失败（权限结论不得掩盖它）', async () => {
+  // ① 建目录失败（目录不存在又报错）→ infrastructure，且权限结论是 failed。
+  const mkdirDown = asShellCtx(fsStub({}), { runs: false, error: 'Access is denied' })
+  const dirFailed = await writeIfindSecret(mkdirDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64' })
+  assert.equal(dirFailed.ok, false, '目录没建出来就不是成功')
+  assert.equal(dirFailed.errorKind, 'infrastructure')
+  assert.equal(dirFailed.permission.status, 'failed')
+
+  // ② 写盘抛错 → infrastructure；权限结论同样是 failed（不是 inherited）。
+  const writeDown = asShellCtx(fsStub({ failWrite: true }), { runs: true })
+  const writeFailed = await writeIfindSecret(writeDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64' })
+  assert.equal(writeFailed.ok, false)
+  assert.equal(writeFailed.errorKind, 'infrastructure')
+  assert.equal(writeFailed.permission.status, 'failed')
+  assert.equal(writeFailed.permission.mechanism, 'windows-acl')
+
+  // ③ 清除失败 → 仍然是操作失败。
+  const clearDown = asShellCtx(fsStub({}), { runs: false, error: 'file is locked' })
+  const cleared = await clearIfindSecret(clearDown, 'C:\\Users\\x', { platform: 'win32-x64' })
+  assert.equal(cleared.ok, false)
+  assert.equal(cleared.errorKind, 'infrastructure')
+})
+
+test('未知平台时不猜权限机制，写盘直接拒绝', async () => {
+  const ctx = asShellCtx(fsStub({}), { runs: true })
+  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', {})
+  assert.equal(result.ok, false)
+  assert.equal(result.permission.status, 'failed')
+  assert.match(result.error, /未知平台/)
 })

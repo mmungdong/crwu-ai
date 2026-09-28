@@ -25,6 +25,13 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * 于是很容易出现「界面是新的、逻辑是旧的」——审核挂错会话那次就是这么来的（用户看到新按钮、
  * 跑的是老代码，报障说「还是挂错位置」）。
  *
+ * 17：**凭据权限结论结构化**（2026-09-28）。`ifind-credential-save` 与 `oss-cred-save` 的应答里
+ *    `chmodOk: boolean` / `chmodError: string` 被 `permission: CredentialPermission`
+ *    （`status: verified|inherited|failed` + `mechanism` + `message`）取代。语义上必须喊出来的原因：
+ *    Windows 没有 POSIX 权限位、也没有 `chmod`，旧字段在 Windows 上**只能是 `true`** ——
+ *    字段名读起来是「chmod 成功了」，界面文案也跟着这么说，员工于是以为凭据文件被 0600 保护着。
+ *    新客户端读到旧宿主的 `chmodOk` 会得到「没有结论」，必须靠协议号拦在「发审核」之前；
+ *    旧客户端读新宿主的 `permission` 会显示不出权限提示 —— 同样得由协议号喊出来。
  * 16：**自助更新**（2026-09-28）。新增四个 Host 操作 `update-status` / `update-check` /
  *    `update-install` / `update-cancel`（操作清单 29 → 33），统一返回 `{ ok, check, install }`
  *    （`shared/update/types.ts` 的 `UpdateCheckState` / `UpdateInstallState`）：检查结论与安装任务
@@ -92,7 +99,7 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 16
+export const WORKBENCH_PROTOCOL = 17
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

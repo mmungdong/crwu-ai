@@ -161,6 +161,28 @@ export interface DeliveryView {
   probe: ServiceCheckView
 }
 
+/**
+ * 凭据文件的权限状态（协议 17）。
+ *
+ * **为什么不能只给一个布尔**（2026-09-28）：旧形态是 `chmodOk: boolean`，而 Windows 上根本没有
+ * `chmod`（POSIX 权限位不适用），跳过之后只能报 `true` —— 字段名读起来是「chmod 成功了」，
+ * 界面文案也会跟着这么说，员工于是以为这份文件被 0600 保护着。三件事必须分开：
+ *
+ * - `verified`：真的执行了收紧命令并回读确认（目前只有 POSIX 0600 走到这里）；
+ * - `inherited`：**没有**执行收紧命令，权限由现有机制负责（Windows 上由当前账户 ACL），
+ *   `mechanism` 说明是谁在负责 —— 这不是失败，也不是「已验证」；
+ * - `failed`：试图收紧但失败了（POSIX 上 chmod 报错、或被沙箱拒绝），`message` 是原因。
+ *
+ * 界面**不得**把 `inherited` 显示成成功；`status` 与 `mechanism` 是唯一的说话依据。
+ */
+export interface CredentialPermission {
+  status: 'verified' | 'inherited' | 'failed'
+  /** `posix-0600`（文件模式位）/ `windows-acl`（账户 ACL）/ `host-store`（DSH 凭据服务托管）。 */
+  mechanism: 'posix-0600' | 'windows-acl' | 'host-store'
+  /** 人话原因：`failed` 必有；`inherited` 说明谁在负责；`verified` 为空串。 */
+  message: string
+}
+
 /** 服务（氚云/钉钉/OSS）探测结果。 */
 export interface ServiceCheckView {
   id: string
