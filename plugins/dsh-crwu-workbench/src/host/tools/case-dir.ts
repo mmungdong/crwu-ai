@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { isAbsoluteLocalPath, joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { failure, type ToolFailure } from './outcome.ts'
 
@@ -28,7 +29,11 @@ export type CaseCheck = CaseResolution | ToolFailure
 export async function requireCaseDir(ctx: Context, raw: unknown): Promise<CaseCheck> {
   const value = text(raw).trim()
   if (value === '') return { ...failure('input', '缺少案例目录（caseDir 必须是绝对路径）') }
-  if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value)) {
+  // 盘符绝对路径与 UNC 都算绝对路径（`isAbsoluteLocalPath` 同时认 POSIX 的 `/…`）。
+  // **UNC 的策略是「交给底层验证」**：DSH 的 fs 在 Windows 上原生支持 `\\server\share`，
+  // 插件不得自行把它判死；底层解析不了时下面统一回「案例目录不可解析：…（原因）」——
+  // 可诊断、也不生成损坏路径（把 `\\server\share` 用字符串规则裁一裁才是真正的损坏）。
+  if (!isAbsoluteLocalPath(value)) {
     return { ...failure('input', `案例目录必须是绝对路径：${value}`) }
   }
   if (value.split(/[\\/]/).includes('..')) {
@@ -70,7 +75,7 @@ export async function requireInsideCase(
   }
   const fs = fileSystem(ctx)
   if (fs === undefined) return { ...failure('infrastructure', 'Host 文件服务不可用') }
-  const full = `${casePath.replace(/[\\/]+$/, '')}/${name}`
+  const full = joinLocalPath(casePath, name)
   try {
     const root = await resolveTarget(ctx, casePath)
     const target = await fs.resolve(name, { cwd: text(root.displayPath) })

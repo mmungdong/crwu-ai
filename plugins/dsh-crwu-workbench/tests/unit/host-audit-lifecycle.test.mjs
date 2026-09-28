@@ -153,6 +153,10 @@ test('dirMarker and fileMarker recognize the case layout', () => {
   assert.equal(fileMarker('材料盘点.json'), 'inventory')
   assert.equal(fileMarker('冻结指纹.json'), 'frozen')
   assert.equal(caseNameOf('/cases/a/S1/'), 'S1')
+  // Windows：`split('/')` 会把整条路径当成目录名（界面上的案例名变成一长串）。
+  assert.equal(caseNameOf('C:\\Cases\\2026-301705-LX10170-BG8746\\'), '2026-301705-LX10170-BG8746')
+  assert.equal(caseNameOf('C:/Cases/2026-301705-LX10170-BG8746'), '2026-301705-LX10170-BG8746')
+  assert.equal(caseNameOf('\\\\server\\share\\S1'), 'S1')
 })
 
 // ── inspectCase ─────────────────────────────────────────────────────────────

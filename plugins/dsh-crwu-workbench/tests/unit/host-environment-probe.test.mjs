@@ -444,6 +444,15 @@ test('旧字符串模板是 deprecated 兼容路径：未知占位符、换行�
 
 // ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
 
+test('iFinD 凭据路径的分隔符随主目录风格走（Windows 上是 `\\`）', () => {
+  assert.equal(ifindCredentialPath('/Users/x'), '/Users/x/.dsh/crwu-workbench/ifind-credential.json')
+  assert.equal(ifindCredentialPath('/Users/x/'), '/Users/x/.dsh/crwu-workbench/ifind-credential.json')
+  assert.equal(ifindCredentialPath('C:\\Users\\x'), 'C:\\Users\\x\\.dsh\\crwu-workbench\\ifind-credential.json')
+  assert.equal(ifindStateDir('C:\\Users\\x'), 'C:\\Users\\x\\.dsh\\crwu-workbench')
+  // 主目录未知时保持 `~` 形式（不能拼成 `/ifind-credential.json`）。
+  assert.equal(ifindCredentialPath(''), '~/.dsh/crwu-workbench/ifind-credential.json')
+})
+
 test('checkIfindSecret 区分空值 / 占位符 / 首尾空白 / 换行 / 过短', () => {
   assert.equal(checkIfindSecret('').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')
   assert.equal(checkIfindSecret('   ').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')

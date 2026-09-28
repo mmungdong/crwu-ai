@@ -1,12 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import type { EnvManifest, OssSpec } from '../environment/manifest-default.ts'
 import { ossutilMissingMessage, probeOss, resolveOssutil } from '../environment/probe.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { openExternalCommand, privateFileCommand, shellInvoke } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
-import { readOssCred, type OssCredView } from './cred.ts'
+import { ossConfigPath, readOssCred, type OssCredView } from './cred.ts'
 import {
   groupObjects, isResultJson, joinUrl, parseLsEntries, parseLsObjects, parseSignUrl, stripPrefix,
 } from './parse.ts'
@@ -267,9 +268,12 @@ export async function uploadArtifacts(
   const results: UploadFileResult[] = []
 
   for (const file of files) {
-    const local = `${item.path.replace(/\/+$/, '')}/${file.name}`
-    const key = `${prefix}/${file.name}`
-    const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${key}`]
+    // **两个概念不能混**：`localPath` 是本地路径（分隔符随平台），`objectKey` 是 OSS 对象键
+    // （永远 `/`，见 `stripPrefix` / `groupObjects`）。历史实现用一个 `/` 拼接同时服务两者，
+    // 于是 Windows 上本地路径被拼成 `C:\Cases/S1/审核意见.html`。
+    const localPath = joinLocalPath(item.path, file.name)
+    const objectKey = `${prefix}/${file.name}`
+    const argv = [ossutil, 'cp', '-f', localPath, `oss://${oss.bucket}/${objectKey}`]
     if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
     for (const extra of oss.extraArgs) argv.push(extra)
     const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
@@ -279,9 +283,9 @@ export async function uploadArtifacts(
     results.push({
       kind: file.kind,
       name: file.name,
-      key,
+      key: objectKey,
       ok: run.ok,
-      publicUrl: joinUrl(oss.publicBaseUrl, key),
+      publicUrl: joinUrl(oss.publicBaseUrl, objectKey),
       error: run.ok ? '' : (text(run.stderr) || text(run.error) || '上传失败').slice(0, 400),
     })
   }
@@ -414,7 +418,7 @@ async function writeOssCred(
 ): Promise<WriteCredOutcome> {
   const fs = fileSystem(deps.ctx)
   if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用', path: '', operation: '', chmodOk: false, chmodError: '' }
-  const path = `${deps.home.replace(/[\\/]+$/, '')}/.ossutilconfig`
+  const path = ossConfigPath(deps.home)
   const built = buildConfigContent(input)
   if (!built.ok) return { ok: false, error: built.error, path: '', operation: '', chmodOk: false, chmodError: '' }
 

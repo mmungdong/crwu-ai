@@ -333,6 +333,28 @@ test('uploadArtifacts uploads both canonical artifacts under the serial number',
   assert.match(copies[0], new RegExp(`审核意见\\.${SEQ}\\.html`))
 })
 
+test('uploadArtifacts 区分本地路径与对象键：本地随平台，对象键永远用 `/`', async () => {
+  const { deps, commands } = uploadDeps()
+  deps.platform = 'win32-x64'
+  const out = await uploadArtifacts(
+    deps,
+    { path: `C:\\Cases\\${SEQ}`, htmlFile: `审核意见.${SEQ}.html`, resultFile: '', name: SEQ },
+    SEQ,
+    'C:\\Program Files\\ossutil.exe',
+    deps.manifest.oss,
+  )
+  assert.equal(out.ok, true)
+  // Windows 上每个 token 都是单引号字面量，所以不能用 `includes(' cp ')` 找子命令。
+  const copy = commands.filter((command) => /['\s]cp['\s]/.test(command)).join('\n')
+  assert.notEqual(copy, '', `必须真的发出 cp 命令：${commands.join(' | ')}`)
+  // 本地源路径必须是 Windows 风格（历史实现拼成 `C:\Cases/<SEQ>/…`）。
+  assert.match(copy, /'C:\\Cases\\[^']*审核意见/)
+  // 远端键永远 `/`，且带 `oss://` 前缀。
+  assert.match(copy, /'oss:\/\/bkt\/crwu\/audit\//)
+  assert.equal(copy.includes('oss://bkt/crwu/audit/' + SEQ), true)
+  assert.equal(out.results[0].key, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
+})
+
 test('uploadArtifacts reports per-file failures instead of a bare false', async () => {
   const { deps } = uploadDeps({ failUpload: true })
   const out = await uploadArtifacts(

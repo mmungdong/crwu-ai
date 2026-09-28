@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
+import { basenameLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, readTextIfExists, resolveTarget } from '../fs/paths.ts'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { DINGTALK_TARGET, DWS_MAX_PAGES } from '../dws/consts.ts'
@@ -302,7 +303,8 @@ export function dingtalkTools(deps: ToolDeps) {
       }
 
       // ⑤ 上传（cwd = 案例目录；`--file` 只接受工作目录内相对路径）。
-      const relativeName = requested.split('/').pop() ?? requested
+      // `--file` 只接受工作目录内相对路径：取末段要认两种分隔符（Windows 上是 `\`）。
+      const relativeName = basenameLocalPath(requested)
       const uploaded = await dwsJson(ctx, platform, withProfile(profile, [
         'drive', '+upload', '--file', relativeName, '--file-name', plan.plan.remoteName,
         '--folder', month.nodeId, '--space-id', spaceId, '--yes', '--format', 'json',

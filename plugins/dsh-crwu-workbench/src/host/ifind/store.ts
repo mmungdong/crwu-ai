@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { mkdirCommand, privateFileCommand, removeFileCommand } from '../platform/shell.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
@@ -39,19 +40,21 @@ export const IFIND_CREDENTIAL_FIELD = 'auth_token'
 /** 视为占位符的取值（上游文档里就是这么写的）。 */
 export const IFIND_PLACEHOLDER = 'your ifind-mcp key'
 
-/** 凭据文件的绝对路径。 */
+/**
+ * 凭据文件的绝对路径。
+ *
+ * 分隔符随主目录风格走（`joinLocalPath`）：这条路径交给 fs 与 shell 两条链路，
+ * 混用分隔符在 Windows 上既进不了 `New-Item -Path`，也会被别的程序当转义。
+ */
 export function ifindCredentialPath(home: string): string {
-  const base = home.replace(/[\\/]+$/, '')
-  if (base === '') return `~/${PLUGIN_STATE_DIR}/${IFIND_CREDENTIAL_FILE}`
-  // 主目录自带反斜杠（Windows）时用反斜杠拼，否则用正斜杠：路径交给 fs 与 shell 两条链路，
-  // 混用分隔符在 Windows 的 `chmod` 那条命令上会被当成转义。
-  const sep = base.includes('\\') ? '\\' : '/'
-  return `${base}${sep}${PLUGIN_STATE_DIR.replace(/\//g, sep)}${sep}${IFIND_CREDENTIAL_FILE}`
+  if (text(home) === '') return `~/${PLUGIN_STATE_DIR}/${IFIND_CREDENTIAL_FILE}`
+  return joinLocalPath(home, PLUGIN_STATE_DIR, IFIND_CREDENTIAL_FILE)
 }
 
-/** 状态目录的绝对路径（`chmod` / `mkdir` 用）。 */
+/** 状态目录的绝对路径（`mkdir` / 权限收紧用）。 */
 export function ifindStateDir(home: string): string {
-  return ifindCredentialPath(home).replace(/[\\/][^\\/]+$/, '')
+  if (text(home) === '') return `~/${PLUGIN_STATE_DIR}`
+  return joinLocalPath(home, PLUGIN_STATE_DIR)
 }
 
 export interface SecretVerdict {

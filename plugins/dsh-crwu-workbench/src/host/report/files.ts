@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { FileSystem, FsDirEntry, FsTarget } from '@deepseek-ai/dsh-fs'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
@@ -125,7 +126,8 @@ export function parseH3yunFiles(payload: unknown): ReportH3yunFile[] {
 }
 
 function joinPath(base: string, name: string): string {
-  return base.endsWith('/') ? `${base}${name}` : `${base}/${name}`
+  // 分隔符随 base 的风格走（Windows 上是 `\`）：这条路径既给界面显示，也进 `resolveTarget`。
+  return joinLocalPath(base, name)
 }
 
 /** 递归列目录（只名字与大小，深度与数量都设上限）。 */
@@ -231,21 +233,29 @@ export async function reportFiles(deps: ReportFilesDeps, args: Record<string, un
   }
 
   // 本地：<工作空间>/<流水号>，且必须落在工作空间之内。
+  // 包含判断**不用字符串前缀**：`..`、符号链接与 Windows 盘符大小写都会让前缀比较失效，
+  // 一律交给 `fs.contains`（后端 realpath 之后比较）。
   const workspacePath = deps.workspacePath()
   const localDir = workspacePath === '' ? '' : joinPath(workspacePath, seqNo)
   let local: ReportLocalFile[] = []
   let localExists = false
-  if (localDir !== '' && (localDir === workspacePath || localDir.startsWith(`${workspacePath.replace(/\/+$/, '')}/`))) {
+  if (localDir !== '') {
     const fs = fileSystem(deps.ctx)
     if (fs !== undefined) {
       const target = await resolveTarget(deps.ctx, localDir)
-      const entries = await fs.listDir(target).catch((error: unknown) => {
+      const root = await resolveTarget(deps.ctx, workspacePath).catch((error: unknown) => {
         void error
         return null
       })
-      if (entries !== null) {
-        localExists = true
-        await collectLocal(fs, target, localDir, '', 1, local)
+      if (root !== null && fs.contains(root, target) === true) {
+        const entries = await fs.listDir(target).catch((error: unknown) => {
+          void error
+          return null
+        })
+        if (entries !== null) {
+          localExists = true
+          await collectLocal(fs, target, localDir, '', 1, local)
+        }
       }
     }
   }

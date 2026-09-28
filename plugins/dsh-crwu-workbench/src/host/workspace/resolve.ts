@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { isLocalPathUnder, trimTrailingSeparators } from '../../shared/utils/local-path.ts'
 import { isDir } from '../fs/paths.ts'
 import { readWorkbenchConfig } from '../state/persist.ts'
 import type { WorkbenchState } from '../state/types.ts'
@@ -34,9 +35,14 @@ export interface WorkspaceEntry {
   title: string
 }
 
-/** 去掉结尾斜杠；空值保持空。 */
+/**
+ * 去掉结尾分隔符；空值保持空。
+ *
+ * 用共享的 `trimTrailingSeparators` 而不是 `replace(/[\\/]+$/, '')`：
+ * 后者会把 Windows 的 `C:\` 裁成 `C:`（盘符相对路径）—— 那是另一个目录。
+ */
 export function trimSlash(value: unknown): string {
-  return text(value).replace(/[\\/]+$/, '')
+  return trimTrailingSeparators(value)
 }
 
 /**
@@ -208,7 +214,9 @@ export function sessionWorkspaceInfo(ctx: Context, state: WorkbenchState): Sessi
   let best: WorkspaceEntry | null = null
   for (const entry of registryList(ctx)) {
     if (entry.path === '') continue
-    if (out.sessionCwd === entry.path || out.sessionCwd.startsWith(`${entry.path}/`)) {
+    // 最长前缀匹配：分隔符与大小写都按路径风格处理（Windows 路径不区分大小写、
+    // 分隔符是 `\`）。这里只用于**显示**，安全判定一律走 `ctx.fs.contains`。
+    if (isLocalPathUnder(out.sessionCwd, entry.path)) {
       if (best === null || entry.path.length > best.path.length) best = entry
     }
   }
