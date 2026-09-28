@@ -9,6 +9,18 @@
  * - 每个动作各自单飞（检查 / 安装 / 取消 / 状态刷新），重复点击不会多打上游；
  * - Host 的 JSON 只在 `parseUpdateResponse()` 收窄之后才进快照（见 `api.ts`）。
  *
+ * ## 2026-09-28 审查修正：三条硬约束
+ *
+ * 1. **操作状态互不覆盖**：`checking` / `installing` / `cancelling` 是三个独立布尔，不再是
+ *    "一个 busy 枚举"。安装请求在飞时点「检查更新」，`check()` 只动 `checking`，安装活动与
+ *    取消入口不会被冲掉；`installing` 只由那次安装请求自己清。界面上的"正在安装" = 本地在飞
+ *    **或** Host 事实说 `installing` —— 后者正是刷新页面后的恢复路径。
+ * 2. **轮询由 Host 事实驱动**：`shouldPoll()` 只看 `install.status` 与"本次事务是否在飞"，
+ *    与检查无关；Host 一落定（awaiting-restart / updated / cancelled / failed）就停。
+ * 3. **过期响应按世代作废**：每次 `install()` 开一个新世代，每个响应带着"发出时捕获的世代"
+ *    回来；旧世代的响应、以及本世代落定之后的观察类响应，一律不许再改安装状态 ——
+ *    覆盖全部 `install.status` 取值，而不只是 `installing`。
+ *
  * 这里**不碰 UI**：没有 React、没有 localStorage、没有 Node 模块；时间只用于轮询间隔，
  * 由注入的 scheduler 决定，单测不做真实等待。
  */
@@ -17,6 +29,14 @@ import type { UpdateCheckState, UpdateInstallState } from '../../../shared/updat
 
 /** 客户端侧失败的来源：后台（自动初始化 / 轮询）还是用户手动操作。 */
 export type UpdateErrorOrigin = 'background' | 'manual'
+
+/**
+ * 失败的**动作归属**。
+ *
+ * 只有 `origin` 不够：检查失败与安装失败都是 manual，界面却说两句不同的话；状态轮询失败
+ * （poll）与用户点开的刷新（status）语义也不同。所以错误必须带上动作。
+ */
+export type UpdateAction = 'check' | 'install' | 'cancel' | 'status' | 'poll'
 
 /**
  * 客户端侧失败的**稳定 code**。
@@ -32,12 +52,10 @@ export type UpdateFailureCode =
   | 'rejected'
 
 export interface UpdateStoreError {
+  action: UpdateAction
   origin: UpdateErrorOrigin
   code: UpdateFailureCode
 }
-
-/** 当前正在进行的动作（互斥的单一状态，不给组件拼布尔组合的机会）。 */
-export type UpdateBusy = 'idle' | 'checking' | 'installing' | 'cancelling'
 
 export interface UpdateSnapshot {
   /** 初始化是否完成（两个消费者只跑一条链）。 */
@@ -48,8 +66,13 @@ export interface UpdateSnapshot {
   install: UpdateInstallState | null
   /** 最近一次检查是谁触发的（决定"手动检查失败"要不要露出来）。 */
   checkOrigin: UpdateErrorOrigin | null
-  busy: UpdateBusy
-  /** 最近一次客户端侧失败；成功的手动操作会清掉手动的那条。 */
+  /** 检查请求在飞。**与安装活动互不覆盖**。 */
+  checking: boolean
+  /** 安装请求在飞（本地事实；Host 事实还要看 `install.status`）。 */
+  installing: boolean
+  /** 取消请求在飞。 */
+  cancelling: boolean
+  /** 最近一次客户端侧失败；成功的**同一个动作**会清掉它自己的旧错误。 */
   error: UpdateStoreError | null
 }
 
@@ -116,7 +139,9 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     check: null,
     install: null,
     checkOrigin: null,
-    busy: 'idle',
+    checking: false,
+    installing: false,
+    cancelling: false,
     error: null,
   }
   let disposed = false
@@ -124,10 +149,19 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   let checkInflight: Promise<UpdateSnapshot> | null = null
   let installInflight: Promise<UpdateSnapshot> | null = null
   let cancelInflight: Promise<UpdateSnapshot> | null = null
-  let statusInflight: Promise<UpdateSnapshot> | null = null
+  let statusInflight: Promise<boolean> | null = null
   let pollCancel: (() => void) | null = null
-  /** 安装请求落定或看到终态之后，状态轮询不得再把 `installing` 塞回来（防倒退）。 */
-  let acceptInstalling = true
+
+  // ── 世代（安装事务）────────────────────────────────────────────────────────
+  /** 安装事务世代：每次 `install()` 开一个新世代。 */
+  let epoch = 1
+  /** 已经写入过安装状态的最高世代。 */
+  let writtenEpoch = 0
+  /** 已经落定（终态）的世代；-1 = 当前世代还没落定。 */
+  let settledEpoch = -1
+  /** 检查 / 取消请求的序号：旧请求的 finally 不许清掉新请求的活动状态。 */
+  let checkSeq = 0
+  let cancelSeq = 0
 
   function get(): UpdateSnapshot {
     return snapshot
@@ -163,41 +197,92 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     return snapshot
   }
 
+  /** 一次安装状态写入的来路。 */
+  interface InstallWrite {
+    /** 这个响应发出时捕获的事务世代。 */
+    epoch: number
+    /** install / cancel 的响应是本次事务的权威结论；status / poll 只是观察。 */
+    authoritative: boolean
+    /**
+     * 这份安装快照只是**顺带**带回来的（检查响应里那一份），不是我们特意去观察的。
+     *
+     * 检查请求完全可能在安装开始之前发出，它的 `install` 字段就是过期的；若允许它写，
+     * 界面会在"正在安装"和"没有更新"之间来回跳，而且会清掉安装活动与取消入口。
+     */
+    incidental: boolean
+  }
+
   /**
-   * 是否接受这份安装状态。
+   * 这份安装状态是否还有资格写进快照（过期响应保护）。
    *
    * @param next - 收窄后的安装状态。
-   * @returns 接受为 true。
+   * @param write - 这份状态来自哪个世代、是不是本次事务的权威结论。
+   * @returns 可以写入为 true。
    */
-  function acceptsInstall(next: UpdateInstallState): boolean {
-    if (next.status !== 'installing') return true
-    // 晚到的旧响应：安装已经落定之后不许倒退回"正在安装"。
-    if (!acceptInstalling) return false
-    const current = snapshot.install
-    if (current !== null && current.status === 'installing' && next.startedAt < current.startedAt) return false
+  function acceptsInstall(next: UpdateInstallState, write: InstallWrite): boolean {
+    // 1) 旧世代的响应：idle / installing / 任何终态都不许写。
+    if (write.epoch < writtenEpoch) return false
+    if (write.epoch === writtenEpoch) {
+      // 2) 本世代已经落定：只有本次事务自己的 install / cancel 响应还有发言权，
+      //    晚到的状态轮询（观察类）一律不许再改安装状态。
+      if (settledEpoch === writtenEpoch && !write.authoritative) return false
+      // 3) 落定之后不许退回非终态。
+      if (settledEpoch === writtenEpoch && !isTerminalInstall(next)) return false
+    }
+    // 4) 检查响应里顺带带回的那份快照：安装正进行时不得用非终态覆盖它
+    //    （否则"检查一下"就会把界面从"正在安装"打回"没有更新"）。
+    const installActive = snapshot.installing || snapshot.cancelling || hostInstalling()
+    if (write.incidental && installActive && !isTerminalInstall(next)) return false
     return true
   }
 
-  function applyEnvelope(raw: unknown, origin: UpdateErrorOrigin, options: { setCheckOrigin: boolean }): void {
+  function applyInstall(next: UpdateInstallState, write: InstallWrite): void {
+    if (!acceptsInstall(next, write)) return
+    if (write.epoch > writtenEpoch) {
+      writtenEpoch = write.epoch
+      settledEpoch = -1
+    }
+    if (isTerminalInstall(next)) settledEpoch = writtenEpoch
+    update({ install: next })
+    syncPolling()
+  }
+
+  interface EnvelopeOptions {
+    action: UpdateAction
+    origin: UpdateErrorOrigin
+    /** 这次请求发出时捕获的安装事务世代。 */
+    epoch: number
+    /** install / cancel 的响应是本次事务的权威结论。 */
+    authoritative?: boolean
+    /** 检查响应顺带带回的安装快照（见 `InstallWrite.incidental`）。 */
+    incidentalInstall?: boolean
+    /** 只有**真正发起检查**的路径才改 `checkOrigin`（状态刷新不得把 manual 降级成 background）。 */
+    setCheckOrigin?: boolean
+  }
+
+  function applyEnvelope(raw: unknown, options: EnvelopeOptions): void {
     const parsed = parseUpdateResponse(raw)
+    const { action, origin } = options
     if (parsed.kind === 'rejected') {
-      update({ error: { origin, code: 'rejected' } })
+      update({ error: { action, origin, code: 'rejected' } })
       return
     }
     if (parsed.kind === 'malformed') {
-      update({ error: { origin, code: 'malformed-envelope' } })
+      update({ error: { action, origin, code: 'malformed-envelope' } })
       return
     }
 
-    const patch: Partial<UpdateSnapshot> = {}
     if (parsed.check !== null) {
-      patch.check = parsed.check
-      // 只有"真正发起了检查"的那条路径才改来源；状态刷新不得把手动错误降级成后台错误。
-      if (options.setCheckOrigin || snapshot.checkOrigin === null) patch.checkOrigin = origin
+      const patch: Partial<UpdateSnapshot> = { check: parsed.check }
+      if (options.setCheckOrigin === true || snapshot.checkOrigin === null) patch.checkOrigin = origin
+      update(patch)
     }
-    if (parsed.install !== null && acceptsInstall(parsed.install)) {
-      if (isTerminalInstall(parsed.install)) acceptInstalling = false
-      patch.install = parsed.install
+    if (parsed.install !== null) {
+      applyInstall(parsed.install, {
+        epoch: options.epoch,
+        authoritative: options.authoritative === true,
+        incidental: options.incidentalInstall === true,
+      })
     }
 
     const failure: UpdateFailureCode | null = parsed.invalid.includes('check')
@@ -206,26 +291,37 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
         ? 'malformed-install'
         : null
     if (failure !== null) {
-      patch.error = { origin, code: failure }
-    } else if (origin === 'manual' && (snapshot.error === null || snapshot.error.origin === 'manual')) {
-      // 手动操作成功就清掉旧的手动错误（后台错误留给它自己的重试去清）。
-      patch.error = null
+      update({ error: { action, origin, code: failure } })
+    } else if (
+      origin === 'manual' &&
+      snapshot.error !== null &&
+      snapshot.error.origin === 'manual' &&
+      snapshot.error.action === action
+    ) {
+      // 手动操作成功就清掉它**自己**的旧错误；别的动作的错误（例如安装失败）留着继续显示。
+      update({ error: null })
     }
-    update(patch)
   }
 
-  /** 一次状态刷新：同一时刻最多一个在飞（轮询与手动刷新共用这条闸门）。 */
-  async function statusOnce(origin: UpdateErrorOrigin): Promise<UpdateSnapshot> {
+  /** 一次状态取数；返回是否真的拿到了 Host 事实（安装 / 取消失败后要用它决定怎么说话）。 */
+  async function fetchStatus(action: 'status' | 'poll'): Promise<boolean> {
     if (statusInflight !== null) return statusInflight
-    const run = (async (): Promise<UpdateSnapshot> => {
+    const at = epoch
+    const run = (async (): Promise<boolean> => {
       try {
-        applyEnvelope(await deps.api.updateStatus(), origin, { setCheckOrigin: snapshot.checkOrigin === null })
+        applyEnvelope(await deps.api.updateStatus(), {
+          action,
+          origin: 'background',
+          epoch: at,
+          setCheckOrigin: snapshot.checkOrigin === null,
+        })
+        return true
       } catch (error) {
         // 传输失败只记 code；保留最后一次有效状态（不清空候选、不清空等待重启）。
         void error
-        update({ error: { origin, code: 'transport' } })
+        update({ error: { action, origin: 'background', code: 'transport' } })
+        return false
       }
-      return snapshot
     })()
     statusInflight = run
     try {
@@ -238,16 +334,26 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   /** 一次检查：手动与后台共用单飞闸门（两个消费者同时点也只发一次）。 */
   function startCheck(origin: UpdateErrorOrigin): Promise<UpdateSnapshot> {
     if (checkInflight !== null) return checkInflight
+    const at = epoch
+    const seq = (checkSeq += 1)
     const run = (async (): Promise<UpdateSnapshot> => {
-      update({ busy: 'checking' })
+      update({ checking: true })
       try {
-        applyEnvelope(await deps.api.updateCheck(), origin, { setCheckOrigin: true })
+        applyEnvelope(await deps.api.updateCheck(), {
+          action: 'check',
+          origin,
+          epoch: at,
+          setCheckOrigin: true,
+          incidentalInstall: true,
+        })
       } catch (error) {
         void error
-        update({ error: { origin, code: 'transport' } })
+        update({ error: { action: 'check', origin, code: 'transport' } })
       } finally {
+        // 只有最新那次检查才能清掉 checking：旧请求的 finally 不准动新状态。
+        if (seq === checkSeq) update({ checking: false })
         checkInflight = null
-        if (snapshot.busy === 'checking') update({ busy: 'idle' })
+        syncPolling()
       }
       return snapshot
     })()
@@ -255,8 +361,30 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     return run
   }
 
-  function pollingWanted(): boolean {
-    return !disposed && (snapshot.busy === 'installing' || snapshot.busy === 'cancelling')
+  // ── 轮询：由 Host 事实驱动，不看 check ──────────────────────────────────────
+  function hostInstalling(): boolean {
+    return snapshot.install !== null && snapshot.install.status === 'installing'
+  }
+
+  function hostTerminal(): boolean {
+    return snapshot.install !== null && isTerminalInstall(snapshot.install)
+  }
+
+  /**
+   * 轮询该不该开着。
+   *
+   * - Host 已落定（awaiting-restart / updated / cancelled / failed）→ 关：没有更多可观察的进展；
+   * - 本地有安装 / 取消请求在飞 → 开：Host 可能还没把 `installing` 报出来，而阶段变化只能靠轮询看；
+   * - 否则只看 Host 是否在装 —— 刷新页面后恢复安装状态走的就是这条；
+   * - Host 说 idle 而本地也没有在飞的事务 → 关。
+   *
+   * `check()` 完全不参与这个判断，所以它清不掉轮询。
+   */
+  function shouldPoll(): boolean {
+    if (disposed) return false
+    if (hostTerminal()) return false
+    if (snapshot.installing || snapshot.cancelling) return true
+    return hostInstalling()
   }
 
   function stopPolling(): void {
@@ -266,22 +394,26 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   }
 
   function startPolling(): void {
-    if (!pollingWanted() || pollCancel !== null) return
+    if (disposed || pollCancel !== null) return
     pollCancel = scheduler.schedule(() => {
       pollCancel = null
       void pollTick()
     }, pollIntervalMs)
   }
 
-  async function pollTick(): Promise<void> {
-    if (!pollingWanted()) return
-    await statusOnce('background')
-    // 上一轮回来之后再排下一轮：同一时刻最多一个 status 请求。
-    startPolling()
+  function syncPolling(): void {
+    if (shouldPoll()) startPolling()
+    else stopPolling()
   }
 
-  function stopPollingWhenSettled(): void {
-    if (!pollingWanted()) stopPolling()
+  async function pollTick(): Promise<void> {
+    if (!shouldPoll()) {
+      stopPolling()
+      return
+    }
+    await fetchStatus('poll')
+    // 上一轮回来之后再排下一轮：同一时刻最多一个 status 请求。
+    syncPolling()
   }
 
   return {
@@ -294,7 +426,10 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
       if (initializing !== null) return initializing
       const run = (async (): Promise<UpdateSnapshot> => {
         try {
-          await statusOnce('background')
+          // Host 事实优先：装到一半刷新页面时，`install.status === 'installing'` 就是在这里恢复的
+          // （applyInstall → syncPolling → 重新开始轮询）。
+          await fetchStatus('status')
+          syncPolling()
           const check = snapshot.check
           const settled = check !== null && check.status !== 'idle' && check.status !== 'checking'
           // 状态还没定论就接续一次后台检查：Host 那边是单飞，会与它自己的启动检查合流。
@@ -304,6 +439,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
           void error
         } finally {
           initializing = null
+          syncPolling()
           update({ initialized: true })
         }
         return snapshot
@@ -318,20 +454,32 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
 
     install(): Promise<UpdateSnapshot> {
       if (installInflight !== null) return installInflight
+      // 新事务：从此之前的观察响应都算旧世代（见 acceptsInstall）。
+      epoch += 1
+      const at = epoch
       const run = (async (): Promise<UpdateSnapshot> => {
-        acceptInstalling = true
-        update({ busy: 'installing' })
-        startPolling()
+        update({ installing: true })
+        syncPolling()
         try {
           // 永远不发参数：安装目标由 Host 自己授权。
-          applyEnvelope(await deps.api.updateInstall(), 'manual', { setCheckOrigin: false })
+          applyEnvelope(await deps.api.updateInstall(), {
+            action: 'install',
+            origin: 'manual',
+            epoch: at,
+            authoritative: true,
+          })
         } catch (error) {
           void error
-          update({ error: { origin: 'manual', code: 'transport' } })
+          // 传输失败 ≠ Host 没开始安装：立刻取一次事实，绝不凭空把安装判定成 idle 或成功。
+          const known = await fetchStatus('status')
+          const state = snapshot.install
+          const explained =
+            known && state !== null && (state.status === 'installing' || isTerminalInstall(state))
+          if (!explained) update({ error: { action: 'install', origin: 'manual', code: 'transport' } })
         } finally {
           installInflight = null
-          if (snapshot.busy === 'installing') update({ busy: cancelInflight === null ? 'idle' : 'cancelling' })
-          stopPollingWhenSettled()
+          update({ installing: false })
+          syncPolling()
         }
         return snapshot
       })()
@@ -341,19 +489,28 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
 
     cancel(): Promise<UpdateSnapshot> {
       if (cancelInflight !== null) return cancelInflight
+      // 取消是**当前事务**的动作，不新开世代：它和这次安装共享同一份"谁先落定"的规则。
+      const at = epoch
+      const seq = (cancelSeq += 1)
       const run = (async (): Promise<UpdateSnapshot> => {
-        // 取消不被安装单飞锁挡住：它走自己的闸门，安装请求还在飞也能立刻发出去。
-        update({ busy: 'cancelling' })
-        startPolling()
+        update({ cancelling: true })
+        syncPolling()
         try {
-          applyEnvelope(await deps.api.updateCancel(), 'manual', { setCheckOrigin: false })
+          applyEnvelope(await deps.api.updateCancel(), {
+            action: 'cancel',
+            origin: 'manual',
+            epoch: at,
+            authoritative: true,
+          })
         } catch (error) {
           void error
-          update({ error: { origin: 'manual', code: 'transport' } })
+          // 取不到事实就如实说"取消没成功"；取到事实就以 Host 状态为准（可能还在装、也可能已落定）。
+          const known = await fetchStatus('status')
+          if (!known) update({ error: { action: 'cancel', origin: 'manual', code: 'transport' } })
         } finally {
+          if (seq === cancelSeq) update({ cancelling: false })
           cancelInflight = null
-          if (snapshot.busy === 'cancelling') update({ busy: installInflight === null ? 'idle' : 'installing' })
-          stopPollingWhenSettled()
+          syncPolling()
         }
         return snapshot
       })()
@@ -362,7 +519,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     },
 
     refreshStatus(): Promise<UpdateSnapshot> {
-      return statusOnce('background')
+      return fetchStatus('status').then(() => snapshot)
     },
 
     dispose(): void {
