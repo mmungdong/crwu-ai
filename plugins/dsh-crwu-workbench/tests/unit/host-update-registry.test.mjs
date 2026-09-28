@@ -133,6 +133,91 @@ test('包名不一致一律拒绝（同名包才是更新对象）', async () =>
   assert.equal(result.failure.kind, 'invalid-metadata')
 })
 
+test('versions 里必须有 dist-tags.latest 精确指向的自洽条目', async () => {
+  // `versions[latest]` 是设计 §5.2 的"对应版本的基本包信息"：只信 dist-tags.latest 而不看它指向的
+  // 条目，结构不一致的文档（latest 指向一个不存在或不属于本包的版本）仍会生成更新候选。
+  const versionsOf = (latest, entry) => packageDocument(latest, { versions: { [latest]: entry } })
+  const missingVersions = packageDocument('0.0.11')
+  delete missingVersions.versions
+
+  const cases = [
+    ['缺少顶层 versions', missingVersions],
+    ['versions 是数组', packageDocument('0.0.11', { versions: ['0.0.11'] })],
+    ['versions 是字符串', packageDocument('0.0.11', { versions: '0.0.11' })],
+    ['versions 是 null', packageDocument('0.0.11', { versions: null })],
+    ['versions 里没有 latest 条目', packageDocument('0.0.11', { versions: { '0.0.10': { name: UPDATE_PACKAGE_NAME, version: '0.0.10' } } })],
+    ['latest 条目是字符串', versionsOf('0.0.11', '0.0.11')],
+    ['latest 条目是数组', versionsOf('0.0.11', [])],
+    ['latest 条目是 null', versionsOf('0.0.11', null)],
+    ['latest 条目 name 是别的包', versionsOf('0.0.11', { name: 'other-plugin', version: '0.0.11' })],
+    ['latest 条目缺 name', versionsOf('0.0.11', { version: '0.0.11' })],
+    ['latest 条目缺 version', versionsOf('0.0.11', { name: UPDATE_PACKAGE_NAME })],
+    ['latest 条目 version 非字符串', versionsOf('0.0.11', { name: UPDATE_PACKAGE_NAME, version: 11 })],
+    ['latest 条目 version 非法', versionsOf('0.0.11', { name: UPDATE_PACKAGE_NAME, version: '不是版本号' })],
+    ['latest 条目 version 与 latest 不一致', versionsOf('0.0.11', { name: UPDATE_PACKAGE_NAME, version: '0.0.10' })],
+    ['latest 条目 version 是 prerelease', versionsOf('0.0.11', { name: UPDATE_PACKAGE_NAME, version: '0.0.11-rc.1' })],
+  ]
+
+  for (const [label, document] of cases) {
+    const result = await fetchRegistryPackage(NPMMIRROR, {
+      fetch: recordingFetch(() => jsonResponse(document)),
+      now: CLOCK,
+    })
+    assert.equal(result.ok, false, `${label} 必须被拒绝`)
+    assert.equal(result.failure.kind, 'invalid-metadata', `${label} 的失败分类`)
+  }
+})
+
+test('正确的 versions[latest] 通过校验；time 可选，且版本条目原文不进结果', async () => {
+  const withTime = packageDocument('0.0.11')
+  const withoutTime = packageDocument('0.0.11')
+  delete withoutTime.time
+  const badTime = packageDocument('0.0.11', { time: { '0.0.11': '不是日期' } })
+
+  const accepted = await fetchRegistryPackage(NPMMIRROR, {
+    fetch: recordingFetch(() => jsonResponse(withTime)),
+    now: CLOCK,
+  })
+  assert.equal(accepted.ok, true)
+  assert.deepEqual(accepted.metadata, {
+    name: UPDATE_PACKAGE_NAME,
+    version: '0.0.11',
+    publishedAt: '2026-09-28T02:00:00.000Z',
+  })
+
+  // `time` 仍然是可选字段：缺失或不可解析只是没有发布时间，不能让合法版本失败。
+  for (const [label, document] of [
+    ['缺少 time', withoutTime],
+    ['time 无效', badTime],
+  ]) {
+    const result = await fetchRegistryPackage(NPMMIRROR, {
+      fetch: recordingFetch(() => jsonResponse(document)),
+      now: CLOCK,
+    })
+    assert.equal(result.ok, true, `${label} 不能导致合法版本失败`)
+    assert.deepEqual(Object.keys(result.metadata).sort(), ['name', 'version'], label)
+  }
+
+  // 一致性判据是**两边规范化之后**相等，不是逐字比较：条目写成 `v0.0.11` 也指向同一个版本。
+  const prefixed = packageDocument('0.0.11', {
+    versions: { '0.0.11': { name: UPDATE_PACKAGE_NAME, version: 'v0.0.11' } },
+  })
+  const normalized = await fetchRegistryPackage(NPMMIRROR, {
+    fetch: recordingFetch(() => jsonResponse(prefixed)),
+    now: CLOCK,
+  })
+  assert.equal(normalized.ok, true, '条目 version 规范化后与 latest 相等时必须接受')
+  assert.equal(normalized.metadata.version, '0.0.11')
+
+  // 版本条目只用来自洽校验：原文与其中任何其它字段都不进内部结果。
+  assert.equal('versions' in accepted.metadata, false)
+  assert.equal('dist-tags' in accepted.metadata, false)
+  const serialized = JSON.stringify(accepted)
+  for (const leaked of ['versions', '0.0.12-rc.1', 'readme', 'maintainers', '_attachments']) {
+    assert.equal(serialized.includes(leaked), false, `结果里不得出现 ${leaked}`)
+  }
+})
+
 test('缺少 latest、latest 不是字符串或不是合法版本时拒绝', async () => {
   const cases = [
     packageDocument('0.0.11', { 'dist-tags': { next: '0.0.12-rc.1' } }),

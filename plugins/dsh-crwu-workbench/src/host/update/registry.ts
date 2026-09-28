@@ -55,10 +55,34 @@ function parsePackageDocument(raw: unknown): RegistryPackageMetadata | null {
   if (version === null) return null
   // 预发布（beta / rc / next 通道）不进候选：这一版只做正式版更新。
   if (prerelease(version) !== null) return null
+  // 只看 `dist-tags.latest` 是不够的：还必须确认它**指向**的那个版本条目自身自洽
+  // （设计文档 §5.2「对应版本的基本包信息，用于确认包名和版本」）。
+  if (!hasConsistentVersionEntry(raw.versions, latest, version)) return null
   const publishedAt = parsePublishedAt(raw.time, version)
   return publishedAt === undefined
     ? { name: UPDATE_PACKAGE_NAME, version }
     : { name: UPDATE_PACKAGE_NAME, version, publishedAt }
+}
+
+/**
+ * 校验 `versions[latest]` 自洽：条目必须是对象，`name` 精确等于固定包名，`version` 是合法稳定版，
+ * 且规范化后与 `dist-tags.latest` 规范化后的版本相等。
+ *
+ * 只校验 latest 指向的**那一个**条目：不遍历 `versions`，也不看 description / dependencies /
+ * dist / readme 等与"这次要装哪个版本"无关的字段 —— 那些字段既不需要也不该被相信。
+ */
+function hasConsistentVersionEntry(versions: unknown, rawLatest: string, latest: string): boolean {
+  if (!isRecord(versions)) return false
+  // registry 的 `versions` 键是规范化版本；`latest` 写成 `v0.0.11` 这类非规范形式时再退回原始键。
+  const entry = versions[rawLatest] ?? versions[latest]
+  if (!isRecord(entry)) return false
+  if (entry.name !== UPDATE_PACKAGE_NAME) return false
+  const declared = entry.version
+  if (typeof declared !== 'string') return false
+  const declaredVersion = valid(declared)
+  if (declaredVersion === null) return false
+  if (prerelease(declaredVersion) !== null) return false
+  return declaredVersion === latest
 }
 
 /** `time[version]` 是可选字段：缺失或不可解析时只是没有发布时间，不影响版本结论。 */
