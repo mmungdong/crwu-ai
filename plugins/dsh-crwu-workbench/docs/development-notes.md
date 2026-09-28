@@ -98,6 +98,20 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 归因由 `shell/run.ts` 的 `sandboxDenialNote()` 统一做，`runDws` / `runCrwu` 会把那句话补在错误最前面。
 `fs.writeText` 那条没有 shell，所以它报的就是 DSH 的标记本身。
 
+**优先用事实，别认文本**：DSH 的 `ShellRunResult.sandbox = { mode, denied, runnerFailed }` 直接告诉你
+「命令实际跑在哪个模式」「沙箱有没有真的拒绝一次文件操作」，`resolve()` 回来的 `spec.sandboxPolicy`
+还能看出**提权请求有没有被降级**（请求 `danger-full-access`、解析回来 `workspace-write`）。
+`ShellResult.sandbox` 把这四项一起带出来，`sandboxDenialNote()` 的顺序是：
+
+1. `denied === true` → 沙箱拒了（确定）；
+2. `requested !== resolved` → 提权被降级（确定）；
+3. `runnerFailed === true` → runner 起不来（确定）；
+4. 拿到事实但都不成立 → **返回空**（沙箱不是原因，去查文件占用 / ACL / 业务错误）；
+5. 拿不到事实（老版本 DSH、非 shell 通道）→ 才退回文本判据。
+
+第 4 条是刻意的：事实已说明「没拒、也没降级」时再去猜文本，会把一份被占用的文件说成沙箱问题，
+员工按「去授权」处理就永远修不掉。诊断时用 `describeSandboxFacts(result)` 压成一行。
+
 ### 5.2 真要在整台机器上关掉沙箱（只用于已知机器 / 排障）
 
 插件**不能**给自己发常驻豁免：`@deepseek-ai/dsh-sandbox` 的提权是

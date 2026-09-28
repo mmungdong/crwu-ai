@@ -224,6 +224,11 @@ UnexpectedToken`），相关按钮点下去也不会有结果；macOS 上完全�
   `runDws` / `runCrwu` 会把这句话补在错误最前面，于是 `dws` 的
   `acquiring file lock: … .dws\.data.lock: Access is denied.` 不再看起来像 dws 自己的 bug。
   测试样本**逐字抄自员工贴回来的原文**。
+- **收下 DSH 的沙箱事实**：`ShellRunResult.sandbox = { mode, denied, runnerFailed }` 会说明命令
+  **实际**跑在哪个模式、沙箱是否真的拒绝过；`resolve()` 回来的 `spec.sandboxPolicy` 还能看出
+  提权请求有没有被降级。`ShellResult` 现在把这四项（请求 / 解析 / 实际 / 是否被拒）一起带出来，
+  `sandboxDenialNote()` **以事实为准、事实在手就不再猜文本** ——
+  于是「沙箱拒了」与「文件真被占用/ACL 异常」不会再被混为一谈（后者按「去授权」处理是修不好的）。
 - 文档：`README.md` 的 Windows 故障排查与 `docs/development-notes.md` §5.1/§5.2 补上
   「工作区外的路径清单」「三种表象→同一个原因」「要全局关沙箱只能改 DSH 侧
   （`DSH_PERMISSION_MODE=danger-full-access` 或 profile 的 `dsh-sandbox-policy.mode`）」。

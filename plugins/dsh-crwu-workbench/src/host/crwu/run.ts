@@ -32,6 +32,8 @@ export interface CrwuRun {
   /** 调用方的取消信号是第一因（与 `error` = 基础设施故障分开）。 */
   aborted: boolean
   escalated: boolean
+  /** 沙箱事实（请求 / 解析 / 实际 / 是否被拒）—— 归因与诊断的唯一依据，见 `shell/run.ts`。 */
+  sandbox: ShellResult['sandbox']
   /** stdout/stderr 命中「钥匙串被拒」特征：提示用户需要无沙箱执行。 */
   keychainBlocked: boolean
   /** 界面应显示一次「授权入口」：本次读本机凭据被拦，且用户还没记住授权。 */
@@ -77,7 +79,9 @@ export interface CrwuOptions {
 export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions): Promise<CrwuRun> {
   const failed = (error: string): CrwuRun => ({
     ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false,
-    escalated: false, keychainBlocked: false, escalateAvailable: false,
+    escalated: false,
+    sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
+    keychainBlocked: false, escalateAvailable: false,
   })
 
   if (!Array.isArray(argv) || argv.length === 0) return failed('缺少命令')
@@ -127,6 +131,7 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
     timedOut: result.timedOut,
     aborted: result.aborted,
     escalated: canEscalate,
+    sandbox: result.sandbox,
     keychainBlocked: blocked,
     // 需要给员工一个「授权入口」的两种情况：凭据读取被钥匙串/沙箱拦下（blocked），
     // 或者命令根本没跑起来（`error`：沙箱后端不可用、审批被拒）。已经记住授权就不再打扰。

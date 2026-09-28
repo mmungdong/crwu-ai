@@ -64,7 +64,47 @@ test('runShell reports success only for exit code zero', async () => {
     truncated: false,
     timedOut: false,
     aborted: false,
+    // 没声明提权、替身也没回沙箱事实 → 全是空/false（不猜）。
+    sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
   })
+})
+
+test('runShell 收下 DSH 的沙箱事实：请求 / 解析 / 实际 / 是否被拒', async () => {
+  // 这是 2026-09-28 之后归因沙箱拒绝的**唯一可靠依据**（比认错误文本强）：
+  // 员工报「授权了还是不行」时，这几个字段直接回答「请求了什么、实际跑在什么下、有没有被拒」。
+  const shell = fakeShell({
+    result: {
+      ...OK_RESULT,
+      exitCode: 1,
+      stderr: { text: 'acquiring file lock: Access is denied.', truncated: false },
+      sandbox: { mode: 'workspace-write', denied: true, runnerFailed: false },
+    },
+  })
+  const result = await runShell(fakeContext({ shell: shell.service }), 'dws auth login', { escalate: true, workdir: '/cases' })
+  assert.equal(result.ok, false)
+  assert.equal(result.sandbox.requested, 'danger-full-access')
+  assert.equal(result.sandbox.resolved, 'danger-full-access', '替身把请求原样回给了 spec')
+  assert.equal(result.sandbox.ran, 'workspace-write')
+  assert.equal(result.sandbox.denied, true)
+  assert.equal(result.sandbox.runnerFailed, false)
+})
+
+test('runShell 把 resolve 回来的策略记下来（提权被降级时看得出）', async () => {
+  const shell = fakeShell({ result: OK_RESULT })
+  // 替身把 spec 里的 sandboxPolicy 改写成更窄的模式：模拟执行器降级提权请求。
+  const inner = shell.service.resolve
+  shell.service.resolve = (request) => ({ ...inner(request), sandboxPolicy: { mode: 'workspace-write', workspaceRoot: '/cases' } })
+  const result = await runShell(fakeContext({ shell: shell.service }), 'crwu h3yun session status', { escalate: true, workdir: '/cases' })
+  assert.equal(result.sandbox.requested, 'danger-full-access')
+  assert.equal(result.sandbox.resolved, 'workspace-write')
+})
+
+test('runShell 在 resolve 抛错时也带上「本来请求了什么」', async () => {
+  const shell = fakeShell({ throwOnResolve: '拒绝解析' })
+  const result = await runShell(fakeContext({ shell: shell.service }), 'crwu x', { escalate: true, workdir: '/cases' })
+  assert.equal(result.ok, false)
+  assert.equal(result.sandbox.requested, 'danger-full-access')
+  assert.equal(result.sandbox.resolved, '')
 })
 
 test('runShell surfaces a non-zero exit code with stderr instead of throwing', async () => {

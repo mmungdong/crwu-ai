@@ -26,6 +26,28 @@ export interface ShellResult {
    * 把「被取消」当成「shell 服务不可用」会让上层把一次正常的取消报成部署故障。
    */
   aborted: boolean
+  /**
+   * 沙箱事实（2026-09-28 接上）。DSH 的 `ShellRunResult.sandbox` 会回
+   * `{ mode, denied, runnerFailed }` —— 「命令**实际**跑在哪个模式」「沙箱是否真的拒绝了一次
+   * 文件操作」是**结构化事实**，不必再从错误文本里猜。
+   *
+   * 为什么必须收下来：员工在 Windows 上看到的三段报错（写 `~/.ossutilconfig` 被拒、
+   * `secret not found in keyring`、`dws` 的 `.data.lock: Access is denied`）表现完全不同，
+   * 原因却是同一个。有了这几个字段，插件就能把「请求了什么、解析回来是什么、实际跑在什么下、
+   * 是否被拒」逐条说清 —— 而不是把沙箱拒绝显示成「未登录」。
+   */
+  sandbox: {
+    /** 请求里声明的模式（空串 = 没声明，交给执行器默认）。 */
+    requested: string
+    /** `resolve()` 回来、执行器实际会用的模式（空串 = 该执行器不上沙箱）。 */
+    resolved: string
+    /** 命令**实际**跑在哪个模式（`ShellRunResult.sandbox.mode`）；不上沙箱时为空串。 */
+    ran: string
+    /** 沙箱是否真的拒绝了一次文件操作（`ShellRunResult.sandbox.denied`）。 */
+    denied: boolean
+    /** 沙箱 runner 在命令跑起来之前就失败了。 */
+    runnerFailed: boolean
+  }
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -36,8 +58,13 @@ function failureMessage(error: unknown): string {
   return String(error)
 }
 
-function failed(error: string): ShellResult {
-  return { ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false }
+const NO_SANDBOX_FACTS = { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false } as const
+
+function failed(error: string, sandbox: ShellResult['sandbox'] = NO_SANDBOX_FACTS): ShellResult {
+  return {
+    ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false,
+    sandbox,
+  }
 }
 
 /**
@@ -84,6 +111,7 @@ export async function runShell(
     return failed('未知会话工作区，无法申请无沙箱执行')
   }
 
+  const requestedMode = options.escalate === true ? 'danger-full-access' : ''
   let spec: ShellExecSpec
   try {
     spec = shell.resolve({
@@ -98,8 +126,13 @@ export async function runShell(
         : {}),
     })
   } catch (error) {
-    return failed(`执行失败：${failureMessage(error)}`)
+    return failed(`执行失败：${failureMessage(error)}`, { ...NO_SANDBOX_FACTS, requested: requestedMode })
   }
+
+  // `resolve()` 回来的策略就是执行器实际会用的那个 —— 请求被降级时这里能看出来。
+  // 执行器不上沙箱时该字段是 `undefined`（例如测试替身与不设限的部署）。
+  const resolvedMode = text(spec.sandboxPolicy?.mode)
+  const baseSandbox = { requested: requestedMode, resolved: resolvedMode, ran: '', denied: false, runnerFailed: false }
 
   try {
     // 0.1.7 把原来的 `run(spec)` 拆成两步：`execute(spec)` 返回进程句柄（`ShellExecution`），
@@ -116,9 +149,16 @@ export async function runShell(
       truncated: result.stdout?.truncated === true || result.stderr?.truncated === true,
       timedOut: result.timedOut === true,
       aborted: result.aborted === true,
+      sandbox: {
+        ...baseSandbox,
+        ran: text(result.sandbox?.mode),
+        denied: result.sandbox?.denied === true,
+        runnerFailed: result.sandbox?.runnerFailed === true,
+      },
     }
   } catch (error) {
-    return failed(`执行失败：${failureMessage(error)}`)
+    // 抛错时也别把已经知道的事实丢掉（解析到的策略仍然说明「本来会跑在什么下」）。
+    return failed(`执行失败：${failureMessage(error)}`, baseSandbox)
   }
 }
 
@@ -164,7 +204,39 @@ export function shellUnavailable(result: ShellResult): boolean {
  *   用户目录或凭据存储线索（`.dws` / `.ossutilconfig` / `keyring` / `credential store`）——
  *   这种情况也可能是真的 NTFS ACL 或文件占用，所以只说「疑似」并给出两条排查方向。
  */
-export function sandboxDenialNote(result: { stdout?: unknown; stderr?: unknown; error?: unknown }): string {
+export function sandboxDenialNote(result: {
+  stdout?: unknown
+  stderr?: unknown
+  error?: unknown
+  sandbox?: { requested?: string; resolved?: string; ran?: string; denied?: boolean; runnerFailed?: boolean }
+}): string {
+  const facts = result.sandbox
+  const requested = text(facts?.requested)
+  const resolved = text(facts?.resolved)
+  const ran = text(facts?.ran)
+
+  // ① 结构化事实优先：DSH 会告诉我们命令**实际**跑在哪个模式、沙箱有没有真的拒绝。
+  if (facts?.denied === true) {
+    return `DSH 沙箱拒绝了这次操作（${ran || resolved || requested || '当前模式'}）：`
+      + '这条命令需要访问工作区之外的路径。'
+  }
+  if (facts?.runnerFailed === true) {
+    return 'DSH 的沙箱 runner 在命令跑起来之前就失败了（不是命令本身的业务失败）。'
+  }
+  // ② 提权请求被降级：请求了 A、解析回来是 B —— 这是「授权了却仍被拦」的确定证据。
+  if (requested !== '' && resolved !== '' && requested !== resolved) {
+    return `提权请求被降级：请求 ${requested}，执行器实际按 ${resolved} 跑 —— `
+      + '这条命令需要访问工作区之外的路径，当前沙箱模式把它拦下了。'
+  }
+
+  // ③ 只有在**拿不到结构化事实**时才退回文本判据（老版本 DSH / 非 shell 通道）。
+  //
+  // 反过来做会很危险：事实已经说明「沙箱没拒、命令跑在我们请求的模式下」时再去猜文本，
+  // 就会把一份被别的进程占用的文件或异常 NTFS ACL 说成沙箱问题 —— 员工按「去授权」处理，
+  // 问题永远修不掉。**事实在手就不猜。**
+  if (facts !== undefined && (requested !== '' || resolved !== '' || ran !== '' || facts.denied === false)) {
+    return ''
+  }
   const blob = `${text(result.stderr)}\n${text(result.stdout)}\n${text(result.error)}`
   const marker = /file access denied under\s+(\S+)\s+mode/i.exec(blob)
   if (marker !== null) {
@@ -178,6 +250,27 @@ export function sandboxDenialNote(result: { stdout?: unknown; stderr?: unknown; 
       + '若它确实是一份被别的进程占用的文件或 NTFS 权限问题，也会报同样的字样。'
   }
   return ''
+}
+
+/**
+ * 把沙箱事实压成**一行**给开发者诊断/错误消息用（人话、无凭据）。
+ *
+ * 典型用途：员工报「授权了还是不行」时，这一行直接回答「请求了什么、实际跑在什么下、有没有被拒」，
+ * 不必再猜是沙箱还是文件权限。
+ */
+export function describeSandboxFacts(result: { sandbox?: { requested?: string; resolved?: string; ran?: string; denied?: boolean; runnerFailed?: boolean } }): string {
+  const f = result.sandbox
+  if (f === undefined) return ''
+  const requested = text(f.requested)
+  const resolved = text(f.resolved)
+  const ran = text(f.ran)
+  const parts: string[] = []
+  if (requested !== '') parts.push(`请求 ${requested}`)
+  if (resolved !== '' && resolved !== requested) parts.push(`解析为 ${resolved}`)
+  if (ran !== '') parts.push(`实际 ${ran}`)
+  if (f.denied === true) parts.push('沙箱拒绝=是')
+  if (f.runnerFailed === true) parts.push('runner 失败=是')
+  return parts.join(' · ')
 }
 
 /** 命令是否可用/成功：只看 `ok`，方便调用方做 `if (!(await ok(...)))`。 */

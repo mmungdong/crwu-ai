@@ -10,7 +10,7 @@ import test from 'node:test'
  * 归因错了，处置就会错到完全无关的方向（去重新扫码、去重装 dws、去换一份 AK）。
  */
 const ROOT = new URL('../../', import.meta.url)
-const { sandboxDenialNote } = await import(new URL('src/host/shell/run.ts', ROOT).href)
+const { sandboxDenialNote, describeSandboxFacts } = await import(new URL('src/host/shell/run.ts', ROOT).href)
 
 test('认得出 DSH 自己的拒绝标记，并带出模式名', () => {
   // 员工原文（写 ~/.ossutilconfig）。
@@ -56,4 +56,40 @@ test('stdout / error 通道里的拒绝同样认得出（不只是 stderr）', (
   const marker = 'file access denied under read-only mode'
   assert.match(sandboxDenialNote({ stdout: marker }), /read-only/)
   assert.match(sandboxDenialNote({ error: marker }), /DSH 沙箱/)
+})
+
+// ── 结构化事实优先（DSH 会回 `ShellRunResult.sandbox`，比文本判据可靠）────────────
+
+test('沙箱自己说「拒了」时以它为准，并带出实际模式', () => {
+  // 这条才是判定 dws 那条报错的关键：`denied: true` 就是沙箱拒了，
+  // `denied: false` 且实际跑在 danger-full-access 就说明是文件本身的问题（占用 / ACL）。
+  const note = sandboxDenialNote({ stderr: 'whatever', sandbox: { requested: 'danger-full-access', resolved: 'danger-full-access', ran: 'workspace-write', denied: true } })
+  assert.match(note, /DSH 沙箱拒绝了这次操作/)
+  assert.match(note, /workspace-write/, '要把实际模式带出来')
+})
+
+test('提权请求被降级：请求 A、解析回来是 B —— 这是「授权了却仍被拦」的确定证据', () => {
+  const note = sandboxDenialNote({ sandbox: { requested: 'danger-full-access', resolved: 'workspace-write', ran: 'workspace-write', denied: false } })
+  assert.match(note, /提权请求被降级/)
+  assert.match(note, /danger-full-access/)
+  assert.match(note, /workspace-write/)
+})
+
+test('runner 起不来时如实说，不冒充业务失败', () => {
+  assert.match(sandboxDenialNote({ sandbox: { runnerFailed: true } }), /runner/)
+})
+
+test('沙箱说没拒、也没降级时**不许**硬扣沙箱的帽子（留给文件占用/ACL 那条路）', () => {
+  // 请求=解析=实际=danger-full-access、denied=false → 沙箱不是原因。
+  const clean = { sandbox: { requested: 'danger-full-access', resolved: 'danger-full-access', ran: 'danger-full-access', denied: false, runnerFailed: false } }
+  assert.equal(sandboxDenialNote({ stderr: 'dingtalk login failed: acquiring file lock: open C:\\Users\\x\\.dws\\.data.lock: Access is denied.', ...clean }), '')
+})
+
+test('describeSandboxFacts 压成一行供诊断（无凭据、可读）', () => {
+  assert.equal(describeSandboxFacts({ sandbox: { requested: 'danger-full-access', resolved: 'workspace-write', ran: 'workspace-write', denied: true } }),
+    '请求 danger-full-access · 解析为 workspace-write · 实际 workspace-write · 沙箱拒绝=是')
+  assert.equal(describeSandboxFacts({}), '')
+  // 请求与解析一致时不重复说一遍。
+  assert.equal(describeSandboxFacts({ sandbox: { requested: 'danger-full-access', resolved: 'danger-full-access', ran: 'danger-full-access' } }),
+    '请求 danger-full-access · 实际 danger-full-access')
 })
