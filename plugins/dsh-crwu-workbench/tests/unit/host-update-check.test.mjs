@@ -99,7 +99,15 @@ function createHarness(options = {}) {
 }
 
 /** 公开状态里绝不能出现的东西：私有地址、凭据、底层错误原文。 */
-const FORBIDDEN_IN_STATE = [PRIVATE, 'npm.corp.example.com', 'user:pass', 'ECONNREFUSED', 'Error:']
+const FORBIDDEN_IN_STATE = [
+  PRIVATE,
+  'npm.corp.example.com',
+  'user:pass',
+  'ECONNREFUSED',
+  'Error:',
+  'SECRET',
+  'token=',
+]
 
 function assertNoForbidden(state, label) {
   const serialized = JSON.stringify(state)
@@ -124,7 +132,7 @@ test('1. dev 安装立即 unsupported，既不读 profile 也不打上游', asyn
   })
   assert.equal(host.registries.calls.length, 0)
   assert.equal(host.discover.calls.length, 0)
-  assert.equal(host.update.installableCandidate(), undefined)
+  assert.equal(await host.update.installableCandidate(), undefined)
 })
 
 test('2. 没有 profile reader 时 unsupported/manager-unavailable，不打上游', async () => {
@@ -134,7 +142,7 @@ test('2. 没有 profile reader 时 unsupported/manager-unavailable，不打上�
   assert.deepEqual(state, { status: 'unsupported', reason: 'manager-unavailable' })
   assert.equal(host.discover.calls.length, 0)
   assert.deepEqual(await host.update.check({ force: true }), state)
-  assert.equal(host.update.installableCandidate(), undefined)
+  assert.equal(await host.update.installableCandidate(), undefined)
 })
 
 test('3. npm 官方 profile 允许检查，并使用 Task 1 的固定两源发现', async () => {
@@ -184,12 +192,15 @@ test('6. 私有 primary registry 禁止检查，且不泄露其地址', async ()
   assert.deepEqual(state, { status: 'unsupported', reason: 'enterprise-registry' })
   assert.equal(host.discover.calls.length, 0)
   assertNoForbidden(state, 'unsupported 状态')
-  assert.equal(host.update.installableCandidate(), undefined)
 
   // unsupported 不是"网络失败"：不得写进 10 分钟退避，profile 修好后下一次自动检查就要生效。
   assert.equal(host.registries.calls.length, 1)
   await host.update.check()
   assert.equal(host.registries.calls.length, 2)
+
+  // 授权读取同样要重新确认政策（仍然是非公共源 → 拒绝），这一步会再读一次 profile。
+  assert.equal(await host.update.installableCandidate(), undefined)
+  assert.equal(host.registries.calls.length, 3)
 })
 
 test('7. 私有 resolved（含公共 primary + 私有 resolved）禁止检查', async () => {
@@ -325,12 +336,16 @@ test('13. up-to-date 同样缓存 6 小时', async () => {
   })
   const first = await host.update.check()
   assert.deepEqual(first, { status: 'up-to-date', checkedAt: NOW })
-  assert.equal(host.update.installableCandidate(), undefined)
 
   host.clock.advance(UPDATE_SUCCESS_TTL_MS - 1000)
   assert.deepEqual(await host.update.check(), first)
   assert.equal(host.registries.calls.length, 1)
   assert.equal(host.discover.calls.length, 1)
+
+  // up-to-date 没有候选：授权读取仍然会重新确认政策，但结果只能是 undefined。
+  assert.equal(await host.update.installableCandidate(), undefined)
+  assert.equal(host.registries.calls.length, 2, '授权读取重新读 profile')
+  assert.equal(host.discover.calls.length, 1, '授权读取不重新发现')
 })
 
 test('14. 缓存过期后自动刷新', async () => {
@@ -394,7 +409,7 @@ test('18. 后台刷新失败保留原候选，checkedAt/expiresAt 一字不改�
 
   const first = await host.update.check()
   assert.equal(first.status, 'available')
-  assert.equal(host.update.installableCandidate().targetVersion, '0.0.12')
+  assert.equal((await host.update.installableCandidate()).targetVersion, '0.0.12')
 
   clock.advance(UPDATE_SUCCESS_TTL_MS + 1000)
   mode = 'fail'
@@ -405,26 +420,26 @@ test('18. 后台刷新失败保留原候选，checkedAt/expiresAt 一字不改�
   assert.equal(after.candidate.checkedAt, first.candidate.checkedAt)
   assert.equal(after.candidate.expiresAt, first.candidate.expiresAt)
   assert.equal(host.discover.calls.length, 2, '确实尝试过刷新')
-  assert.equal(host.update.installableCandidate(), undefined, '过期候选不得再授权安装')
+  assert.equal(await host.update.installableCandidate(), undefined, '过期候选不得再授权安装')
 })
 
 test('19. 可安装候选按当前注入时钟重新判过期', async () => {
   const host = createHarness()
-  assert.equal(host.update.installableCandidate(), undefined, '还没检查过就没有可安装候选')
+  assert.equal(await host.update.installableCandidate(), undefined, '还没检查过就没有可安装候选')
 
   const state = await host.update.check()
-  assert.deepEqual(host.update.installableCandidate(), state.candidate)
+  assert.deepEqual(await host.update.installableCandidate(), state.candidate)
 
   host.clock.advance(UPDATE_SUCCESS_TTL_MS - 1000)
-  assert.notEqual(host.update.installableCandidate(), undefined, '未过期仍可安装')
+  assert.notEqual(await host.update.installableCandidate(), undefined, '未过期仍可安装')
 
   host.clock.advance(1000)
-  assert.equal(host.update.installableCandidate(), undefined, '正好到期即失效')
+  assert.equal(await host.update.installableCandidate(), undefined, '正好到期即失效')
 
   // unsupported 之后一律没有可安装候选（哪怕上一轮成功过）。
   const switched = createHarness({ profile: { registry: PRIVATE, fallbackRegistries: [], resolved: PRIVATE } })
   await switched.update.check()
-  assert.equal(switched.update.installableCandidate(), undefined)
+  assert.equal(await switched.update.installableCandidate(), undefined)
 })
 
 // ---------------------------------------------------------------------------
@@ -460,7 +475,7 @@ test('21. 当前版本非法时 fail closed，不得报 up-to-date 也不得给�
     const state = await host.update.check()
     assert.equal(state.status, 'error')
     assert.equal(state.kind, 'unknown')
-    assert.equal(host.update.installableCandidate(), undefined)
+    assert.equal(await host.update.installableCandidate(), undefined)
   }
 })
 
@@ -507,7 +522,7 @@ test('22. 至少一个源成功且最高稳定版不高于当前版本才允许 
   })
   const downgradeState = await downgrade.update.check()
   assert.equal(downgradeState.status, 'error')
-  assert.equal(downgrade.update.installableCandidate(), undefined)
+  assert.equal(await downgrade.update.installableCandidate(), undefined)
 })
 
 test('23. 底层失败映射到稳定的错误分类', async () => {
@@ -591,3 +606,205 @@ test('24. 公开状态序列化后不含 registry URL、凭据或底层错误原
     'targetVersion',
   ])
 })
+
+// ---------------------------------------------------------------------------
+// 五、安装授权：每次读取都重新确认**当前**政策（防 TOCTOU）
+// ---------------------------------------------------------------------------
+
+test('25. profile 切成私有源后，授权读取必须重新确认政策并拒绝', async () => {
+  const clock = makeClock()
+  const publicProfile = { registry: NPMMIRROR, fallbackRegistries: [], resolved: NPMMIRROR }
+  let profile = publicProfile
+  const registries = spy(async () => profile)
+  const host = createHarness({ clock, registries })
+
+  const checked = await host.update.check()
+  assert.equal(checked.status, 'available')
+  assert.equal(registries.calls.length, 1)
+  assert.equal(host.discover.calls.length, 1)
+
+  // 公共源时能拿到授权（这一步自己也会重读一次 profile）。
+  assert.deepEqual(await host.update.installableCandidate(), checked.candidate)
+  assert.equal(registries.calls.length, 2)
+
+  // 场景本体：候选没过期，但 profile 已经被切成企业私有源。
+  profile = { registry: PRIVATE, fallbackRegistries: [], resolved: PRIVATE }
+  assert.equal(await host.update.installableCandidate(), undefined, '切到私有源后不得再授权安装')
+  assert.equal(registries.calls.length, 3, '授权读取必须重新读 profile')
+  assert.equal(host.discover.calls.length, 1, '授权读取不得重新发现（不请求 registry metadata）')
+  assert.deepEqual(host.update.status(), { status: 'unsupported', reason: 'enterprise-registry' })
+  assertNoForbidden(host.update.status(), '切换后的状态')
+
+  // 授权已被清除：紧接着的 check() 不再命中 6 小时缓存，而是按当前政策重新判定。
+  const after = await host.update.check()
+  assert.deepEqual(after, { status: 'unsupported', reason: 'enterprise-registry' })
+  assert.equal(host.discover.calls.length, 1, '企业源下不得访问公共源')
+
+  // 旧的成功缓存也没有变成"可安装"：切回公共源后是重新检查，而不是沿用旧授权。
+  profile = publicProfile
+  assert.deepEqual(await host.update.installableCandidate(), undefined, '授权已清除，需先重新检查')
+})
+
+test('26. 授权时 profile reader 抛错：fail closed，状态脱敏且不刷新有效期', async () => {
+  const clock = makeClock()
+  let mode = 'ok'
+  const registries = spy(async () => {
+    if (mode === 'fail') {
+      throw new Error('pnpm config failed https://user:pass@npm.corp.example.com/ token=SECRET')
+    }
+    return { registry: NPMMIRROR, fallbackRegistries: [], resolved: NPMMIRROR }
+  })
+  const host = createHarness({ clock, registries })
+
+  const checked = await host.update.check()
+  assert.equal(checked.status, 'available')
+
+  mode = 'fail'
+  assert.equal(await host.update.installableCandidate(), undefined, '读不到政策就没有授权')
+  const state = host.update.status()
+  assert.deepEqual(state, { status: 'error', kind: 'unknown', checkedAt: clock.now().toISOString() })
+  const serialized = assertNoForbidden(state, 'reader 抛错后的状态')
+  assert.equal(serialized.includes('SECRET'), false)
+  assert.equal(host.discover.calls.length, 1, '授权读取不得重新发现')
+
+  // 历史成功结果仍然保留（供后续重新检查），但有效期没有被刷新。
+  mode = 'ok'
+  const restored = await host.update.installableCandidate()
+  assert.deepEqual(restored, checked.candidate)
+  assert.equal(restored.checkedAt, checked.candidate.checkedAt)
+  assert.equal(restored.expiresAt, checked.candidate.expiresAt)
+})
+
+test('27. profile 仍是公共源时授权返回原候选，且不重发现、不刷新有效期', async () => {
+  const clock = makeClock()
+  const host = createHarness({ clock })
+  const checked = await host.update.check()
+  const original = { ...checked.candidate }
+
+  clock.advance(60_000)
+  const authorized = await host.update.installableCandidate()
+
+  assert.deepEqual(authorized, original)
+  assert.equal(authorized.checkedAt, original.checkedAt, '不得刷新 checkedAt')
+  assert.equal(authorized.expiresAt, original.expiresAt, '不得刷新 expiresAt')
+  assert.equal(host.registries.calls.length, 2, '必须重新读 profile')
+  assert.equal(host.discover.calls.length, 1, '不得重新发现')
+  assert.deepEqual(host.update.status(), checked, '状态与 checkedAt 都不变')
+})
+
+test('28. dev、manager 缺失、resolved 无法确认时授权一律 undefined', async () => {
+  const dev = createHarness({ buildKind: 'dev' })
+  await dev.update.check()
+  assert.equal(await dev.update.installableCandidate(), undefined)
+  assert.equal(dev.registries.calls.length, 0)
+  assert.equal(dev.discover.calls.length, 0)
+
+  const noManager = createHarness({ registries: null })
+  await noManager.update.check()
+  assert.equal(await noManager.update.installableCandidate(), undefined)
+  assert.equal(noManager.discover.calls.length, 0)
+
+  // resolved 从"公共"变成"无法确认"：检查器必须先按当前政策拒绝，再谈候选。
+  const profile = { registry: null, fallbackRegistries: [], resolved: null }
+  const unknown = createHarness({ profile })
+  assert.equal((await unknown.update.check()).status, 'unsupported')
+  assert.equal(await unknown.update.installableCandidate(), undefined)
+
+  let flippable = { registry: NPMMIRROR, fallbackRegistries: [], resolved: NPMMIRROR }
+  const flip = createHarness({ registries: spy(async () => flippable) })
+  const checked = await flip.update.check()
+  assert.equal(checked.status, 'available')
+  flippable = { registry: null, fallbackRegistries: [], resolved: null }
+  assert.equal(await flip.update.installableCandidate(), undefined, '无法确认 pnpm 实际源 → fail closed')
+  assert.deepEqual(flip.update.status(), { status: 'unsupported', reason: 'enterprise-registry' })
+})
+
+test('29. 候选正好到 expiresAt 时授权返回 undefined（历史展示不受影响）', async () => {
+  const host = createHarness()
+  const checked = await host.update.check()
+
+  host.clock.advance(UPDATE_SUCCESS_TTL_MS - 1000)
+  assert.notEqual(await host.update.installableCandidate(), undefined)
+
+  host.clock.advance(1000)
+  assert.equal(await host.update.installableCandidate(), undefined, '正好到期即失效')
+  assert.deepEqual(host.update.status(), checked, '过期候选仍可作历史展示，状态不被改写')
+})
+
+test('30. 不自洽的候选在授权时一律被拒（授权比展示更严）', async () => {
+  const clock = makeClock()
+  const base = availableNow(clock)
+  const cases = [
+    // check() 会把它存成 available（展示），但授权必须因为"与 Host 当前版本不一致"而拒绝。
+    ['currentVersion 与 Host 版本不一致', { ...base.candidate, currentVersion: '0.0.10' }, 'available'],
+    ['currentVersion 非法', { ...base.candidate, currentVersion: 'dev-build' }, 'available'],
+    ['targetVersion 是 prerelease', { ...base.candidate, targetVersion: '0.0.12-rc.1' }, 'available'],
+    ['expiresAt 非法', { ...base.candidate, expiresAt: '不是日期' }, 'available'],
+    ['expiresAt 缺失', { ...base.candidate, expiresAt: undefined }, 'available'],
+    ['expiresAt 已到期', { ...base.candidate, expiresAt: new Date(clock.now().getTime() - 1).toISOString() }, 'available'],
+    // check() 自己就 fail closed（没有候选可存），授权自然也是 undefined。
+    ['targetVersion 非法', { ...base.candidate, targetVersion: '不是版本号' }, 'error'],
+    ['targetVersion 不高于当前版本', { ...base.candidate, targetVersion: '0.0.11' }, 'error'],
+  ]
+
+  for (const [label, candidate, checkStatus] of cases) {
+    const host = createHarness({
+      clock,
+      discover: spy(async () => ({
+        candidate,
+        sources: [{ kind: 'npmmirror', latestVersion: candidate.targetVersion }],
+      })),
+    })
+    const checked = await host.update.check()
+    assert.equal(checked.status, checkStatus, label)
+    assert.equal(await host.update.installableCandidate(), undefined, label)
+    assert.equal(host.discover.calls.length, 1, `${label}：授权不得重新发现`)
+  }
+})
+
+test('31. 授权路径产生的状态同样不泄露私有地址、凭据、异常原文与 Token', async () => {
+  const states = []
+
+  // 私有源切换（授权读取发现政策已变）
+  let profile = { registry: NPMMIRROR, fallbackRegistries: [], resolved: NPMMIRROR }
+  const switched = createHarness({ registries: spy(async () => profile) })
+  await switched.update.check()
+  profile = { registry: PRIVATE, fallbackRegistries: [], resolved: PRIVATE }
+  await switched.update.installableCandidate()
+  states.push(switched.update.status())
+
+  // reader 抛错（消息里带私有地址、凭据与 token）
+  const thrown = createHarness({
+    registries: spy(async () => {
+      throw new Error('boom https://user:pass@npm.corp.example.com/ token=SECRET')
+    }),
+  })
+  await thrown.update.check()
+  await thrown.update.installableCandidate()
+  states.push(thrown.update.status())
+
+  // resolved 无法确认
+  const unknown = createHarness({ profile: { registry: null, fallbackRegistries: [], resolved: null } })
+  await unknown.update.check()
+  await unknown.update.installableCandidate()
+  states.push(unknown.update.status())
+
+  // 到期候选走的是"公共源 + 过期"分支，状态必须还是原来的 available（不带任何地址）
+  const expired = createHarness()
+  await expired.update.check()
+  expired.clock.advance(UPDATE_SUCCESS_TTL_MS)
+  await expired.update.installableCandidate()
+  states.push(expired.update.status())
+
+  for (const state of states) {
+    const serialized = assertNoForbidden(state, JSON.stringify(state))
+    assert.equal(serialized.includes(NPMMIRROR), false, serialized)
+    assert.equal(serialized.includes(NPM), false, serialized)
+    assert.equal(serialized.includes('SECRET'), false, serialized)
+    assert.equal(serialized.includes('token='), false, serialized)
+    if (state.status === 'error') {
+      assert.deepEqual(Object.keys(state).sort(), ['checkedAt', 'kind', 'status'])
+    }
+  }
+})
+

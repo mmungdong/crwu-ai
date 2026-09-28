@@ -120,7 +120,16 @@ export interface UpdateChecker {
   /**
    * 当前**仍可授权安装**的候选（供安装服务使用）。
    *
-   * 判据是此刻重新核对 `expiresAt`：过期候选只能作历史展示，不能授权安装。
+   * 每次调用都**重新确认当前政策**：重读 Plugin Manager 的 registry profile，并逐条重验候选自洽性
+   * （未过期、`currentVersion` 与运行版本一致、`targetVersion` 是严格更高的稳定版）。
+   * 这里只读 profile，**不重新请求 registry metadata**，也不刷新候选的有效期。
+   *
+   * 为什么不能只读缓存：`check()` 会复用 6 小时成功结果（按设计不再读 profile），
+   * 而 profile 可能在这期间被切成企业私有源 —— 只读缓存就等于绕过了
+   * 「企业私有源不进入自助安装」的政策。授权是安全出口，必须按**此刻**的政策重新判一次。
+   *
+   * 任何理由（dev / Plugin Manager 不可用 / 企业私有源 / 无法确认 / reader 抛错）都返回
+   * `undefined`（fail closed）。
    */
-  installableCandidate(): UpdateCandidate | undefined
+  installableCandidate(): Promise<UpdateCandidate | undefined>
 }

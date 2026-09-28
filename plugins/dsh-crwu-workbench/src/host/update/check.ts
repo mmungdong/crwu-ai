@@ -312,11 +312,41 @@ export function createUpdateChecker(ports: UpdateCheckPorts): UpdateChecker {
       }
     },
 
-    installableCandidate() {
+    async installableCandidate() {
+      // 授权是安全出口：**每次都重新确认当前政策**，绝不复用 check() 的缓存结论。
+      // 只用 supportVerdict()/isPublicProfile() 这一份判据（与检查完全同一政策），
+      // 不复制分类逻辑，也不重新请求 registry metadata。
+      const verdict = await supportVerdict()
+      if (verdict.kind === 'unsupported') {
+        // dev / manager 不可用 / 企业私有源 / 无法确认：清除安装授权并如实切换状态。
+        success = null
+        failure = null
+        state = { status: 'unsupported', reason: verdict.reason }
+        return undefined
+      }
+      if (verdict.kind === 'failed') {
+        // profile 读不出来 → 本次授权必须拒绝（fail closed），状态用脱敏 error/unknown。
+        // 历史成功结果保留：等 reader 恢复后仍可重新授权，但**不在这里**刷新它的有效期。
+        const at = ports.now()
+        failure = { kind: 'unknown', checkedAt: at.toISOString(), atMs: at.getTime() }
+        state = { status: 'error', kind: 'unknown', checkedAt: at.toISOString() }
+        return undefined
+      }
       if (success === null || success.state.status !== 'available') return undefined
       const candidate = success.state.candidate
-      // 授权判据是**此刻**重判 expiresAt：过期候选只能展示，不能被安装服务取走。
-      return Date.parse(candidate.expiresAt) > ports.now().getTime() ? candidate : undefined
+      const now = ports.now().getTime()
+      // 过期（含正好到期、以及缺失/非法的 expiresAt）一律不授权：过期候选只能作历史展示。
+      const expiresAt = Date.parse(candidate.expiresAt)
+      if (Number.isNaN(expiresAt) || expiresAt <= now) return undefined
+      // 候选必须与**此刻运行的版本**同源：规范化后相等，避免拿旧版本的候选去装到新版本上。
+      const hostVersion = valid(ports.version)
+      const candidateVersion = valid(candidate.currentVersion)
+      if (hostVersion === null || candidateVersion === null || candidateVersion !== hostVersion) return undefined
+      // 目标版本必须是合法**稳定版**，且严格高于当前运行版本（防降级、防预发布）。
+      const target = valid(candidate.targetVersion)
+      if (target === null || prerelease(target) !== null) return undefined
+      if (compare(target, hostVersion) <= 0) return undefined
+      return candidate
     },
   }
 }
