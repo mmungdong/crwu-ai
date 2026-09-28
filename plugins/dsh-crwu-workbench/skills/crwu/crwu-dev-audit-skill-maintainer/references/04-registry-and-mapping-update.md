@@ -38,7 +38,7 @@
 - **定位**：知识库 ↔ Skill 映射的**只读派生视图**，给人一眼看现状用；事实源仍是知识库最新目录 + `07-skill-registry.md` + 源仓技能层里的真实目录。它不参与运行时路由，不替代 registry。
 - **生成**：只由检查器 `--emit-map` 生成，禁止手工编辑状态列：
 
-```bash
+```text
 python3 scripts/check_audit_skill_mappings.py \
   --repo-root . --catalog <本次 crwu-dws 快照> --max-age-hours <H> \
   --emit-map <本技能目录>/references/07-kb-skill-map.md

@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { text } from '../../shared/utils/value.ts'
-import { mkdirCommand } from '../platform/shell.ts'
+import { mkdirCommand, shellDialect } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
 import { agentRegistry } from './spawn.ts'
 import { auditToolsVisible } from './preflight.ts'
@@ -28,8 +28,21 @@ import type { WorldFacts } from '../platform/world.ts'
 /** 根会话的标题前缀；后面会补时间戳，便于区分分叉出来的多棵树。 */
 export const AUDIT_ROOT_TITLE = '审核子代理根节点'
 
-/** 预检指令：一次调用同时证明「模型能回」「bash 能用、cwd 正确」「CRWU Tool 链路与 policy pipeline 通」。 */
-export const AUDIT_ROOT_PROBE = 'hello，请依次做两件事：① 用 bash 执行 `pwd`；② 调用 `crwu_audit_capabilities`（无参数）。然后回复当前目录，以及该工具返回的 `ok`、`platform` 与 `binPlatform`。'
+/**
+ * 预检指令：一次调用同时证明「模型能回」「shell 能用、cwd 正确」「CRWU Tool 链路与 policy pipeline 通」。
+ *
+ * **必须按平台生成**（2026-09-28）：旧文案写死了「用 bash 执行 `pwd`」，而 DSH 在 Windows 上挂的是
+ * PowerShell（`@deepseek-ai/dsh-pwsh-local`，整串命令交给 `pwsh -Command`）。后果是宿主侧环境自检
+ * 全绿、Agent 预检却直接失败，错误里还出现一个这台机器上根本不存在的 `bash` —— 让人往
+ * 「装 Git Bash」的方向排查。这里给出的命令一律是**当前平台 shell 的真实写法**。
+ */
+export function auditRootProbe(platform: string): string {
+  const cwd = shellDialect(platform) === 'powershell' ? '`Get-Location`' : '`pwd`'
+  const shellName = shellDialect(platform) === 'powershell' ? 'PowerShell' : 'POSIX shell'
+  return 'hello，请依次做两件事：① 用**当前平台的 shell 工具**执行 ' + cwd + ' 输出当前目录'
+    + `（这个会话的 shell 是 ${shellName}，不要再去找别的 shell）；② 调用 \`crwu_audit_capabilities\`（无参数）。`
+    + '然后回复当前目录，以及该工具返回的 `ok`、`platform` 与 `binPlatform`。'
+}
 
 export interface AuditRootDeps {
   ctx: Context
@@ -68,11 +81,11 @@ export function mintSessionId(): string {
  * 不走 `@deepseek-ai/dsh-llm` 的 `createUserMessage`：那会把 dsh-llm 变成我们的一条运行时依赖，
  * 而这里只需要「一条带 id 与 role 的用户消息」这个形状（字段与它产出的完全一致）。
  */
-export function probeMessage(sessionSeed: string): Record<string, unknown> {
+export function probeMessage(sessionSeed: string, platform: string): Record<string, unknown> {
   return {
     id: `msg-${sessionSeed}`,
     role: 'user',
-    content: [{ type: 'text', text: AUDIT_ROOT_PROBE }],
+    content: [{ type: 'text', text: auditRootProbe(platform) }],
     source: { kind: 'user' },
   }
 }
@@ -138,6 +151,8 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   const workspacePath = state.workspacePath || state.caseRoot
   const fail = (error: string): AuditRootResult => ({ ok: false, error, sessionId: '', created: false, notes: [] })
   if (workspacePath === '') return fail('尚未选定工作空间：审核根会话需要一个明确的工作空间。')
+  // 平台事实只探一次：目录创建、预检指令与"当前目录"的写法都要用它。
+  const platform = await deps.world.platform()
 
   const usable = auditRootUsability(ctx, state, workspacePath)
   if (usable.ok) return { ok: true, error: '', sessionId: state.auditRoot.sessionId, created: false, notes: [] }
@@ -151,7 +166,7 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   // ① 工作空间：先解析，解析不到就建目录再登记。
   let workspace = await resolveWorkspaceEntity(ctx, workspacePath)
   if (workspace === undefined) {
-    const mkdirError = await ensureDirectory(ctx, workspacePath, await deps.world.workdir(), await deps.world.platform())
+    const mkdirError = await ensureDirectory(ctx, workspacePath, await deps.world.workdir(), platform)
     if (mkdirError !== '') return fail(mkdirError)
     workspace = await createWorkspace(ctx, workspacePath, state.workspaceTitle || workspacePath)
     if (workspace === undefined) return fail(`工作空间登记失败：${workspacePath}`)
@@ -192,7 +207,7 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   if (!renamed) notes.push('根会话改名失败（不影响审核，只是标题不好认）')
 
   // ④ hello 预检：证明这个会话真的能被驱动，并且 CRWU 工具链路可用。
-  const probeError = await preflight(ctx, created.agent, sessionId)
+  const probeError = await preflight(ctx, created.agent, sessionId, platform)
   if (probeError !== '') return fail(`审核根会话预检未通过：${probeError}`)
 
   // ⑤ 确定性门禁：必需 Tool 必须对该 Agent 可见。
@@ -214,12 +229,18 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
 }
 
 /** 一次 hello 预检；返回空串表示通过。 */
-export async function preflight(ctx: Context, agent: LiveAgent, sessionSeed: string, timeoutMs = 90_000): Promise<string> {
+export async function preflight(
+  ctx: Context,
+  agent: LiveAgent,
+  sessionSeed: string,
+  platform: string,
+  timeoutMs = 90_000,
+): Promise<string> {
   if (typeof agent.followup !== 'function' || typeof agent.whenIdle !== 'function') {
     return '这个部署的 Agent 不支持 followup/whenIdle，无法确认会话可驱动'
   }
   try {
-    agent.followup(probeMessage(sessionSeed))
+    agent.followup(probeMessage(sessionSeed, platform))
   } catch (error) {
     return `发送预检消息失败：${error instanceof Error ? error.message : String(error)}`
   }

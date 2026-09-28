@@ -177,27 +177,27 @@ DSH 下的三条硬规则：
 
 - M1/P1 库解析（分范围全量取空间，精确名匹配）：
 
-  ```bash
+  ```text
   dws wiki +space-list --type orgWikiSpace --limit 50 --page-all --format json
   dws wiki +space-list --type myWikiSpace --limit 50 --page-all --format json
   ```
 
 - P2 目录遍历（`--workspace` 必填；子层追加 `--folder`；页数上限显式放大）：
 
-  ```bash
+  ```text
   dws wiki +node-list --workspace <ID> --page-all --page-limit 200 --format json
   dws wiki +node-list --workspace <ID> --folder <folderId> --page-all --page-limit 200 --format json
   ```
 
 - M2/M3 取节点元数据（判 `extension`）：
 
-  ```bash
+  ```text
   dws wiki +node-get --node <nodeId> --format json
   ```
 
 - M2/M3 双通道取正文：
 
-  ```bash
+  ```text
   dws doc +export --node <nodeId> --export-format markdown --output <相对路径>
   dws drive +download --node <nodeId> --output <相对路径>
   ```

@@ -66,7 +66,7 @@ description: >-
 
 **唯一推荐步骤（自动扫码）**
 
-```bash
+```text
 crwu h3yun session login
 ```
 
@@ -84,7 +84,7 @@ crwu h3yun session login
 
 **验证**
 
-```bash
+```text
 crwu h3yun session status
 ```
 
@@ -95,7 +95,7 @@ crwu h3yun session status
 若浏览器自动流程不可用（无浏览器/被禁用），可以让员工在 `h3yun.com` 网页扫码
 登录后，由**绑定者本人在本机**执行并把浏览器里的会话 JWT 只粘贴给本机命令：
 
-```bash
+```text
 crwu h3yun session bind --token '<JWT>'
 ```
 

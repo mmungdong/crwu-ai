@@ -62,7 +62,7 @@ DSH 里氚云取数只走工作台插件注册的 CRWU 结构化 Tool，**不要
 ## 前置检查
 
 1. 先确认能读取会话：
-   ```bash
+   ```text
    crwu h3yun session status
    ```
    - 成功：输出里出现 `engineCode` 与 `expiresIn`，继续。
@@ -75,7 +75,7 @@ DSH 里氚云取数只走工作台插件注册的 CRWU 结构化 Tool，**不要
 
 ### 第 1 步：列系统（应用），请用户选择
 
-```bash
+```text
 crwu h3yun apps list
 ```
 
@@ -85,7 +85,7 @@ crwu h3yun apps list
 
 ### 第 2 步：选中的系统下钻，看父集/子集（表单），再请用户选择
 
-```bash
+```text
 crwu h3yun apps children --app <appCode>
 ```
 
@@ -99,7 +99,7 @@ crwu h3yun apps children --app <appCode>
 
 ### 第 3 步：在表单里查记录（默认每页 20 条，可翻页）
 
-```bash
+```text
 # 用户没给标题 → 首页 20 条
 crwu h3yun records list --schema <schemaCode> --size 20
 
@@ -131,7 +131,7 @@ crwu h3yun records list --schema <schemaCode> --size 20 --filter "F0000036 Equal
 
 ### 第 4 步：查看用户选中记录的具体内容（简要输出）
 
-```bash
+```text
 crwu h3yun records get --schema <schemaCode> --id <ObjectId>
 ```
 

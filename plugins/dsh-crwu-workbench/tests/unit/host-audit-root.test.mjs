@@ -14,7 +14,7 @@ import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
 
-const { auditRootTitle, mintSessionId, probeMessage, auditRootUsability, ensureAuditRoot, auditRootView, AUDIT_ROOT_TITLE } = await import(
+const { auditRootTitle, mintSessionId, probeMessage, auditRootProbe, auditRootUsability, ensureAuditRoot, auditRootView, AUDIT_ROOT_TITLE } = await import(
   new URL('src/host/audit/root.ts', ROOT).href
 )
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
@@ -171,12 +171,12 @@ test('mintSessionId produces a fresh session- id every time', () => {
 })
 
 test('probeMessage is a plain user message carrying the probe instruction', () => {
-  const message = probeMessage('seed-1')
+  const message = probeMessage('seed-1', 'darwin-arm64')
   assert.equal(message.role, 'user')
   assert.deepEqual(message.source, { kind: 'user' })
   assert.equal(Array.isArray(message.content), true)
   assert.match(String(message.content[0].text), /hello/)
-  assert.match(String(message.content[0].text), /pwd/, '预检要顺便证明 bash 能用、cwd 正确')
+  assert.match(String(message.content[0].text), /pwd/, '预检要顺便证明 shell 能用、cwd 正确')
   // 形状对照已安装的 `@deepseek-ai/dsh-llm` 声明：`UserMessage extends Message`
   // （`id` / `role` / `content: ContentBlock[]` / `source`），`MessageSourceMap.user = { kind: 'user' }`，
   // 文本块是小写 `{ type: 'text', text }`。`followup` 直接吃这个对象，多塞字段没有意义。
@@ -328,4 +328,30 @@ test('auditRootView explains the two states the panel shows', () => {
   }))
   assert.equal(usable.usable, true)
   assert.equal(usable.title, '审核子代理根节点 · 09-20 21:05')
+})
+
+// ── 预检指令的平台中立（2026-09-28：Windows 上写死 bash 会让预检必然失败）────────
+
+test('预检指令按平台给出真实可用的取当前目录命令，绝不要求 bash', () => {
+  const posix = auditRootProbe('darwin-arm64')
+  const win = auditRootProbe('win32-x64')
+
+  for (const [platform, text] of [['darwin-arm64', posix], ['win32-x64', win]]) {
+    assert.match(text, /hello/, `${platform}：仍要是一次 hello 预检`)
+    assert.match(text, /crwu_audit_capabilities/, `${platform}：仍要顺便验 Tool 链路`)
+    assert.match(text, /当前目录/, `${platform}：必须要求回报当前目录（可解析结果）`)
+    // 写死 bash 的后果实测过：宿主自检全绿、Agent 预检直接失败，错误还指向不存在的 bash。
+    assert.equal(/\bbash\b/.test(text), false, `${platform}：预检不得要求 bash`)
+    assert.equal(/```/.test(text), false, `${platform}：预检不得给出 shell 代码块`)
+  }
+  assert.match(posix, /`pwd`/)
+  assert.match(win, /`Get-Location`/)
+  assert.equal(win.includes('pwd'), false, 'Windows 上不应出现 pwd')
+  assert.equal(posix.includes('Get-Location'), false)
+})
+
+test('probeMessage 把平台一路带进预检文本', () => {
+  const win = String(probeMessage('seed-1', 'win32-x64').content[0].text)
+  assert.match(win, /Get-Location/)
+  assert.match(win, /PowerShell/)
 })

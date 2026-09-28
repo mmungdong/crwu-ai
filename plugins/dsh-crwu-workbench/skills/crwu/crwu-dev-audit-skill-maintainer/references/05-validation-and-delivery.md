@@ -9,7 +9,7 @@
 
 ## 检查器
 
-```bash
+```text
 python3 scripts/check_audit_skill_mappings.py \
   --repo-root <source-repo> \
   --catalog <目录树、snapshot 或 node-index> \
@@ -71,7 +71,7 @@ python3 scripts/check_audit_skill_mappings.py \
 
 ## 新 Skill 验证
 
-```bash
+```text
 # 以下命令在技能目录内执行（`scripts/` = 本技能自带脚本）；跨技能脚本按**技能层**寻址 ——
 # DSH 一个层就是一个技能根：本技能与 crwu-audit 在自研层，crwu-dws 在公共层（不是同一个根）。
 CRWU_SKILLS_ROOT=<本技能所安装到的自研层>

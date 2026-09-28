@@ -19,7 +19,7 @@
 
 ## 运行
 
-```bash
+```text
 # 源仓技能：引用卫生 + 实时协议 lint（禁止本地知识库根常量与根路径字面、禁止硬编码 nodeId，crwu-audit* 目录从严）
 python3 scripts/kb_tool.py validate --skill-root <skills 安装根>
 
@@ -58,7 +58,7 @@ python3 scripts/kb_tool.py validate --skill-root <skills 安装根> --forbid-lit
 映射一致性（registry ↔ classification ↔ 真实技能目录 ↔ 最新知识库目录）
 由本技能 `scripts/check_audit_skill_mappings.py` 校验：
 
-```bash
+```text
 # 只读盘点（json 供机器消费；--strict 有 error 时退出 1）
 python3 scripts/check_audit_skill_mappings.py --repo-root <源仓> --catalog <本次目录> --format json --strict
 

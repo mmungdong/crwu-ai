@@ -24,6 +24,21 @@
 
 下面流程里出现的 `python3 scripts/<文件>` 一律按本节解析出的解释器路径执行。
 
+### 1.1 命令块按**当前平台 shell** 执行
+
+本技能与各 reference 里的命令块只描述**要跑什么**，不承诺某一种 shell：
+
+- Windows 上 DSH 挂的是 **PowerShell**（整串命令作为一个 argv 元素交给 `pwsh -Command`），
+  macOS / Linux 上是 POSIX shell；
+- 不要假设某一种 shell 一定存在，也不要用另一种方言的语法（PowerShell 里没有
+  `mkdir -p` / `chmod` / `rm -f`，POSIX 里也没有 `Get-Location` / `New-Item`）；
+- 命令块里的 `python3` 一律换成上面解析出的**绝对解释器路径**；文件路径直接作为参数传递，
+  引用交给宿主 shell 的规则，不要自己拼引号或分隔符；
+- 需要「当前在哪个目录」时**问宿主 shell**（POSIX `pwd` / Windows `Get-Location`），不要猜。
+
+Windows 上审核链路的命令全部由插件的平台适配器生成（`src/host/platform/shell.ts`），
+技能正文里的命令只用于人工复现与排障。
+
 ## 2. 路由流程（步骤 1–15）
 
 1. **消费 Host 已准备的输入快照（不要再定位、不要重复取数）**：报告已由 Host 按精确 ObjectId 定位并取数一次，结果落在案例目录的 `输入快照/` 下——完整记录 `报告记录.json`、附件清单 `附件清单.json`、元数据 `快照元数据.json`。`schemaCode` 是 Host 的基础设施状态：**核验记录事实一律以 `报告记录.json` 为准**，不要提交、不要猜测 `schemaCode`，也不要再调 `records list` / 搜表单 / 重新取记录。仅在启动指令明确说明「输入快照缺失」时，才允许**一次**兜底：调 `crwu_h3yun_record_get({objectId,caseDir})`（它由 Host 自己解析 `schemaCode`）。附件元数据直接读 `附件清单.json`（字段：附件字段、文件名、类型、大小、`fileId`）并分类；只有快照缺失时才对同一 `objectId` 调一次 `crwu_h3yun_files_list({objectId,caseDir})`；附件名只用于隔离决策和待抽验提示。（工具**不返回**带会话鉴权的下载 URL，也不需要。）
