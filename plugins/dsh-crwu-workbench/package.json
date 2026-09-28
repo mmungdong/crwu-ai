@@ -94,24 +94,28 @@
     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-host-webserver": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-plugin-manager": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-skill-filesystem": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.7-rc.2",
     "react": "^18.2.0"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4",
+    "semver": "^7.8.5",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-agent": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-fs": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-plugin-manager": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-session": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-shell": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-subagent": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.7-rc.2",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
+    "@types/semver": "^7.8.0",
     "react": "^18.3.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3"
