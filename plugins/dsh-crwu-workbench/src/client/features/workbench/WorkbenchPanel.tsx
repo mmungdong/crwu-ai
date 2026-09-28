@@ -438,7 +438,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const bootError = build.error
   const boundParentId = build.parentSessionId
   // 有审核在跑时禁的是"安装"（不动 profile），**不禁检查** —— 这一点由 View Model 决定。
-  const gatingHasAudit = auditBusy !== '' || busy
+  // 判据只认两种**真的在跑审核**的状态：正在发起（auditBusy）与 Host 已确认在跑（activeKey）。
+  // `busy` 是报告列表的加载/翻页状态，把它算进来会对着一个"正在刷新列表"的用户说
+  // "有审核任务正在进行"（口径错误，第 6 轮审查点掉的就是这个）。
+  const gatingHasAudit = auditBusy !== '' || activeKey !== ''
   const updateView = updateViewModelOf({
     snapshot: updateSnapshot,
     currentVersion: currentVersionOf(build),

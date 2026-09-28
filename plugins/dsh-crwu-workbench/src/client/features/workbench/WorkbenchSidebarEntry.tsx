@@ -6,7 +6,6 @@ import { envLampOf, useEnvStatus, type EnvStatusStore } from '../environment/sta
 import { buildTagOf, currentVersionOf, useBuild, type BuildStore } from './build-store.ts'
 import { useUpdateStore } from '../update/react.ts'
 import { updateViewModelOf, type UpdateBadgeTone } from '../update/view-model.ts'
-import type { UpdateDialogStore } from '../update/dialog-store.ts'
 import type { UpdateStore } from '../update/update-store.ts'
 import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
 import { envMarkTitle, isUnderDevelopment, MODULE_IDS, moduleLabel, type ModuleId } from './modules.ts'
@@ -49,9 +48,12 @@ export interface WorkbenchSidebarEntryProps {
    * 缺省（单测直接渲染）时徽标退回 build store 的形态标签。
    */
   update?: UpdateStore
-  /** 由 `apply()` 创建的更新面板开关状态（点徽标要打开它）。 */
-  updateDialog?: UpdateDialogStore
-  /** 点版本徽标：打开工作台面板 + 打开更新面板（由 apply 绑好）。 */
+  /**
+   * 点版本徽标要做的事：打开工作台面板 **并** 打开更新面板。
+   *
+   * 只由 `apply()` 下发（它同时持有 `layout` 与那份 updateDialog）—— 侧栏自己不再收
+   * dialog store，避免"谁负责打开"出现两套含糊入口。
+   */
   onOpenUpdate?: () => void
   /** 当前平台（重启说明用）；缺省按 other。 */
   platform?: 'mac' | 'other'

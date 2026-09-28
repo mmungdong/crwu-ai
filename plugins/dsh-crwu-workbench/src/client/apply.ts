@@ -94,12 +94,18 @@ export function apply(ctx: ClientContext): void {
         build: buildStore,
         modules,
         update: updateStore,
-        updateDialog,
         wide: props.wide !== false,
         ...(props.usePanelInfo === undefined ? {} : { usePanelInfo: props.usePanelInfo }),
         // 点卡头 = 打开面板（回到当前子项）；点子项 = 切模块 + 打开面板，两件事一起做
         // （切换动作在入口内部完成：它自己就是那个 store 的读者，不需要外面再接一手）。
         onOpen: openPanel,
+        // 点**版本徽标**：打开面板 + 把**同一份** updateDialog 设为 open。
+        // 两件事必须一起做 —— 只开面板会让用户看不到更新界面，只开弹窗则在面板没打开时什么都没有；
+        // 缺了这个 prop，真实运行时点徽标就是个死按钮（第 6 轮审查的独立探针抓到的就是它）。
+        onOpenUpdate: () => {
+          openPanel()
+          updateDialog.open()
+        },
       })
     },
   ))

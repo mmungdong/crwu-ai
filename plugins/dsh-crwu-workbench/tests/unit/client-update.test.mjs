@@ -1860,3 +1860,22 @@ test('54. 不存在"立即重启"这类动作，也不声称 CRWU 重启过桌�
     }
   }
 })
+
+test('55. 版本未知时不给孤立的 v：徽标与悬停说明走"未知"口径', () => {
+  const unknown = vm(snapshotOf({ check: checkAvailable() }), { currentVersion: '' })
+  assert.equal(unknown.badgeText, `${zhCN.buildTagUnknown}${zhCN.updateBadgeSeparator}${zhCN.updateBadgeUpdate}`)
+  assert.equal(unknown.badgeText.includes('v '), false)
+  assert.equal(/^v/.test(unknown.badgeText), false, '不许出现孤立的 v')
+  assert.equal(unknown.currentVersionLabel, zhCN.buildTagUnknown)
+  assert.equal(unknown.badgeTitle.includes(zhCN.buildTagUnknown), true, '悬停说明也要说"未知"')
+  assert.equal(unknown.badgeTitle.includes('v（'), false, '不许出现孤立的 v')
+  assert.equal(/v\{/.test(unknown.badgeTitle), false)
+
+  const known = vm(snapshotOf())
+  assert.equal(known.currentVersionLabel, 'v0.0.11')
+  assert.equal(known.badgeText, 'v0.0.11')
+
+  const dev = vm(snapshotOf(), { buildKind: 'dev' })
+  assert.equal(dev.badgeText, zhCN.buildTagDev)
+  assert.equal(dev.currentVersionLabel, zhCN.buildTagDev)
+})

@@ -223,7 +223,7 @@ test('rpc propagates a network failure to the caller', async () => {
  * 直接调 `slots.inject`（槽位寿命由 slots 服务自己管），而 `effect` 对回调返回值有类型要求 ——
  * 包错了会让 `apply()` 在激活阶段抛 `Invalid effect`，表现为「装上了但面板不出现」。
  */
-function fakeClientContext() {
+function fakeClientContext(layout = null) {
   const effects = []
   const injections = []
   const registrations = []
@@ -231,7 +231,7 @@ function fakeClientContext() {
   let depth = 0
   const ctx = {
     // 真实 Client 上下文一定有 get：插件用它读可选服务（这里读 layout 以便跳转面板）。
-    get: (name) => (name === 'layout' ? { selectPanel() {} } : undefined),
+    get: (name) => (name === 'layout' ? (layout ?? { selectPanel() {} }) : undefined),
     effect(callback, label) {
       depth += 1
       let disposer
@@ -5284,4 +5284,198 @@ test('更新面板有无障碍语义：role/aria-modal/关联标题/关闭按钮
   const backdrop = findByClass(busy.tree, WORKBENCH_CLASSES.updateDialogBackdrop)
   assert.equal(backdrop.props.onClick, undefined, '安装中遮罩不可点关闭')
   assert.ok(buttonByLabel(busy.tree, zhCN.updateActionClose) !== null, '关闭按钮始终在（可访问性）')
+})
+
+// ── Task 6 审查修正：真实装配 / 审核占用 / 空版本 / 模态焦点 ────────────────────
+
+/** 一个能模拟"焦点"的 document 替身：给弹窗的焦点接管与 Tab 循环用。 */
+function fakeFocusDocument() {
+  const listeners = []
+  const created = []
+  const doc = {
+    activeElement: null,
+    getElementById: () => dialogNode,
+    createElement: () => ({ id: '', dataset: {}, textContent: '', remove() {} }),
+    head: { appendChild() {} },
+    addEventListener: (type, listener) => { listeners.push({ type, listener }) },
+    removeEventListener: (type, listener) => {
+      const index = listeners.findIndex((one) => one.type === type && one.listener === listener)
+      if (index >= 0) listeners.splice(index, 1)
+    },
+  }
+  const makeFocusable = (name) => ({
+    name,
+    focus() { doc.activeElement = this; created.push(name) },
+  })
+  /** 弹窗里"当前可用的可聚焦元素"（disabled 的不在列表里）。 */
+  let focusables = ['install', 'check', 'close'].map(makeFocusable)
+  const dialogNode = {
+    focusables,
+    setFocusables(names) { focusables = names.map(makeFocusable); dialogNode.focusables = focusables },
+    querySelectorAll: () => focusables,
+    focus() { doc.activeElement = dialogNode },
+  }
+  return { doc, listeners, dialogNode, focused: created }
+}
+
+test('apply 真实装配：点侧栏版本徽标 = 打开面板 + 打开同一份更新弹窗（卡头仍不可点）', () => {
+  installDoc()
+  const selected = []
+  const { ctx, registrations } = fakeClientContext({ selectPanel: (key) => { selected.push(key) } })
+  stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
+  apply(ctx)
+
+  const sidebar = registrations.find((entry) => entry.meta.name === 'sidebar.footer.action')
+  const main = registrations.find((entry) => entry.meta.name === 'main')
+  assert.ok(sidebar !== undefined && main !== undefined)
+
+  // 从 apply 注册出来的**真实**侧栏组件开始（不手工注入 onOpenUpdate）
+  // 只断言**装配出来的**界面形状与点击行为，不跑那些会打 RPC 的挂载 effect：
+  // 徽标在首次渲染时就已经是可点按钮（文案随 store 快照走，与 effect 无关）。
+  const sidebarProps = { wide: true, usePanelInfo: () => false }
+  const tree = render(sidebar.component, sidebarProps).tree
+
+  const badge = findByClass(tree, WORKBENCH_CLASSES.updateBadge)
+  assert.equal(badge.type, 'button', '真实装配下徽标必须是可点按钮')
+  assert.equal(typeof badge.props.onClick, 'function', 'apply 必须把 onOpenUpdate 接上（缺了就点不动）')
+  // 卡头仍然是纯标题：不可点
+  const head = findByClass(tree, WORKBENCH_CLASSES.sideCardHead)
+  assert.notEqual(head.type, 'button')
+  assert.equal(head.props.onClick, undefined)
+
+  badge.props.onClick()
+  assert.deepEqual(selected, ['crwu-workbench'], '点徽标要 selectPanel(WORKBENCH_PANEL_KEY)')
+
+  // main 组件读的是**同一份** updateDialog：它现在应该渲染出 role=dialog
+  const panelTree = render(main.component, {}).tree
+  assert.ok(find(panelTree, (node) => node.props?.role === 'dialog') !== null, '同一份 dialog store 要变 open 并渲染出更新弹窗')
+  assert.equal(textOf(panelTree).includes(zhCN.updateDialogTitle), true, '渲染出来的就是更新面板')
+
+  // 并且没有第二份 store：侧栏这一次点击只让 main 那份开了
+  assert.equal(selected.length, 1)
+})
+
+test('审核真的在跑（audit-status 的 active.key）必须禁用安装并给出审核原因', async () => {
+  const active = { key: '2026-301705-LX10170', childId: 'child-1', since: 1 }
+  installDoc()
+  // 报告审核页要的其余数据也一并备齐（否则渲染那一页会缺字段）。
+  const auditBody = (activeKey) => ({
+    boot: { body: bootOk() },
+    env: { body: okEnvBody() },
+    pending: { body: { ok: true, error: '', rows: [], formName: '报告审核', page: 1, size: 20, total: 0, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
+    'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { ...active, key: activeKey } } },
+    'oss-index': { body: { ok: true, error: '', bucket: 'b', prefix: '', count: 0, items: {}, truncated: false } },
+  })
+  const ops = stubOps(auditBody(active.key))
+  const update = updateStoreStub({ check: updateAvailable() })
+  // 真实链路：模块状态先停在「报告审核」（面板才会去轮询 audit-status），
+  // 再让面板按 RPC 回来的 active.key 决定 gatingHasAudit。
+  const { createModuleStore } = await import(new URL('src/client/features/workbench/module-store.ts', ROOT).href)
+  const modules = createModuleStore()
+  modules.navigate('audit', { state: 'ready' })
+  const props = {
+    services: fakeServices(),
+    modules,
+    build: fakeBuildStore({ version: '9.9.9' }),
+    update,
+    updateDialog: fakeDialogStore(true),
+    now: () => UPDATE_NOW,
+    platform: 'mac',
+  }
+  // 多轮挂载：第一轮拿到 env 才会去问 audit-status，第二轮才把 active.key 折算成"审核在跑"。
+  let tree = render(WorkbenchPanel, props).tree
+  for (let round = 0; round < 3; round += 1) {
+    for (const effect of globalThis.__crwuTestInstance.effects) await effect.callback()
+    await settle()
+    tree = rerender(WorkbenchPanel, props)
+  }
+  assert.equal(ops.filter((op) => op === 'audit-status').length > 0, true, '面板要真的问过 audit-status')
+  const dialog = find(tree, (node) => node.props?.role === 'dialog')
+  assert.ok(dialog !== null, '更新弹窗要在')
+  const install = buttonByLabel(dialog, zhCN.updateActionInstall)
+  assert.equal(install.props.disabled, true, '已有审核在运行时必须禁用安装')
+  assert.equal(textOf(dialog).includes(zhCN.updateReasonAuditActive), true)
+
+  // 反向：只有报告列表在加载（active.key 为空）时**不得**被说成"审核任务正在进行"
+  installDoc()
+  stubOps(auditBody(''))
+  let idle = render(WorkbenchPanel, props).tree
+  for (let round = 0; round < 3; round += 1) {
+    for (const effect of globalThis.__crwuTestInstance.effects) await effect.callback()
+    await settle()
+    idle = rerender(WorkbenchPanel, props)
+  }
+  const idleDialog = find(idle, (node) => node.props?.role === 'dialog')
+  assert.equal(textOf(idleDialog).includes(zhCN.updateReasonAuditActive), false, '没有审核在跑就不能说"有审核任务正在进行"')
+  assert.equal(buttonByLabel(idleDialog, zhCN.updateActionInstall).props.disabled, false)
+})
+
+test('Host 还没回报版本时不得显示孤立的 v（徽标、悬停说明、弹窗当前版本）', async () => {
+  for (const unknown of [{ version: '', rev: '' }, { version: '', rev: '' , buildKind: ''}]) {
+    installDoc()
+    stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
+    const update = updateStoreStub({ check: updateAvailable() })
+    const props = {
+      services: fakeServices(),
+      build: fakeBuildStore({ ...unknown }),
+      update,
+      updateDialog: fakeDialogStore(true),
+      now: () => UPDATE_NOW,
+    }
+    const rendered = render(WorkbenchPanel, props)
+    for (const effect of rendered.instance.effects) await effect.callback()
+    await settle()
+    const tree = rerender(WorkbenchPanel, props)
+    const dialog = find(tree, (node) => node.props?.role === 'dialog')
+    const text = textOf(dialog)
+    assert.equal(text.includes('vundefined'), false)
+    assert.equal(text.includes('vnull'), false)
+    // 「当前版本」那一行的值必须是"未知"口径，而不是孤立的 v
+    const row = find(dialog, (node) => node.props?.children === zhCN.updateFieldCurrent)
+    assert.ok(row !== null, '要有"当前版本"这一行')
+    assert.equal(text.includes(zhCN.updateFieldCurrent), true)
+    const kvText = textOf(find(dialog, (node) => String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.kv)))
+    assert.equal(kvText.includes(`${zhCN.updateFieldCurrent}未知`) || kvText.includes(`${zhCN.updateFieldCurrent}v`), true)
+    assert.equal(/当前版本\s*v(?![0-9])/.test(kvText), false, '不许出现孤立的 v')
+  }
+})
+
+test('模态焦点：打开进入弹窗、Tab/Shift+Tab 在弹窗内循环、关闭后焦点还回去', async () => {
+  const { UpdateDialog } = await import(new URL('src/client/features/update/UpdateDialog.tsx', ROOT).href)
+  const fake = fakeFocusDocument()
+  globalThis.document = fake.doc
+  const outside = { name: 'outside', focus() { fake.doc.activeElement = this } }
+  fake.doc.activeElement = outside // 打开前焦点在背景（侧栏）上
+
+  const snapshot = updateStoreStub({ check: updateAvailable() }).get()
+  const rendered = render(UpdateDialog, {
+    snapshot, currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => {},
+  })
+  const cleanups = rendered.instance.effects.map((effect) => effect.callback())
+
+  assert.equal(fake.doc.activeElement?.name, 'install', '打开后焦点要进入弹窗（第一个可用控件）')
+  const keydown = fake.listeners.find((one) => one.type === 'keydown')
+  assert.ok(keydown !== undefined, '要挂键盘监听')
+
+  // Tab：从最后一个可用控件回到第一个
+  fake.doc.activeElement = fake.dialogNode.focusables[2]
+  keydown.listener({ key: 'Tab', shiftKey: false, preventDefault() {} })
+  assert.equal(fake.doc.activeElement?.name, 'install', 'Tab 在最后一个要回到第一个')
+
+  // Shift+Tab：从第一个回到最后一个
+  fake.doc.activeElement = fake.dialogNode.focusables[0]
+  keydown.listener({ key: 'Tab', shiftKey: true, preventDefault() {} })
+  assert.equal(fake.doc.activeElement?.name, 'close', 'Shift+Tab 在第一个要回到最后一个')
+
+  // disabled 的按钮不进循环（弹窗只报两个可用控件时，循环只在这两个之间）
+  fake.dialogNode.setFocusables(['install', 'close'])
+  fake.doc.activeElement = fake.dialogNode.focusables[1]
+  keydown.listener({ key: 'Tab', shiftKey: false, preventDefault() {} })
+  assert.equal(fake.doc.activeElement?.name, 'install')
+  assert.equal(fake.dialogNode.focusables.length, 2, 'disabled 的按钮不在可聚焦列表里')
+
+  // 关闭/卸载：焦点还给打开前的元素，并且监听器被摘掉
+  for (const cleanup of cleanups) if (typeof cleanup === 'function') cleanup()
+  assert.equal(fake.doc.activeElement, outside, '关闭后焦点要还给打开前的元素')
+  assert.equal(fake.listeners.filter((one) => one.type === 'keydown').length, 0, '监听器必须随卸载释放')
 })

@@ -50,6 +50,31 @@ type KeydownTarget = {
   removeEventListener?: (type: string, listener: (event: unknown) => void) => void
 }
 
+type FocusableNode = {
+  focus?: () => void
+  querySelectorAll?: (selector: string) => ArrayLike<FocusableNode>
+}
+
+type FocusDocument = KeydownTarget & {
+  activeElement?: FocusableNode | null
+  getElementById?: (id: string) => FocusableNode | null
+}
+
+/** 弹窗容器的 id：焦点接管与 Tab 循环都要先在文档里找到它（无 ref 也能工作）。 */
+const DIALOG_ID = 'crwu-audit-update-dialog'
+
+/** 弹窗里"当前可用"的可聚焦元素（disabled 的不在其中 —— 这是 Tab 循环的判据）。 */
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  'a[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+type KeyLikeEvent = { key?: unknown; shiftKey?: unknown; preventDefault?: () => void }
+
 function join(...all: Array<string | false | undefined>): string {
   return all.filter((item): item is string => typeof item === 'string' && item !== '').join(' ')
 }
@@ -68,17 +93,54 @@ export function UpdateDialog(props: UpdateDialogProps): React.ReactElement {
   // 关键动作进行中：Esc 与遮罩点击都不关闭（关闭按钮仍然可用，见 §无障碍）。
   const critical = view.installing || view.cancelling
 
+  // 事件处理器要读到**最新**的 critical/onClose，但焦点接管只能做一次（重复订阅会在每次
+  // 重渲染时把焦点又拽回弹窗）。所以处理器从 ref 读最新值，订阅本身只挂一次。
+  const latest = React.useRef({ critical, onClose })
   React.useEffect(() => {
-    const doc = (globalThis as { document?: KeydownTarget }).document
+    latest.current = { critical, onClose }
+  })
+
+  React.useEffect(() => {
+    const doc = (globalThis as { document?: FocusDocument }).document
     if (doc?.addEventListener === undefined) return undefined
+    const dialog = doc.getElementById?.(DIALOG_ID) ?? null
+    const previouslyFocused = doc.activeElement ?? null
+    const focusables = (): FocusableNode[] => {
+      const found = dialog?.querySelectorAll?.(FOCUSABLE_SELECTOR)
+      return found === undefined ? [] : Array.from(found)
+    }
+
+    // 1) 打开后焦点进入弹窗：优先第一个可用控件；一个都没有时聚焦容器本身（tabIndex=-1）。
+    const first = focusables()[0]
+    if (first !== undefined) first.focus?.()
+    else dialog?.focus?.()
+
     const onKeyDown = (event: unknown): void => {
-      if ((event as { key?: unknown } | null)?.key !== 'Escape') return
-      if (critical) return
-      onClose()
+      const key = (event as KeyLikeEvent | null)?.key
+      if (key === 'Escape') {
+        if (latest.current.critical) return
+        latest.current.onClose()
+        return
+      }
+      if (key !== 'Tab') return
+      const items = focusables()
+      if (items.length === 0) return
+      // 2) Tab / Shift+Tab 在当前可用控件之间循环，绝不走进背后的工作台。
+      const index = items.indexOf((doc.activeElement ?? null) as FocusableNode)
+      const shift = (event as KeyLikeEvent | null)?.shiftKey === true
+      const next = shift
+        ? (index <= 0 ? items[items.length - 1] : items[index - 1])
+        : (index === -1 || index >= items.length - 1 ? items[0] : items[index + 1])
+      ;(event as KeyLikeEvent | null)?.preventDefault?.()
+      next?.focus?.()
     }
     doc.addEventListener('keydown', onKeyDown)
-    return () => { doc.removeEventListener?.('keydown', onKeyDown) }
-  }, [critical, onClose])
+    return () => {
+      // 6) 监听随卸载释放；3) 焦点尽量还给打开前的元素。
+      doc.removeEventListener?.('keydown', onKeyDown)
+      previouslyFocused?.focus?.()
+    }
+  }, [])
 
   const notice = view.installNotice
   const sourceKind = view.sourceKind === null ? zhCN.updateDiagNone : view.sourceKind
@@ -87,7 +149,7 @@ export function UpdateDialog(props: UpdateDialogProps): React.ReactElement {
     : `${props.snapshot.error.action}/${props.snapshot.error.code}`
 
   const rows: Array<{ key: string; label: string; value: string; mono: boolean }> = [
-    { key: 'current', label: zhCN.updateFieldCurrent, value: `v${view.currentVersion}`, mono: true },
+    { key: 'current', label: zhCN.updateFieldCurrent, value: view.currentVersionLabel, mono: true },
   ]
   if (view.targetVersion !== '') {
     rows.push({ key: 'target', label: zhCN.updateFieldTarget, value: `v${view.targetVersion}`, mono: true })
@@ -107,7 +169,14 @@ export function UpdateDialog(props: UpdateDialogProps): React.ReactElement {
       className={C.updateDialogBackdrop}
       {...(critical ? {} : { onClick: onClose })}
     />
-    <div className={C.updateDialog} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <div
+      className={C.updateDialog}
+      id={DIALOG_ID}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+    >
       <div className={C.updateDialogHead}>
         <span className={C.updateDialogTitle} id={titleId}>{zhCN.updateDialogTitle}</span>
         <Button label={zhCN.updateActionClose} onClick={onClose} />

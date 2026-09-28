@@ -67,6 +67,8 @@ export interface UpdateViewModel {
   badgeTone: UpdateBadgeTone
   hasCandidate: boolean
   currentVersion: string
+  /** 当前版本的**展示标签**：`v0.0.11` / `dev` / `未知`（空版本时不给孤立的 `v`）。 */
+  currentVersionLabel: string
   /** 无候选时为空串。 */
   targetVersion: string
   /** 无发布时间时为空串。 */
@@ -187,7 +189,9 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
                   ? 'candidate-expired'
                   : null
 
-  const versionLabel = `v${currentVersion}`
+  // 宿主还没回报版本时（version/rev 都是空串）**不许**拼出孤立的 `v`：
+  // 退回既有的「未知」口径，与 build store 的小标签一致。
+  const versionLabel = currentVersion === '' ? zhCN.buildTagUnknown : `v${currentVersion}`
   let badgeSuffix = ''
   let badgeTone: UpdateBadgeTone = 'neutral'
   let badgeText = versionLabel
@@ -246,6 +250,7 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
     badgeTone,
     hasCandidate: candidate !== null,
     currentVersion,
+    currentVersionLabel: isDev ? zhCN.buildTagDev : versionLabel,
     targetVersion: candidate === null ? '' : candidate.targetVersion,
     publishedAt: candidate === null || candidate.publishedAt === undefined ? '' : candidate.publishedAt,
     sourceKind: candidate === null ? null : candidate.sourceKind,
