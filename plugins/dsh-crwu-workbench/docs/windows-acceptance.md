@@ -103,7 +103,8 @@ C:\Users\<测试用户>\测试 Work\Case's [1]
 
 ## 7. 收尾
 
-- [ ] 删除本次专用的 profile（`rm -rf "$env:USERPROFILE\.dsh\profiles\<profile>"`）与临时工作空间。
+- [ ] 删除本次专用的 profile 与临时工作空间（PowerShell：
+      `Remove-Item -LiteralPath "$env:USERPROFILE\.dsh\profiles\<profile>" -Recurse -Force`）。
 - [ ] 确认发布树 / 安装目录里没有运行残留（`.dws`、日志、临时文件）。
 - [ ] 把**脱敏后**的日志附到发布说明或 CI artifact（手工上传）。
 

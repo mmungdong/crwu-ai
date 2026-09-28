@@ -162,6 +162,45 @@ UnexpectedToken`），相关按钮点下去也不会有结果；macOS 上完全�
   尚未执行**：本机是 macOS，可机器验证的部分已交给上面的三个 Windows job；
   人工验收按 `docs/windows-acceptance.md` 的清单逐项记录。
 
+#### 复查修复（同一版本的第三批，2026-09-28）
+
+分支合并前的一次定向复查发现了三个阻塞项与三个中等问题，全部已修，并各自配了会变红的用例。
+
+- **[P1] 发布工作流会稳定失败**：`release.yml` 里「未声明平台必须报错」那一步**故意**让
+  `node` 返回非零，但 GitHub 的 pwsh 壳在脚本末尾用 `$LASTEXITCODE` 作为步骤退出码，
+  `Write-Host` 不会把它重置成 0 —— 于是这一步真的判红，依赖它的 `publish` 永远起不来。
+  现在写成「存退出码 → 断言 → 末尾显式 `exit 0`」；`windows-powershell` job 里那条
+  `npm test` 也改成同样的形状。新增 `tests/unit/host-ci-workflows.test.mjs`：用 `yaml` 解析两个
+  工作流，**任何引用 `$LASTEXITCODE` 的 `run` 块都必须以显式 `exit` 收尾**，并钉住
+  「原生 pwsh job 不得设 job 级 shell / 必须先断言 PowerShell 7 / publish 必须 needs Windows 冒烟」。
+- **[P1] 裸盘符被当成绝对路径**：`isAbsoluteLocalPath` 复用了「Windows 风格」的判断，
+  而风格判断为了兼容 `C:` 这种写法接受了裸盘符 —— 于是 `requireCaseDir('C:')` 会放行一条
+  「盘符相对路径」，案例目录随进程 cwd 漂移。现在风格（`DRIVE_STYLE`）与绝对（`DRIVE_ROOTED`）
+  是两条正则，并新增 `tests/unit/host-case-dir-gate.test.mjs` 覆盖门禁全部分支
+  （裸盘符 / 相对路径 / `..` / UNC 策略 / `fs.contains` 而非字符串前缀）。
+- **[P1] 本地路径迁移不完整**：`bootstrap.ts`（输入快照目录与三个快照文件）、`knowledge.ts`
+  （knowledge 目录 / 下载目标 / manifest）、`dingtalk.ts`（通知幂等状态文件）、
+  `audit/state.ts`（案例目录候选）、`WorkbenchPanel.tsx`（打开本地 HTML）、
+  `workspace-view.ts`（界面上的落盘位置说明）仍在用 `/` 拼 Windows 本地路径 ——
+  其中快照、知识库与本地报告打开都属于核心审核链路。全部改走 `joinLocalPath`/
+  `localSeparator`；新增 Windows 行为测试（bootstrap 的三条快照路径与真实落盘目标、
+  knowledge 目录、`assessAudit` 的案例目录候选、`artifactHint`），
+  并在 `host-platform-shell.test.mjs` 加一条**本地路径载体名单**的静态门禁
+  （名单短、每条写得出理由；对象键与 URL 不在名单里）。
+- **[P2] `fs.stat` 异常被当成「文件不存在」**：`case-files.ts` 把 `resolve/stat` 的所有异常
+  都折叠成「没什么可删的」，删除后的回读也一样 —— 于是 `Access denied` 会被回报成删除成功。
+  现在探测是**三态**（存在 / 不存在 / 查不出来），「查不出来」一律按基础设施失败上报；
+  `ensureDirectory` 在确认不了目标状态时也不许报成功。
+- **[P2] `verified` 没有真正回读**：协议与注释都把 `verified` 定义为「执行并回读确认」，
+  而实现只看了 `chmod` 的退出码 —— 有些文件系统会静默忽略 chmod。现在收紧之后**必须回读模式位**：
+  新增 `readFileModeCommand()`（GNU `stat -c %a` / BSD `stat -f %Lp` / Windows 不适用，
+  分歧只在适配器里出现一次）与 `parseFileMode()`；回读失败、模式对不上都算 `failed` 并带原因。
+- **[P2] Windows 的 OSS 输入错误仍报 POSIX 机制**：`ossCredSave` 的输入校验失败信封硬编码了
+  `mechanism: 'posix-0600'`，在 `win32-x64` 上说错了「谁在负责权限」。改为复用
+  `failedPermission(error, deps.platform)`。
+- 文档：`docs/windows-acceptance.md` 的收尾步骤在 PowerShell 里错用了 `rm -rf`，
+  改为 `Remove-Item -LiteralPath … -Recurse -Force`。
+
 ## package · 0.0.12 · 2026-09-28
 
 **首个包含自更新能力的正式版本。** 0.0.10 / 0.0.11 用户需要**手动完成一次**引导升级
