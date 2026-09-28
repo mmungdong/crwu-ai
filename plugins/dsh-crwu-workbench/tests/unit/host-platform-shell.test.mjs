@@ -189,3 +189,52 @@ test('静态门禁：业务代码不得用 process.platform 覆盖注入的平�
   }
   assert.deepEqual(offenders, [], `平台必须由调用方注入，不得回退 process.platform：\n${offenders.join('\n')}`)
 })
+
+// ── 静态门禁：本地路径拼接只能走 local-path.ts ────────────────────────────────
+
+/**
+ * 已知的**本地路径载体**变量：它们的值来自案例目录 / 工作空间 / 主目录，绝不是 OSS 对象键或 URL。
+ *
+ * 为什么用名单而不是「凡 `${x}/` 都禁」：`${oss.prefix}/${seqNo}`、`${base}/${path}`（URL）
+ * 这些**必须**用 `/`。名单短、可读，且每条都写得出理由；代价是新增一个本地路径变量时
+ * 门禁拦不住 —— 所以它只是补充，真正管用的是 `joinLocalPath` 本身与 Windows 行为测试。
+ */
+const LOCAL_PATH_CARRIERS = [
+  'caseCheck.path', 'caseDir', 'knowledgeDir', 'snapshotDir', 'caseRoot',
+  'record.casePath', 'record.htmlFile', 'context.caseRoot', 'workspacePath',
+]
+
+test('静态门禁：已知本地路径载体不得用 `/` 手工拼接', async () => {
+  const { readFile, readdir } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const srcRoot = fileURLToPath(new URL('src', ROOT))
+  const dialectHome = fileURLToPath(new URL('src/shared/utils/local-path.ts', ROOT))
+
+  const walk = async (dir) => {
+    const out = []
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) out.push(...await walk(full))
+      else if (/\.tsx?$/.test(entry.name)) out.push(full)
+    }
+    return out
+  }
+
+  const offenders = []
+  for (const file of await walk(srcRoot)) {
+    if (file === dialectHome) continue
+    const source = await readFile(file, 'utf8')
+    source.split('\n').forEach((line, index) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
+      for (const carrier of LOCAL_PATH_CARRIERS) {
+        // 模板里紧跟 `/` 、或 `+ '/' +`，都算手工拼接。
+        const escaped = carrier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        if (new RegExp(`${escaped}(?:\\.replace\\([^)]*\\))?\\}/`).test(line)
+          || new RegExp(`${escaped}\\s*\\+\\s*['\"]\\/`).test(line)) {
+          offenders.push(`${file.replace(`${srcRoot}/`, '')}:${String(index + 1)}: ${line.trim()} — 用 joinLocalPath()？`)
+        }
+      }
+    })
+  }
+  assert.deepEqual(offenders, [], `本地路径拼接必须走 shared/utils/local-path.ts：\n${offenders.join('\n')}`)
+})

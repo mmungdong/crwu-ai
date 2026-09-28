@@ -58,3 +58,6 @@ export const CASE_MATERIAL_DIR = '材料-源'
 
 /** 知识库材料的落地目录名（在案例目录内）。 */
 export const CASE_KNOWLEDGE_DIR = 'knowledge'
+
+/** 知识库下载清单的文件名（落在 `knowledge/` 下，与下载正文同级）。 */
+export const KB_MANIFEST_FILE = '.crwu-manifest.json'

@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { H3YUN_FIELDS, RECORDS_STDOUT_MAX } from '../h3yun/consts.ts'
 import { labelOf, pick } from '../h3yun/fields.ts'
@@ -258,7 +259,9 @@ export function bootstrapTools(deps: ToolDeps) {
       if (attachments === null) return { ...failure('cli', `files list 没有返回附件数组：${clampText(filesRun.stdout, 400)}`), ...empty }
 
       // ③ 落盘：完整记录 + 附件清单 + 元数据（元数据只放 schemaCode 的**指纹**）。
-      const snapshotDir = `${caseCheck.path}/${SNAPSHOT_DIR}`
+      // 分隔符随案例目录风格走（Windows 上是 `\`）：这条路径既进提示词与 Tool 返回值，
+      // 也是后续 `ctx.fs` / shell 的目标。
+      const snapshotDir = joinLocalPath(caseCheck.path, SNAPSHOT_DIR)
       const made = await ensureDirectory(ctx, snapshotDir, { workdir: caseCheck.path, platform, ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
       if (!made.ok) return { ...failure('infrastructure', `创建快照目录失败：${made.error}`), ...empty }
 
@@ -274,9 +277,9 @@ export function bootstrapTools(deps: ToolDeps) {
         fieldCount: Object.keys(record).length,
         attachmentCount: attachments.length,
         snapshotDir,
-        snapshotPath: `${snapshotDir}/${SNAPSHOT_RECORD_FILE}`,
-        attachmentsPath: `${snapshotDir}/${SNAPSHOT_ATTACHMENTS_FILE}`,
-        metadataPath: `${snapshotDir}/${SNAPSHOT_METADATA_FILE}`,
+        snapshotPath: joinLocalPath(snapshotDir, SNAPSHOT_RECORD_FILE),
+        attachmentsPath: joinLocalPath(snapshotDir, SNAPSHOT_ATTACHMENTS_FILE),
+        metadataPath: joinLocalPath(snapshotDir, SNAPSHOT_METADATA_FILE),
         routingFacts: routingFactsOf(record, seqNo, form.name),
         reused: false,
       }

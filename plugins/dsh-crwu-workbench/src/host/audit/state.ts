@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, isDir, resolveTarget } from '../fs/paths.ts'
 import type { AuditRecord, WorkbenchState } from '../state/types.ts'
 import { inspectCase } from './case.ts'
@@ -53,8 +54,8 @@ function rootCandidates(context: AssessContext, record: AuditRecord): string[] {
   // 否则磁盘上明明有交付件，界面却退化成「未出结果」。
   if (record.casePath !== '') paths.push(record.casePath)
   if (context.caseRoot !== '') {
-    if (record.seqNo !== '') paths.push(`${context.caseRoot}/${record.seqNo}`)
-    if (record.key !== '') paths.push(`${context.caseRoot}/${record.key}`)
+    if (record.seqNo !== '') paths.push(joinLocalPath(context.caseRoot, record.seqNo))
+    if (record.key !== '') paths.push(joinLocalPath(context.caseRoot, record.key))
   }
   return paths
 }

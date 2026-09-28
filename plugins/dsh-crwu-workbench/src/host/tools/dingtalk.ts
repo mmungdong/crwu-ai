@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { basenameLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, readTextIfExists, resolveTarget } from '../fs/paths.ts'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
@@ -405,7 +406,7 @@ export function dingtalkTools(deps: ToolDeps) {
       const caseDir = caseCheck.path
 
       const send = async (): Promise<NotifyResult> => {
-        const statePath = `${caseDir.replace(/[\\/]+$/, '')}/${NOTIFY_STATE_FILE}`
+        const statePath = joinLocalPath(caseDir, NOTIFY_STATE_FILE)
         // ① 幂等：案例目录里已有成功记录就直接回放，不再发送。
         const existing = await readTextIfExists(ctx, statePath)
         if (existing !== '') {

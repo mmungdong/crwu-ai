@@ -55,7 +55,15 @@ const FILES_JSON = JSON.stringify({
 
 /** 包内二进制目录（仓库已 `make plugin-bin`）：工具严格要求它们存在，替身也要认。 */
 const PKG_BIN_DIR = new URL('bin/darwin-arm64/', ROOT).pathname.replace(/\/$/, '')
-const PKG_BIN_FILES = ['crwu', 'dws', 'ossutil'].map((name) => `${PKG_BIN_DIR}/${name}`)
+const PKG_BIN_WIN_DIR = new URL('bin/win32-x64/', ROOT).pathname.replace(/\/$/, '')
+/**
+ * 两个平台的包内二进制都让替身「存在」：Windows 用例要走 `requireBundledCommand`
+ * （严格解析，找不到就回 capability gap），而 JSON 里 win32 的文件名带 `.exe`。
+ */
+const PKG_BIN_FILES = [
+  ...['crwu', 'dws', 'ossutil'].map((name) => `${PKG_BIN_DIR}/${name}`),
+  ...['crwu', 'dws', 'ossutil'].map((name) => `${PKG_BIN_WIN_DIR}/${name}.exe`),
+]
 
 function makeFs({ dirs = [], files = {} } = {}) {
   const dirSet = new Set([PKG_BIN_DIR, ...dirs])
@@ -68,7 +76,9 @@ function makeFs({ dirs = [], files = {} } = {}) {
     addFile(path, content) { fileMap.set(path, content) },
     async resolve(path, opts) {
       const base = opts?.cwd ?? ''
-      const full = path.startsWith('/') ? path : `${base.replace(/[\\/]+$/, '')}/${path}`
+      // 绝对 = POSIX 根 / 盘符根 / UNC（裸 `C:` 不算，与实现同一判据）。
+      const absolute = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}[^\\/]/.test(path)
+      const full = absolute ? path : `${base.replace(/[\\/]+$/, '')}/${path}`
       return target(full)
     },
     async stat(t) {
@@ -212,7 +222,7 @@ function makeForm({ code = 'FORM-1', name = '报告审核', fails = false } = {}
   }
 }
 
-function makeDeps({ fs, shell, tools, state, form } = {}) {
+function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64' } = {}) {
   const theState = state ?? makeState()
   const theFs = fs ?? makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/knowledge`] })
   const theShell = shell ?? makeShell(() => shellOk('{}'))
@@ -228,10 +238,10 @@ function makeDeps({ fs, shell, tools, state, form } = {}) {
       state: theState,
       form: theForm.resolver,
       world: {
-        platform: async () => 'darwin-arm64',
+        platform: async () => platform,
         home: async () => '/Users/x',
         workdir: async () => '/cases/session',
-        cached: () => ({ platform: 'darwin-arm64', home: '/Users/x' }),
+        cached: () => ({ platform, home: '/Users/x' }),
       },
     },
   }
@@ -894,4 +904,58 @@ test('every command failure is classified into approval / infrastructure / cli',
   assert.equal(classifyRun({ error: '', exitCode: 3 }), 'cli')
   assert.equal(classifyRun({ error: '', exitCode: 0, ok: true }), '')
   assert.equal(classifyRun({ error: 'approval cancelled', exitCode: null, aborted: true }), 'cancelled', '取消优先于审批归类')
+})
+
+// ── Windows 本地路径：核心审核链路的拼接必须随平台走 ────────────────────────
+//
+// 2026-09-28 复查：`bootstrap.ts` / `knowledge.ts` / `dingtalk.ts` / `audit/state.ts` /
+// `WorkbenchPanel.tsx` / `workspace-view.ts` 仍在用 `/` 拼 Windows 本地路径 ——
+// 结果就是 `C:\case/输入快照` 这种混用分隔符的路径进提示词、进 Tool 返回值、进 shell。
+
+test('bootstrap 在 Windows 案例目录下用 `\\` 拼快照路径（含落盘目标）', async () => {
+  const winCase = `C:\\Cases\\${SEQ}`
+  // Windows 上每个 token 都是单引号字面量（`& 'crwu.exe' 'h3yun' 'records' 'get'`），
+  // 所以不能只按 `records get` 这个连续子串匹配。
+  const has = (command, verb) => command.includes(`records ${verb}`) || command.includes(`'records' '${verb}'`)
+  const shell = makeShell((spec) => (has(spec.command, 'get') ? shellOk(RECORD_JSON) : shellOk(FILES_JSON)))
+  const fs = makeFs({ dirs: [winCase] })
+  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64' })
+  registerCrwuTools(deps.ctx, deps)
+  const result = await registry.execute({
+    callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap,
+    arguments: { objectId: 'obj-1', seqNo: SEQ, caseDir: winCase, attemptId: 'S1-a1-x', refresh: true },
+    signal: new AbortController().signal,
+  })
+  assert.equal(result.value.ok, true, result.value.ok ? '' : String(result.value.error))
+  const dir = `${winCase}\\输入快照`
+  assert.equal(result.value.snapshotDir, dir)
+  assert.equal(result.value.snapshotPath, `${dir}\\报告记录.json`)
+  assert.equal(result.value.attachmentsPath, `${dir}\\附件清单.json`)
+  assert.equal(result.value.metadataPath, `${dir}\\快照元数据.json`)
+  // 三条路径里都不许出现混用的 `/`（`C:\\Cases/...` 这种形态）。
+  for (const value of [result.value.snapshotDir, result.value.snapshotPath, result.value.attachmentsPath, result.value.metadataPath]) {
+    assert.equal(String(value).includes('/'), false, `混用了分隔符：${String(value)}`)
+  }
+  // 真的落到 fs 上的三个文件也必须是同一个目录。
+  assert.equal(fs.files.has(`${dir}\\报告记录.json`), true)
+  assert.equal(fs.files.has(`${dir}\\附件清单.json`), true)
+  assert.equal(fs.files.has(`${dir}\\快照元数据.json`), true)
+})
+
+test('knowledge 在 Windows 案例目录下用 `\\` 拼 knowledge 目录', async () => {
+  const winCase = `C:\\Cases\\${SEQ}`
+  // `wiki +space-list` 回空表：定位不到知识库 → 工具提前返回，但 caseDir / knowledgeDir
+  // 已经在返回值里，正好用来断言拼接方式（不需要把整条下载链路都替身出来）。
+  const shell = makeShell((spec) => (spec.command.includes('+space-list') ? shellOk('{"spaces":[]}') : shellOk('{}')))
+  const fs = makeFs({ dirs: [winCase] })
+  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64' })
+  registerCrwuTools(deps.ctx, deps)
+  const result = await registry.execute({
+    callId: 'c1', name: TOOL_NAMES.knowledgeMaterialize,
+    arguments: { caseDir: winCase, paths: ['02-资产类型/机器设备/评估审核条目'] },
+    signal: new AbortController().signal,
+  })
+  assert.equal(result.value.caseDir, winCase)
+  assert.equal(result.value.knowledgeDir, `${winCase}\\knowledge`)
+  assert.equal(String(result.value.knowledgeDir).includes('/'), false)
 })

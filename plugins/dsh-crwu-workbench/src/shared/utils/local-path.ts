@@ -25,21 +25,34 @@ import { text } from './value.ts'
  *   静默清洗会让调用方以为拿到了一条安全路径（最危险的形态）。
  */
 
-/** 盘符形式：`C:\` / `C:/`，也接受裸 `C:`。 */
-const DRIVE = /^[A-Za-z]:([\\/]|$)/
+/**
+ * 盘符**风格**：`C:\` / `C:/`，也接受裸 `C:`。
+ *
+ * `C:` 是「盘符相对路径」（这个盘上的当前目录），它**不是**绝对路径 —— 风格与绝对必须分开判，
+ * 见 `isAbsoluteLocalPath`。
+ */
+const DRIVE_STYLE = /^[A-Za-z]:([\\/]|$)/
+/** 盘符**绝对**：盘符后必须有分隔符（`C:\` / `C:/`）。裸 `C:` 不算。 */
+const DRIVE_ROOTED = /^[A-Za-z]:[\\/]/
 /** UNC / 双分隔符开头：`\\server\share` 或 `//server/share`。 */
 const UNC = /^[\\/]{2}[^\\/]/
 
-/** 这个字符串看起来是 Windows 风格路径（盘符或 UNC）。 */
+/** 这个字符串看起来是 Windows 风格路径（盘符或 UNC）。**不表示它是绝对路径。** */
 export function isWindowsStylePath(value: unknown): boolean {
   const raw = text(value)
-  return DRIVE.test(raw) || UNC.test(raw)
+  return DRIVE_STYLE.test(raw) || UNC.test(raw)
 }
 
-/** 是否是绝对本地路径（POSIX `/…`、Windows 盘符、UNC 都算）。 */
+/**
+ * 是否是绝对本地路径（POSIX `/…`、Windows 盘符根、UNC）。
+ *
+ * **裸 `C:` 不是绝对路径**（2026-09-28 复查修）：早先这里复用了「Windows 风格」的判断，
+ * 于是 `requireCaseDir('C:')` 会把盘符相对路径当绝对路径放行 —— 案例目录随后随进程 cwd 漂移，
+ * 产物落点不可预测。`C:` 与 `C:\` 是完全不同的位置，两条正则不能共用。
+ */
 export function isAbsoluteLocalPath(value: unknown): boolean {
   const raw = text(value)
-  return raw.startsWith('/') || isWindowsStylePath(raw)
+  return raw.startsWith('/') || DRIVE_ROOTED.test(raw) || UNC.test(raw)
 }
 
 /**
@@ -108,6 +121,10 @@ function isParentSegment(segment: string): boolean {
  * - 片段含 `..` 整段 —— 那会静默越出调用方以为的目录。
  *
  * 空片段（`''`）跳过；片段内部的另一种分隔符会被规范成目标分隔符。
+ *
+ * 裸盘符根（`'C:'`）会被规范成 `'C:\\'` —— 「往 `C:` 后面接一段」在 Windows 上的实际含义
+ * 就是该盘的根，而不是「这个盘上的当前目录」；要判「是不是绝对路径」用 `isAbsoluteLocalPath`，
+ * 那一条对裸 `C:` 明确返回 `false`。
  */
 export function joinLocalPath(root: unknown, ...segments: unknown[]): string {
   const base = trimTrailingSeparators(root)

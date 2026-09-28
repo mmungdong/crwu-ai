@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { KNOWLEDGE_DEFAULT_SPACE_NAME } from '../dws/consts.ts'
 import {
@@ -14,7 +15,7 @@ import {
   treeStats,
   type DwsNode,
 } from '../dws/knowledge-tree.ts'
-import { CASE_KNOWLEDGE_DIR } from './consts.ts'
+import { CASE_KNOWLEDGE_DIR, KB_MANIFEST_FILE } from './consts.ts'
 import { ensureDirectory, removeFileIfExists } from './case-files.ts'
 import { requireCaseDir, fileSize } from './case-dir.ts'
 import { dwsJson } from './dws-json.ts'
@@ -252,7 +253,7 @@ export function knowledgeTools(deps: ToolDeps) {
       const platform = await deps.world.platform()
       const trusted = credentialsTrusted(deps)
       const caseDir = caseCheck.path
-      const knowledgeDir = `${caseDir.replace(/[\\/]+$/, '')}/${CASE_KNOWLEDGE_DIR}`
+      const knowledgeDir = joinLocalPath(caseDir, CASE_KNOWLEDGE_DIR)
       const base = { ...empty, caseDir, knowledgeDir }
 
       const prepared = await ensureDirectory(ctx, knowledgeDir, {
@@ -321,7 +322,7 @@ export function knowledgeTools(deps: ToolDeps) {
             manifest.push({ ...entry, status: 'skipped', reason })
             continue
           }
-          const local = `${knowledgeDir}/${relative}`
+          const local = joinLocalPath(knowledgeDir, relative)
           const cleared = await removeFileIfExists(ctx, local, {
             workdir: caseDir, platform, ...(exec.signal === undefined ? {} : { signal: exec.signal }),
           })
@@ -357,7 +358,7 @@ export function knowledgeTools(deps: ToolDeps) {
         }
       }
 
-      const manifestPath = `${knowledgeDir}/.crwu-manifest.json`
+      const manifestPath = joinLocalPath(knowledgeDir, KB_MANIFEST_FILE)
       const written = await writeManifest(ctx, manifestPath, {
         schema: 'crwu.kb-materialize.manifest.v1',
         spaceName,

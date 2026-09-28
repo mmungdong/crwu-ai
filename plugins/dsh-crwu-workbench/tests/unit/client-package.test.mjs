@@ -5574,3 +5574,15 @@ test('critical 状态跃迁：rerender 成 installing 后立即按 Esc 不得关
     unmountAll(cleanups)
   }
 })
+
+// ── Windows 本地路径：界面上的落盘位置说明 ────────────────────────────────────
+
+test('artifactHint 在 Windows 工作空间下用 `\\` 拼（界面不能显示 `C:\\.../<流水号>/`）', async () => {
+  const { artifactHint } = await import(new URL('src/client/features/workbench/workspace-view.ts', ROOT).href)
+  const win = artifactHint('C:\\Users\\张三\\Case\'s Work')
+  assert.match(win, /C:\\Users\\张三\\Case's Work\\<报告流水号>\\/, win)
+  assert.equal(/Case's Work\//.test(win), false, '不得混用分隔符')
+
+  const posix = artifactHint('/Users/me/工作空间')
+  assert.match(posix, /\/Users\/me\/工作空间\/<报告流水号>\//, posix)
+})

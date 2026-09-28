@@ -18,6 +18,7 @@ test('isWindowsStylePath 只认盘符与 UNC，不把 POSIX 绝对路径当 Wind
   assert.equal(isWindowsStylePath('C:\\Work'), true)
   assert.equal(isWindowsStylePath('C:/Work'), true)
   assert.equal(isWindowsStylePath('c:\\work\\x'), true)
+  // 风格判断接受裸盘符（`C:` 的写法确实是 Windows 风格）。
   assert.equal(isWindowsStylePath('C:'), true)
   assert.equal(isWindowsStylePath('\\\\server\\share'), true)
   assert.equal(isWindowsStylePath('//server/share'), true)
@@ -28,13 +29,23 @@ test('isWindowsStylePath 只认盘符与 UNC，不把 POSIX 绝对路径当 Wind
   assert.equal(isWindowsStylePath('C:\\Users\\张三\\Case\'s Work'), true)
 })
 
-test('isAbsoluteLocalPath 覆盖 POSIX 根、盘符与 UNC', () => {
+test('isAbsoluteLocalPath 覆盖 POSIX 根、盘符根与 UNC —— 但裸盘符不是绝对路径', () => {
   assert.equal(isAbsoluteLocalPath('/work'), true)
   assert.equal(isAbsoluteLocalPath('C:\\Work'), true)
+  assert.equal(isAbsoluteLocalPath('C:/Work'), true)
   assert.equal(isAbsoluteLocalPath('\\\\server\\share\\x'), true)
   assert.equal(isAbsoluteLocalPath('work/S1'), false)
   assert.equal(isAbsoluteLocalPath('~/x'), false)
   assert.equal(isAbsoluteLocalPath(''), false)
+  // 2026-09-28 复查修：`C:` 是「盘符相对路径」（这个盘上的当前目录），
+  // 与 `C:\` 完全不是一个位置 —— 早先这里复用了「Windows 风格」的判断，于是
+  // `requireCaseDir('C:')` 会放行一条随进程 cwd 漂移的案例目录。
+  assert.equal(isWindowsStylePath('C:'), true, '风格上它确实是 Windows 写法')
+  assert.equal(isAbsoluteLocalPath('C:'), false, '但它不是绝对路径')
+  assert.equal(isAbsoluteLocalPath('c:'), false)
+  // 有分隔符才算绝对。
+  assert.equal(isAbsoluteLocalPath('C:\\'), true)
+  assert.equal(isAbsoluteLocalPath('C:/'), true)
 })
 
 test('trimTrailingSeparators 保留根，不把盘符或 UNC 裁成残废路径', () => {
@@ -86,6 +97,14 @@ test('joinLocalPath 拒绝绝对片段与 .. 片段，而不是静默清洗', ()
   // 「含点但不是 .. 段」的文件名照常通过（`审核结果.v1.json`）。
   assert.equal(joinLocalPath('/work', '审核结果.v1.json'), '/work/审核结果.v1.json')
   assert.equal(joinLocalPath('/work', 'a..b'), '/work/a..b')
+})
+
+test('joinLocalPath 把裸盘符根规范成盘根（拼接语义），但不改变「绝对性」判据', () => {
+  // 「往 `C:` 后面接一段」在 Windows 上的实际含义就是该盘根目录。
+  assert.equal(joinLocalPath('C:', 'S1'), 'C:\\S1')
+  // 而「C: 算不算绝对路径」是另一个问题，那一侧的判据不受影响。
+  assert.equal(isAbsoluteLocalPath('C:'), false)
+  assert.equal(isAbsoluteLocalPath(joinLocalPath('C:', 'S1')), true)
 })
 
 test('joinLocalPath 根为空时返回相对片段，不伪造绝对路径', () => {

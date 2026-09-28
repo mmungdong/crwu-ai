@@ -874,3 +874,40 @@ test('audit-start refuses before spawning when the capability preflight reports 
   assert.match(result.error, /capability gap/)
   assert.equal(spawned.length, 0, '能力缺失时绝不许创建子代理')
 })
+
+// ── Windows 本地路径：案例目录候选必须用 `\` 拼 ──────────────────────────────
+
+test('assessAudit 在 Windows 案例根下用 `\\` 拼候选目录（否则扫不到交付件）', async () => {
+  // 2026-09-28 复查：`rootCandidates` 原来写 `${caseRoot}/${seqNo}` —— Windows 上拼出
+  // `C:\Cases/S1`，`isDir` 判它不是目录，于是磁盘上明明有交付件，界面却退化成「未出结果」。
+  const winRoot = 'C:\\Cases'
+  const winCase = `${winRoot}\\S1`
+  const ctx = makeCtx({
+    dirs: [winCase],
+    entries: { [winCase]: [{ type: 'file', name: '审核结果.S1.json', target: { targetKey: `${winCase}\\审核结果.S1.json` } }] },
+    files: { [`${winCase}\\审核结果.S1.json`]: '{"ok":true}' },
+  })
+  const result = await assessAudit(
+    { ctx, state: makeState(), listed: {}, agentStatusOf: () => '', caseRoot: winRoot, now: Date.parse('2026-09-20T10:00:00Z') },
+    record({ casePath: '', seqNo: 'S1', key: 'k', startedAt: '2026-09-20T09:59:00Z', ended: true }),
+  )
+  assert.equal(result.casePath, winCase, `候选目录必须是 ${winCase}`)
+  assert.equal(result.resultFile, '审核结果.S1.json', '必须真的扫到交付件')
+  assert.equal(result.casePath.includes('/'), false, '不得混用分隔符')
+})
+
+test('assessAudit 在 Windows 案例根下用 `\\` 拼 key 候选', async () => {
+  const winRoot = 'C:\\Cases'
+  const winCase = `${winRoot}\\key-1`
+  const ctx = makeCtx({
+    dirs: [winCase],
+    entries: { [winCase]: [{ type: 'file', name: '审核结果.key-1.json', target: { targetKey: `${winCase}\\审核结果.key-1.json` } }] },
+    files: { [`${winCase}\\审核结果.key-1.json`]: '{}' },
+  })
+  const result = await assessAudit(
+    { ctx, state: makeState(), listed: {}, agentStatusOf: () => '', caseRoot: winRoot, now: Date.parse('2026-09-20T10:00:00Z') },
+    record({ casePath: '', seqNo: '', key: 'key-1', startedAt: '2026-09-20T09:59:00Z', ended: true }),
+  )
+  assert.equal(result.casePath, winCase)
+  assert.equal(result.resultFile, '审核结果.key-1.json')
+})
