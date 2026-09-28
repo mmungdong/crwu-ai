@@ -146,6 +146,8 @@ const snapshotOf = (patch = {}) => ({
   initialized: true,
   check: null,
   install: null,
+  // 默认这份 install 属于**当前**事务：这个开关就是"旧终态 vs 当前事实"的显式区分。
+  installCurrent: true,
   checkOrigin: null,
   checking: false,
   installing: false,
@@ -1407,4 +1409,246 @@ test('40. 后台轮询失败不得顶掉手动取消/安装错误', async () => 
   installGate.resolve()
   await installing
   assert.equal(store.get().install.status, 'awaiting-restart')
+})
+
+// ---------------------------------------------------------------------------
+// 八、第三轮审查：重试的新事务（世代）与事务内 revision
+// ---------------------------------------------------------------------------
+
+test('41. failed 后重试安装：新事务立刻轮询，界面显示正在更新且不显示旧失败', async () => {
+  const retryGate = deferred()
+  let installCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      installCall += 1
+      if (installCall === 1) {
+        return { ok: true, check: checkAvailable(), install: { status: 'failed', kind: 'network', targetVersion: '0.0.12' } }
+      }
+      await retryGate.promise
+      return okEnvelope({ install: installAwaiting() })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({ check: checkAvailable() }),
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  await store.install()
+  assert.equal(store.get().install.status, 'failed')
+  assert.equal(vm(store.get()).showInstallError, true, '第一次失败要如实显示')
+
+  const retry = store.install() // 重试：新事务
+  await tick(4)
+  const snapshot = store.get()
+  assert.equal(snapshot.installing, true)
+  assert.equal(snapshot.installCurrent, false, '旧 failed 属于上一事务，不是当前事实')
+  assert.equal(scheduler.pending(), 1, '新事务一开始就必须安排轮询（旧终态不得挡住）')
+  const view = vm(snapshot)
+  assert.equal(view.installing, true, '重试中要显示正在安装')
+  assert.equal(view.canCancel, true)
+  assert.equal(view.canInstall, false)
+  assert.equal(view.showInstallError, false, '不能同时显示上一事务的安装失败')
+  assert.equal(view.badgeSuffix, zhCN.updateBadgeInstalling)
+
+  retryGate.resolve()
+  await retry
+  assert.equal(store.get().install.status, 'awaiting-restart')
+  assert.equal(store.get().installCurrent, true)
+})
+
+test('42. cancelled 后重试安装：同样立刻轮询，旧 cancelled 不算当前事务结果', async () => {
+  const retryGate = deferred()
+  let installCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      installCall += 1
+      if (installCall === 1) {
+        return { ok: true, check: checkAvailable(), install: { status: 'cancelled', targetVersion: '0.0.12' } }
+      }
+      await retryGate.promise
+      return okEnvelope({ install: installInstalling({ stage: 'downloading' }) })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({ check: checkAvailable() }),
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  await store.install()
+  assert.equal(store.get().install.status, 'cancelled')
+
+  const retry = store.install()
+  await tick(4)
+  assert.equal(store.get().installCurrent, false, '旧 cancelled 属于上一事务')
+  assert.equal(scheduler.pending(), 1, 'cancelled 之后重试同样要立刻轮询')
+  assert.equal(vm(store.get()).installing, true)
+  assert.equal(vm(store.get()).installBlockedReason, 'install-active')
+  assert.equal(vm(store.get()).canInstall, false)
+
+  retryGate.resolve()
+  await retry
+  assert.equal(store.get().install.status, 'installing')
+})
+
+test('43. 重试的新事务收到当前终态后停止轮询（不是让本地在飞永远压过终态）', async () => {
+  const retryGate = deferred()
+  let installCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      installCall += 1
+      if (installCall === 1) {
+        return { ok: true, check: checkAvailable(), install: { status: 'failed', kind: 'network' } }
+      }
+      await retryGate.promise
+      return okEnvelope({ install: installAwaiting() })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({
+      check: checkAvailable(),
+      install: { status: 'cancelled', targetVersion: '0.0.12' },
+    }),
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  await store.install()
+  const retry = store.install()
+  await tick(4)
+  assert.equal(scheduler.pending(), 1, '重试已开始轮询')
+
+  await scheduler.runNext() // 当前事务的终态（由轮询观察到）
+  assert.equal(store.get().install.status, 'cancelled')
+  assert.equal(store.get().installCurrent, true)
+  assert.equal(scheduler.pending(), 0, '当前事务已落定 → 立刻停止轮询，哪怕 install 请求还挂着')
+
+  retryGate.resolve()
+  await retry
+})
+
+test('41b. 上一次 action=install 的手动错误在重试开始时就清除', async () => {
+  const retryGate = deferred()
+  let installCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      installCall += 1
+      if (installCall === 1) throw new Error('install lost')
+      await retryGate.promise
+      return okEnvelope({ install: installInstalling({ stage: 'connecting' }) })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: () => {
+      throw new Error('status lost')
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  await store.install()
+  assert.deepEqual(store.get().error, { action: 'install', origin: 'manual', code: 'transport' })
+  assert.equal(vm(store.get()).showInstallError, true)
+
+  const retry = store.install()
+  await tick(4)
+  assert.equal(store.get().error, null, '开始新一次安装就清掉上一次的安装错误')
+  assert.equal(vm(store.get()).showInstallError, false)
+  assert.equal(scheduler.pending(), 1)
+
+  retryGate.resolve()
+  await retry
+})
+
+test('44. poll 先写 awaiting-restart，随后 install 响应丢失：再确认的成功必须算事实', async () => {
+  const installGate = deferred()
+  let statusCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      throw new Error('install response lost')
+    },
+    [UPDATE_OPERATION_NAMES[0]]: () => {
+      statusCall += 1
+      return okEnvelope({ check: checkAvailable(), install: installAwaiting() })
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  const installing = store.install()
+  await tick(4)
+  await scheduler.runNext() // 轮询：Host 说 awaiting-restart（当前事务落定）
+  assert.equal(store.get().install.status, 'awaiting-restart')
+  assert.equal(scheduler.pending(), 0, '当前事务落定 → 停止轮询')
+
+  installGate.resolve() // install 请求 transport failure → 恢复取事实
+  const state = await installing
+
+  assert.equal(statusCall, 2, '恢复又发了一次当前事务的 status')
+  assert.equal(state.error, null, 'Host 两次确认成功，不得报 stale 安装错误')
+  assert.equal(vm(state).showInstallError, false)
+  assert.equal(vm(state).showManualCheckError, false)
+  assert.equal(vm(state).awaitingRestart, true)
+  assert.equal(state.install.status, 'awaiting-restart')
+})
+
+test('45. 对称覆盖 cancel：已观察到 cancelled 后再确认，不得产生 stale 取消错误', async () => {
+  const cancelGate = deferred()
+  const installGate = deferred()
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      return okEnvelope({ install: installInstalling({ stage: 'installing' }) })
+    },
+    [UPDATE_OPERATION_NAMES[3]]: async () => {
+      await cancelGate.promise
+      throw new Error('cancel response lost')
+    },
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({
+      check: checkAvailable(),
+      install: { status: 'cancelled', targetVersion: '0.0.12' },
+    }),
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  const installing = store.install()
+  await tick(4)
+  await scheduler.runNext() // 轮询：Host 说 cancelled（当前事务落定）
+  assert.equal(store.get().install.status, 'cancelled')
+
+  const cancelling = store.cancel()
+  await tick(4)
+  cancelGate.resolve()
+  const state = await cancelling
+
+  assert.equal(state.error, null, '取消后的再确认不得报 stale 取消错误')
+  assert.equal(vm(state).showCancelError, false)
+  assert.equal(state.install.status, 'cancelled')
+
+  installGate.resolve()
+  await installing
+})
+
+test('46. 反向保护：终态之前发出的旧观察在终态之后返回，不得覆盖终态', async () => {
+  const installGate = deferred()
+  const staleGate = deferred()
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      return okEnvelope({ install: installAwaiting() })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: async () => {
+      await staleGate.promise
+      return okEnvelope({ install: { status: 'failed', kind: 'network', targetVersion: '0.0.12' } })
+    },
+  })
+  const { store } = storeFor({ api })
+
+  const installing = store.install()
+  await tick(4)
+  const stale = store.refreshStatus() // 同事务、终态**之前**发出
+  await tick(4)
+  installGate.resolve() // 权威响应写终态
+  await installing
+  assert.equal(store.get().install.status, 'awaiting-restart')
+
+  staleGate.resolve()
+  await stale
+  assert.equal(store.get().install.status, 'awaiting-restart', '终态之前发出的旧观察不得覆盖终态')
+  assert.equal(store.get().installCurrent, true)
 })

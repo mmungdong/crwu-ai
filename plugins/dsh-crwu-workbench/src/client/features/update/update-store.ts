@@ -28,6 +28,16 @@
  *    不认识 / 被拒 / install 字段非法 / 不被当前世代接受，都要补一次 status 取事实，
  *    再决定是"确实在推进"还是"这次动作没生效/取不到事实"。
  *
+ * ## 2026-09-28 第三轮审查修正
+ *
+ * E. **快照里的安装状态带出"它属于哪个事务"**（`installCurrent`）：上一事务的 failed / cancelled
+ *    不能挡住新事务的轮询（`shouldPoll()` 只看当前事务是否落定、当前事务是否在装），
+ *    也不能在重试期间继续当作"当前 Host 事实"显示安装失败。
+ * F. **事务内再加一层 revision**：光靠世代分不出"终态之前发出的旧观察"和"终态之后发出的新确认"
+ *    —— 两者同世代。所以每次写入安装状态都递增 `installRevision`，每个请求把**发出时**的
+ *    revision 带回来：终态之前发出的观察仍一律拒（反向保护不变），终态之后发出、且确认的就是
+ *    同一个终态的观察才算当前事实（Host 已经两次确认成功，不该报 stale）。
+ *
  * 这里**不碰 UI**：没有 React、没有 localStorage、没有 Node 模块；时间只用于轮询间隔，
  * 由注入的 scheduler 决定，单测不做真实等待。
  */
@@ -78,8 +88,15 @@ export interface UpdateSnapshot {
   initialized: boolean
   /** 最近一次**有效**的检查结论；`null` = 还没有过（不认识的响应不会覆盖它）。 */
   check: UpdateCheckState | null
-  /** 最近一次**有效**的安装结论。 */
+  /** 最近一次**有效**的安装结论（可能是**上一事务**留下的历史状态，见 `installCurrent`）。 */
   install: UpdateInstallState | null
+  /**
+   * 这份 `install` 是不是**当前事务**的结论。
+   *
+   * `false` = 它属于上一事务（例如上一次安装的 failed / cancelled 还留在快照里），
+   * 界面不得把它当成"现在正在发生的事"（但 `awaiting-restart` 例外，见 View Model）。
+   */
+  installCurrent: boolean
   /** 最近一次检查是谁触发的（决定"手动检查失败"要不要露出来）。 */
   checkOrigin: UpdateErrorOrigin | null
   /** 检查请求在飞。**与安装活动互不覆盖**。 */
@@ -183,6 +200,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     initialized: false,
     check: null,
     install: null,
+    installCurrent: false,
     checkOrigin: null,
     checking: false,
     installing: false,
@@ -198,14 +216,20 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   let statusInflight: { epoch: number; promise: Promise<StatusResult> } | null = null
   let pollCancel: (() => void) | null = null
 
-  // ── 安装事务世代 ───────────────────────────────────────────────────────────
+  // ── 安装事务世代 + 事务内 revision ─────────────────────────────────────────
   /**
    * **当前**安装事务世代。`install()` 一开新事务就 +1 —— 那一刻起，所有带着更早世代回来的
    * 响应立刻失效（不是"等新事务写入第一条状态之后"）。
    */
   let activeEpoch = 1
-  /** 当前事务是否已经落定（写过终态）；值等于 `activeEpoch` 表示"现在这份状态是终态"。 */
+  /** `snapshot.install` 属于哪个世代（0 = 还没有过）。不等于 `activeEpoch` 就是"历史状态"。 */
+  let installEpoch = 0
+  /** 哪个世代已经落定（写过终态）；值等于 `activeEpoch` 表示"当前事务已经是终态"。 */
   let settledEpoch = -1
+  /** 安装状态的**写入序号**：每接受一次安装状态 +1（事务内也递增）。 */
+  let installRevision = 0
+  /** 写入终态时的 `installRevision`：用来区分"终态之前发出的旧观察"与"终态之后发出的新确认"。 */
+  let settledAtRevision = -1
   /** 检查 / 取消请求的序号：旧请求的 finally 不许清掉新请求的活动状态。 */
   let checkSeq = 0
   let cancelSeq = 0
@@ -263,6 +287,14 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   interface InstallWrite {
     /** 这个响应发出时捕获的事务世代。 */
     epoch: number
+    /**
+     * 这个请求**发出时**的安装状态写入序号。
+     *
+     * 与 `epoch` 配合才能分清两类同世代观察：`revision < settledAtRevision` 是"终态之前发出的
+     * 旧观察"（终态后返回时必须拒绝）；`revision >= settledAtRevision` 是"终态之后发出的新确认"
+     * （确认同一个终态时算当前事实）。
+     */
+    revision: number
     /** install / cancel 的响应是本次事务的权威结论；status / poll 只是观察。 */
     authoritative: boolean
     /**
@@ -286,15 +318,20 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     //    这是第二轮审查修掉的洞：新事务刚开、还没写入任何状态时，旧响应也不能钻进来。
     if (write.epoch !== activeEpoch) return false
     if (settledEpoch === activeEpoch) {
-      // 2) 当前事务已经落定：只有本次事务自己的 install / cancel 响应还有发言权，
-      //    晚到的状态轮询（观察类）一律不许再改安装状态。
-      if (!write.authoritative) return false
+      // 2) 当前事务已经落定。观察类响应分两种（同世代，只能靠 revision 分）：
+      //    - 终态**之前**发出的旧观察 → 一律拒绝（反向保护：晚到的旧响应不得覆盖终态）；
+      //    - 终态**之后**发出的新确认 → 只有它确认的就是同一个终态时才算数
+      //      （Host 已经两次确认 awaiting-restart，恢复取事实时必须认；但也不许用它改写终态）。
+      if (!write.authoritative) {
+        if (write.revision < settledAtRevision) return false
+        if (!sameValue(next, snapshot.install)) return false
+      }
       // 3) 落定之后不许退回非终态。
       if (!isTerminalInstall(next)) return false
     }
     // 4) 检查响应里顺带带回的那份快照：安装正进行时不得用非终态覆盖它
     //    （否则"检查一下"就会把界面从"正在安装"打回"没有更新"）。
-    const installActive = snapshot.installing || snapshot.cancelling || hostInstalling()
+    const installActive = snapshot.installing || snapshot.cancelling || currentTransactionInstalling()
     if (write.incidental && installActive && !isTerminalInstall(next)) return false
     return true
   }
@@ -302,8 +339,13 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   /** 写入安装状态；返回是否真的被接受。 */
   function applyInstall(next: UpdateInstallState, write: InstallWrite): boolean {
     if (!acceptsInstall(next, write)) return false
-    if (isTerminalInstall(next)) settledEpoch = activeEpoch
-    update({ install: next })
+    installRevision += 1
+    installEpoch = activeEpoch
+    if (isTerminalInstall(next)) {
+      settledEpoch = activeEpoch
+      settledAtRevision = installRevision
+    }
+    update({ install: next, installCurrent: currentInstallIsVisible() })
     syncPolling()
     return true
   }
@@ -313,6 +355,8 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     origin: UpdateErrorOrigin
     /** 这次请求发出时捕获的安装事务世代。 */
     epoch: number
+    /** 这次请求发出时的安装状态写入序号（见 `InstallWrite.revision`）。 */
+    revision: number
     /** install / cancel 的响应是本次事务的权威结论。 */
     authoritative?: boolean
     /** 检查响应顺带带回的安装快照（见 `InstallWrite.incidental`）。 */
@@ -351,6 +395,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
         ? false
         : applyInstall(parsed.install, {
             epoch: options.epoch,
+            revision: options.revision,
             authoritative: options.authoritative === true,
             incidental: options.incidentalInstall === true,
           })
@@ -410,6 +455,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
         continue
       }
       const at = activeEpoch
+      const revision = installRevision
       const run = (async (): Promise<StatusResult> => {
         let outcome: UpdateEnvelopeOutcome
         try {
@@ -417,6 +463,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
             action,
             origin: 'background',
             epoch: at,
+            revision,
             setCheckOrigin: snapshot.checkOrigin === null,
           })
         } catch (error) {
@@ -445,6 +492,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   function startCheck(origin: UpdateErrorOrigin): Promise<UpdateSnapshot> {
     if (checkInflight !== null) return checkInflight
     const at = activeEpoch
+    const revision = installRevision
     const seq = (checkSeq += 1)
     const run = (async (): Promise<UpdateSnapshot> => {
       update({ checking: true })
@@ -453,6 +501,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
           action: 'check',
           origin,
           epoch: at,
+          revision,
           setCheckOrigin: true,
           incidentalInstall: true,
         })
@@ -471,13 +520,20 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     return run
   }
 
-  // ── 轮询：由 Host 事实驱动，不看 check ──────────────────────────────────────
-  function hostInstalling(): boolean {
-    return snapshot.install !== null && snapshot.install.status === 'installing'
+  // ── 轮询：由**当前事务**的 Host 事实驱动，不看 check ────────────────────────
+  /** `snapshot.install` 是不是当前事务的结论。 */
+  function currentInstallIsVisible(): boolean {
+    return installEpoch === activeEpoch
   }
 
-  function hostTerminal(): boolean {
-    return snapshot.install !== null && isTerminalInstall(snapshot.install)
+  /** 当前事务是否已经落定（终态已经写进快照）。 */
+  function currentTransactionSettled(): boolean {
+    return settledEpoch === activeEpoch
+  }
+
+  /** 当前事务的 Host 事实说"正在装"。上一事务留下的 installing 不算。 */
+  function currentTransactionInstalling(): boolean {
+    return currentInstallIsVisible() && snapshot.install !== null && snapshot.install.status === 'installing'
   }
 
   /**
@@ -492,9 +548,14 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
    */
   function shouldPoll(): boolean {
     if (disposed) return false
-    if (hostTerminal()) return false
+    // 当前事务已经落定 → 没有更多可观察的进展（哪怕 install 请求还没返回）。
+    if (currentTransactionSettled()) return false
+    // 本地有安装 / 取消请求在飞 → 开。这里刻意放在"当前事务落定"之后：
+    // 新事务一开始就算轮询（上一事务的 failed / cancelled 不挡），
+    // 但当前事务一旦落定就停 —— 不是让本地在飞永远压过终态。
     if (snapshot.installing || snapshot.cancelling) return true
-    return hostInstalling()
+    // 否则只看**当前事务**的 Host 事实（刷新页面恢复安装状态走这条）。
+    return currentTransactionInstalling()
   }
 
   function stopPolling(): void {
@@ -566,9 +627,13 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
       if (installInflight !== null) return installInflight
       // 新事务：**立刻**作废旧世代响应（比较基准是 activeEpoch，不是"写过的最高世代"）。
       activeEpoch += 1
+      // 用户重新开始安装：上一次安装留下的手动错误到此为止（界面不能再挂着旧失败）。
+      clearManualError('install')
       const at = activeEpoch
+      const revision = installRevision
       const run = (async (): Promise<UpdateSnapshot> => {
-        update({ installing: true })
+        // 上一事务的状态仍然可见，但**不是**当前事务的事实（installCurrent=false）。
+        update({ installing: true, installCurrent: currentInstallIsVisible() })
         syncPolling()
         try {
           let outcome: UpdateEnvelopeOutcome | null = null
@@ -578,6 +643,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
               action: 'install',
               origin: 'manual',
               epoch: at,
+              revision,
               authoritative: true,
             })
           } catch (error) {
@@ -617,7 +683,9 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
       if (cancelInflight !== null) return cancelInflight
       // 取消是**当前事务**的动作，不新开世代：它和这次安装共享同一份"谁先落定"的规则。
       const at = activeEpoch
+      const revision = installRevision
       const seq = (cancelSeq += 1)
+      clearManualError('cancel')
       const run = (async (): Promise<UpdateSnapshot> => {
         update({ cancelling: true })
         syncPolling()
@@ -628,6 +696,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
               action: 'cancel',
               origin: 'manual',
               epoch: at,
+              revision,
               authoritative: true,
             })
           } catch (error) {

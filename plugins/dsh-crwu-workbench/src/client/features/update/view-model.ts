@@ -10,6 +10,11 @@
  *
  * 2026-09-28 审查修正：错误按**动作**分派（检查 / 安装 / 取消），且"正在安装"取
  * "本地在飞 **或** Host 事实说 installing"，所以刷新页面后也能正确显示安装中并允许取消。
+ *
+ * 第三轮补充：`snapshot.installCurrent === false` 表示快照里那份安装状态属于**上一事务**
+ * （用户点了重试、新事务已经开始，但 Host 还没回报）。这种"历史状态"不得再当作当前事实
+ * 显示安装失败或"已更新"；`awaiting-restart` 例外 —— 它是"磁盘上已经是新版本、进程还没重启"
+ * 这个**持久事实**，重试期间也必须继续提示用户重启。
  */
 import { zhCN } from '../../locales/zh-CN.ts'
 import type { UpdateSnapshot } from './update-store.ts'
@@ -109,12 +114,16 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
   const error = snapshot.error
 
   const candidate = check !== null && check.status === 'available' ? check.candidate : null
+  // 这份安装状态是不是**当前事务**的结论。false = 上一事务的历史状态（例如上次安装的
+  // failed 还在快照里，而用户已经点了重试）—— 它不能继续当作"现在发生的事"。
+  const installCurrent = snapshot.installCurrent
+  // 等待重启是**持久事实**（磁盘已换、进程未重启），不随事务世代收敛：重试期间也得提示。
   const awaitingRestart = install !== null && install.status === 'awaiting-restart'
-  const showUpdated = install !== null && install.status === 'updated'
-  // 安装活动有两个来源：本地请求在飞（点下去到响应回来之间），或 Host 事实说在装
+  const showUpdated = installCurrent && install !== null && install.status === 'updated'
+  // 安装活动有两个来源：本地请求在飞（点下去到响应回来之间），或**当前事务**的 Host 事实说在装
   // （刷新页面后本地没有任何请求在飞，只有 Host 知道）。两者取或，缺一个就会出现
   // 「装到一半刷新页面 → 显示成普通有更新、还能再点安装」。
-  const installing = snapshot.installing || (install !== null && install.status === 'installing')
+  const installing = snapshot.installing || (installCurrent && install !== null && install.status === 'installing')
   const cancelling = snapshot.cancelling
   const checking = snapshot.checking || (check !== null && check.status === 'checking')
   const unsupported = check !== null && check.status === 'unsupported' ? check.reason : null
@@ -178,7 +187,7 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
     (error !== null && error.action === 'check' && error.origin === 'manual') ||
     (check !== null && check.status === 'error' && snapshot.checkOrigin === 'manual')
   const showInstallError =
-    (install !== null && install.status === 'failed') || (error !== null && error.action === 'install')
+    (installCurrent && install !== null && install.status === 'failed') || (error !== null && error.action === 'install')
   const showCancelError = error !== null && error.action === 'cancel'
 
   return {
@@ -201,13 +210,13 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
     cancelling,
     awaitingRestart,
     showUpdated,
-    installStage: install !== null && install.status === 'installing' ? install.stage : null,
+    installStage: installCurrent && install !== null && install.status === 'installing' ? install.stage : null,
     showManualCheckError,
     manualCheckErrorText: showManualCheckError ? zhCN.updateCheckFailedManual : '',
     showInstallError,
     installErrorText: showInstallError ? zhCN.updateInstallFailed : '',
     showCancelError,
     cancelErrorText: showCancelError ? zhCN.updateCancelFailed : '',
-    installErrorKind: install !== null && install.status === 'failed' ? install.kind : null,
+    installErrorKind: installCurrent && install !== null && install.status === 'failed' ? install.kind : null,
   }
 }
