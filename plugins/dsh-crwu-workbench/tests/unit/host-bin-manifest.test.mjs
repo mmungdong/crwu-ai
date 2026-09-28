@@ -245,3 +245,14 @@ test('release strict mode neutralizes an inherited npm dry_run before the real p
     '真实 pack 的子进程环境必须显式 npm_config_dry_run=false（否则 npm publish --dry-run 之下打不出 tarball）',
   )
 })
+
+test('release packaging rejects Python bytecode residue anywhere in the tree', async () => {
+  // 真实故障：在包目录里跑一次技能门禁（`kb_tool.py` / 契约测试）就会在
+  // `skills/crwu/**/scripts/__pycache__/` 落 `.pyc`，而 `files` 里有 `skills/crwu/` →
+  // 它会随包发出去（`.pyc` 里还带着构建者的绝对路径）。实测文件数 479 → 481。
+  // 前缀式 FORBIDDEN 抓不到任意深度的片段，所以这条断言钉住「按路径片段判」的写法。
+  const source = await readFile(join(ROOT, 'scripts', 'assert-pack.mjs'), 'utf8')
+  assert.match(source, /file\.split\('\/'\)\.includes\('__pycache__'\)/, '必须按路径片段抓 __pycache__（前缀匹配抓不到深层残留）')
+  assert.match(source, /file\.endsWith\('\.pyc'\)/, '散落的 .pyc 同样要在发布前拦下')
+  assert.match(source, /打进了 Python 字节码缓存/, '残留必须变成 FAIL，不是静默放过')
+})

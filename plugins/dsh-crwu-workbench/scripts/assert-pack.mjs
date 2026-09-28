@@ -114,6 +114,14 @@ for (const forbidden of FORBIDDEN) {
   const hit = files.filter((file) => file === forbidden || file.startsWith(forbidden))
   if (hit.length > 0) problems.push(`打进了不该发布的路径：${hit.slice(0, 3).join(', ')}${hit.length > 3 ? ` 等 ${hit.length} 项` : ''}`)
 }
+// 运行残留按**路径片段**判，不能只做前缀匹配：在包目录里跑一次技能门禁（`kb_tool.py` /
+// 契约测试）就会在 `skills/crwu/**/scripts/__pycache__/` 落 `.pyc`，而 `files` 里有
+// `skills/crwu/` —— 它会随包发出去（`.pyc` 里还带着构建者的绝对路径）。实测 479 → 481
+// 个文件就是这么来的，而当时的前缀匹配一条都没报。
+const pycacheHits = files.filter((file) => file.split('/').includes('__pycache__') || file.endsWith('.pyc'))
+if (pycacheHits.length > 0) {
+  problems.push(`打进了 Python 字节码缓存（跑技能门禁留下的运行残留）：${pycacheHits.slice(0, 3).join(', ')}${pycacheHits.length > 3 ? ` 等 ${pycacheHits.length} 项` : ''}`)
+}
 // 体积上限。技能正文是随包发布的主体（`crwu` 层约 2.7MB + vendored 的 `dws` 层约 3.0MB），
 // 而**自带二进制才是大头**：darwin-arm64 与 win32-x64 各一套 crwu/dws/ossutil，
 // 两个平台合计解包约 100MB（dws 一个平台就 32MB）。所以这里卡的是「有没有多打了不该进包的东西」，
