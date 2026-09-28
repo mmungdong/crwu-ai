@@ -74,11 +74,27 @@ jobs:
       - name: skill gates
         if: runner.os == 'Linux'
         run: |
-          python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu
-          python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root ../common/skills
-          python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
-          python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
-          python3 ../common/skills/crwu-dws/scripts/test_dws_source_contract.py
+          # 日志接口要仓库 admin 权限（普通 token 403），所以失败原因必须落成**公开可读**的
+          # check-run 注解 —— 与 windows 那条 annotate 步骤同一口径。2026-09-28 这一步在
+          # ubuntu 上一直是红，而注解里只有一句「Process completed with exit code 1」，
+          # 连是哪条门禁、为什么都读不出来。
+          run_gate() {
+            label="$1"; shift
+            if "$@" > /tmp/skill-gate.log 2>&1; then
+              echo "OK   $label"
+              return 0
+            fi
+            tail -30 /tmp/skill-gate.log
+            echo "::error title=skill gate 失败：$label::$(tail -20 /tmp/skill-gate.log | sed ':a;N;$!ba;s/\n/%0A/g')"
+            return 1
+          }
+          status=0
+          run_gate "自洽性 lint：skills/crwu" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu || status=1
+          run_gate "自洽性 lint：../common/skills" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root ../common/skills || status=1
+          run_gate "维护者源仓契约测试" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py || status=1
+          run_gate "router 源仓契约测试" python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py || status=1
+          run_gate "crwu-dws 源仓契约测试" python3 ../common/skills/crwu-dws/scripts/test_dws_source_contract.py || status=1
+          exit $status
 
       # 公共层是**生成产物**：`common/skills/` 在 `.gitignore` 里，源是 `../common/skills`。
       # 下面的 `pack:assert`（tarball 的必需文件里有 `common/skills/crwu-dws/SKILL.md`）与

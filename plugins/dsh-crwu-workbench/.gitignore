@@ -1,14 +1,18 @@
 node_modules/
-dist/
-lib/
+# 下面这些**必须锚定在包根**（`/xxx/`）：不锚定的 `lib/` 会把 `scripts/lib/` 一起忽略掉，
+# 而 `scripts/lib/skill-digest.mjs` 是 `npm run skills:sync` / `dws:sync` / `build` 的依赖 ——
+# 它只存在于维护者本机、从没进过版本库，于是 CI 与发布作业一跑到 `skills:sync` 就
+# `ERR_MODULE_NOT_FOUND`（2026-09-28 实测：plugin-v0.0.11 的发布作业就卡在这一步）。
+/dist/
+/lib/
 *.tsbuildinfo
 .DS_Store
 .venv/
 .superpowers/
 *.tgz
 # 打包前由 scripts/sync-common-skills.mjs 从 ../../common/skills 生成
-common/skills/
+/common/skills/
 # 打包前由 scripts/sync-binaries.mjs 装配（crwu 构建产物 + ossutil 官方包 + dws 上游归档）：
 # 二进制是构建输入，不进版本库；下载缓存同理。
-bin/
-.cache/
+/bin/
+/.cache/
