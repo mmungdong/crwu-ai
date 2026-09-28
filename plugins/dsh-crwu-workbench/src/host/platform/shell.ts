@@ -139,6 +139,22 @@ export function privateFileCommand(path: string, platform: string): string {
 }
 
 /**
+ * 读取一个文件的 POSIX 权限模式（八进制，例如 `600`）。
+ *
+ * **为什么需要它**：`chmod` 在个别文件系统（网络盘、被容器/虚拟化层挡住的挂载点）上会
+ * **静默无效** —— 退出码 0 但模式没变。只信退出码就把「命令跑过了」说成「权限已验证」，
+ * 而 0600 正是凭据文件的安全边界。所以收紧之后要回读一次。
+ *
+ * GNU 与 BSD 的 `stat` 参数不同，这个分歧只在这里出现一次：
+ * `stat -c %a`（GNU/Linux）与 `stat -f %Lp`（BSD/macOS）。Windows 没有 POSIX 模式位，返回空串。
+ */
+export function readFileModeCommand(path: string, platform: string): string {
+  if (shellDialect(platform) === 'powershell') return ''
+  const quoted = shellQuote(path, platform)
+  return text(platform).startsWith('darwin') ? `stat -f %Lp ${quoted}` : `stat -c %a ${quoted}`
+}
+
+/**
  * 该平台用哪种机制保护凭据文件 —— 与 `privateFileCommand` **同一判据**。
  *
  * 拆出来是因为调用方要把「谁在负责」写进结构化的权限结论（`CredentialPermission.mechanism`），

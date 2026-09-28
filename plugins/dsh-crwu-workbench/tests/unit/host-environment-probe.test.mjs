@@ -99,7 +99,7 @@ function fsStub({ infos = {}, files = {}, failWrite = false } = {}) {
  *
  * `{ runs: false }` 走 DSH 契约里「命令根本没执行」的形状：`execute` 抛错。
  */
-function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '' } = {}) {
+function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '', mode = '600' } = {}) {
   const commands = []
   const shell = {
     resolve: (request) => request,
@@ -107,9 +107,12 @@ function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '' 
       commands.push(spec.command)
       if (failOn !== '' && spec.command.includes(failOn)) throw new Error(error)
       if (!runs) throw new Error(error)
+      // 权限收紧之后会**回读模式位**（`stat -f %Lp` / `stat -c %a`）：替身必须回答这一条，
+      // 否则 `verified` 会被误判成 failed（那正是「只信退出码」时代的反面）。
+      const text = /^stat -[fc] /.test(spec.command) ? mode : stdout
       return { result: async () => ({
         exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
-        stdout: { text: stdout, truncated: false }, stderr: { text: '', truncated: false },
+        stdout: { text, truncated: false }, stderr: { text: '', truncated: false },
       }) }
     },
   }

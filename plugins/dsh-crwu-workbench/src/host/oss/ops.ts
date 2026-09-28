@@ -362,9 +362,11 @@ export interface CredSaveResult {
 }
 
 export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>): Promise<CredSaveResult> {
+  // 输入校验发生在权限操作**之前**，但机制字段仍必须与注入的平台一致：
+  // 硬编码 `posix-0600` 会让 win32-x64 上的失败信封说错「谁在负责权限」。
   const failed = (error: string): CredSaveResult => ({
     ok: false, error, path: '', operation: '',
-    permission: { status: 'failed', mechanism: 'posix-0600', message: error }, probe: null, cred: null,
+    permission: failedPermission(error, deps.platform), probe: null, cred: null,
   })
   const accessKeyId = text(args.accessKeyId).trim()
   const accessKeySecret = text(args.accessKeySecret).trim()
