@@ -1002,15 +1002,14 @@ test('29. 较早的终态/installing 都不得覆盖较新事务的状态', asyn
   assert.equal(store.get().error, null)
 })
 
-test('29b. 同一事务内：较新的 cancelled 落定后，晚到的 installing 与旧终态都不得覆盖', async () => {
+test('29b. 同一事务内：较新的 cancelled 落定后，晚到的另一个终态不得覆盖', async () => {
   const lateGate = deferred()
-  let statusCall = 0
   const api = fakeUpdateApi({
     [UPDATE_OPERATION_NAMES[2]]: okEnvelope({ install: installInstalling({ stage: 'installing' }) }),
     [UPDATE_OPERATION_NAMES[3]]: okEnvelope({ install: { status: 'cancelled', targetVersion: '0.0.12' } }),
+    // 终态**落定之后**才发出的观察（revision 已是最新）：回来时带着另一个终态 failed。
+    // 这一条只有"落定后只许确认完全相同的终态"能拦住 —— revision 比较在这里是不成立的。
     [UPDATE_OPERATION_NAMES[0]]: async () => {
-      statusCall += 1
-      if (statusCall === 1) return okEnvelope({ install: installInstalling({ stage: 'connecting' }) })
       await lateGate.promise
       return okEnvelope({ install: { status: 'failed', kind: 'timeout', targetVersion: '0.0.12' } })
     },
@@ -1022,12 +1021,11 @@ test('29b. 同一事务内：较新的 cancelled 落定后，晚到的 installin
   await store.cancel()
   assert.equal(store.get().install.status, 'cancelled')
 
-  // 同一事务里，一个"发得早、回得晚"的轮询带着旧终态回来
   const late = store.refreshStatus()
   await tick(4)
   lateGate.resolve()
   await late
-  assert.equal(store.get().install.status, 'cancelled', '晚到的旧终态不得覆盖已落定的 cancelled')
+  assert.equal(store.get().install.status, 'cancelled', '晚到的另一个终态不得覆盖已落定的 cancelled')
   assert.equal(store.get().cancelling, false)
   assert.equal(scheduler.pending(), 0, '终态后不再轮询')
 })
@@ -1651,4 +1649,145 @@ test('46. 反向保护：终态之前发出的旧观察在终态之后返回，�
   await stale
   assert.equal(store.get().install.status, 'awaiting-restart', '终态之前发出的旧观察不得覆盖终态')
   assert.equal(store.get().installCurrent, true)
+})
+
+// ---------------------------------------------------------------------------
+// 九、第四轮审查：同一事务内"过期观察"不得覆盖更新的安装状态
+// ---------------------------------------------------------------------------
+
+/**
+ * 造一个"较新的 update-install 响应先回来、较早发出的 poll 后回来"的场景。
+ *
+ * @param staleState - 较早那次 poll 回来时带的 install 状态。
+ * @returns store / install promise / scheduler / 两个 deferred。
+ */
+function olderPollAfterInstall(staleState) {
+  const installGate = deferred()
+  const pollGate = deferred()
+  let statusCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      return okEnvelope({ check: checkAvailable(), install: installInstalling({ stage: 'installing' }) })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: async () => {
+      statusCall += 1
+      if (statusCall === 1) {
+        await pollGate.promise
+        return okEnvelope({ check: checkAvailable(), install: staleState })
+      }
+      return okEnvelope({ check: checkAvailable(), install: installInstalling({ stage: 'installing' }) })
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+  return { store, api, scheduler, installGate, pollGate }
+}
+
+test('47. 较新的 install 响应之后，较早的 poll 不得把状态打回 idle', async () => {
+  const { store, scheduler, installGate, pollGate } = olderPollAfterInstall(installIdle)
+
+  const installing = store.install()
+  await tick(4)
+  await scheduler.runNext() // poll 先发出（挂住），捕获旧的 revision
+  installGate.resolve() // 较新的权威响应先回来
+  await tick(6)
+
+  assert.equal(store.get().install.status, 'installing', '权威响应已写入安装中')
+  assert.equal(store.get().install.stage, 'installing')
+  assert.equal(store.get().installCurrent, true)
+  assert.equal(scheduler.pending(), 1, '安装仍在进行 → 继续轮询')
+
+  pollGate.resolve() // 旧 poll 带着 idle 回来
+  await tick(8)
+  assert.equal(store.get().install.status, 'installing', '过期观察不得把状态打回 idle')
+  assert.equal(store.get().install.stage, 'installing', '阶段不得倒退')
+  assert.equal(store.get().installCurrent, true)
+  assert.equal(scheduler.pending(), 1, '过期观察不得停掉轮询')
+  assert.equal(store.get().error, null, '过期观察不得产生手动错误')
+
+  await installing
+})
+
+test('48. 较早的 poll 不得把安装阶段倒退回旧值', async () => {
+  const { store, scheduler, installGate, pollGate } = olderPollAfterInstall(
+    installInstalling({ stage: 'connecting' }),
+  )
+
+  const installing = store.install()
+  await tick(4)
+  await scheduler.runNext()
+  installGate.resolve()
+  await tick(6)
+  assert.equal(store.get().install.stage, 'installing')
+
+  pollGate.resolve()
+  await tick(8)
+  assert.equal(store.get().install.stage, 'installing', '阶段只许往前走，不许被旧观察拉回去')
+  assert.equal(scheduler.pending(), 1)
+
+  await installing
+})
+
+test('49. 较早的 poll 返回任意终态都不得覆盖较新的 installing', async () => {
+  const cases = [
+    ['idle', installIdle],
+    ['installing', installInstalling({ stage: 'downloading' })],
+    ['failed', { status: 'failed', kind: 'network', targetVersion: '0.0.12' }],
+    ['cancelled', { status: 'cancelled', targetVersion: '0.0.12' }],
+    ['awaiting-restart', installAwaiting()],
+    ['updated', { status: 'updated', version: '0.0.12' }],
+  ]
+  for (const [label, staleState] of cases) {
+    const { store, scheduler, installGate, pollGate } = olderPollAfterInstall(staleState)
+    const installing = store.install()
+    await tick(4)
+    await scheduler.runNext()
+    installGate.resolve()
+    await tick(6)
+
+    pollGate.resolve()
+    await tick(8)
+    assert.equal(store.get().install.status, 'installing', `${label}：过期观察不得覆盖较新的状态`)
+    assert.equal(store.get().install.stage, 'installing', `${label}：阶段不得倒退`)
+    assert.equal(scheduler.pending(), 1, `${label}：过期观察不得停掉轮询`)
+    assert.equal(store.get().error, null, `${label}：过期观察不得产生手动错误`)
+
+    await installing
+  }
+})
+
+test('50. 当前 revision 的新观察可以正常推进阶段（不是把所有观察都拒掉）', async () => {
+  const installGate = deferred()
+  const stages = ['connecting', 'downloading', 'installing']
+  let statusCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      return okEnvelope({ check: checkAvailable(), install: installInstalling({ stage: 'connecting' }) })
+    },
+    [UPDATE_OPERATION_NAMES[0]]: () => {
+      const stage = stages[Math.min(statusCall, stages.length - 1)]
+      statusCall += 1
+      return okEnvelope({ check: checkAvailable(), install: installInstalling({ stage }) })
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  const installing = store.install()
+  await tick(4)
+  assert.equal(scheduler.pending(), 1, '安装期间在轮询')
+
+  const seen = []
+  for (let index = 0; index < 3; index += 1) {
+    await scheduler.runNext()
+    seen.push(store.get().install.stage)
+  }
+  assert.deepEqual(seen, ['connecting', 'downloading', 'installing'], '每次新发出的观察都要被接受')
+  assert.equal(store.get().installCurrent, true)
+  assert.equal(scheduler.pending(), 1)
+
+  installGate.resolve()
+  await installing
 })

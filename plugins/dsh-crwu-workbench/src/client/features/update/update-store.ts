@@ -33,10 +33,17 @@
  * E. **快照里的安装状态带出"它属于哪个事务"**（`installCurrent`）：上一事务的 failed / cancelled
  *    不能挡住新事务的轮询（`shouldPoll()` 只看当前事务是否落定、当前事务是否在装），
  *    也不能在重试期间继续当作"当前 Host 事实"显示安装失败。
- * F. **事务内再加一层 revision**：光靠世代分不出"终态之前发出的旧观察"和"终态之后发出的新确认"
- *    —— 两者同世代。所以每次写入安装状态都递增 `installRevision`，每个请求把**发出时**的
- *    revision 带回来：终态之前发出的观察仍一律拒（反向保护不变），终态之后发出、且确认的就是
- *    同一个终态的观察才算当前事实（Host 已经两次确认成功，不该报 stale）。
+ * F. **事务内再加一层 revision**：光靠世代分不出同一事务里"谁更新" —— 两者世代相同。
+ *    每次写入安装状态都递增 `installRevision`，每个请求把**发出时**的 revision 带回来；
+ *    返回时若 `installRevision` 已经更大，就说明期间有更新的状态被接受，这份观察作废
+ *    （终态之前发出的旧观察、以及更新的 update-install 之后回来的旧 poll，都走这一条）。
+ *
+ * ## 2026-09-28 第四轮审查修正
+ *
+ * G. **revision 保护所有观察响应，不只终态之后**：`write.revision < installRevision` 的
+ *    非权威响应一律拒绝 —— 否则"update-install 先写 installing、较早发出的 poll 后返回 idle"
+ *    会把状态打回 idle 并把轮询停掉。终态之后只额外多一条"只允许确认完全相同的终态"。
+ *    当前 revision 的观察照常推进（connecting → downloading → installing 不受影响）。
  *
  * 这里**不碰 UI**：没有 React、没有 localStorage、没有 Node 模块；时间只用于轮询间隔，
  * 由注入的 scheduler 决定，单测不做真实等待。
@@ -226,10 +233,13 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   let installEpoch = 0
   /** 哪个世代已经落定（写过终态）；值等于 `activeEpoch` 表示"当前事务已经是终态"。 */
   let settledEpoch = -1
-  /** 安装状态的**写入序号**：每接受一次安装状态 +1（事务内也递增）。 */
+  /**
+   * 安装状态的**写入序号**：每接受一次安装状态 +1（事务内也递增）。
+   *
+   * 请求发出时捕获它，返回时再比一次：`write.revision < installRevision` 就是"这份观察发出之后
+   * 已经有更新的状态被接受了" —— 过期观察，任何结论（含任意终态）都不许覆盖当前状态。
+   */
   let installRevision = 0
-  /** 写入终态时的 `installRevision`：用来区分"终态之前发出的旧观察"与"终态之后发出的新确认"。 */
-  let settledAtRevision = -1
   /** 检查 / 取消请求的序号：旧请求的 finally 不许清掉新请求的活动状态。 */
   let checkSeq = 0
   let cancelSeq = 0
@@ -290,9 +300,9 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     /**
      * 这个请求**发出时**的安装状态写入序号。
      *
-     * 与 `epoch` 配合才能分清两类同世代观察：`revision < settledAtRevision` 是"终态之前发出的
-     * 旧观察"（终态后返回时必须拒绝）；`revision >= settledAtRevision` 是"终态之后发出的新确认"
-     * （确认同一个终态时算当前事实）。
+     * 与 `epoch` 配合区分同世代内的新旧：`revision < installRevision` = 这份观察发出之后已经有
+     * 更新的状态被接受 → 过期观察，必须拒绝；`revision === installRevision` = 最新的观察，
+     * 可以推进状态（落定时只允许确认完全相同的终态）。
      */
     revision: number
     /** install / cancel 的响应是本次事务的权威结论；status / poll 只是观察。 */
@@ -309,24 +319,29 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
   /**
    * 这份安装状态是否还有资格写进快照（过期响应保护）。
    *
+   * 判定顺序：
+   * 1. `write.epoch !== activeEpoch` → 拒（跨事务的旧响应全部失效）；
+   * 2. 非权威且 `write.revision < installRevision` → 拒（**过期观察**：期间已有更新的状态被接受）；
+   * 3. 当前事务已落定 → 非权威的只允许确认完全相同的终态，且任何响应都不许退回非终态；
+   * 4. 检查响应顺带带回的快照，安装进行时不得用非终态覆盖。
+   *
    * @param next - 收窄后的安装状态。
-   * @param write - 这份状态来自哪个世代、是不是本次事务的权威结论。
+   * @param write - 这份状态来自哪个世代、哪个 revision、是不是本次事务的权威结论。
    * @returns 可以写入为 true。
    */
   function acceptsInstall(next: UpdateInstallState, write: InstallWrite): boolean {
     // 1) 不是**当前**事务的响应：立刻失效。idle / installing / 任何终态都不许写 ——
     //    这是第二轮审查修掉的洞：新事务刚开、还没写入任何状态时，旧响应也不能钻进来。
     if (write.epoch !== activeEpoch) return false
+    // 2) **过期观察**（对全部非权威响应生效，不只终态之后）：这份响应发出之后，已经有更新的
+    //    安装状态被接受 —— 它带回来的任何结论（idle / installing / 旧阶段 / failed / cancelled /
+    //    awaiting-restart / updated）都不许覆盖当前状态，也不许影响轮询。
+    if (!write.authoritative && write.revision < installRevision) return false
     if (settledEpoch === activeEpoch) {
-      // 2) 当前事务已经落定。观察类响应分两种（同世代，只能靠 revision 分）：
-      //    - 终态**之前**发出的旧观察 → 一律拒绝（反向保护：晚到的旧响应不得覆盖终态）；
-      //    - 终态**之后**发出的新确认 → 只有它确认的就是同一个终态时才算数
-      //      （Host 已经两次确认 awaiting-restart，恢复取事实时必须认；但也不许用它改写终态）。
-      if (!write.authoritative) {
-        if (write.revision < settledAtRevision) return false
-        if (!sameValue(next, snapshot.install)) return false
-      }
-      // 3) 落定之后不许退回非终态。
+      // 3) 当前事务已经落定：终态之后新发出的观察只允许**确认完全相同的终态**
+      //    （Host 再次确认 awaiting-restart 时算当前事实，但不许改写终态，也不许换成别的终态）。
+      if (!write.authoritative && !sameValue(next, snapshot.install)) return false
+      // 4) 落定之后不许退回非终态（权威响应同样受这条约束）。
       if (!isTerminalInstall(next)) return false
     }
     // 4) 检查响应里顺带带回的那份快照：安装正进行时不得用非终态覆盖它
@@ -341,10 +356,7 @@ export function createUpdateStore(deps: UpdateStoreDeps): UpdateStore {
     if (!acceptsInstall(next, write)) return false
     installRevision += 1
     installEpoch = activeEpoch
-    if (isTerminalInstall(next)) {
-      settledEpoch = activeEpoch
-      settledAtRevision = installRevision
-    }
+    if (isTerminalInstall(next)) settledEpoch = activeEpoch
     update({ install: next, installCurrent: currentInstallIsVisible() })
     syncPolling()
     return true
