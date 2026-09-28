@@ -134,4 +134,3 @@ test('readFileModeCommand 按 GNU / BSD / Windows 三种分支生成回读命令
   // Windows 没有 POSIX 模式位：空串表示「这一项不适用」，调用方不许据此宣称已验证。
   assert.equal(readFileModeCommand('C:\\Users\\x\\cred.json', 'win32-x64'), '')
 })
-
