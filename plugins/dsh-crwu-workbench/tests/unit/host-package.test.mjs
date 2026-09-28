@@ -829,3 +829,50 @@ test('every declared peer dependency is a real DSH package reference', async () 
   assert.equal(pkg.devDependencies['@deepseek-ai/dsh-client-ui-slots'], undefined)
   assert.equal(pkg.peerDependencies['@deepseek-ai/dsh-client-ui-slots'], undefined)
 })
+
+/**
+ * 本包声明支持、且**逐包比对过 API** 的 DSH 运行时版本。
+ *
+ * 判据来自 DSH 自己的 `evaluatePluginCompatibility()`（`@deepseek-ai/dsh-app-boot`）：
+ * 只读 `peerDependencies` 里 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的**区间**，与
+ * `getDshRuntimeVersion()`（= app-boot 包自己的版本）做
+ * `semver.satisfies(runtime, range, { includePrerelease: true })`；不匹配就把整行插件
+ * 改成 `disabled: true`，界面报「与 DSH 不兼容」。`engines.dsh` **不参与**判定。
+ *
+ * 这里列的是**我们逐包比对过 API 的线**；同一条线内后续的 rc 补丁与正式版由区间语义覆盖，
+ * 不必逐个列举（`^0.2.0-rc.1` 已含 `0.2.0`…`0.2.x`）。
+ */
+const SUPPORTED_DSH_RUNTIMES = ['0.1.7-rc.2', '0.1.7', '0.2.0-rc.1']
+
+test('peer 区间必须覆盖每一条我们声明支持的 DSH 运行时线（否则装上去直接被禁用）', async () => {
+  const { satisfies, validRange } = await import('semver')
+  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
+  const dshPeers = Object.entries(pkg.peerDependencies)
+    .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
+
+  // 2026-09-28 的真实事故：peer 原本只写 `^0.1.7-rc.2`（= `>=0.1.7-rc.2 <0.2.0-0`），
+  // DSH 升到 0.2.0-rc.1 后整包被判不兼容 —— 症状是「装上了但被禁用」。
+  assert.ok(dshPeers.length > 0, '至少应声明一个 @deepseek-ai/dsh-* peer')
+  for (const [name, range] of dshPeers) {
+    assert.notEqual(validRange(range), null, `${name} 的区间不是合法 semver 区间：${range}`)
+    for (const runtime of SUPPORTED_DSH_RUNTIMES) {
+      assert.equal(
+        satisfies(runtime, range, { includePrerelease: true }),
+        true,
+        `${name} 的区间（${range}）不覆盖 DSH ${runtime}；DSH 会把整个插件判为不兼容并禁用`,
+      )
+    }
+  }
+
+  // 反向：没逐包比对过的线不能顺手放进来 —— 范围必须是**有意**加的，不是 `*`。
+  for (const [name, range] of dshPeers) {
+    assert.equal(
+      satisfies('0.3.0-rc.1', range, { includePrerelease: true }),
+      false,
+      `${name} 的区间（${range}）顺带覆盖了尚未验证的 0.3 线；先逐包比对 API 再把那条线写进白名单`,
+    )
+  }
+
+  // `engines.dsh` 不是门禁，但它必须与 peer 口径一致，避免两处说法不同。
+  assert.equal(pkg.engines.dsh, pkg.peerDependencies['@deepseek-ai/dsh-tools'])
+})

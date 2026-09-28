@@ -1013,25 +1013,39 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 
 ### 8.6 与 DSH 版本对齐
 
-`peerDependencies` 里的 `@deepseek-ai/dsh-*` 与已安装 DSH 对齐（当前 `^0.1.7-rc.2`，cordis `^4.0.4`）。
-DSH API 是 developer preview：**升级 DSH 时必须**同步核对这几个 peer、重跑门禁，并把兼容到的
+`peerDependencies` 里的 `@deepseek-ai/dsh-*` 必须覆盖**每一条我们声明支持的 DSH 运行时线**
+（当前 `^0.1.7-rc.2 || ^0.2.0-rc.1`，cordis `^4.0.4`）。DSH API 是 developer preview：
+**加一条 DSH 线之前**必须逐包比对这几个 peer 的 API，再把那条线写进区间，并把兼容到的
 DSH 版本写进 `CHANGELOG.md`。
 
 **0.1.7 起 peer 是硬门禁，不再是提醒**（依据 0.1.7-rc.2 的 app-boot 文档原文）：加载 profile 的
 bundle 层时会拿 `getDshRuntimeVersion()` 与每个 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的
 peer 范围比对，**「Every declared range must match; prereleases participate in range matching」**，
 不匹配的 bundle 会被**当作不可读直接跳过**并记进 `skippedBundles` —— 表现为「插件装上了、界面里
-什么都没有」，而启动日志干干净净。注意三点：
+什么都没有」，而启动日志干干净净；插件管理器还会直接把这一行标成「与 DSH <运行时版本> 不兼容
+（要求 …）」并禁用。注意五点：
 
 - 判据是 **`peerDependencies`，不是 `engines.dsh`**：官方文档明确写了「These checks use peer
   declarations, not `engines.dsh`」，而 `dsh.manifestVersion` 与 `engines.dsh` 目前**只是声明、
   没有任何强制**（`dsh-package-manifest` README：「Current installers and loaders do not enforce」）。
   本包两者都写，仅为声明口径；真正生效的是 peer。
-- 范围写 `^0.1.7-rc.2` 而不是钉死：同一条 `0.1.7` 线上的 rc 补丁（rc.3…）与正式版都能过门禁，
-  避免 DSH 一升级就全员硬失败。语义上 `^0.1.7-rc.2` = `>=0.1.7-rc.2 <0.2.0`，且预发布只在
-  同一 `[major,minor,patch]` 元组内匹配（所以 `0.1.8-rc.1` **不会**被放行）。
+- **一条线一个 `^` 区间，用 `||` 并列**：`^0.1.7-rc.2 || ^0.2.0-rc.1` 精确表达「0.1.7 线的 rc 补丁
+  与正式版」+「0.2.0-rc.1 到 0.2.x」，而 `>=0.1.7-rc.2 <0.3.0` 会顺带放行**没验证过的** 0.3 线。
+  注意 `^0.1.7-rc.2` 语义是 `>=0.1.7-rc.2 <0.2.0-0`，**不含** `0.2.0-rc.1` —— 2026-09-28 的真实
+  事故正是这一条（DSH 升到 0.2.0-rc.1 后 0.0.13 被整体判为不兼容）。
+- **加线之前先逐包比对 API**：把两条线的 `@deepseek-ai/dsh-*` tarball 都 `npm pack` 下来逐文件 diff，
+  确认插件用到的部分没变（0.1.7-rc.2 → 0.2.0-rc.1 的实测结论：7 个 peer 里 5 个字节相同，
+  `dsh-client-ui-sidebar` 只多 1 行埋点、`dsh-client-ui-layout` 只多一段 Windows 标题栏 CSS）。
+  比对结论写进 `CHANGELOG.md`。**只改区间不做比对等于赌**。
 - 精确版本豁免写在 **profile 自己的 `compatibility.json`**（不在本包），由插件管理器写入；
   「同一个版本只发一次」的纪律意味着**豁免不是升级路径**，改 API 就该发新版本。
+- `devDependencies` 里**必须同时列出全部 7 个 peer**（哪怕并不 import）：npm 的 peer 自动安装会为
+  「只有 peer、树里没有具体实例」的包去解析**最新**匹配版本，于是新线里那些把 `peerDependencies`
+  写成精确版本的包（例如 `@deepseek-ai/dsh-skill-filesystem@0.2.0-rc.1` 要求
+  `@deepseek-ai/dsh-fs@0.2.0-rc.1`）会和旧线的 devDep 撞成 `ERESOLVE`。列出实例 = 把开发树钉在
+  我们开发所对的那条线上。**接收方不受影响**：profile 的 pnpm 配了 `autoInstallPeers: false`，
+  `@deepseek-ai/dsh-*` 从来不由包管理器安装（DSH 运行时自己提供）。`host-package.test.mjs` 那条
+  真装 tarball 的回归盯着这一点，`peer 区间必须覆盖每一条我们声明支持的 DSH 运行时线` 那条盯着区间。
 - **0.1.7 的 shell 契约变更**：`ShellExecutor.run(spec)` 已不存在，改为 `execute(spec)` 返回进程句柄，
   前台结果在句柄的 `result()` 上（`ShellExecSpec` 另增 `onExpiry`）。本仓的 `runShell` 是唯一调用点，
   测试替身必须跟着 `execute().result()` 走 —— 0.1.5 的 `run` 形状在 0.1.7 上会直接 `is not a function`。

@@ -206,13 +206,17 @@ it builds when the sources are present and skips with an explanation when they a
 `tests/unit/host-package.test.mjs` pins this with a real `npm pack` + `npm install` + import regression —
 both failure modes were invisible to local gates and only surfaced for the person installing the package.
 
-`peerDependencies` currently target the `@deepseek-ai/dsh-*@^0.1.7-rc.2` line (cordis `^4.0.4`), matching the
-installed DSH. The DSH plugin API is a developer preview: when you upgrade DSH, re-check those peers, re-run the
-gate, and record the supported DSH version in `CHANGELOG.md`.
+`peerDependencies` cover **two DSH lines**: `@deepseek-ai/dsh-*@^0.1.7-rc.2 || ^0.2.0-rc.1` (cordis `^4.0.4`).
+One `^` range per line, joined with `||`, rather than a single `>=… <…` — the latter would also admit the
+unverified 0.3 line. The DSH plugin API is a developer preview: **before adding a line**, diff the
+`@deepseek-ai/dsh-*` packages of both lines file by file, re-run the gate, and record the supported DSH
+version in `CHANGELOG.md`.
 
 > **Since 0.1.7 this is a hard gate.** DSH compares the runtime version against every `@deepseek-ai/dsh*` peer
 > range and **skips the whole bundle** on any mismatch (recorded in `skippedBundles`) — the symptom is "the plugin
-> is installed but nothing appears", with a clean startup log. The check reads `peerDependencies`, not `engines.dsh`.
+> is installed but nothing appears", with a clean startup log; the plugin manager also marks the row
+> "incompatible with DSH \<version\>" and disables it. The check reads `peerDependencies`, not `engines.dsh`.
+> Note that `^0.1.7-rc.2` means `>=0.1.7-rc.2 <0.2.0-0` and therefore **excludes** `0.2.0-rc.1`.
 
 ## Development
 

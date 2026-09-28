@@ -7,6 +7,34 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.14 · 2026-09-28
+
+**兼容 DSH `0.2.0-rc.1`：peer 区间从「一条线」改成「两条线并列」。**
+0.0.13 及更早的版本在 DSH `0.2.0-rc.1` 上会被整体判为不兼容 —— 插件管理器的原文是
+「`dsh-crwu-workbench@0.0.13` 与 DSH `0.2.0-rc.1` 不兼容（要求 `@deepseek-ai/dsh-tools@^0.1.7-rc.2`…），
+运行它可能导致崩溃或数据丢失。请安装与当前 DSH 兼容的插件版本。」，装上了也会被禁用。
+
+- **根因**：`^0.1.7-rc.2` 的语义是 `>=0.1.7-rc.2 <0.2.0-0`，**不含** `0.2.0-rc.1`。DSH 从 0.1.7 起把
+  peer 当**硬门禁**：加载 profile 的 bundle 层时拿 `getDshRuntimeVersion()` 与每个
+  `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的**区间**比对（预发布参与匹配），不匹配的整行被跳过；
+  插件管理器在安装前还会拿候选包自己的 `peerDependencies` 先判一次。
+- **peer 改成 `^0.1.7-rc.2 || ^0.2.0-rc.1`**（7 个 `@deepseek-ai/dsh-*` 与 `engines.dsh` 一致）。
+  **一条线一个 `^` 区间并列，不用 `>=0.1.7-rc.2 <0.3.0`** —— 后者会顺带放行还没验证过的 0.3 线。
+- **加线之前逐包比对过 API**，比对结论（`npm pack` 两条线的全部 `@deepseek-ai/dsh-*` 后逐文件 diff）：
+  7 个 peer 里 `dsh-tools` / `dsh-plugin-manager` / `dsh-host-webserver` / `dsh-client-ui-renderer` /
+  `dsh-skill-filesystem` **字节相同**；`dsh-client-ui-sidebar` 只多了 1 行埋点调用与 1 行文档注释；
+  `dsh-client-ui-layout` 只多了一段 Windows 标题栏的 CSS 变量。插件用到的类型与运行时契约没有变化，
+  0.1.7-rc.2 上的一切行为不变。
+- **`devDependencies` 补全为全部 7 个 peer**（原先只有 4 个）：npm 的 peer 自动安装会为「只有 peer、
+  树里没有具体实例」的包去解析**最新**匹配版本，于是 `@deepseek-ai/dsh-skill-filesystem@0.2.0-rc.1`
+  的精确 peer（`@deepseek-ai/dsh-fs@0.2.0-rc.1`）会和开发树里的 `0.1.7-rc.2` 撞成 `ERESOLVE`。
+  列出实例即把开发树钉在我们开发所对的那条线上。**接收方不受影响**：profile 的 pnpm 配了
+  `autoInstallPeers: false`，`@deepseek-ai/dsh-*` 从来不由包管理器安装（DSH 运行时自己提供）。
+- **新的回归测试**（`host-package.test.mjs`）：按 DSH 自己的判据
+  （`semver.satisfies(runtime, range, { includePrerelease: true })`）断言 7 个 peer 覆盖
+  `0.1.7-rc.2` / `0.1.7` / `0.2.0-rc.1`，并反向断言**没有**顺带放行 `0.3.0-rc.1`，同时要求
+  `engines.dsh` 与 peer 口径一致。这条测试在旧区间上会直接红（已用注入缺陷证伪）。
+
 ## package · 0.0.13 · 2026-09-28
 
 **修复 Windows 上的平台方言：命令串按 PowerShell 拼，不再按 `cmd.exe` 拼。**

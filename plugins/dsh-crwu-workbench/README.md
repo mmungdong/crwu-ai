@@ -505,13 +505,16 @@ npm 安装**已发布的 tarball** 时也会执行 `prepare`，而 tarball 里�
 
 ### 版本兼容
 
-`peerDependencies` 当前锁在 `@deepseek-ai/dsh-*@^0.1.7-rc.2`（与已安装的 DSH 一致，cordis `^4.0.4`）。
-DSH API 仍是 developer preview，升级 DSH 时**必须**同步核对这几个包、重新跑门禁，
-并在 `CHANGELOG.md` 里写明兼容到哪个 DSH 版本。
+`peerDependencies` 覆盖**两条 DSH 线**：`@deepseek-ai/dsh-*@^0.1.7-rc.2 || ^0.2.0-rc.1`（cordis `^4.0.4`）。
+一条线一个 `^` 区间并列，而不是 `>=… <…` 一把梭 —— 后者会顺带放行还没验证过的 0.3 线。
+DSH API 仍是 developer preview，**加一条线之前**必须把两条线的 `@deepseek-ai/dsh-*` 逐包比对过、
+重新跑门禁，并在 `CHANGELOG.md` 里写明兼容到哪个 DSH 版本。
 
 > **0.1.7 起这条是硬门禁**：DSH 会拿运行时版本与每个 `@deepseek-ai/dsh*` peer 范围比对，
 > 不匹配的 bundle 会被**整包跳过**（记进 `skippedBundles`）—— 症状是「插件装上了、界面里什么都没有」，
-> 而启动日志没有任何报错。判据是 `peerDependencies`，不是 `engines.dsh`。
+> 而启动日志没有任何报错；插件管理器还会把这一行标成「与 DSH \<版本\> 不兼容」并禁用。
+> 判据是 `peerDependencies`，不是 `engines.dsh`。注意 `^0.1.7-rc.2` = `>=0.1.7-rc.2 <0.2.0-0`，
+> **不含** `0.2.0-rc.1`。
 
 ---
 
