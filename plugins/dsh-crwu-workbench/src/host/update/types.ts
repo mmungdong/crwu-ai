@@ -4,9 +4,23 @@
  * 这里允许出现 registry 地址与失败归因：它们只在 Host 内部用于决策与脱敏诊断，
  * 到 Client 的只有 `src/shared/update/types.ts` 里的规范化字段。
  */
-import type { PluginRegistries } from '@deepseek-ai/dsh-plugin-manager'
+import type {
+  BundleInfo,
+  ChangeResult,
+  InstallBundleOptions,
+  PluginInstallCancellation,
+  PluginInstallProgress,
+  PluginInstallRequestId,
+  PluginRegistries,
+} from '@deepseek-ai/dsh-plugin-manager'
 
-import type { UpdateCandidate, UpdateCheckState, UpdateSourceKind } from '../../shared/update/types.ts'
+import type {
+  UpdateCandidate,
+  UpdateCheckState,
+  UpdateInstallErrorKind,
+  UpdateInstallState,
+  UpdateSourceKind,
+} from '../../shared/update/types.ts'
 import type { UpdateSourceDescriptor } from '../../shared/update/consts.ts'
 import type { HostBuildKind } from '../build-info.ts'
 
@@ -132,4 +146,95 @@ export interface UpdateChecker {
    * `undefined`（fail closed）。
    */
   installableCandidate(): Promise<UpdateCandidate | undefined>
+}
+
+// ---------------------------------------------------------------------------
+// 安装与恢复（Task 3）
+// ---------------------------------------------------------------------------
+
+/**
+ * `~/.dsh/crwu-workbench.json` 顶层 `pluginUpdate` 的形状（设计 §7）。
+ *
+ * 只保存**恢复所需**的非敏感字段：没有 registry、requestId、pnpm 输出、Token 或命令 ——
+ * 这份文件会被读到、也会被写回，往里放任何环境细节都是泄露面。
+ */
+export interface PersistedPluginUpdate {
+  phase: 'installing' | 'awaiting-restart'
+  fromVersion: string
+  targetVersion: string
+  startedAt: string
+  /** 只在 `awaiting-restart` 出现：观察到磁盘已到目标版本的时刻。 */
+  installedAt?: string
+}
+
+/**
+ * `pluginUpdate` 的持久化端口：读、合并写入、清除。
+ *
+ * 三个方法都**不抛异常**：读不到就是"没有有效恢复记录"，写不进去就是 `false`
+ * （安装服务据此在开始安装之前 fail closed）。
+ */
+export interface PluginUpdateStore {
+  read(): Promise<PersistedPluginUpdate | undefined>
+  write(record: PersistedPluginUpdate): Promise<boolean>
+  /** 清除标记：让序列化后的顶层 `pluginUpdate` 真正消失，而不是覆盖整个文件。 */
+  clear(): Promise<boolean>
+}
+
+/**
+ * DSH Plugin Manager 的**公开方法**（`ctx.get('pluginManager')` 满足这个形状）。
+ *
+ * 只列本任务用到的四个：Task 4 负责接线，Task 3 只通过注入口工作。
+ * profile 锁、pnpm、registry 回退、回滚、兼容性与日志全部由 Plugin Manager 拥有。
+ */
+export interface PluginManagerPort {
+  listBundles(): Promise<BundleInfo[]>
+  installBundle(spec: string, options: InstallBundleOptions): Promise<ChangeResult>
+  waitForInstall(requestId: PluginInstallRequestId): Promise<ChangeResult | null>
+  cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation>
+}
+
+/**
+ * 磁盘事实：固定包在 profile 里的版本。
+ *
+ * `unknown` 是**独立**的一档，不能并进 `absent` —— 「读不出来」与「确定没装」在恢复里
+ * 指向不同结论（前者不能猜，后者是安装中断）。
+ */
+export type DiskVersionFact =
+  | { readonly kind: 'installed'; readonly version: string }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unknown' }
+
+/** 一次安装调用的归一化结论：只有稳定分类，没有日志、诊断、registry 或异常原文。 */
+export type InstallOutcome =
+  | { readonly kind: 'ok'; readonly application: 'applied' | 'restart-required' }
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'failed'; readonly reason: UpdateInstallErrorKind }
+  | { readonly kind: 'unknown' }
+
+/** 安装服务的注入端口（Context / RPC / Client 都不在这里）。 */
+export interface UpdateServicePorts {
+  /** 当前运行版本（Host 构建常量 `PLUGIN_VERSION`）。 */
+  version: string
+  now: () => Date
+  /** 请求 id 工厂：id 只活在当前进程内，不进持久化、不进 Client 状态。 */
+  newRequestId: () => PluginInstallRequestId
+  checker: UpdateChecker
+  manager: PluginManagerPort
+  store: PluginUpdateStore
+  /** 审核任务活动（active 或 starting 都由上层折算成 true）。 */
+  auditBusy: () => boolean
+}
+
+/** 每个 Host 插件实例一个安装服务。 */
+export interface UpdateService {
+  /** 当前安装/恢复结论（不触发任何调用）。 */
+  status(): UpdateInstallState
+  /** 安装 Host 自己已授权的候选：**不接受**版本、包名、registry 或命令参数。 */
+  install(): Promise<UpdateInstallState>
+  /** 取消当前活动安装；没有活动安装时什么都不做。 */
+  cancel(): Promise<UpdateInstallState>
+  /** 启动时的状态恢复：只读持久化与磁盘事实，绝不自动重装。 */
+  recover(): Promise<UpdateInstallState>
+  /** 把 Plugin Manager 的进度事件转交给当前任务（不匹配的 requestId 会被忽略）。 */
+  acceptProgress(progress: PluginInstallProgress): void
 }
