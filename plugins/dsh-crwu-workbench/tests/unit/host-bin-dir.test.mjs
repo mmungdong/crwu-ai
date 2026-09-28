@@ -106,6 +106,29 @@ test('bundledBinaryPath 按平台拼出文件名', () => {
   assert.equal(bundledBinaryPath('linux-x64', 'ossutil'), '')
 })
 
+// ── win32-arm64：没有随包二进制就必须如实拒绝，绝不顶替 x64 ──────────────────
+
+test('win32-arm64 没有随包二进制：路径解析为空、capability gap 不得指向 x64', async () => {
+  // 为什么单独钉：arm64 Windows 上跑一份 x64 exe 在多数机器上「看起来能跑」（模拟层），
+  // 于是「静默用 x64 顶上」不会立刻报错，却让适用性判断失去意义。策略是**明确不支持**。
+  assert.equal(binPlatformDir('win32-arm64'), '')
+  assert.equal(bundledBinaryPath('win32-arm64', 'crwu'), '')
+  assert.equal(binaryFileName('crwu', 'win32-arm64'), 'crwu.exe', '文件名规则仍按平台给（用于报错文案）')
+
+  const { requireBundledCommand } = await import(new URL('src/host/platform/command.ts', ROOT).href)
+  const shell = shellStub(() => ({ stdout: '' }))
+  for (const name of ['crwu', 'dws', 'ossutil']) {
+    const resolved = await requireBundledCommand(ctxOf(fsStub({}), shell), 'win32-arm64', name)
+    assert.equal(resolved.ok, false, `${name} 在 win32-arm64 上必须回 capability gap`)
+    assert.equal(resolved.errorKind, 'capability-gap')
+    assert.match(resolved.error, /win32-arm64/)
+    assert.match(resolved.error, /没有随包发布/)
+    assert.equal(resolved.error.includes('win32-x64'), false, '不得在文案里指向另一个架构')
+  }
+  // 也不许跑任何命令去找替代品（`which` / `command -v` / 搜文件）。
+  assert.deepEqual(shell.calls, [])
+})
+
 // ── 优先级：只认包内 ────────────────────────────────────────────────────────
 
 test('包内 ossutil 存在时直接命中，不跑任何 PATH 探测', async () => {

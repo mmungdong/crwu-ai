@@ -75,8 +75,46 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  publish:
+  # 第二个：**在 Windows 上真的把发布二进制启动一次**。
+  #
+  # 为什么不能只看哈希：`binaries` job 在 macOS 上交叉编译六个二进制并核对清单/哈希，那只证明
+  # 「文件没变」，不证明「在 Windows 上能跑」。坏 exe、架构不对（「不是有效的 Win32 应用程序」）、
+  # 缺 DLL、被杀软拦下 —— 这几种在 macOS runner 上永远绿，员工装完才发现。
+  #
+  # 所以：下载同一份 staged `bin` artifact → 校验 manifest 与 SHA-256 → 复制三个 .exe 到
+  # runner 临时目录（HOME/USERPROFILE/TMPDIR 一并指过去）→ 各跑一条无副作用命令 →
+  # 断言发布树没有 `.dws` 之类残留。publish 依赖它：Windows 冒烟不过就不许发布。
+  windows-binary-smoke:
     needs: binaries
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: plugins/dsh-crwu-workbench
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: crwu-workbench-bin
+          path: plugins/dsh-crwu-workbench/bin
+
+      # win32-arm64 的策略也在这里显式验一次：**没有随包二进制就不许顶替**。
+      # 这条在 Windows runner 上跑，才是对真实平台键的检查。
+      - name: smoke the win32-x64 binaries
+        run: node scripts/smoke-windows-binaries.mjs --platform=win32-x64
+
+      - name: an undeclared platform must fail loudly (no arch fallback)
+        run: |
+          node scripts/smoke-windows-binaries.mjs --platform=win32-arm64
+          if ($LASTEXITCODE -eq 0) { throw "win32-arm64 没有随包二进制，冒烟却报成功" }
+          Write-Host "OK  win32-arm64 被如实拒绝（退出码 $LASTEXITCODE）"
+
+  publish:
+    needs: [binaries, windows-binary-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read

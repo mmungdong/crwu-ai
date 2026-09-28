@@ -74,6 +74,7 @@
     "skills:check": "node scripts/sync-common-skills.mjs --check",
     "skills:cli-guard": "node scripts/check-skill-cli-guard.mjs",
     "bin:check": "node scripts/sync-binaries.mjs --check",
+    "bin:smoke": "node scripts/smoke-windows-binaries.mjs",
     "dws:sync": "node scripts/sync-dws-skills.mjs",
     "dws:check": "node scripts/sync-dws-skills.mjs --check"
   },
