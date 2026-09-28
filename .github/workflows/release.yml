@@ -104,6 +104,14 @@ jobs:
           name: crwu-workbench-bin
           path: plugins/dsh-crwu-workbench/bin
 
+      # 公共技能层是**生成产物**：`common/skills/` 在 `.gitignore` 里，源是 `../common/skills`。
+      # 接下来 `npm run check` 的 `skills:check` 会比对这两份，`pack:assert:strict` 又要求
+      # tarball 里有 `common/skills/crwu-dws/SKILL.md`（`files` 里也列了 `common/skills/`）——
+      # 少了这一步，发布作业会在 `skills:check` 上红（`make plugin-pack` 是靠 `plugin-skills`
+      # 生成它的，workflow 必须自己补）。
+      - name: sync bundled skills
+        run: npm run skills:sync
+
       - name: tag must match the package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
