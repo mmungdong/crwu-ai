@@ -170,3 +170,82 @@ jobs:
           test -f lib/index.js
           test -f lib/client.js
           node -e "const fs=require('fs');const c=fs.readFileSync('lib/client.js','utf8');if(!c.includes('__ModuleLoader__'))throw new Error('lib/client.js 缺少 DSH ModuleLoader 包装')"
+
+      # DSH 运行时兼容矩阵：**真的**在干净临时工程里装齐 DSH 0.1.7 与 0.2.0 的完整 peer 集，
+      # 再把本插件的 tarball 装进去，最后调用 DSH 自己的 `evaluatePluginCompatibility()`
+      # 断言它不会被 skip / disable，并用**该版本**的 DSH 类型跑一次 tsc。
+      #
+      # 为什么必须真的装：2026-09-28 的事故是 peer 区间只覆盖 0.1 系列、DSH 0.2 直接禁用整包，
+      # 而当时只有一条「读区间字符串」的单测 —— 它证明不了 DSH 会加载这个包。
+      #
+      # 只在 Node 22 上跑：这一步与 Node 版本无关（两个 DSH 运行时线各装一遍），
+      # 跑两遍只是把 CI 时间翻倍。OS 两平台都覆盖（Linux + Windows 的安装/解析行为不同）。
+      - name: DSH runtime compatibility matrix
+        if: matrix.node == 22
+        run: npm run compat:dsh
+
+  # 原生 PowerShell 合同测试：**DSH 在 Windows 上就是这么跑的** —— 整串命令作为**一个 argv
+  # 元素**交给 `pwsh -NoLogo -NoProfile -NonInteractive -Command <整串>`。
+  #
+  # 为什么单开一个 job：上面 `plugin` 矩阵的 windows job 在 **job 级设了 `shell: bash`**
+  # （Git for Windows Bash），它验证的是 bash 的解析，而不是 DSH 真实的 PowerShell 语义 ——
+  # 2026-09-28 员工报的 ParserError 正是这一类「本地永远绿、Windows 必红」的缺陷。
+  #
+  # 这个 job **不设 `shell:`**：runner 默认就是 pwsh，所以每一步都由 PowerShell 执行。
+  # 内容：静态门禁 + 方言表格（host-platform-shell）+ 原生执行合同（tests/windows/），
+  # 再走一遍 build / smoke / 全量 npm test（其中 host-package 会真跑 npm pack + install，
+  # 安装链路会执行 `prepare`，正好验证它不再依赖 shell 找 `tsdown.cmd`）。
+  windows-powershell:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: plugins/dsh-crwu-workbench
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugins/dsh-crwu-workbench/package-lock.json
+
+      # 先证明这个 job 真的跑在 PowerShell 上：否则「原生 pwsh 覆盖」就是一句空话。
+      - name: assert the runner shell is PowerShell
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          if ($PSVersionTable.PSVersion.Major -lt 7) { throw "需要 PowerShell 7（pwsh），实际 $($PSVersionTable.PSVersion)" }
+
+      - run: npm ci
+
+      - name: 静态门禁 + 方言表格
+        run: node --test tests/unit/host-platform-shell.test.mjs
+
+      - name: 原生 PowerShell 执行合同
+        run: node --test tests/windows/powershell-contract.test.mjs
+
+      - name: build（prepare 不再靠 shell 找 tsdown.cmd）
+        run: npm run build
+
+      - name: built-artifact smoke
+        run: npm run smoke:built
+
+      # 全量单元/集成测试也放到原生 pwsh 下跑一遍：`prepare` 的跨平台启动、`npm pack/install`
+      # 回归、路径与凭据权限的 Windows 分支都在这里。日志 tee 到文件，失败时上传为 artifact。
+      - name: tests under native PowerShell
+        run: |
+          # 末尾必须**显式 exit**：GitHub 的 pwsh 壳用脚本末尾的 `$LASTEXITCODE` 当步骤退出码，
+          # 中间任何一条原生命令都会改写它。存下来 → 报告 → 显式退出，形状固定、不会误判。
+          $log = Join-Path $env:RUNNER_TEMP 'native-pwsh-tests.log'
+          npm test 2>&1 | Tee-Object -FilePath $log
+          $testsExit = $LASTEXITCODE
+          if ($testsExit -ne 0) { Write-Host "npm test 失败（退出码 $testsExit），日志已写入 $log" }
+          exit $testsExit
+
+      # 失败时上传合同测试日志。**只上传测试输出**：不含凭据、不 dump 环境变量。
+      - name: upload native PowerShell logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-powershell-logs
+          path: ${{ runner.temp }}/native-pwsh-tests.log
+          if-no-files-found: ignore

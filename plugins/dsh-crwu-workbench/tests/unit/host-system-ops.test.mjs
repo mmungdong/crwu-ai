@@ -173,7 +173,8 @@ test('openPath picks the platform opener', async () => {
   const files = { '/cases/a.html': { type: 'file' } }
   const win = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true, files })
   await openPath(depsOf(win, { platform: 'win32-x64' }), { path: '/cases/a.html' })
-  assert.match(win.commands[0], /^cmd \/c start/)
+  // PowerShell 里 `cmd /c start "" <path>` 会引入第二套引号解析；`Start-Process -FilePath` 才是原生写法。
+  assert.match(win.commands[0], /^Start-Process -FilePath '/)
 
   const linux = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true, files })
   await openPath(depsOf(linux, { platform: 'linux-x64' }), { path: '/cases/a.html' })

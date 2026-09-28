@@ -1,6 +1,6 @@
 import { rpc } from '../../api/client.ts'
 import { createUpdateApi, UPDATE_METHOD_OPERATION, type UpdateApi } from '../update/api.ts'
-import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
+import type { AuditView, CloudItem, CredentialPermission, TaskRow } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
 import type { AuditRootView, EnvResultView } from '../../../shared/types.ts'
 import {
@@ -243,8 +243,8 @@ export interface IfindSaveResult {
   error: string
   errorKind: string
   view: { path: string; exists: boolean; state: string; length: number; reason: string }
-  chmodOk: boolean
-  chmodError: string
+  /** 凭据文件的权限结论（协议 17）：`verified` / `inherited` / `failed`。 */
+  permission: CredentialPermission
   mode: string
   probe: IfindProbeResult
 }

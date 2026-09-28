@@ -333,6 +333,41 @@ test('uploadArtifacts uploads both canonical artifacts under the serial number',
   assert.match(copies[0], new RegExp(`审核意见\\.${SEQ}\\.html`))
 })
 
+test('ossCredSave 的输入校验失败信封按注入平台给机制（Windows 不得报 posix-0600）', async () => {
+  const { deps } = ossDeps({})
+  const win = await ossCredSave({ ...deps, platform: 'win32-x64' }, { accessKeyId: '', accessKeySecret: '' })
+  assert.equal(win.ok, false)
+  assert.equal(win.permission.status, 'failed')
+  assert.equal(win.permission.mechanism, 'windows-acl', '失败信封也要与平台一致')
+
+  const mac = await ossCredSave({ ...deps, platform: 'darwin-arm64' }, { accessKeyId: 'a', accessKeySecret: 'b\nc' })
+  assert.equal(mac.ok, false)
+  assert.equal(mac.permission.mechanism, 'posix-0600')
+  assert.match(mac.error, /换行/)
+})
+
+test('uploadArtifacts 区分本地路径与对象键：本地随平台，对象键永远用 `/`', async () => {
+  const { deps, commands } = uploadDeps()
+  deps.platform = 'win32-x64'
+  const out = await uploadArtifacts(
+    deps,
+    { path: `C:\\Cases\\${SEQ}`, htmlFile: `审核意见.${SEQ}.html`, resultFile: '', name: SEQ },
+    SEQ,
+    'C:\\Program Files\\ossutil.exe',
+    deps.manifest.oss,
+  )
+  assert.equal(out.ok, true)
+  // Windows 上每个 token 都是单引号字面量，所以不能用 `includes(' cp ')` 找子命令。
+  const copy = commands.filter((command) => /['\s]cp['\s]/.test(command)).join('\n')
+  assert.notEqual(copy, '', `必须真的发出 cp 命令：${commands.join(' | ')}`)
+  // 本地源路径必须是 Windows 风格（历史实现拼成 `C:\Cases/<SEQ>/…`）。
+  assert.match(copy, /'C:\\Cases\\[^']*审核意见/)
+  // 远端键永远 `/`，且带 `oss://` 前缀。
+  assert.match(copy, /'oss:\/\/bkt\/crwu\/audit\//)
+  assert.equal(copy.includes('oss://bkt/crwu/audit/' + SEQ), true)
+  assert.equal(out.results[0].key, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
+})
+
 test('uploadArtifacts reports per-file failures instead of a bare false', async () => {
   const { deps } = uploadDeps({ failUpload: true })
   const out = await uploadArtifacts(
@@ -455,14 +490,18 @@ test('oss-cred-save writes the config, tightens permissions and re-probes', asyn
     shell: (command) => {
       if (command.startsWith('command -v')) return { stdout: '/usr/local/bin/ossutil\n' }
       if (command.includes(' ls ')) return { stdout: 'oss://bkt/obj\n' }
+      // 权限收紧之后会**回读模式位**：替身要回答这一条，否则 `verified` 判不出来。
+      if (/^stat -[fc] /.test(command)) return { stdout: '600\n' }
       return { stdout: '' }
     },
   })
   const result = await ossCredSave(deps, { accessKeyId: 'AKID1234567890', accessKeySecret: 'SECRET', endpoint: 'oss-cn-x.aliyuncs.com' })
   assert.equal(result.ok, true)
   assert.equal(result.path, '/Users/x/.ossutilconfig')
-  assert.equal(result.chmodOk, true)
+  assert.equal(result.permission.status, 'verified')
+  assert.equal(result.permission.mechanism, 'posix-0600')
   assert.equal(commands.some((command) => command.startsWith('chmod 600')), true, '凭据文件必须收紧到 600')
+  assert.equal(commands.some((command) => /^stat -[fc] /.test(command)), true, '收紧后必须回读模式位')
   const written = writes[0].content
   assert.match(written, /accessKeyID=AKID1234567890/)
   assert.match(written, /accessKeySecret=SECRET/)

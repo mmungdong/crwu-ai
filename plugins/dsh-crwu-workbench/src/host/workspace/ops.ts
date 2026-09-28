@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { WorkbenchConfig } from '../config/config.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import { writeWorkbenchConfig } from '../state/persist.ts'
+import { trimTrailingSeparators } from '../../shared/utils/local-path.ts'
 import { workspaceView } from '../state/store.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { ensureWorkspace, sessionWorkspaceInfo, type SessionWorkspaceInfo } from './resolve.ts'
@@ -50,7 +51,8 @@ export interface WorkspaceSelectionResult {
 
 /** 选定案例根目录（手动）。 */
 export async function pickWorkspace(deps: WorkspaceOpsDeps, args: Record<string, unknown>): Promise<WorkspaceSelectionResult> {
-  const path = String(args.path ?? '').trim().replace(/\/+$/, '')
+  // 尾分隔符按路径风格裁剪：`replace(/\/+$/, '')` 对 `C:\Work\` 无效、对 `C:\` 会裁坏。
+  const path = trimTrailingSeparators(String(args.path ?? '').trim())
   let persistError = ''
   if (path !== '') {
     const title = String(args.title ?? '') || path

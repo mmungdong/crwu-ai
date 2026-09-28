@@ -1,18 +1,21 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import type { EnvManifest, OssSpec } from '../environment/manifest-default.ts'
-import { ossutilMissingMessage, probeOss, resolveOssutil, shellInvoke, shellQuote } from '../environment/probe.ts'
+import { ossutilMissingMessage, probeOss, resolveOssutil } from '../environment/probe.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { isWindowsPlatform } from '../platform/detect.ts'
+import { openExternalCommand, privateFileMechanism, shellInvoke } from '../platform/shell.ts'
+import { enforceCredentialPermission } from '../platform/credential-permission.ts'
 import { runShell } from '../shell/run.ts'
-import { readOssCred, type OssCredView } from './cred.ts'
+import { ossConfigPath, readOssCred, type OssCredView } from './cred.ts'
 import {
   groupObjects, isResultJson, joinUrl, parseLsEntries, parseLsObjects, parseSignUrl, stripPrefix,
 } from './parse.ts'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { inspectCase } from '../audit/case.ts'
 import { auditInfoFromResult } from '../audit/summary.ts'
+import type { CredentialPermission } from '../../shared/types.ts'
 
 /**
  * OSS 交付件相关的操作。
@@ -48,10 +51,6 @@ async function requireOss(deps: OssDeps): Promise<{ ok: true; oss: OssSpec; ossu
   })
   if (lookup.path === '') return { ok: false, error: ossutilMissingMessage(lookup) }
   return { ok: true, oss, ossutil: lookup.path }
-}
-
-function endpointArgs(oss: OssSpec, platform: string): string {
-  return oss.endpoint === '' ? '' : ` --endpoint ${shellQuote(oss.endpoint, platform)}`
 }
 
 // ── oss-index ───────────────────────────────────────────────────────────────
@@ -216,12 +215,7 @@ export async function ossLink(deps: OssDeps, args: Record<string, unknown>): Pro
   // 链接里带 bearer 签名，能拿到就能看 —— 不能走明文。
   if (url.startsWith('http://')) url = `https://${url.slice('http://'.length)}`
 
-  const command = deps.platform.startsWith('darwin')
-    ? `open ${shellQuote(url, deps.platform)}`
-    : (deps.platform.startsWith('win32')
-      ? `cmd /c start "" ${shellQuote(url, deps.platform)}`
-      : `xdg-open ${shellQuote(url, deps.platform)}`)
-  const opened = await runShell(deps.ctx, command, {
+  const opened = await runShell(deps.ctx, openExternalCommand(url, deps.platform), {
     workdir: await shellWorkdir(deps),
     timeoutMs: 30_000,
     escalate: true,
@@ -276,9 +270,12 @@ export async function uploadArtifacts(
   const results: UploadFileResult[] = []
 
   for (const file of files) {
-    const local = `${item.path.replace(/\/+$/, '')}/${file.name}`
-    const key = `${prefix}/${file.name}`
-    const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${key}`]
+    // **两个概念不能混**：`localPath` 是本地路径（分隔符随平台），`objectKey` 是 OSS 对象键
+    // （永远 `/`，见 `stripPrefix` / `groupObjects`）。历史实现用一个 `/` 拼接同时服务两者，
+    // 于是 Windows 上本地路径被拼成 `C:\Cases/S1/审核意见.html`。
+    const localPath = joinLocalPath(item.path, file.name)
+    const objectKey = `${prefix}/${file.name}`
+    const argv = [ossutil, 'cp', '-f', localPath, `oss://${oss.bucket}/${objectKey}`]
     if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
     for (const extra of oss.extraArgs) argv.push(extra)
     const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
@@ -288,9 +285,9 @@ export async function uploadArtifacts(
     results.push({
       kind: file.kind,
       name: file.name,
-      key,
+      key: objectKey,
       ok: run.ok,
-      publicUrl: joinUrl(oss.publicBaseUrl, key),
+      publicUrl: joinUrl(oss.publicBaseUrl, objectKey),
       error: run.ok ? '' : (text(run.stderr) || text(run.error) || '上传失败').slice(0, 400),
     })
   }
@@ -358,15 +355,18 @@ export interface CredSaveResult {
   error: string
   path: string
   operation: string
-  chmodOk: boolean
-  chmodError: string
+  /** 凭据文件的权限结论（协议 17，结构化）：`verified` / `inherited` / `failed`。 */
+  permission: CredentialPermission
   probe: Record<string, unknown> | null
   cred: OssCredView | null
 }
 
 export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>): Promise<CredSaveResult> {
+  // 输入校验发生在权限操作**之前**，但机制字段仍必须与注入的平台一致：
+  // 硬编码 `posix-0600` 会让 win32-x64 上的失败信封说错「谁在负责权限」。
   const failed = (error: string): CredSaveResult => ({
-    ok: false, error, path: '', operation: '', chmodOk: false, chmodError: '', probe: null, cred: null,
+    ok: false, error, path: '', operation: '',
+    permission: failedPermission(error, deps.platform), probe: null, cred: null,
   })
   const accessKeyId = text(args.accessKeyId).trim()
   const accessKeySecret = text(args.accessKeySecret).trim()
@@ -400,8 +400,7 @@ export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>):
     error: probe.ok ? '' : (probe.detail || probe.state || 'OSS 验证未通过'),
     path: written.path,
     operation: written.operation,
-    chmodOk: written.chmodOk,
-    chmodError: written.chmodError,
+    permission: written.permission,
     probe: probe as unknown as Record<string, unknown>,
     cred: await readOssCred(deps.ctx, deps.home),
   }
@@ -412,48 +411,45 @@ interface WriteCredOutcome {
   error: string
   path: string
   operation: string
-  chmodOk: boolean
-  chmodError: string
+  permission: CredentialPermission
 }
 
-/** 写 `~/.ossutilconfig`，并把权限收紧到 600。 */
+/** 写 `~/.ossutilconfig`，并把权限收紧到 600（Windows 上如实报「继承账户 ACL」）。 */
 async function writeOssCred(
   deps: OssDeps,
   input: { accessKeyId: string; accessKeySecret: string; stsToken: string; endpoint: string },
 ): Promise<WriteCredOutcome> {
   const fs = fileSystem(deps.ctx)
-  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用', path: '', operation: '', chmodOk: false, chmodError: '' }
-  const path = `${deps.home.replace(/[\\/]+$/, '')}/.ossutilconfig`
+  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用', path: '', operation: '', permission: failedPermission('Host 文件服务不可用', deps.platform) }
+  const path = ossConfigPath(deps.home)
   const built = buildConfigContent(input)
-  if (!built.ok) return { ok: false, error: built.error, path: '', operation: '', chmodOk: false, chmodError: '' }
+  if (!built.ok) return { ok: false, error: built.error, path: '', operation: '', permission: failedPermission(built.error, deps.platform) }
 
   let operation = ''
   try {
     const outcome = await fs.writeText(await resolveTarget(deps.ctx, path), built.content)
     operation = text(outcome?.operation)
   } catch (error) {
-    return { ok: false, error: `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, path: '', operation: '', chmodOk: false, chmodError: '' }
+    const message = `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`
+    return { ok: false, error: message, path: '', operation: '', permission: failedPermission(message, deps.platform) }
   }
-  // Windows 没有 POSIX 权限位，也没有 `chmod` 命令：这一项在 Windows 上不适用（凭据文件在用户
-  // 配置目录内，由用户 ACL 保护），跳过并报「没有未收紧的权限」，而不是伪造一条必然失败的命令。
-  let chmodOk = true
-  let chmodError = ''
-  if (!isWindowsPlatform(deps.platform)) {
-    const chmod = await runShell(deps.ctx, `chmod 600 ${shellQuote(path, deps.platform)}`, {
-      workdir: await shellWorkdir(deps),
-      timeoutMs: 15_000,
-    })
-    chmodOk = chmod.ok
-    chmodError = chmod.ok ? '' : (text(chmod.stderr) || text(chmod.error) || '权限设置失败').slice(0, 200)
-  }
+  // 权限结论由 `enforceCredentialPermission` 统一给出（三条结局各有名字，见 shared/types.ts）：
+  // Windows 上报 `inherited / windows-acl`，POSIX 上失败或成功都如实说。
+  const permission = await enforceCredentialPermission(deps.ctx, path, deps.platform, {
+    workdir: await shellWorkdir(deps),
+  })
   return {
     ok: true,
     error: '',
     path,
     operation,
-    chmodOk,
-    chmodError,
+    permission,
   }
+}
+
+/** 写盘都没走到权限那一步时的失败信封（mechanism 与平台一致，status 恒为 failed）。 */
+function failedPermission(message: string, platform: string): CredentialPermission {
+  return { status: 'failed', mechanism: privateFileMechanism(platform), message }
 }
 
 /** 生成 ossutil 配置内容（`[Credentials]` 段）。 */

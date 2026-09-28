@@ -150,7 +150,7 @@ test('两个字段都填了才放行主按钮；未填时禁用', () => {
 })
 
 test('提交的那一瞬间清空本地密钥，且从不回填已保存的值', () => {
-  const ops = stubOps({ 'oss-cred-save': { ok: true, error: '', chmodOk: true, chmodError: '', probe: { ok: true, state: 'AK 正常' } } })
+  const ops = stubOps({ 'oss-cred-save': { ok: true, error: '', permission: { status: 'verified', mechanism: 'posix-0600', message: '' }, probe: { ok: true, state: 'AK 正常' } } })
   const { tree, instance } = render(OssCredCard, { delivery: delivery(), onSaved: () => {} })
   inputs(tree).find((node) => node.props.name === 'crwu-oss-ak').props.onChange({ target: { value: 'AKID123' } })
   inputs(rerender(OssCredCard, { delivery: delivery(), onSaved: () => {} }))
@@ -166,7 +166,7 @@ test('提交的那一瞬间清空本地密钥，且从不回填已保存的值',
 test('保存成功：显示「验证成功，可以访问交付目录。」并回调刷新', async () => {
   stubOps({
     'oss-cred-save': {
-      ok: true, error: '', chmodOk: true, chmodError: '',
+      ok: true, error: '', permission: { status: 'verified', mechanism: 'posix-0600', message: '' },
       probe: { ok: true, state: 'AK 正常', detail: '已验证可访问 oss://bkt/crwu/audit/' },
     },
   })
@@ -193,7 +193,7 @@ test('保存失败：按宿主给的四类归因就地给人话，且不回显�
   for (const [kind, hint] of cases) {
     stubOps({
       'oss-cred-save': {
-        ok: false, error: `OSS 交付不可用：${kind}`, chmodOk: true, chmodError: '',
+        ok: false, error: `OSS 交付不可用：${kind}`, permission: { status: 'verified', mechanism: 'posix-0600', message: '' },
         probe: { ok: false, state: 'x', detail: `上游原文 ${kind}`, errorKind: kind },
       },
     })
@@ -213,7 +213,7 @@ test('保存失败：按宿主给的四类归因就地给人话，且不回显�
 test('权限没收紧成功要如实说（0600 是这份文件的安全边界）', async () => {
   stubOps({
     'oss-cred-save': {
-      ok: true, error: '', chmodOk: false, chmodError: 'chmod 不可用：权限仍是 0644',
+      ok: true, error: '', permission: { status: 'failed', mechanism: 'posix-0600', message: 'chmod 不可用：权限仍是 0644' },
       probe: { ok: true, state: 'AK 正常' },
     },
   })

@@ -732,6 +732,11 @@ export const zhCN = {
   envOssErrPermission: 'AccessKey 可以登录，但这个账号没有交付目录的访问权限，请联系管理员开通。',
   envOssErrConfig: '交付目录的配置有问题（Bucket 或 Endpoint），请联系管理员核对。',
   envOssErrInfrastructure: '暂时无法连接 OSS，请稍后重新验证；这不代表 AccessKey 有误。',
+
+  // 凭据文件权限（协议 17）：三种结局各自说话，不把「不适用」说成成功、也不说成失败。
+  envCredInheritedWindowsAcl: '使用当前 Windows 账户 ACL；POSIX 0600 不适用。',
+  envCredInherited: '凭据权限由现有机制负责，没有执行额外收紧。',
+  envCredHardeningFailed: '凭据已保存，但权限没有收紧成功，请检查文件权限。',
   // iFinD 步骤
   envIfindCardTitle: '同花顺 iFinD API-Key',
   envIfindCardHint: '用于查询外部金融数据。API-Key 由插件保存在本机，页面不回显；每次检查都会真的读取一条测试数据。',

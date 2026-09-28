@@ -292,11 +292,11 @@ test('ping and boot answer with the state the panel needs to render', async () =
   }
   assert.deepEqual(boot.ported.todo, [], '不该再有未移植的操作')
 
-  // 协议 16：更新操作与 check/install 线协议是跨进程契约的一部分（见 shared/consts.ts）。
-  // ping 与 boot 都必须报同一代，否则「界面新、宿主旧」只能在用户点更新时才暴露。
-  assert.equal(WORKBENCH_PROTOCOL, 16, '新增四个 update 操作后协议必须 +1')
-  assert.equal(pong.protocol, 16, 'ping 必须报当前协议代')
-  assert.equal(bootAnswer.protocol, 16, 'boot 必须报当前协议代')
+  // 协议 17：凭据权限结论（`permission`）是跨进程契约的一部分（见 shared/consts.ts）。
+  // ping 与 boot 都必须报同一代，否则「界面新、宿主旧」只能在用户点保存凭据时才暴露。
+  assert.equal(WORKBENCH_PROTOCOL, 17, '凭据权限结论结构化（chmodOk → permission）后协议必须 +1')
+  assert.equal(pong.protocol, WORKBENCH_PROTOCOL, 'ping 必须报当前协议代')
+  assert.equal(bootAnswer.protocol, WORKBENCH_PROTOCOL, 'boot 必须报当前协议代')
   // 四个更新操作必须真的在操作表里（不是只写进 boot 的声明）。
   assert.deepEqual(
     Object.keys(operations).filter((name) => name.startsWith('update-')).sort(),
@@ -702,6 +702,11 @@ test('the npm release path is wired: publishable, self-checked before publish', 
   assert.match(pkg.scripts.prepack, /build:lib/)
   assert.match(pkg.scripts['build:lib'], /prepare\.mjs --force/)
   assert.ok(pkg.files.includes('scripts/prepare.mjs'), 'prepare 入口必须随包发布')
+  // prepare 的 tsdown 入口解析器：少了它，员工安装 tarball 时 prepare 会「找不到模块」，
+  // 而本地 link 开发与 `npm test` 都在有 src 的检出里跑，永远看不出来。
+  assert.ok(pkg.files.includes('scripts/lib/cli-entry.mjs'), 'prepare 依赖的 JS 入口解析器必须随包发布')
+  assert.equal('compat:dsh' in pkg.scripts, true, 'DSH 兼容矩阵要有可直接跑的门禁命令')
+  assert.equal(pkg.scripts['compat:dsh'], 'node scripts/check-dsh-compat.mjs')
 })
 
 test('an installed tarball can actually be installed and imported', async () => {

@@ -1,6 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
+import { basenameLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, readTextIfExists, resolveTarget } from '../fs/paths.ts'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { DINGTALK_TARGET, DWS_MAX_PAGES } from '../dws/consts.ts'
@@ -302,7 +304,8 @@ export function dingtalkTools(deps: ToolDeps) {
       }
 
       // ⑤ 上传（cwd = 案例目录；`--file` 只接受工作目录内相对路径）。
-      const relativeName = requested.split('/').pop() ?? requested
+      // `--file` 只接受工作目录内相对路径：取末段要认两种分隔符（Windows 上是 `\`）。
+      const relativeName = basenameLocalPath(requested)
       const uploaded = await dwsJson(ctx, platform, withProfile(profile, [
         'drive', '+upload', '--file', relativeName, '--file-name', plan.plan.remoteName,
         '--folder', month.nodeId, '--space-id', spaceId, '--yes', '--format', 'json',
@@ -403,7 +406,7 @@ export function dingtalkTools(deps: ToolDeps) {
       const caseDir = caseCheck.path
 
       const send = async (): Promise<NotifyResult> => {
-        const statePath = `${caseDir.replace(/[\\/]+$/, '')}/${NOTIFY_STATE_FILE}`
+        const statePath = joinLocalPath(caseDir, NOTIFY_STATE_FILE)
         // ① 幂等：案例目录里已有成功记录就直接回放，不再发送。
         const existing = await readTextIfExists(ctx, statePath)
         if (existing !== '') {

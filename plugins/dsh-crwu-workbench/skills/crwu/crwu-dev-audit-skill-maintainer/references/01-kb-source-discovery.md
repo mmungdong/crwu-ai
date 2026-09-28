@@ -13,7 +13,7 @@
 
 将目录树或 JSON 快照保存到本次临时文件，运行：
 
-```bash
+```text
 python3 scripts/check_audit_skill_mappings.py \
   --repo-root <source-repo> \
   --catalog <目录树或快照文件> \

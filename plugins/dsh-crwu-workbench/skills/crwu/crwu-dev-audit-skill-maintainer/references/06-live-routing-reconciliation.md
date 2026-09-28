@@ -109,7 +109,7 @@
 
 ## 命令
 
-```bash
+```text
 python3 scripts/check_audit_skill_mappings.py \
   --repo-root <source-repo> \
   --catalog <本次 crwu-dws 刷新落地的快照> \

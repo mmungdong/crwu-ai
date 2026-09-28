@@ -305,6 +305,9 @@ test('readOssCred reports a missing file without throwing', async () => {
 test('ossConfigPath and resolveConfigPath follow the execution world home', () => {
   assert.equal(ossConfigPath('/Users/x/'), '/Users/x/.ossutilconfig')
   assert.equal(ossConfigPath(''), '~/.ossutilconfig')
+  // Windows：分隔符随主目录走（混用 `/` 的路径进 `chmod` / `-Path` 会被当成转义或直接不存在）。
+  assert.equal(ossConfigPath('C:\\Users\\x'), 'C:\\Users\\x\\.ossutilconfig')
+  assert.equal(ossConfigPath('C:\\Users\\x\\'), 'C:\\Users\\x\\.ossutilconfig')
   assert.equal(resolveConfigPath('/Users/x', 'darwin-arm64', '~/.ossutilconfig'), '/Users/x/.ossutilconfig')
   assert.equal(resolveConfigPath('/Users/x', 'darwin-arm64', '/abs/cfg'), '/abs/cfg')
 })

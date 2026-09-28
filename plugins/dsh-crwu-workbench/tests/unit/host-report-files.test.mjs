@@ -74,6 +74,12 @@ function deps(patch = {}) {
             if (rows === undefined) throw new Error('ENOENT')
             return rows
           },
+          // 工作空间包含判断交给 fs（实现不再用字符串前缀）：这里按目录树的前缀回答。
+          contains(parent, child) {
+            const p = String(parent.displayPath).replace(/[\\/]+$/, '')
+            const c = String(child.displayPath).replace(/[\\/]+$/, '')
+            return c === p || c.startsWith(`${p}/`)
+          },
         }
       }
       return undefined
@@ -178,6 +184,17 @@ test('report-files：本地没有这个案例目录 ≠ 空目录（界面要分
   assert.equal(result.localExists, false)
   assert.deepEqual(result.local, [])
   assert.equal(result.localDir, `/ws/中瑞世联工作空间/${SEQ}`, '路径照样给出来，界面才知道去哪找')
+})
+
+test('report-files：Windows 工作空间的本地目录用 `\\` 拼接（不混用分隔符）', async () => {
+  const harness = deps({
+    workspacePath: 'C:\\ws\\中瑞世联工作空间',
+    shell: (command) => ({ stdout: command.startsWith('command -v') ? '' : '' }),
+    dirs: {},
+  })
+  const result = await reportFiles(harness.value, { seqNo: SEQ })
+  assert.equal(result.localDir, `C:\\ws\\中瑞世联工作空间\\${SEQ}`)
+  assert.equal(result.localExists, false)
 })
 
 test('report-files：没选工作空间时本地部分为空，但云端照常查', async () => {

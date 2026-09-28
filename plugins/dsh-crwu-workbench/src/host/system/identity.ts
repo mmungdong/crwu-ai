@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
-import { shellInvoke } from '../environment/probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
 
 /**

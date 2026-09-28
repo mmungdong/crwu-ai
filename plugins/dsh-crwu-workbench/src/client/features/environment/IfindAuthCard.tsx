@@ -3,6 +3,7 @@ import { Button, Chip, Notice } from '../../components/primitives.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { workbenchApi, type EnvResult, type IfindProbeResult, type IfindStatusResult } from '../report-audit/api.ts'
+import { credentialPermissionHint } from './credential-permission.ts'
 
 /**
  * ⑥ iFinD **API-Key** 卡片。
@@ -159,9 +160,12 @@ export function IfindAuthCard(props: IfindAuthCardProps): React.ReactElement {
           return
         }
         setReplacing(false)
-        // 权限没收紧要如实说（0600 是这份文件的安全边界）。
-        if (result.chmodOk === false) setHint(result.chmodError)
         showProbe(result.probe)
+        // 权限结论按 `status` 说话（协议 17），并且**放在探测提示之后** —— 卡片只有一个提示位，
+        // 「文件没被保护」比「这次取数失败」更需要先看见；`inherited`（Windows 账户 ACL）也必须
+        // 明说，否则员工会以为这份文件被 0600 保护着。**不得**把 `inherited` 说成成功。
+        const permissionHint = credentialPermissionHint(result.permission)
+        if (permissionHint !== '') setHint(permissionHint)
       })
       .catch((cause: unknown) => {
         if (mounted.current) {

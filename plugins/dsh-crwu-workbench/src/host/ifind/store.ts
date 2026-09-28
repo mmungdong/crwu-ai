@@ -1,7 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { isWindowsPlatform } from '../platform/detect.ts'
+import { mkdirCommand, privateFileMechanism, removeFileCommand } from '../platform/shell.ts'
+import { enforceCredentialPermission, hostStorePermission } from '../platform/credential-permission.ts'
+import type { CredentialPermission } from '../../shared/types.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
 
 /**
@@ -39,19 +42,21 @@ export const IFIND_CREDENTIAL_FIELD = 'auth_token'
 /** 视为占位符的取值（上游文档里就是这么写的）。 */
 export const IFIND_PLACEHOLDER = 'your ifind-mcp key'
 
-/** 凭据文件的绝对路径。 */
+/**
+ * 凭据文件的绝对路径。
+ *
+ * 分隔符随主目录风格走（`joinLocalPath`）：这条路径交给 fs 与 shell 两条链路，
+ * 混用分隔符在 Windows 上既进不了 `New-Item -Path`，也会被别的程序当转义。
+ */
 export function ifindCredentialPath(home: string): string {
-  const base = home.replace(/[\\/]+$/, '')
-  if (base === '') return `~/${PLUGIN_STATE_DIR}/${IFIND_CREDENTIAL_FILE}`
-  // 主目录自带反斜杠（Windows）时用反斜杠拼，否则用正斜杠：路径交给 fs 与 shell 两条链路，
-  // 混用分隔符在 Windows 的 `chmod` 那条命令上会被当成转义。
-  const sep = base.includes('\\') ? '\\' : '/'
-  return `${base}${sep}${PLUGIN_STATE_DIR.replace(/\//g, sep)}${sep}${IFIND_CREDENTIAL_FILE}`
+  if (text(home) === '') return `~/${PLUGIN_STATE_DIR}/${IFIND_CREDENTIAL_FILE}`
+  return joinLocalPath(home, PLUGIN_STATE_DIR, IFIND_CREDENTIAL_FILE)
 }
 
-/** 状态目录的绝对路径（`chmod` / `mkdir` 用）。 */
+/** 状态目录的绝对路径（`mkdir` / 权限收紧用）。 */
 export function ifindStateDir(home: string): string {
-  return ifindCredentialPath(home).replace(/[\\/][^\\/]+$/, '')
+  if (text(home) === '') return `~/${PLUGIN_STATE_DIR}`
+  return joinLocalPath(home, PLUGIN_STATE_DIR)
 }
 
 export interface SecretVerdict {
@@ -219,17 +224,31 @@ export interface WriteSecretResult {
   view: IfindCredentialView
   /** 目录创建结果；false 表示落盘可能失败。 */
   dirReady: boolean
-  /** 权限是否真的收紧到 0600；false 时 `chmodError` 有原因。 */
-  chmodOk: boolean
-  chmodError: string
+  /**
+   * 凭据文件的权限结论（结构化，协议 17）：`verified`（POSIX 0600 真的生效）/
+   * `inherited`（Windows 继承账户 ACL，POSIX 0600 不适用）/ `failed`（真的没收紧，带原因）。
+   * 旧字段 `chmodOk: boolean` 已删除：Windows 上它只能是 `true`，语义是错的。
+   */
+  permission: CredentialPermission
   /** 落盘模式：`host`（DSH 凭据服务）或 `file`（插件自有文件）。 */
   mode: 'host' | 'file'
 }
 
-/** 写盘结果里的失败形状（集中一处，避免每个分支各写一遍）。 */
-function writeFailure(kind: 'input' | 'infrastructure', error: string, path: string): WriteSecretResult {
+/**
+ * 写盘结果里的失败形状（集中一处，避免每个分支各写一遍）。
+ *
+ * `mechanism` 由**注入的平台事实**推出（`privateFileMechanism` 是唯一判据，不看 `process.platform`）；
+ * 写盘都没成功时它只影响文案口径，`status` 恒为 `failed`。
+ */
+function writeFailure(
+  kind: 'input' | 'infrastructure',
+  error: string,
+  path: string,
+  platform: string,
+): WriteSecretResult {
   return {
-    ok: false, errorKind: kind, error, dirReady: false, chmodOk: false, chmodError: '', mode: 'file',
+    ok: false, errorKind: kind, error, dirReady: false,
+    permission: { status: 'failed', mechanism: privateFileMechanism(platform), message: error }, mode: 'file',
     view: { path, exists: false, state: 'unconfigured', length: 0, reason: error },
   }
 }
@@ -250,42 +269,43 @@ export async function writeIfindSecret(
   options: { platform?: string; placeholder?: unknown } = {},
 ): Promise<WriteSecretResult> {
   const path = ifindCredentialPath(home)
+  // 平台由调用方注入；先解析，失败信封与权限结论都用同一个值。
+  const platform = text(options.platform)
   const verdict = checkIfindSecret(rawSecret, options.placeholder ?? IFIND_PLACEHOLDER)
-  if (!verdict.ok) return writeFailure('input', verdict.reason, path)
+  if (!verdict.ok) return writeFailure('input', verdict.reason, path, platform)
 
   const resolved = resolveIfindStore(ctx)
   if (resolved.kind === 'host' && resolved.store !== undefined) {
     try {
       await resolved.store.set(IFIND_CREDENTIAL_KEY, verdict.value)
       return {
-        ok: true, errorKind: '', error: '', dirReady: true, chmodOk: true, chmodError: '', mode: 'host',
+        ok: true, errorKind: '', error: '', dirReady: true, permission: hostStorePermission(), mode: 'host',
         view: { path: `credentials:${IFIND_CREDENTIAL_KEY}`, exists: true, state: 'unverified', length: verdict.length, reason: '' },
       }
     } catch (error) {
       return writeFailure('infrastructure',
-        `写入 DSH 凭据存储失败：${error instanceof Error ? error.message : String(error)}`, path)
+        `写入 DSH 凭据存储失败：${error instanceof Error ? error.message : String(error)}`, path, platform)
     }
   }
 
-  if (home === '') return writeFailure('infrastructure', '主目录未知，无法保存同花顺 iFinD 凭据', path)
+  if (home === '') return writeFailure('infrastructure', '主目录未知，无法保存同花顺 iFinD 凭据', path, platform)
   const fs = fileSystem(ctx)
-  if (fs === undefined) return writeFailure('infrastructure', 'Host 文件服务不可用，无法保存同花顺 iFinD 凭据', path)
+  if (fs === undefined) return writeFailure('infrastructure', 'Host 文件服务不可用，无法保存同花顺 iFinD 凭据', path, platform)
 
-  const platform = text(options.platform) || process.platform
+  // 平台**由调用方注入**，不再回退 `process.platform`：回退会让单测与真实运行使用不同方言，
+  // Windows 分支永远测不到 —— 而这里曾经正是这样漏掉 `cmd` 语义的。拿不到平台事实就不动手：
+  // 建目录、权限收紧、路径分隔符全都依赖它。
+  if (platform === '') {
+    return writeFailure('infrastructure', '未知平台，拒绝在没有平台事实的情况下写凭据', path, platform)
+  }
   const dir = ifindStateDir(home)
-  // Windows 上是 PowerShell：`mkdir -p` 的 `-p` 依赖参数名缩写匹配，`chmod` 根本不是命令，
-  // `rm -f` 的 `-f` 在 `Remove-Item` 上同时前缀匹配 `-Force` 与 `-Filter`（报「参数名不明确」）。
-  // 所以这三条都按平台分开写，Windows 用 PowerShell 自身等价的幂等写法。
-  const mkdirCommand = isWindowsPlatform(platform)
-    ? `New-Item -ItemType Directory -Force -Path ${shellQuote(dir, platform)} | Out-Null`
-    : `mkdir -p ${shellQuote(dir, platform)}`
-  const mkdir = await runShell(ctx, mkdirCommand, {
+  const mkdirRun = await runShell(ctx, mkdirCommand(dir, platform), {
     workdir: home, timeoutMs: 15_000, escalate: true,
   })
-  const dirReady = mkdir.ok
+  const dirReady = mkdirRun.ok
   if (!dirReady) {
     return writeFailure('infrastructure',
-      `创建插件状态目录失败：${text(mkdir.stderr) || text(mkdir.error) || dir}`.slice(0, 300), path)
+      `创建插件状态目录失败：${text(mkdirRun.stderr) || text(mkdirRun.error) || dir}`.slice(0, 300), path, platform)
   }
 
   const body = `${JSON.stringify({ [IFIND_CREDENTIAL_FIELD]: verdict.value }, null, 2)}\n`
@@ -296,26 +316,13 @@ export async function writeIfindSecret(
     })
   } catch (error) {
     return writeFailure('infrastructure',
-      `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, path)
+      `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, path, platform)
   }
 
-  // 权限**必须回读核对**：chmod 在个别文件系统上会静默无效，而 0600 是这份文件的安全边界。
-  // Windows 没有 POSIX 权限位、也没有 `chmod` 命令：这一项在 Windows 上**不适用**（凭据文件在
-  // 用户配置目录内，由用户 ACL 保护），所以跳过而不是伪造一条必然失败的命令 —— 跳过后报
-  // `chmodOk: true` 表示「没有未收紧的权限」，不是「假装 chmod 成功了」。
-  let chmodOk = true
-  let chmodError = ''
-  if (!isWindowsPlatform(platform)) {
-    const chmod = await runShell(ctx, `chmod 600 ${shellQuote(path, platform)}`, {
-      workdir: home, timeoutMs: 15_000, escalate: true,
-    })
-    chmodOk = chmod.ok
-    chmodError = chmod.ok
-      ? ''
-      : (text(chmod.stderr) || text(chmod.error) || '权限设置命令没有跑起来').slice(0, 200)
-  }
+  // 权限结论由 `enforceCredentialPermission` 统一给出（三条结局各有名字，见 shared/types.ts）。
+  const permission = await enforceCredentialPermission(ctx, path, platform, { workdir: home, escalate: true })
   return {
-    ok: true, errorKind: '', error: '', dirReady, chmodOk, chmodError, mode: 'file',
+    ok: true, errorKind: '', error: '', dirReady, permission, mode: 'file',
     view: { path, exists: true, state: 'unverified', length: verdict.length, reason: '' },
   }
 }
@@ -337,13 +344,11 @@ export async function clearIfindSecret(
     }
   }
   if (home === '') return { ok: false, errorKind: 'infrastructure', error: '主目录未知，无法清除同花顺 iFinD 凭据', mode: 'file' }
-  const platform = text(options.platform) || process.platform
-  // POSIX `rm -f` 的语义是「文件不存在也算成功」，Windows 用 `-ErrorAction SilentlyContinue` 对齐
-  // （`rm -f` 在 PowerShell 里会因 `-f` 与 `-Filter` / `-Force` 二义而直接失败）。
-  const removeCommand = isWindowsPlatform(platform)
-    ? `Remove-Item -LiteralPath ${shellQuote(ifindCredentialPath(home), platform)} -Force -ErrorAction SilentlyContinue`
-    : `rm -f ${shellQuote(ifindCredentialPath(home), platform)}`
-  const result = await runShell(ctx, removeCommand, {
+  const platform = text(options.platform)
+  if (platform === '') {
+    return { ok: false, errorKind: 'infrastructure', error: '未知平台，拒绝在没有平台事实的情况下清除凭据', mode: 'file' }
+  }
+  const result = await runShell(ctx, removeFileCommand(ifindCredentialPath(home), platform), {
     workdir: home, timeoutMs: 15_000, escalate: true,
   })
   if (!result.ok) {
@@ -352,18 +357,4 @@ export async function clearIfindSecret(
       mode: 'file' }
   }
   return { ok: true, errorKind: '', error: '', mode: 'file' }
-}
-
-/**
- * 平台引用方式。
- *
- * 与 `environment/probe.ts` 的 `shellQuote` 同一判据（POSIX 单引号 / Windows 也是单引号 ——
- * Windows 上 DSH 跑的是 PowerShell，单引号才是纯字面量，双引号会插值），
- * 这里各写一份是因为 `probe.ts` 已经反向依赖本模块（`checkIfindSecret` 由它复用），
- * 再互相 import 会成环。两处都只有两行，且都有单测钉着 Windows 分支。
- */
-export function shellQuote(value: unknown, platform: string): string {
-  const raw = text(value)
-  if (!isWindowsPlatform(text(platform))) return `'${raw.replace(/'/g, "'\\''")}'`
-  return `'${raw.replace(/'/g, "''")}'`
 }

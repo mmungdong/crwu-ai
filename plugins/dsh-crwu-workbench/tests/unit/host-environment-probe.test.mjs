@@ -20,9 +20,12 @@ const ROOT = new URL('../../', import.meta.url)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const {
-  shellQuote, shellInvoke, probePackageIntegrity, packageIntegrityPaths,
+  buildOssProbeCommand, probePackageIntegrity, packageIntegrityPaths,
   probeOss, resolveOssutil, ossutilMissingMessage, serviceChecks,
 } = await import(new URL('src/host/environment/probe.ts', ROOT).href)
+// 引用与命令位置已经集中到 `platform/shell.ts`：这里的断言随实现一起搬过去，
+// 表格化的逐字断言在 `tests/unit/host-platform-shell.test.mjs` 里更全。
+const { shellQuote, shellInvoke } = await import(new URL('src/host/platform/shell.ts', ROOT).href)
 const { checkIfindSecret, readIfindSecret, writeIfindSecret, clearIfindSecret, ifindCredentialPath, ifindStateDir } =
   await import(new URL('src/host/ifind/store.ts', ROOT).href)
 const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
@@ -96,7 +99,7 @@ function fsStub({ infos = {}, files = {}, failWrite = false } = {}) {
  *
  * `{ runs: false }` 走 DSH 契约里「命令根本没执行」的形状：`execute` 抛错。
  */
-function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '' } = {}) {
+function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '', mode = '600' } = {}) {
   const commands = []
   const shell = {
     resolve: (request) => request,
@@ -104,9 +107,12 @@ function asShellCtx(fs, { runs = true, error = 'boom', stdout = '', failOn = '' 
       commands.push(spec.command)
       if (failOn !== '' && spec.command.includes(failOn)) throw new Error(error)
       if (!runs) throw new Error(error)
+      // 权限收紧之后会**回读模式位**（`stat -f %Lp` / `stat -c %a`）：替身必须回答这一条，
+      // 否则 `verified` 会被误判成 failed（那正是「只信退出码」时代的反面）。
+      const text = /^stat -[fc] /.test(spec.command) ? mode : stdout
       return { result: async () => ({
         exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
-        stdout: { text: stdout, truncated: false }, stderr: { text: '', truncated: false },
+        stdout: { text, truncated: false }, stderr: { text: '', truncated: false },
       }) }
     },
   }
@@ -409,16 +415,46 @@ test('Windows 上探测命令是可执行的 PowerShell：以 `&` 开头、路�
   assert.equal(command.includes('"'), false, '不得出现 cmd 式双引号')
 })
 
-test('Windows 上清单给的探测模板同样补调用运算符', async () => {
+test('Windows 上清单给的探测模板同样补调用运算符，且每个占位符都逐个引用', async () => {
   const shell = shellStub(() => ({ stdout: 'ok\n' }))
-  const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/ --endpoint {endpoint}' }
+  const oss = { ...DEFAULT_MANIFEST.oss, prefix: 'my audit', bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/{prefix}/ --endpoint {endpoint}' }
   await probeOss(ctxOf(packagedFs({ platform: 'win32-x64' }), shell.ctx), oss, 'win32-x64')
   const command = shell.calls[0] ?? ''
-  assert.equal(command.startsWith("& '"), true, `模板里的 {{ossutil}} 就是命令位置：${command}`)
-  assert.match(command, / --endpoint oss-cn-x\.aliyuncs\.com$/)
+  assert.equal(command.startsWith("& '"), true, `模板里的 {ossutil} 就是命令位置：${command}`)
+  // 每个占位符的值都按平台引用成字面量：旧实现把动态值裸拼进去，一个空格就能改写命令结构。
+  // （占位符夹在词中间时，引用后的片段与裸文本相邻拼接，两个方言都把整段当一个参数。）
+  assert.equal(command.endsWith("--endpoint 'oss-cn-x.aliyuncs.com'"), true, command)
+  assert.equal(command.includes("'my audit/'"), true, `带空格的占位符必须被引用：${command}`)
+  assert.equal(command.includes('{prefix}'), false, '占位符必须被替换掉')
+})
+
+test('旧字符串模板是 deprecated 兼容路径：未知占位符、换行与空可执行文件都必须拒绝', () => {
+  const base = { ...DEFAULT_MANIFEST.oss, bucket: 'bkt', endpoint: '', enabled: true }
+  const rejected = (probeCommand) => {
+    const built = buildOssProbeCommand({ ...base, probeCommand }, '/opt/ossutil', 'darwin-arm64')
+    assert.equal(built.ok, false, `应当拒绝：${probeCommand}`)
+    return built.error
+  }
+  assert.match(rejected('{ossutil} ls {nope}'), /未知占位符/)
+  assert.match(rejected('{ossutil} ls oss://a\nb'), /换行/)
+  assert.match(rejected('{ossutil} ls {oops'), /花括号/)
+  assert.equal(buildOssProbeCommand(base, '', 'darwin-arm64').ok, false)
+  // 默认路径是**结构化**的，不经过任何模板。
+  const built = buildOssProbeCommand(base, '/opt/ossutil', 'darwin-arm64')
+  assert.equal(built.ok, true)
+  assert.equal(built.deprecated, false)
 })
 
 // ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
+
+test('iFinD 凭据路径的分隔符随主目录风格走（Windows 上是 `\\`）', () => {
+  assert.equal(ifindCredentialPath('/Users/x'), '/Users/x/.dsh/crwu-workbench/ifind-credential.json')
+  assert.equal(ifindCredentialPath('/Users/x/'), '/Users/x/.dsh/crwu-workbench/ifind-credential.json')
+  assert.equal(ifindCredentialPath('C:\\Users\\x'), 'C:\\Users\\x\\.dsh\\crwu-workbench\\ifind-credential.json')
+  assert.equal(ifindStateDir('C:\\Users\\x'), 'C:\\Users\\x\\.dsh\\crwu-workbench')
+  // 主目录未知时保持 `~` 形式（不能拼成 `/ifind-credential.json`）。
+  assert.equal(ifindCredentialPath(''), '~/.dsh/crwu-workbench/ifind-credential.json')
+})
 
 test('checkIfindSecret 区分空值 / 占位符 / 首尾空白 / 换行 / 过短', () => {
   assert.equal(checkIfindSecret('').reason, 'API-Key 为空，请填写你自己的同花顺 iFinD API-Key')
@@ -501,12 +537,13 @@ test('写入失败与权限设置失败都要如实上报（不假装成功、�
   assert.equal(writeFailed.errorKind, 'infrastructure')
   assert.match(writeFailed.error, /写入/)
 
-  // ② chmod 失败 → 凭据仍然保存成功，但 chmodOk=false + 原因带出来。
+  // ② chmod 失败 → 凭据仍然保存成功，但权限结论必须是 failed + 原因带出来。
   const ctx = asShellCtx(fsStub({}), { failOn: 'chmod 600', error: 'chmod: Operation not permitted' })
   const chmodFailed = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
   assert.equal(chmodFailed.ok, true, '权限没收紧不该作废已保存的凭据')
-  assert.equal(chmodFailed.chmodOk, false)
-  assert.match(chmodFailed.chmodError, /Operation not permitted/)
+  assert.equal(chmodFailed.permission.status, 'failed')
+  assert.equal(chmodFailed.permission.mechanism, 'posix-0600')
+  assert.match(chmodFailed.permission.message, /Operation not permitted/)
   assert.equal(ctx.written.length, 1, '文件确实写下去了')
 })
 
@@ -514,7 +551,7 @@ test('成功保存：文件内容只有那一个字段、权限收紧到 0600、
   const ctx = asShellCtx(fsStub({}), { runs: true })
   const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
   assert.equal(result.ok, true)
-  assert.equal(result.chmodOk, true)
+  assert.deepEqual(result.permission, { status: 'verified', mechanism: 'posix-0600', message: '' })
   assert.equal(result.mode, 'file')
   assert.equal(result.view.exists, true)
   assert.equal(result.view.length, 8)
@@ -548,15 +585,51 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
   assert.equal(result.mode, 'file')
   assert.equal(ctx.commands.some((command) => command.includes('chmod')), false, 'Windows 不得执行 chmod')
   assert.equal(
-    ctx.commands.some((command) => command.startsWith('New-Item -ItemType Directory -Force -Path ')),
+    ctx.commands.some((command) => /^New-Item -ItemType Directory -Force -Path '.+' \| Out-Null$/.test(command)),
     true,
     `建目录必须是幂等的 PowerShell 写法：${ctx.commands.join(' | ')}`,
   )
-  // Windows 没有 POSIX 权限位：这一项不适用，报「没有未收紧的权限」而不是伪造失败。
-  assert.equal(result.chmodOk, true)
-  assert.equal(result.chmodError, '')
+  // Windows 没有 POSIX 权限位：结论必须是 **inherited / windows-acl** ——
+  // 既不说成「已验证」（旧 chmodOk:true 的毛病），也不说成失败。
+  assert.deepEqual(result.permission, {
+    status: 'inherited', mechanism: 'windows-acl', message: '使用当前 Windows 账户 ACL；POSIX 0600 不适用',
+  })
 
   await clearIfindSecret(ctx, home, { platform: 'win32-x64' })
-  assert.equal(ctx.commands.some((command) => command.startsWith('Remove-Item -LiteralPath ')), true)
+  const remove = ctx.commands.find((command) => command.startsWith('if (Test-Path -LiteralPath ')) ?? ''
+  assert.notEqual(remove, '', `删除必须是 PowerShell 幂等写法：${ctx.commands.join(' | ')}`)
+  assert.match(remove, /-ErrorAction Stop \}$/, '真实失败必须能传播（不能 SilentlyContinue）')
+  assert.equal(remove.includes('SilentlyContinue'), false)
   assert.equal(ctx.commands.some((command) => command.startsWith('rm -f ')), false)
+})
+
+test('Windows 上凭据落盘本身失败仍是操作失败（权限结论不得掩盖它）', async () => {
+  // ① 建目录失败（目录不存在又报错）→ infrastructure，且权限结论是 failed。
+  const mkdirDown = asShellCtx(fsStub({}), { runs: false, error: 'Access is denied' })
+  const dirFailed = await writeIfindSecret(mkdirDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64' })
+  assert.equal(dirFailed.ok, false, '目录没建出来就不是成功')
+  assert.equal(dirFailed.errorKind, 'infrastructure')
+  assert.equal(dirFailed.permission.status, 'failed')
+
+  // ② 写盘抛错 → infrastructure；权限结论同样是 failed（不是 inherited）。
+  const writeDown = asShellCtx(fsStub({ failWrite: true }), { runs: true })
+  const writeFailed = await writeIfindSecret(writeDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64' })
+  assert.equal(writeFailed.ok, false)
+  assert.equal(writeFailed.errorKind, 'infrastructure')
+  assert.equal(writeFailed.permission.status, 'failed')
+  assert.equal(writeFailed.permission.mechanism, 'windows-acl')
+
+  // ③ 清除失败 → 仍然是操作失败。
+  const clearDown = asShellCtx(fsStub({}), { runs: false, error: 'file is locked' })
+  const cleared = await clearIfindSecret(clearDown, 'C:\\Users\\x', { platform: 'win32-x64' })
+  assert.equal(cleared.ok, false)
+  assert.equal(cleared.errorKind, 'infrastructure')
+})
+
+test('未知平台时不猜权限机制，写盘直接拒绝', async () => {
+  const ctx = asShellCtx(fsStub({}), { runs: true })
+  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', {})
+  assert.equal(result.ok, false)
+  assert.equal(result.permission.status, 'failed')
+  assert.match(result.error, /未知平台/)
 })

@@ -19,7 +19,7 @@ const ROOT = new URL('../../', import.meta.url)
 
 const { satisfies, parseVersion, compareVersion } = await import(new URL('src/host/environment/version.ts', ROOT).href)
 const { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
-const { quoteArg, normalizeOss } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
+const { normalizeOss } = await import(new URL('src/host/environment/manifest.ts', ROOT).href)
 
 // ── 版本 ────────────────────────────────────────────────────────────────────
 
@@ -130,11 +130,4 @@ test('normalizeOss only accepts the two documented link modes', () => {
   assert.equal(normalizeOss({}).autoUpload, true)
   assert.equal(normalizeOss({ prefix: '/crwu/audit/' }).prefix, '/crwu/audit', 'prefix 去掉尾斜杠')
   assert.equal(normalizeOss({ linkTtl: 'soon' }).linkTtl, 3600, 'TTL 解析不出数字时回默认')
-})
-
-test('quoteArg only quotes when the value needs it', () => {
-  assert.equal(quoteArg('https://a.b/c.json'), 'https://a.b/c.json')
-  assert.equal(quoteArg('has space'), "'has space'")
-  assert.equal(quoteArg("it's"), "'it'\\''s'")
-  assert.equal(quoteArg(''), "''")
 })

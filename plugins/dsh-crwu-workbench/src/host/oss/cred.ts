@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { isWindowsPlatform } from '../platform/detect.ts'
 import { expandLocal } from '../platform/home.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
@@ -12,10 +13,14 @@ import { maskKey } from '../h3yun/fields.ts'
  * 写完之后也不回读内容，只回路径与是否成功。文件按 600 权限落盘。
  */
 
-/** ossutil 配置文件的路径：跟着主目录走，不写死。 */
+/**
+ * ossutil 配置文件的路径：跟着主目录走，不写死。
+ *
+ * 分隔符随主目录风格（Windows 上是 `\`）：这条路径既进提示词与界面，也进 `chmod` / 读取命令。
+ */
 export function ossConfigPath(home: string): string {
   if (home === '') return '~/.ossutilconfig'
-  return `${home.replace(/[\\/]+$/, '')}/.ossutilconfig`
+  return joinLocalPath(home, '.ossutilconfig')
 }
 
 /** 解析 ossutil 的 INI 风格配置：`key=value`，忽略注释与段名，键小写。 */

@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { FsDirEntry, FsTarget, FileSystem } from '@deepseek-ai/dsh-fs'
 import { text } from '../../shared/utils/value.ts'
+import { basenameLocalPath, joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { COUNTED, HTML_FILE, RESULT_FILE, dirMarker, fileMarker } from './consts.ts'
 
@@ -25,11 +26,10 @@ export interface CaseItem {
   error: string
 }
 
-/** 目录名取路径最后一段；结尾斜杠不影响。 */
+/** 目录名取路径最后一段；Windows 的 `\` 与 POSIX 的 `/`、结尾斜杠都不影响。 */
 export function caseNameOf(displayPath: string): string {
-  const trimmed = displayPath.replace(/\/+$/, '')
-  const parts = trimmed.split('/')
-  return parts.length > 0 ? (parts[parts.length - 1] ?? trimmed) : trimmed
+  const name = basenameLocalPath(displayPath)
+  return name === '' ? text(displayPath) : name
 }
 
 export async function inspectCase(ctx: Context, dirTarget: FsTarget): Promise<CaseItem | null> {
@@ -103,7 +103,7 @@ export async function inspectCase(ctx: Context, dirTarget: FsTarget): Promise<Ca
   if (resultFile !== '') {
     try {
       // 按**记录里的绝对路径**解析：结果文件的 key 是 `dir/file`，只传文件名会解析错。
-      const target = await resolveTarget(ctx, `${item.path.replace(/\/+$/, '')}/${resultFile}`)
+      const target = await resolveTarget(ctx, joinLocalPath(item.path, resultFile))
       item.audit = JSON.parse(await fs.readText(target))
     } catch (error) {
       item.error = error instanceof Error ? error.message : String(error)

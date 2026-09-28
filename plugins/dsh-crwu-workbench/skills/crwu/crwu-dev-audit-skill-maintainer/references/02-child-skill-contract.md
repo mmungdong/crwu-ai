@@ -26,7 +26,7 @@ crwu-audit-asset-<name>/
 
 **公共规则：一个规范源 + 各叶子本地副本（不是多个事实源）**。轴边界、输入、一级根装配、二级选择返回、执行顺序（一级共用层→命中二级条目）、必检项/历史问题状态字段、来源优先级、证据出处与 capability gap，维护在**一个规范源** `crwu-audit/references/12-leaf-common-contract.md`，由确定性工具同步为每个叶子的**本地副本** `references/03-common-contract.md`：
 
-```bash
+```text
 # 生成/修复所有叶子副本（只为缺失或漂移的叶子写入；重复执行无 diff）
 python3 scripts/kb_tool.py sync-leaf-common-contract --skill-root <本技能层> --write
 # 只报告 missing / drifted / unexpected（validate 已自动执行同等检查）

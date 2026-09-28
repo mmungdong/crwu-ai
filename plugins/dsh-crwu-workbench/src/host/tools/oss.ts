@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { normalizeOss } from '../environment/manifest.ts'
-import { shellInvoke } from '../environment/probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { sanitizeOssError } from '../oss/sanitize.ts'
 
 // 兼容再导出：脱敏器搬到了 `host/oss/sanitize.ts`（环境探测与上传共用一份），
@@ -11,6 +11,7 @@ import { sanitizeOssError } from '../oss/sanitize.ts'
 export { sanitizeOssError } from '../oss/sanitize.ts'
 import { requireBundledCommand } from '../platform/command.ts'
 import { parseLsEntries, type OssEntry } from '../oss/parse.ts'
+import { basenameLocalPath } from '../../shared/utils/local-path.ts'
 import { runShell } from '../shell/run.ts'
 import { fileSize, requireCaseDir, requireInsideCase } from './case-dir.ts'
 import { failure, renderJson } from './outcome.ts'
@@ -140,8 +141,9 @@ export function ossTools(deps: ToolDeps) {
           results.push({ kind, name: relative, key: '', ok: false, sizeBytes: 0, exitCode: null, error: '文件不存在或为空' })
           continue
         }
-        const key = `${prefix}/${relative.split('/').pop() ?? relative}`
-        const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${key}`]
+        // 对象键永远用 `/`；文件名那一段用 basenameLocalPath（两种分隔符都能取对）。
+        const objectKey = `${prefix}/${basenameLocalPath(relative)}`
+        const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${objectKey}`]
         if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
         for (const extra of oss.extraArgs) argv.push(extra)
         const run = await runShell(ctx, shellInvoke(argv[0] ?? '', argv.slice(1), platform), {
@@ -151,15 +153,15 @@ export function ossTools(deps: ToolDeps) {
         })
         if (!run.ok) {
           results.push({
-            kind, name: relative, key, ok: false, sizeBytes: 0, exitCode: run.exitCode,
+            kind, name: relative, key: objectKey, ok: false, sizeBytes: 0, exitCode: run.exitCode,
             error: sanitizeOssError(run.stderr || run.error || '上传失败'),
           })
           continue
         }
         // 写后校验：列举一次，目标对象必须在、且字节数与本地一致。
-        const verify = await verifyObject(ctx, platform, oss.bucket, prefix, key, size, caseDir, ossutil, exec.signal)
+        const verify = await verifyObject(ctx, platform, oss.bucket, prefix, objectKey, size, caseDir, ossutil, exec.signal)
         results.push({
-          kind, name: relative, key, ok: verify.ok, sizeBytes: verify.sizeBytes, exitCode: run.exitCode,
+          kind, name: relative, key: objectKey, ok: verify.ok, sizeBytes: verify.sizeBytes, exitCode: run.exitCode,
           error: verify.ok ? '' : verify.error,
         })
       }

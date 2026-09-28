@@ -1,21 +1,15 @@
 import { DEFAULT_MANIFEST, type OssSpec } from './manifest-default.ts'
 
 /**
- * 环境域的取值收窄与 shell 引用。
+ * 环境域的取值收窄。
  *
  * 2026-09-25 之前这里还住着「远程清单拉取与归一」：一份放在只读 OSS 上的 JSON 可以远程改写
  * 员工机器上认哪些二进制、装到哪儿。整条只读依赖下掉后它已删除 —— 现在清单只有内置一份
  * （`manifest-default.ts`），外部输入只剩 YAML（由 `config/yaml.ts` 校验）。
  *
- * 留着这个文件是因为两个纯函数还被别处用着，且都属于「环境值怎么进 shell / 怎么收窄」这一件事。
+ * 原来的 `quoteArg`（POSIX-only 引用）已经删除：平台引用只有一个出口，
+ * 就是 `platform/shell.ts` 的 `shellQuote` —— 留着第二个引用函数就等于留着第二条绕过 Windows 的路。
  */
-
-/** 单引号安全引用；需要时包一层 shell 引用，避免清单地址里的特殊字符被解释。 */
-export function quoteArg(value: unknown): string {
-  const raw = String(value)
-  if (raw.length > 0 && /^[A-Za-z0-9_@%+=:,./-]+$/.test(raw)) return raw
-  return `'${raw.split("'").join("'\\''")}'`
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}

@@ -5,11 +5,10 @@ import { text } from '../../shared/utils/value.ts'
 import { sanitizeOssError, OSS_OUTPUT_LIMIT } from '../oss/sanitize.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { binPlatformDir, bundledBinaryPath, binaryFileName } from '../platform/bin-dir.ts'
-import { isWindowsPlatform } from '../platform/detect.ts'
 import { packageRootFrom } from '../platform/package-root.ts'
+import { shellInvoke, shellQuote } from '../platform/shell.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
 import type { EnvManifest, OssSpec, PackagedToolSpec, ServiceSpec } from './manifest-default.ts'
-import { quoteArg } from './manifest.ts'
 
 /**
  * 随插件发布的组件（`crwu` / `dws` / `ossutil`）的完整性与 ossutil 的定位。
@@ -110,54 +109,6 @@ export interface IfindCheck {
   dataSample: string
   /** 「获取 API-Key」的官方入口（界面上的链接）；Host 不代填、不索取。 */
   applyUrl: string
-}
-
-/**
- * 把一个参数安全地放进**该平台真实使用的 shell** 的命令串里。
- *
- * POSIX 上就是 `bash -c`：能不加引号就不加（`quoteArg`），需要时用单引号 + `'\''`。
- *
- * **Windows 上是 PowerShell，不是 `cmd.exe`**（DSH 在 Windows 挂 `@deepseek-ai/dsh-pwsh-local`，
- * 整串命令交给 `pwsh -Command`）。所以这里用 PowerShell 的单引号字面量、内部单引号翻倍：
- * 双引号在 PowerShell 里会做 `$` / 反引号插值（路径或 URL 里出现 `$` 就会被当变量展开），
- * 而单引号是纯字面量。cmd 那套 `"…"` + `""` 转义在这里既没必要也不安全。
- *
- * 以引号开头的命令还需要 PowerShell 的调用运算符 `&` —— 那是**命令位置**的事，由下面的
- * `shellInvoke()` 负责；`shellQuote` 只管「一个参数」。
- */
-export function shellQuote(value: unknown, platform: string): string {
-  if (!isWindowsPlatform(text(platform))) return quoteArg(value)
-  return `'${String(value).replace(/'/g, "''")}'`
-}
-
-/**
- * 拼一条**可执行文件 + 参数**的命令串（命令位置）。
- *
- * 为什么不能直接 `${shellQuote(exe, platform)} 参数…`（2026-09-28 修，员工在 Windows 上实测报错）：
- * DSH 在 Windows 挂的执行器是 `@deepseek-ai/dsh-pwsh-local`，它把整条命令作为**一个 argv 元素**
- * 交给 `pwsh -NoLogo -NoProfile -NonInteractive -Command <整串>`（该包自己的 README：*the command
- * string is passed as ONE argv element to `-Command`; PowerShell itself parses the text*）。
- * 也就是说插件拼的是 **PowerShell 脚本**，不是 `cmd.exe` 的批处理行。
- *
- * 后果很硬：**以引号开头的 token 在 PowerShell 里是字符串表达式，不是命令调用**。
- *
- * ```text
- * PS> "C:\…\crwu.exe" "h3yun" "session" "status"
- * 表达式或语句中包含意外的标记"h3yun"。
- * ```
- *
- * 员工看到的正是这个：环境页「氚云员工会话」「钉钉认证」两行一起红，因为它们的命令都以包内绝对
- * 路径开头。PowerShell 的调用运算符 `&` 才是「把这段字符串当命令执行」，所以 Windows 上必须写
- * `& 'C:\…\crwu.exe' 'h3yun' 'session' 'status'`。
- *
- * POSIX 上**绝不能**加 `&`：`bash -c` 里它是后台作业，会把前台命令变成异步执行。
- *
- * 所有「第一条 token 是可执行文件」的调用点都必须走这里，而不是自己 join ——
- * `tests/unit/host-shell-fs.test.mjs` 里有静态守卫钉着这一点。
- */
-export function shellInvoke(executable: string, args: readonly string[], platform: string): string {
-  const parts = [executable, ...args].map((item) => shellQuote(item, platform))
-  return isWindowsPlatform(text(platform)) ? `& ${parts.join(' ')}` : parts.join(' ')
 }
 
 /**
@@ -425,7 +376,7 @@ export async function probeOss(
   platform: string,
   options: { workdir?: string } = {},
 ): Promise<ServiceCheck> {
-  const { target, prefix } = ossProbeTarget(oss)
+  const { target } = ossProbeTarget(oss)
   const base: ServiceCheck = {
     id: 'oss', label: '阿里云 OSS（AK 权限）', required: true,
     ok: false, state: '', detail: '', errorKind: '', target,
@@ -444,8 +395,12 @@ export async function probeOss(
   }
   const ossutil = lookup.path
 
-  const command = buildOssProbeCommand(oss, ossutil, platform)
-  const run = await runShell(ctx, command, {
+  const built = buildOssProbeCommand(oss, ossutil, platform)
+  if (!built.ok) {
+    // 模板写坏了（未知占位符 / 换行 / 没有可执行文件）—— 这是**部署配置**问题，不是 AK 问题。
+    return { ...base, ok: false, state: '探测配置有误', errorKind: 'config', detail: built.error }
+  }
+  const run = await runShell(ctx, built.command, {
     timeoutMs: 60_000,
     ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
   })
@@ -472,33 +427,83 @@ export async function probeOss(
 }
 
 /**
- * 探测命令：**只读 `ls` + 业务前缀 + `--limited-num 1`**。
+ * 结构化探测请求：**可执行文件 + 参数**。
  *
- * `oss.probeCommand` 仍被尊重（部署方可以换成等价的只读命令），但 `{prefix}` 占位符与默认分支
- * 都指向业务前缀 —— 旧默认（列桶根）证明不了"能写交付件"。跑之前不检查、跑之后才看错误码，
- * 所以它必须自身只读。
+ * 这是默认（也是唯一推荐的）探测形状：可执行文件与参数分开交给 `shellInvoke`，由它按平台引用 ——
+ * 动态值不可能被当成命令结构的一部分。
  */
-export function buildOssProbeCommand(oss: OssSpec, ossutil: string, platform: string): string {
-  const { bucket, prefix, target } = ossProbeTarget(oss)
-  // `{ossutil}` 占位符替换成**命令位置**的形式（Windows 上带 `&`）：模板里的 `{ossutil}` 就是
-  // 可执行文件的位置，直接塞一个引号路径会让 PowerShell 把它当字符串表达式。
-  const executable = shellInvoke(ossutil, [], platform)
-  if (oss.probeCommand !== '') {
-    return oss.probeCommand
-      .split('{ossutil}').join(executable)
-      .split('{bucket}').join(bucket)
-      .split('{prefix}').join(prefix)
-      .split('{target}').join(target)
-      .split('{endpoint}').join(oss.endpoint)
+export interface OssProbeSpec {
+  executable: string
+  args: string[]
+}
+
+/** 默认探测：**只读 `ls` + 业务前缀 + `--limited-num 1`**，结构化形状。 */
+export function ossProbeSpec(oss: OssSpec, ossutil: string): OssProbeSpec {
+  const { target } = ossProbeTarget(oss)
+  return {
+    executable: ossutil,
+    args: [
+      'ls', target,
+      ...(oss.endpoint === '' ? [] : ['--endpoint', oss.endpoint]),
+      // `--limited-num 1` = 最多一次请求；空目录（0 个对象）仍然是成功的列举。
+      '--limited-num', '1',
+      ...oss.extraArgs,
+    ],
   }
-  const args = [
-    'ls', target,
-    ...(oss.endpoint === '' ? [] : ['--endpoint', oss.endpoint]),
-    // `--limited-num 1` = 最多一次请求；空目录（0 个对象）仍然是成功的列举。
-    '--limited-num', '1',
-    ...oss.extraArgs,
-  ]
-  return shellInvoke(ossutil, args, platform)
+}
+
+/** 旧字符串模板允许的占位符；出现别的 `{…}` 一律拒绝。 */
+export const OSS_PROBE_PLACEHOLDERS = ['ossutil', 'bucket', 'prefix', 'target', 'endpoint'] as const
+
+export type OssProbeCommand =
+  | { ok: true; command: string; /** 走的是旧字符串模板（deprecated 兼容路径）。 */ deprecated: boolean }
+  | { ok: false; error: string }
+
+/**
+ * 生成探测命令。
+ *
+ * **默认路径是结构化的**（`ossProbeSpec` + `shellInvoke`）：部署配置里不需要、也不应该出现
+ * 「一段宿主 shell 脚本」。`oss.probeCommand` 作为 **deprecated 兼容路径**保留，但不再是裸替换：
+ *
+ * - 只认 `{ossutil}` / `{bucket}` / `{prefix}` / `{target}` / `{endpoint}` 五个占位符，别的一律拒绝；
+ * - 每个占位符的值**逐个按平台引用**（`shellQuote`）—— 旧实现是把动态值裸拼进去，
+ *   于是 endpoint 里一个空格或 `$` 就能改变命令结构；
+ * - `{ossutil}` 是**命令位置**，替换成 `shellInvoke(ossutil, [], platform)`（Windows 上带 `&`）；
+ * - 拒绝换行、拒绝替换后仍残留的 `{` / `}`、拒绝空可执行文件。
+ *
+ * 部署配置是管理员写的，但这仍然是外部输入：它进 shell 前必须过同一套边界。
+ */
+export function buildOssProbeCommand(oss: OssSpec, ossutil: string, platform: string): OssProbeCommand {
+  if (ossutil === '') return { ok: false, error: '探测命令缺少可执行文件（ossutil 解析失败）' }
+  if (oss.probeCommand === '') {
+    const spec = ossProbeSpec(oss, ossutil)
+    return { ok: true, command: shellInvoke(spec.executable, spec.args, platform), deprecated: false }
+  }
+
+  const template = oss.probeCommand
+  if (template.trim() === '') return { ok: false, error: 'oss.probeCommand 是空白字符串，请留空使用内置只读探测' }
+  if (/[\r\n]/.test(template)) return { ok: false, error: 'oss.probeCommand 不能包含换行' }
+
+  const { bucket, prefix, target } = ossProbeTarget(oss)
+  const values: Record<string, string> = { ossutil, bucket, prefix, target, endpoint: oss.endpoint }
+  const unknown: string[] = []
+  const command = template.replace(/\{([A-Za-z0-9_]+)\}/g, (whole, name: string) => {
+    if (!Object.hasOwn(values, name)) {
+      unknown.push(whole)
+      return whole
+    }
+    // 命令位置要带调用运算符（Windows）；其余位置逐个引用成字面量。
+    return name === 'ossutil'
+      ? shellInvoke(values[name] as string, [], platform)
+      : shellQuote(values[name], platform)
+  })
+  if (unknown.length > 0) {
+    return { ok: false, error: `oss.probeCommand 含未知占位符：${[...new Set(unknown)].join(' ')}（只认 ${OSS_PROBE_PLACEHOLDERS.join(' / ')}）` }
+  }
+  if (command.includes('{') || command.includes('}')) {
+    return { ok: false, error: 'oss.probeCommand 含无法识别的花括号，请只使用 {ossutil} {bucket} {prefix} {target} {endpoint}' }
+  }
+  return { ok: true, command, deprecated: true }
 }
 
 /**

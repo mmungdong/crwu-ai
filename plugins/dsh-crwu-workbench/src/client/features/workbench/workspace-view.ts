@@ -1,5 +1,6 @@
 import type { WorkspaceView } from '../../../shared/types.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
+import { joinLocalPath, localSeparator } from '../../../shared/utils/local-path.ts'
 
 /**
  * 工作空间卡片的**判定逻辑**（纯函数，可独立测试）。
@@ -43,7 +44,11 @@ export function workspaceStatus(workspace: WorkspaceView | null | undefined): Wo
   }
 }
 
+/** 提示文案里的占位段：员工看到的是「<工作空间>\<报告流水号>\」。 */
+const ARTIFACT_HINT_PLACEHOLDER = '<报告流水号>'
+
 /** 审核产物的落盘位置说明（用户最常问的问题：东西写到哪了）。 */
 export function artifactHint(path: string): string {
-  return `${zhCN.wsArtifactPrefix}${path}/<报告流水号>/。${zhCN.wsCwdNote}`
+  const sep = localSeparator(path)
+  return `${zhCN.wsArtifactPrefix}${joinLocalPath(path, ARTIFACT_HINT_PLACEHOLDER)}${sep}。${zhCN.wsCwdNote}`
 }

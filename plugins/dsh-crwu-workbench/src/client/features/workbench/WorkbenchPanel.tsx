@@ -4,6 +4,7 @@ import { Notice } from '../../components/primitives.tsx'
 import { Button } from '../../components/primitives.tsx'
 import { SideDrawer } from '../../components/SideDrawer.tsx'
 import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
+import { joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { environmentStateOf, gatingOf, workbenchApi } from '../report-audit/api.ts'
 import type { PendingResult } from '../report-audit/api.ts'
@@ -688,7 +689,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                     setNotice('这条记录还没有本地 HTML')
                     return
                   }
-                  void workbenchApi.openPath({ path: `${record.casePath.replace(/\/+$/, '')}/${record.htmlFile}` })
+                  void workbenchApi.openPath({ path: joinLocalPath(record.casePath, record.htmlFile) })
                     .then((result) => { if (!result.ok) setNotice(result.error) })
                 }}
                 onOpenSession={(key) => {

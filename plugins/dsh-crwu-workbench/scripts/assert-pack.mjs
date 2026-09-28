@@ -52,6 +52,9 @@ const REQUIRED = [
   // npm 安装 tarball 时也会跑 prepare；这个入口不在包里，装包的人就会看到
   // `npm error command sh -c node scripts/prepare.mjs`。它必须随包发布。
   'scripts/prepare.mjs',
+  // prepare 用它解析 tsdown 的 JS 入口（不再靠 shell 找 `tsdown.cmd`）：少了它，
+  // 员工安装 tarball 时 prepare 会以「找不到模块」失败 —— 而本地 link 开发永远看不出来。
+  'scripts/lib/cli-entry.mjs',
   'config/crwu-workbench.yml',
   'cordis.patch.yml',
   'README.md',

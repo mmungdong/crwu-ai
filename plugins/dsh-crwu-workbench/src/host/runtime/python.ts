@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { shellInvoke } from '../environment/probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
 import type { WorldFacts } from '../platform/world.ts'
 

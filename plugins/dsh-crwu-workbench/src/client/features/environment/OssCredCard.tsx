@@ -3,6 +3,7 @@ import { Button, Chip, Notice } from '../../components/primitives.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import { credentialPermissionHint } from './credential-permission.ts'
 
 /**
  * 阿里云 OSS 交付凭据（步骤 2）。
@@ -75,12 +76,14 @@ export function OssCredCard(props: OssCredCardProps): React.ReactElement {
         if (result.ok !== true) {
           setError(String(result.error ?? outcome?.detail ?? zhCN.envOssNotReady))
           setHint(ossErrorHint(String(outcome?.errorKind ?? result.errorKind ?? '')))
-          if (result.chmodOk === false) setHint(String(result.chmodError ?? ''))
+          // 只叠「真的没收紧成功」这种硬问题；ACL 说明会把连通性归因挤掉。
+          const failed = credentialPermissionHint(result.permission, { onlyFailures: true })
+          if (failed !== '') setHint(failed)
           return
         }
         setReplacing(false)
-        // 权限没收紧成功要如实说（0600 是这份文件的安全边界）。
-        if (result.chmodOk === false) setHint(String(result.chmodError ?? ''))
+        const permissionHint = credentialPermissionHint(result.permission)
+        if (permissionHint !== '') setHint(permissionHint)
         if (outcome?.ok === true) {
           setMessage(zhCN.envOssSaved)
           props.onSaved()
