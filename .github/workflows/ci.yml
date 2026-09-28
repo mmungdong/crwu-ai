@@ -74,6 +74,10 @@ jobs:
       - name: skill gates
         if: runner.os == 'Linux'
         run: |
+          # 门禁只读源码：**不许在包目录里留下 `__pycache__/*.pyc`** —— `files` 里有
+          # `skills/crwu/`，残留会被后面的 `pack:assert` 判成「打进了不该发布的东西」
+          # （`assert-pack.mjs` 有按路径片段判的残留检查）。
+          export PYTHONDONTWRITEBYTECODE=1
           # 日志接口要仓库 admin 权限（普通 token 403），所以失败原因必须落成**公开可读**的
           # check-run 注解 —— 与 windows 那条 annotate 步骤同一口径。2026-09-28 这一步在
           # ubuntu 上一直是红，而注解里只有一句「Process completed with exit code 1」，

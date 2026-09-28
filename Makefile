@@ -110,9 +110,11 @@ plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run pack:assert:strict
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
-	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
-	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
-	cd "$(PLUGIN_DIR)" && python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
+	# 门禁只读源码：`PYTHONDONTWRITEBYTECODE=1` 保证不在包目录留下 `__pycache__/*.pyc`
+	# —— `files` 里有 `skills/crwu/`，残留会被 `pack:assert` 判成「打进了不该发布的东西」。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 
 # 打成可直接分发的 tgz（`npm publish` 的对象，也是接收方自测的输入）。
 # 包内已含全部技能层（skills/crwu、skills/dws、common/skills）与两个平台的自带二进制。
