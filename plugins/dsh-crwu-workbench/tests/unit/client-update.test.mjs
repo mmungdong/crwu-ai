@@ -1141,3 +1141,270 @@ test('32. cancel 传输失败：status 仍说在装 → 保持安装中；status
   cancelGate.resolve()
   await installing
 })
+
+// ---------------------------------------------------------------------------
+// 七、第二轮审查：新事务立即作废旧世代 + 恢复必须取得有效事实
+// ---------------------------------------------------------------------------
+
+/**
+ * 造一个"旧 status 挂住 → 新 install 开始（install 响应也挂住）"的场景。
+ *
+ * @param staleState - 旧世代 status 回来时带的 install 状态。
+ * @returns store / api / scheduler / 两个 deferred / install 的 promise。
+ */
+function staleStatusDuringInstall(staleState) {
+  const staleGate = deferred()
+  const installGate = deferred()
+  let statusCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[0]]: async () => {
+      statusCall += 1
+      if (statusCall === 1) {
+        await staleGate.promise
+        return okEnvelope({ install: staleState })
+      }
+      return okEnvelope({ install: installInstalling({ stage: 'downloading' }) })
+    },
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      return okEnvelope({ install: installAwaiting() })
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+  return { store, api, scheduler, staleGate, installGate }
+}
+
+test('33. 新事务开始后、install 响应前：旧 status 的 failed 不得进入当前事务', async () => {
+  const { store, scheduler, staleGate, installGate } = staleStatusDuringInstall({
+    status: 'failed',
+    kind: 'network',
+    targetVersion: '0.0.12',
+  })
+
+  const stale = store.refreshStatus() // 旧世代：发得早、回得晚
+  await tick(4)
+  const installing = store.install() // 新事务开始（立即作废旧世代）
+  await tick(4)
+  assert.equal(store.get().installing, true, '本地安装请求在飞')
+  assert.equal(scheduler.pending(), 1, '新事务的轮询已经排上')
+
+  staleGate.resolve() // 旧世代带着 failed 回来
+  await stale
+
+  assert.equal(store.get().install, null, '旧世代的 failed 不得写入新事务')
+  assert.equal(store.get().error, null, '旧世代响应本身不算错误')
+  const view = vm(store.get())
+  assert.equal(view.installing, true, '仍在安装')
+  assert.equal(view.canCancel, true, '取消入口必须还在')
+  assert.equal(view.canInstall, false)
+  assert.equal(view.installBlockedReason, 'install-active')
+  assert.equal(scheduler.pending(), 1, '旧响应不得停掉新事务的轮询')
+
+  installGate.resolve()
+  await installing
+  assert.equal(store.get().install.status, 'awaiting-restart')
+})
+
+test('34. 旧世代的 idle/cancelled/awaiting-restart/updated 都不得覆盖新事务或停轮询', async () => {
+  const cases = [
+    ['idle', installIdle],
+    ['cancelled', { status: 'cancelled', targetVersion: '0.0.12' }],
+    ['awaiting-restart', installAwaiting()],
+    ['updated', { status: 'updated', version: '0.0.12' }],
+  ]
+  for (const [label, staleState] of cases) {
+    const { store, scheduler, staleGate, installGate } = staleStatusDuringInstall(staleState)
+    const stale = store.refreshStatus()
+    await tick(4)
+    const installing = store.install()
+    await tick(4)
+
+    staleGate.resolve()
+    await stale
+
+    assert.equal(store.get().install, null, `${label}：旧世代状态不得写入新事务`)
+    assert.equal(vm(store.get()).installing, true, `${label}：仍在安装`)
+    assert.equal(vm(store.get()).canCancel, true, `${label}：取消入口还在`)
+    assert.equal(scheduler.pending(), 1, `${label}：旧响应不得停掉新事务的轮询`)
+
+    installGate.resolve()
+    await installing
+    assert.equal(store.get().install.status, 'awaiting-restart', `${label}：新事务自己的终态仍然权威`)
+  }
+})
+
+test('35. install 响应丢失且旧世代 status 在飞：恢复必须真正取一次当前世代事实', async () => {
+  const staleGate = deferred()
+  let statusCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[0]]: async () => {
+      statusCall += 1
+      if (statusCall === 1) {
+        await staleGate.promise // 旧世代：发得早
+        return okEnvelope({ install: installIdle })
+      }
+      return okEnvelope({ install: installInstalling({ stage: 'installing' }) }) // 当前世代事实
+    },
+    [UPDATE_OPERATION_NAMES[2]]: () => {
+      throw new Error('install response lost')
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  const stale = store.refreshStatus() // 旧世代 status 在飞
+  await tick(4)
+  const installing = store.install() // 新事务；install 响应丢失 → 触发事实恢复
+  await tick(6)
+  assert.equal(statusCall, 1, '恢复不得复用旧世代的在飞请求')
+
+  staleGate.resolve()
+  await stale
+  const state = await installing
+
+  assert.equal(statusCall, 2, '必须真正再发一次当前世代的 status')
+  assert.equal(state.install.status, 'installing', '以当前世代事实为准')
+  assert.equal(state.error, null, '取到事实后不报安装失败')
+  assert.equal(vm(state).canCancel, true)
+  assert.equal(scheduler.pending(), 1, '继续轮询')
+})
+
+test('36. cancel 响应丢失且恢复 status 的 install 非法：按 cancel 失败处理', async () => {
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[3]]: { ok: false, error: SECRET_TEXT },
+    [UPDATE_OPERATION_NAMES[0]]: { ok: true, check: checkIdle, install: { status: 'weird' } },
+  })
+  const { store } = storeFor({ api })
+  const state = await store.cancel()
+
+  assert.deepEqual(state.error, { action: 'cancel', origin: 'manual', code: 'malformed-install' })
+  const view = vm(state)
+  assert.equal(view.showCancelError, true)
+  assert.equal(view.showManualCheckError, false)
+  assert.equal(view.showInstallError, false)
+  assert.equal(JSON.stringify(state).includes(SECRET_TEXT), false)
+})
+
+test('37. cancel 响应丢失且恢复 status 返回拒绝/畸形信封：同样按取消失败展示', async () => {
+  const cases = [
+    ['rejected', { ok: false, error: SECRET_TEXT }, 'rejected'],
+    ['malformed', 'not-json', 'malformed-envelope'],
+  ]
+  for (const [label, statusResponse, expectedCode] of cases) {
+    const api = fakeUpdateApi({
+      [UPDATE_OPERATION_NAMES[3]]: () => {
+        throw new Error('cancel lost')
+      },
+      [UPDATE_OPERATION_NAMES[0]]: statusResponse,
+    })
+    const { store } = storeFor({ api })
+    const state = await store.cancel()
+
+    assert.deepEqual(
+      state.error,
+      { action: 'cancel', origin: 'manual', code: expectedCode },
+      `${label}：恢复失败必须留下取消错误`,
+    )
+    assert.equal(vm(state).showCancelError, true, label)
+    assert.equal(vm(state).showManualCheckError, false, label)
+    assert.equal(JSON.stringify(state).includes(SECRET_TEXT), false, label)
+  }
+})
+
+test('38. install 响应丢失且恢复 status 非法：按安装失败展示', async () => {
+  const invalid = storeFor({
+    api: fakeUpdateApi({
+      [UPDATE_OPERATION_NAMES[2]]: () => {
+        throw new Error('install lost')
+      },
+      [UPDATE_OPERATION_NAMES[0]]: okEnvelope({ install: { status: 'nonsense' } }),
+    }),
+  })
+  const state = await invalid.store.install()
+  assert.deepEqual(state.error, { action: 'install', origin: 'manual', code: 'malformed-install' })
+  assert.equal(vm(state).showInstallError, true)
+  assert.equal(vm(state).showManualCheckError, false)
+
+  const malformed = storeFor({
+    api: fakeUpdateApi({
+      [UPDATE_OPERATION_NAMES[2]]: () => {
+        throw new Error('install lost')
+      },
+      [UPDATE_OPERATION_NAMES[0]]: [],
+    }),
+  })
+  const second = await malformed.store.install()
+  assert.deepEqual(second.error, { action: 'install', origin: 'manual', code: 'malformed-envelope' })
+  assert.equal(vm(second).showInstallError, true)
+})
+
+test('39. update-install/update-cancel 自身返回非法 install：不得静默结束', async () => {
+  // install：信封 OK 但 install 不认识 → 取事实；事实也非法 → 报安装失败
+  const installApi = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: okEnvelope({ install: { status: 'weird' } }),
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({ install: { status: 'nonsense' } }),
+  })
+  const installed = await storeFor({ api: installApi }).store.install()
+  assert.deepEqual(installed.error, { action: 'install', origin: 'manual', code: 'malformed-install' })
+  assert.equal(vm(installed).showInstallError, true, '不能静默结束')
+
+  // cancel：install 字段缺失同样不算确定结果
+  const cancelApi = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[3]]: { ok: true, check: checkIdle },
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({ install: { status: 'weird' } }),
+  })
+  const cancelled = await storeFor({ api: cancelApi }).store.cancel()
+  assert.deepEqual(cancelled.error, { action: 'cancel', origin: 'manual', code: 'malformed-install' })
+  assert.equal(vm(cancelled).showCancelError, true)
+
+  // 反向：install 自身非法，但事实说在装 → 安装确实在进行，不报错
+  const recoveredApi = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: okEnvelope({ install: { status: 'weird' } }),
+    [UPDATE_OPERATION_NAMES[0]]: okEnvelope({ install: installInstalling({ stage: 'connecting' }) }),
+  })
+  const recovered = await storeFor({ api: recoveredApi }).store.install()
+  assert.equal(recovered.error, null)
+  assert.equal(recovered.install.status, 'installing')
+})
+
+test('40. 后台轮询失败不得顶掉手动取消/安装错误', async () => {
+  const installGate = deferred()
+  let statusCall = 0
+  const api = fakeUpdateApi({
+    [UPDATE_OPERATION_NAMES[2]]: async () => {
+      await installGate.promise
+      return okEnvelope({ install: installAwaiting() })
+    },
+    [UPDATE_OPERATION_NAMES[3]]: () => {
+      throw new Error('cancel lost')
+    },
+    [UPDATE_OPERATION_NAMES[0]]: () => {
+      statusCall += 1
+      if (statusCall === 1) return okEnvelope({ install: installInstalling({ stage: 'installing' }) })
+      if (statusCall === 2) throw new Error('recovery status lost')
+      throw new Error('poll lost')
+    },
+  })
+  const scheduler = fakeScheduler()
+  const { store } = storeFor({ api, scheduler })
+
+  const installing = store.install()
+  await tick(4)
+  await scheduler.runNext() // status #1：Host 说在装 → 轮询继续
+  await store.cancel() // cancel 丢失 → 恢复 status #2 也失败 → 手动取消错误
+  assert.deepEqual(store.get().error, { action: 'cancel', origin: 'manual', code: 'transport' })
+
+  await scheduler.runNext() // status #3：后台轮询失败
+  assert.deepEqual(
+    store.get().error,
+    { action: 'cancel', origin: 'manual', code: 'transport' },
+    '后台失败不得顶掉手动错误',
+  )
+  assert.equal(vm(store.get()).showCancelError, true)
+  assert.equal(vm(store.get()).showManualCheckError, false)
+
+  installGate.resolve()
+  await installing
+  assert.equal(store.get().install.status, 'awaiting-restart')
+})
