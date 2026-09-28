@@ -21,7 +21,12 @@ import { WorkbenchLoading } from './LoadingPane.tsx'
 import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
 import { moduleLabel, type ModuleId } from './modules.ts'
 import type { NavigateResult } from '../../../shared/environment/model.ts'
-import { buildTagOf, createBuildStore, hostIsStale, useBuild, type BuildStore } from './build-store.ts'
+import { buildTagOf, createBuildStore, currentVersionOf, hostIsStale, useBuild, type BuildStore } from './build-store.ts'
+import { UpdateDialog } from '../update/UpdateDialog.tsx'
+import { useUpdateDialog, useUpdateStore } from '../update/react.ts'
+import { updateViewModelOf, type UpdateBadgeTone } from '../update/view-model.ts'
+import type { UpdateDialogStore } from '../update/dialog-store.ts'
+import type { UpdateStore } from '../update/update-store.ts'
 import { greetingLine } from './greeting.ts'
 
 /**
@@ -56,6 +61,22 @@ export interface WorkbenchPanelProps {
   build?: BuildStore
   /** 由 apply 创建的模块状态；侧栏那张分组卡上的三个子项与这里的三页是同一个模块。 */
   modules?: ModuleStore
+  /** 由 apply 创建的更新状态；侧栏那枚版本徽标与这里的更新面板共用同一份。 */
+  update?: UpdateStore
+  /** 由 apply 创建的更新面板开关状态（侧栏徽标点开的就是它）。 */
+  updateDialog?: UpdateDialogStore
+  /** 当前平台：决定等待重启说明里的 macOS 提示。 */
+  platform?: 'mac' | 'other'
+  /** 过期判据用的时钟；缺省本机时钟（测试注入固定值）。 */
+  now?: () => number
+}
+
+/** 更新徽标的语气 → 附加类（与侧栏入口共用同一套）。 */
+const UPDATE_TONE_CLASSES: Record<UpdateBadgeTone, string> = {
+  neutral: '',
+  accent: C.updateBadgeAccent,
+  warn: C.updateBadgeWarn,
+  success: C.updateBadgeOk,
 }
 
 export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
@@ -101,6 +122,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const buildStore = props.build ?? buildFallback.current
   const build = useBuild(buildStore)
   const tag = buildTagOf(build)
+  // 自助更新：与侧栏那枚徽标共用**同一个** store（apply 里创建的唯一一份）。
+  // hook 无条件调用，缺省时不注入任何东西（单测直接渲染组件也能跑）。
+  const updateSnapshot = useUpdateStore(props.update)
+  const updateDialogState = useUpdateDialog(props.updateDialog)
 
   /** 被门禁拦住的界面状态：running = 正在重新自检，blocked = 自检没过。 */
   const [gate, setGate] = React.useState<'idle' | 'running' | 'blocked'>('idle')
@@ -269,6 +294,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     // 要重跑有页面上的「重新自检」按钮，以及登录 / 授权成功后的那几次显式刷新。
     const current = envStatus.get()
     if (current.env === null && !current.busy) void envStatus.refresh()
+    // 自助更新：面板也调一次 initialize()，store 自己保证幂等 + 单飞
+    //（侧栏那枚常驻徽标通常已经先跑过，这里不会重复请求）。
+    if (props.update !== undefined && !props.update.get().initialized) void props.update.initialize()
     return () => {
       mounted.current = false
     }
@@ -409,6 +437,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const awaitingEnv = env === null && !hostStale && snapshot.error === ''
   const bootError = build.error
   const boundParentId = build.parentSessionId
+  // 有审核在跑时禁的是"安装"（不动 profile），**不禁检查** —— 这一点由 View Model 决定。
+  const gatingHasAudit = auditBusy !== '' || busy
+  const updateView = updateViewModelOf({
+    snapshot: updateSnapshot,
+    currentVersion: currentVersionOf(build),
+    auditBusy: gatingHasAudit,
+    nowMs: (props.now ?? Date.now)(),
+    buildKind: build.buildKind,
+    platform: props.platform ?? 'other',
+  })
   const gating = gatingOf(env, activeKey, {
     busy,
     ...(auditBusy === '' ? {} : { auditBusy }),
@@ -508,6 +546,22 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   </div>
 
   return <div className={C.root}>
+    {/* 自助更新面板：与侧栏那枚徽标共用同一个开关状态与同一份更新状态。
+        `position: fixed` 让它盖在面板之上，但仍长在面板壳内（--crwu-* token 照常继承）。 */}
+    {updateDialogState.open && props.update !== undefined
+      ? <UpdateDialog
+          snapshot={updateSnapshot}
+          currentVersion={currentVersionOf(build)}
+          buildKind={build.buildKind}
+          auditBusy={gatingHasAudit}
+          nowMs={(props.now ?? Date.now)()}
+          platform={props.platform ?? 'other'}
+          onClose={() => { props.updateDialog?.close() }}
+          onCheck={() => { void props.update?.check() }}
+          onInstall={() => { void props.update?.install() }}
+          onCancel={() => { void props.update?.cancel() }}
+        />
+      : null}
     <div className={C.header}>
       {/* 品牌标记：与侧栏入口同一个图形（用户给的原图描成的矢量版）。 */}
       <BrandMark size={22} />
@@ -515,7 +569,15 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       {/* 同一枚小标签：dev（本地源码检出）或 v<版本>（装好的包）。
           客户端刷新就换新、宿主只有重启才换，所以这枚标签是「我到底在跑哪一版」的唯一凭据
           （悬停看形态说明与构建时间）。 */}
-      <span className={[C.version, BUILD_TAG_CLASSES[tag.tone]].join(' ')} title={tag.title}>{tag.text}</span>
+      {props.update === undefined
+        ? <span className={[C.version, BUILD_TAG_CLASSES[tag.tone]].join(' ')} title={tag.title}>{tag.text}</span>
+        : <button
+            type="button"
+            className={[C.version, C.updateBadge, UPDATE_TONE_CLASSES[updateView.badgeTone]].filter((item) => item !== '').join(' ')}
+            title={updateView.badgeTitle}
+            aria-label={updateView.badgeTitle}
+            onClick={() => { props.updateDialog?.open() }}
+          >{updateView.badgeText}</button>}
       <span className={C.grow} />
       {/* 头部右侧只放一句问候：`下午好，杨凡宾`。姓名来自宿主的钉钉 CLI（`whoami`），
           **拿不到就整句不渲染**（用户 2026-09-22 口径：钉钉 CLI 没有登录信息就什么也不展示）。

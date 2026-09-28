@@ -10,6 +10,9 @@ import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './features/workbench
 import { createBuildStore } from './features/workbench/build-store.ts'
 import { createModuleStore } from './features/workbench/module-store.ts'
 import { createEnvStatusStore } from './features/environment/status.ts'
+import { updateApi } from './features/update/api.ts'
+import { createUpdateDialogStore } from './features/update/dialog-store.ts'
+import { createUpdateStore } from './features/update/update-store.ts'
 import { readClientServices } from './features/workbench/services.ts'
 import { installWorkbenchStyles } from './features/workbench/styles.ts'
 import { zhCN } from './locales/zh-CN.ts'
@@ -60,6 +63,18 @@ export function apply(ctx: ClientContext): void {
   // 模块状态（报告评估 / 报告审核 / 环境信息）同理必须**只有一份**：侧栏那张分组卡上
   // 的三个子项与面板里的三页是同一件事，各存一份就会出现「侧栏高亮报告审核、面板显示环境信息」。
   const modules = createModuleStore()
+  // 自助更新同理，而且这条是**硬要求**：侧栏那枚版本徽标与面板里的更新面板必须共用
+  // 唯一一份更新状态（各自建 store 就会各发一次 status/check，还会出现"徽标说有更新、
+  // 面板说已是最新"）。开关状态也挂在实例上（侧栏徽标要能打开面板里的那只 Dialog）。
+  const updateStore = createUpdateStore({ api: updateApi })
+  const updateDialog = createUpdateDialogStore()
+  // 更新状态里挂着轮询定时器、开关状态里挂着监听器：寿命必须由 effect 管。
+  ctx.effect(() => () => {
+    updateStore.dispose()
+    updateDialog.dispose()
+  }, 'crwu-workbench: update state')
+  // 平台只在装配时读一次（重启说明要不要给 macOS 的"退出"指引）。
+  const platform: 'mac' | 'other' = /Mac|iPhone|iPad/i.test(globalThis.navigator?.userAgent ?? '') ? 'mac' : 'other'
 
   // 打开工作台面板。`services.layout` **在点击时现读**，不在 apply() 里快照：客户端服务的
   // 注册有先后，我们的插件可能比提供 layout 的插件先激活 —— 快照下来就是「永远拿不到
@@ -78,6 +93,8 @@ export function apply(ctx: ClientContext): void {
         store: envStatus,
         build: buildStore,
         modules,
+        update: updateStore,
+        updateDialog,
         wide: props.wide !== false,
         ...(props.usePanelInfo === undefined ? {} : { usePanelInfo: props.usePanelInfo }),
         // 点卡头 = 打开面板（回到当前子项）；点子项 = 切模块 + 打开面板，两件事一起做
@@ -89,7 +106,15 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject('main', () => ctx.slots.register(
     { name: 'main', key: WORKBENCH_PANEL_KEY },
-    () => React.createElement(WorkbenchPanel, { services, envStatus, build: buildStore, modules }),
+    () => React.createElement(WorkbenchPanel, {
+      services,
+      envStatus,
+      build: buildStore,
+      modules,
+      update: updateStore,
+      updateDialog,
+      platform,
+    }),
   ))
 
   // Cordis 运行卡片里的动作区：顺带登记父级 + 跳转到面板。

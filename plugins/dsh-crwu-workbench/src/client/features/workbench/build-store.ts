@@ -117,6 +117,17 @@ export function hostIsStale(snapshot: BuildSnapshot): boolean {
   return snapshot.protocol !== null && snapshot.protocol !== WORKBENCH_PROTOCOL
 }
 
+/**
+ * 当前运行的版本号（**不带 `v` 前缀**）：`0.0.11` / dev 形态回空串。
+ *
+ * 侧栏徽标与更新面板都要把它交给更新 View Model（`v{currentVersion}`），
+ * 口径必须只有一处 —— 以前两边各自 `build.version || rev` 拼过，dev 形态会拼出 `vdev`。
+ */
+export function currentVersionOf(snapshot: BuildSnapshot): string {
+  if (snapshot.version !== '') return snapshot.version
+  return snapshot.rev === '' ? '' : snapshot.rev.replace(/^pkg-/, '')
+}
+
 export interface BuildTag {
   /** 标签文字：`dev` / `v0.0.4` / `未知`。 */
   text: string

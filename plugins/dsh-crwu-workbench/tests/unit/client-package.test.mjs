@@ -71,6 +71,7 @@ function resolve(node) {
 const { rpc } = await import(new URL('src/client/api/client.ts', ROOT).href)
 const { apply } = await import(new URL('src/client/apply.ts', ROOT).href)
 const { WorkbenchPanel } = await import(new URL('src/client/features/workbench/WorkbenchPanel.tsx', ROOT).href)
+const { WorkbenchSidebarEntry } = await import(new URL('src/client/features/workbench/WorkbenchSidebarEntry.tsx', ROOT).href)
 const { environmentStateOf } = await import(new URL('src/client/features/report-audit/api.ts', ROOT).href)
 const { BrandMark } = await import(new URL('src/client/components/BrandMark.tsx', ROOT).href)
 const { buildTagOf, createBuildStore } = await import(
@@ -265,8 +266,9 @@ test('apply registers every slot through slots.inject', () => {
   const { ctx, effects, injections, registrations } = fakeClientContext()
   apply(ctx)
 
-  // 只有样式走 effect；槽位注入直接调用（与 DSH 自带的客户端插件一致）。
-  assert.equal(effects.length, 1)
+  // 只有两处走 effect：样式元素，以及自助更新状态（轮询定时器 + 面板开关的监听器）。
+  // 槽位注入直接调用（与 DSH 自带的客户端插件一致）。
+  assert.deepEqual(effects.map((entry) => entry.label), ['crwu-workbench: styles', 'crwu-workbench: update state'])
   assert.deepEqual(injections.map((entry) => entry.name), [
     'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ], '四个槽位缺一不可：少了会话头那个，界面上就没有办法登记审核父级')
@@ -4890,4 +4892,396 @@ test('点小鲸鱼：远端一项都取不到（只有本地文件）→ 不建�
   assert.ok(findOptionLike(dialog, zhCN.auditRetry), '只给重试')
   assert.equal(textOf(after).includes('/ws/S/报告.docx'), false, '界面上也不回显"我们有本地这份"')
   assert.equal(ops.includes('oss-result'), false, '没资料就不该继续往后走')
+})
+
+// ── 自助更新界面（Task 6）─────────────────────────────────────────────────────
+
+const { createUpdateStore } = await import(new URL('src/client/features/update/update-store.ts', ROOT).href)
+const { createUpdateApi } = await import(new URL('src/client/features/update/api.ts', ROOT).href)
+
+const UPDATE_NOW = Date.parse('2026-09-28T10:00:00.000Z')
+
+/** 一份合法的 `update-*` 应答信封；用例按需覆盖 check / install。 */
+function updateOk(patch = {}) {
+  return { ok: true, check: { status: 'idle' }, install: { status: 'idle' }, ...patch }
+}
+
+function updateCandidate(patch = {}) {
+  return {
+    currentVersion: '9.9.9',
+    targetVersion: '9.9.10',
+    sourceKind: 'npmmirror',
+    checkedAt: '2026-09-28T10:00:00.000Z',
+    expiresAt: '2026-10-28T10:00:00.000Z',
+    ...patch,
+  }
+}
+
+function updateAvailable(patch = {}) {
+  return { status: 'available', checkedAt: '2026-09-28T10:00:00.000Z', candidate: updateCandidate(), ...patch }
+}
+
+function updateInstalling(stage = 'connecting', patch = {}) {
+  return { status: 'installing', stage, targetVersion: '9.9.10', startedAt: '2026-09-28T10:00:00.000Z', ...patch }
+}
+
+function updateAwaiting(patch = {}) {
+  return { status: 'awaiting-restart', targetVersion: '9.9.10', installedAt: '2026-09-28T10:00:05.000Z', ...patch }
+}
+
+/** 只回固定应答的更新 API 替身（记录操作名，不碰 global fetch）。 */
+function fakeUpdateApi(responses = {}) {
+  const calls = []
+  const respond = async (operation) => {
+    calls.push(operation)
+    const entry = responses[operation]
+    return typeof entry === 'function' ? await entry() : (entry ?? updateOk())
+  }
+  return {
+    calls,
+    countOf: (operation) => calls.filter((call) => call === operation).length,
+    updateStatus: () => respond('update-status'),
+    updateCheck: () => respond('update-check'),
+    updateInstall: () => respond('update-install'),
+    updateCancel: () => respond('update-cancel'),
+  }
+}
+
+/** 一个不联网的 env 状态 store 替身（侧栏入口需要它才能渲染）。 */
+function fakeEnvStore(patch = {}) {
+  const snapshot = { busy: false, error: '', env: null, ...patch }
+  return { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot }
+}
+
+/** 更新面板开关状态的替身：只回答"开着没有"。 */
+function fakeDialogStore(open) {
+  return { get: () => ({ open }), open: () => {}, close: () => {}, subscribe: () => () => {}, dispose: () => {} }
+}
+
+/** 空 scheduler：测试里绝不创建真实定时器（轮询计时器会把测试进程拖住不退出）。 */
+function noTimers() {
+  return { schedule: () => () => {} }
+}
+
+/**
+ * 只回答一份固定快照的 update store 替身。
+ *
+ * 内容断言（面板渲染出什么）用它：`error` / `install` 这类字段是 store 的**内部状态**，
+ * 没法从 wire 信封注入，而 store 自身的行为已经由 `client-update.test.mjs` 逐条覆盖。
+ */
+function updateStoreStub(snapshot) {
+  const full = {
+    initialized: true, check: null, install: null, installCurrent: true, checkOrigin: null,
+    checking: false, installing: false, cancelling: false, error: null, ...snapshot,
+  }
+  return {
+    get: () => full,
+    subscribe: () => () => {},
+    initialize: async () => full,
+    check: async () => full,
+    install: async () => full,
+    cancel: async () => full,
+    refreshStatus: async () => full,
+    dispose: () => {},
+  }
+}
+
+/** 用固定应答装好的 update store（真实 store，注入 API 与空 scheduler，不联网、不起真定时器）。 */
+async function updateStoreWith(snapshot) {
+  const store = createUpdateStore({
+    api: fakeUpdateApi({ 'update-status': updateOk(snapshot) }),
+    scheduler: noTimers(),
+  })
+  await store.initialize()
+  return store
+}
+
+/**
+ * 挂上主面板（更新面板开着），返回展开后的元素树。
+ *
+ * 内容断言走**面板**而不是单独渲染 `UpdateDialog`：这样在基线（还没有更新界面）上，
+ * 这些用例是**行为失败**（树里根本没有那个 dialog），而不是"模块找不到"。
+ */
+async function panelWithUpdate(snapshot, patch = {}) {
+  installDoc()
+  const { auditActive = false, ...rest } = patch
+  stubOps({
+    boot: { body: bootOk() },
+    env: { body: okEnvBody() },
+    // 「有审核在跑」走真实链路：面板读 audit-status 的 active.key 才知道自己被占用。
+    ...(auditActive
+      ? { 'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { key: '2026-301705-LX10170', childId: 'child-1', since: 1 } } } }
+      : {}),
+  })
+  const update = updateStoreStub(snapshot)
+  const props = {
+    services: fakeServices(),
+    build: fakeBuildStore({ version: '9.9.9' }),
+    update,
+    updateDialog: fakeDialogStore(true),
+    now: () => UPDATE_NOW,
+    platform: 'mac',
+    ...rest,
+  }
+  const rendered = render(WorkbenchPanel, props)
+  for (const effect of rendered.instance.effects) await effect.callback()
+  await settle()
+  const tree = rerender(WorkbenchPanel, props)
+  return auditActive ? rerender(WorkbenchPanel, props) : tree
+}
+
+/** 面板里那颗按钮（按文字找，避免依赖类名顺序）。 */
+function buttonByLabel(node, label) {
+  return find(node, (item) => item.type === 'button' && textOf(item).includes(label))
+}
+
+test('启动自动检查是静默的：只改徽标、不弹更新面板，两个消费者共用一次请求', async () => {
+  installDoc()
+  const ops = stubOps({
+    boot: { body: bootOk() },
+    env: { body: okEnvBody() },
+    'update-status': { body: updateOk({ check: { status: 'idle' } }) },
+    'update-check': { body: updateOk({ check: updateAvailable() }) },
+  })
+  // 唯一一份 update store：侧栏徽标与主面板共用（apply 里就是这么接的）。
+  const update = createUpdateStore({ api: createUpdateApi(), scheduler: noTimers() })
+  const updateDialog = fakeDialogStore(false)
+  const build = fakeBuildStore({ version: '9.9.9' })
+  const entryProps = {
+    store: fakeEnvStore(), build, update, updateDialog, onOpen: () => {},
+  }
+
+  const entry = render(WorkbenchSidebarEntry, entryProps)
+  for (const effect of entry.instance.effects) await effect.callback()
+  await settle()
+  // 侧栏用**它自己**的实例重渲染（rerender 认的是最近一次 render 的实例）。
+  const entryTree = rerender(WorkbenchSidebarEntry, entryProps)
+  assert.equal(find(entryTree, (node) => node.props?.role === 'dialog'), null, '侧栏不该弹窗')
+
+  // 徽标说清「有更新」，而且它自己是更新入口
+  const badge = findByClass(entryTree, WORKBENCH_CLASSES.updateBadge)
+  assert.ok(badge !== null, '侧栏徽标要能被找到（更新入口）')
+  assert.equal(textOf(badge), 'v9.9.9 · 有更新')
+  assert.equal(badge.type, 'button', '徽标本身才是更新入口')
+
+  const panel = render(WorkbenchPanel, {
+    services: fakeServices(), build, update, updateDialog, now: () => UPDATE_NOW,
+  })
+  for (const effect of panel.instance.effects) await effect.callback()
+  await settle()
+  assert.equal(find(panel.tree, (node) => node.props?.role === 'dialog'), null, '面板也不该自动弹窗')
+  assert.equal(updateDialog.get().open, false)
+
+  // 两个消费者各调一次 initialize()，但只打了一次请求（store 的幂等 + 单飞）
+  assert.equal(ops.filter((op) => op === 'update-status').length, 1, 'update-status 只发一次')
+  assert.equal(ops.filter((op) => op === 'update-check').length, 1, 'update-check 只发一次')
+  update.dispose()
+})
+
+test('点击侧栏版本徽标：打开面板并弹出更新面板（卡头仍是纯标题）', async () => {
+  installDoc()
+  const update = await updateStoreWith({ check: updateAvailable() })
+  let opened = 0
+  const props = {
+    store: fakeEnvStore(),
+    build: fakeBuildStore({ version: '9.9.9' }),
+    update,
+    updateDialog: fakeDialogStore(false),
+    onOpen: () => {},
+    onOpenUpdate: () => { opened += 1 },
+  }
+  const entry = render(WorkbenchSidebarEntry, props)
+  for (const effect of entry.instance.effects) await effect.callback()
+  await settle()
+  const tree = rerender(WorkbenchSidebarEntry, props)
+
+  const badge = findByClass(tree, WORKBENCH_CLASSES.updateBadge)
+  assert.equal(badge.type, 'button')
+  badge.props.onClick()
+  assert.equal(opened, 1, '点徽标要打开更新入口（apply 里 = 打开面板 + 打开更新面板）')
+
+  // 卡头整体仍然不可点
+  const head = findByClass(tree, WORKBENCH_CLASSES.sideCardHead)
+  assert.notEqual(head.type, 'button')
+  assert.equal(head.props.onClick, undefined)
+})
+
+test('更新面板展示当前/目标版本、发布时间与公开来源，且不出现私有源地址或凭据', async () => {
+  const poisoned = {
+    ...updateAvailable(),
+    candidate: {
+      ...updateCandidate({ publishedAt: '2026-09-27T02:00:00.000Z' }),
+      registryUrl: 'https://npm.corp.example.com/private',
+      token: 'SECRET-TOKEN',
+      log: 'pnpm ERR! full log',
+      requestId: 'req-1',
+    },
+    error: 'Host 原文错误',
+  }
+  const tree = await panelWithUpdate({ check: poisoned })
+  const dialog = find(tree, (node) => node.props?.role === 'dialog')
+  assert.ok(dialog !== null, '更新面板要被渲染出来')
+  const text = textOf(dialog)
+  assert.ok(text.includes('9.9.9'), '要显示当前版本')
+  assert.ok(text.includes('9.9.10'), '要显示目标版本')
+  assert.ok(text.includes(zhCN.updateFieldPublished), '要显示发布时间这一行')
+  assert.equal(text.includes(zhCN.updateSourceNpmmirror), true, '来源用本地中文标签')
+  for (const leak of ['npm.corp.example.com', 'SECRET-TOKEN', 'pnpm ERR', 'req-1', 'Host 原文错误', 'registryUrl']) {
+    assert.equal(text.includes(leak), false, `不得展示 ${leak}`)
+  }
+})
+
+test('安装阶段用诚实地离散中文，且不伪造百分比', async () => {
+  for (const [stage, label] of [
+    ['connecting', zhCN.updateStageConnecting],
+    ['downloading', zhCN.updateStageDownloading],
+    ['installing', zhCN.updateStageInstalling],
+    ['cancelling', zhCN.updateStageCancelling],
+  ]) {
+    const tree = await panelWithUpdate({ install: updateInstalling(stage), installing: true })
+    const text = textOf(find(tree, (node) => node.props?.role === 'dialog'))
+    assert.equal(text.includes(label), true, `阶段 ${stage} 要说清在做什么`)
+    assert.equal(text.includes('%'), false, '不伪造百分比')
+  }
+})
+
+test('禁用状态逐项给出原因（八种），且安装按钮真的 disabled', async () => {
+  const cases = [
+    ['development-install', { check: { status: 'unsupported', reason: 'development-install' } }, {}],
+    ['enterprise-registry', { check: { status: 'unsupported', reason: 'enterprise-registry' } }, {}],
+    ['manager-unavailable', { check: { status: 'unsupported', reason: 'manager-unavailable' } }, {}],
+    ['candidate-expired', { check: updateAvailable({ candidate: updateCandidate({ expiresAt: '2026-09-28T09:00:00.000Z' }) }) }, {}],
+    ['install-active', { check: updateAvailable(), install: updateInstalling('installing') }, { installing: true }],
+    ['awaiting-restart', { check: updateAvailable(), install: updateAwaiting() }, {}],
+    ['no-candidate', { check: { status: 'up-to-date', checkedAt: '2026-09-28T10:00:00.000Z' } }, {}],
+  ]
+  const expected = {
+    'development-install': zhCN.updateReasonDevelopment,
+    'enterprise-registry': zhCN.updateReasonEnterprise,
+    'manager-unavailable': zhCN.updateReasonManagerUnavailable,
+    'candidate-expired': zhCN.updateReasonCandidateExpired,
+    'audit-active': zhCN.updateReasonAuditActive,
+    'install-active': zhCN.updateReasonInstallActive,
+    'awaiting-restart': zhCN.updateReasonAwaitingRestart,
+    'no-candidate': zhCN.updateReasonNoCandidate,
+  }
+  for (const [reason, snapshot, extra] of cases) {
+    const tree = await panelWithUpdate(snapshot, extra)
+    const dialog = find(tree, (node) => node.props?.role === 'dialog')
+    const install = buttonByLabel(dialog, zhCN.updateActionInstall)
+    if (reason === 'awaiting-restart') {
+      assert.equal(install, null, '等待重启时连安装按钮都不给')
+      assert.ok(buttonByLabel(dialog, zhCN.updateActionOk) !== null, '只给「我知道了」')
+    } else {
+      assert.ok(install !== null, `${reason}: 要有安装按钮`)
+      assert.equal(install.props.disabled, true, `${reason}: 安装按钮必须 disabled`)
+    }
+    assert.equal(textOf(dialog).includes(expected[reason]), true, `${reason}: 要说清原因`)
+  }
+  const ok = await panelWithUpdate({ check: updateAvailable() })
+  assert.equal(buttonByLabel(ok, zhCN.updateActionInstall).props.disabled, false)
+
+  // 「有审核在跑」这一种走组件级：面板里的 audit-busy 来自 audit-status RPC，
+  // 而 View Model 的 auditBusy → audit-active 映射由 client-update.test.mjs 单独钉住。
+  const { UpdateDialog } = await import(new URL('src/client/features/update/UpdateDialog.tsx', ROOT).href)
+  const audited = render(UpdateDialog, {
+    snapshot: updateStoreStub({ check: updateAvailable() }).get(),
+    currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', auditBusy: true, onClose: () => {},
+  })
+  assert.equal(buttonByLabel(audited.tree, zhCN.updateActionInstall).props.disabled, true, 'audit-active 也要禁用安装')
+  assert.equal(textOf(audited.tree).includes(zhCN.updateReasonAuditActive), true)
+})
+
+test('错误按动作分派：手动检查失败可见、后台失败不打断、安装/取消失败各说各的', async () => {
+  const manualCheck = await panelWithUpdate({ error: { action: 'check', origin: 'manual', code: 'transport' } })
+  assert.equal(textOf(manualCheck).includes(zhCN.updateCheckFailedManual), true, '手动检查失败要可见')
+
+  const background = await panelWithUpdate({ check: updateAvailable(), error: { action: 'poll', origin: 'background', code: 'transport' } })
+  assert.equal(textOf(background).includes(zhCN.updateCheckFailedManual), false, '后台失败不打断用户')
+
+  const installFailed = await panelWithUpdate({ check: updateAvailable(), error: { action: 'install', origin: 'manual', code: 'transport' } })
+  const installText = textOf(installFailed)
+  assert.equal(installText.includes(zhCN.updateInstallFailed), true, '安装失败要显示安装错误')
+  assert.equal(installText.includes(zhCN.updateCheckFailedManual), false, '安装失败不能说成检查失败')
+
+  const cancelFailed = await panelWithUpdate({
+    check: updateAvailable(), install: updateInstalling('installing'), error: { action: 'cancel', origin: 'manual', code: 'transport' },
+  })
+  const cancelText = textOf(cancelFailed)
+  assert.equal(cancelText.includes(zhCN.updateCancelFailed), true, '取消失败要显示取消错误')
+  assert.equal(cancelText.includes(zhCN.updateCheckFailedManual), false)
+  assert.equal(cancelText.includes(zhCN.updateInstallFailed), false)
+})
+
+test('等待重启：逐字说明 + macOS 退出方式 + 只有「我知道了」，没有立即重启', async () => {
+  const tree = await panelWithUpdate({ check: updateAvailable(), install: updateAwaiting() })
+  const dialog = find(tree, (node) => node.props?.role === 'dialog')
+  const text = textOf(dialog)
+  assert.equal(text.includes(zhCN.updateInstalledLine.replace('{version}', '9.9.10')), true, '安装完成那句要逐字出现')
+  assert.equal(text.includes('关闭窗口不一定退出应用'), true, 'macOS 要说清关闭窗口 ≠ 退出')
+  assert.equal(text.includes('Command-Q'), true, 'macOS 要给键盘方式')
+  assert.ok(buttonByLabel(dialog, zhCN.updateActionOk) !== null, '等待重启时给「我知道了」')
+  assert.equal(buttonByLabel(dialog, zhCN.updateActionInstall), null, '等待重启时不再给安装')
+  assert.equal(buttonByLabel(dialog, zhCN.updateActionCancel), null)
+  assert.equal(text.includes('立即重启'), false)
+
+  // 非 macOS 不给 macOS 专门的说明
+  const other = await panelWithUpdate({ install: updateAwaiting() }, { platform: 'other' })
+  assert.equal(textOf(other).includes('Command-Q'), false)
+})
+
+test('协议不一致继续拦审核，且提示以「完全退出并重新打开 DeepSeek Harness」为准', () => {
+  installDoc()
+  stubOps({ boot: { body: bootOk({ protocol: WORKBENCH_PROTOCOL - 1 }) }, env: { body: okEnvBody() } })
+  const { tree } = render(WorkbenchPanel, {
+    services: fakeServices(),
+    build: fakeBuildStore({ protocol: WORKBENCH_PROTOCOL - 1 }),
+  })
+  const text = textOf(tree)
+  assert.equal(text.includes(zhCN.hostStaleTitle), true)
+  assert.equal(zhCN.hostStaleTitle.includes('完全退出并重新打开 DeepSeek Harness'), true, '提示要指名"完全退出并重新打开"')
+  assert.equal(zhCN.hostStaleGate.includes('完全退出并重新打开 DeepSeek Harness'), true)
+  assert.equal(text.includes('重启 profile'), false, '不要再只说含糊的"重启 profile"')
+})
+
+test('更新面板有无障碍语义：role/aria-modal/关联标题/关闭按钮，Esc 在安全时关闭', async () => {
+  // 这一条直接渲染面板组件本体（Esc 监听器长在它身上，面板外壳里拿不到它的 effect）。
+  const { UpdateDialog } = await import(new URL('src/client/features/update/UpdateDialog.tsx', ROOT).href)
+  const snapshot = {
+    initialized: true, check: updateAvailable(), install: null, installCurrent: true, checkOrigin: null,
+    checking: false, installing: false, cancelling: false, error: null,
+  }
+  const closed = []
+  const rendered = render(UpdateDialog, {
+    snapshot, currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => { closed.push('x') },
+  })
+  const dialog = find(rendered.tree, (node) => node.props?.role === 'dialog')
+  assert.ok(dialog !== null, '必须是 role=dialog')
+  assert.equal(dialog.props['aria-modal'], 'true')
+  assert.equal(typeof dialog.props['aria-labelledby'], 'string', '标题要能被关联')
+  assert.ok(find(rendered.tree, (node) => node.props?.id === dialog.props['aria-labelledby']) !== null, '关联的标题必须真的存在')
+  assert.ok(buttonByLabel(rendered.tree, zhCN.updateActionClose) !== null, '要有明确关闭按钮')
+
+  const listeners = []
+  globalThis.document = {
+    ...fakeDocument().document,
+    addEventListener: (type, listener) => { listeners.push({ type, listener }) },
+    removeEventListener: () => {},
+  }
+  for (const effect of rendered.instance.effects) await effect.callback()
+  assert.equal(listeners[0]?.type, 'keydown', '要挂键盘监听（Esc 关闭）')
+  listeners[0].listener({ key: 'Escape' })
+  assert.equal(closed.length, 1, '安全状态下 Esc 关闭')
+
+  // 安装进行中：Esc 与遮罩都不关闭（避免误触丢状态），关闭按钮仍在
+  const busy = render(UpdateDialog, {
+    snapshot: { ...snapshot, install: updateInstalling('installing'), installing: true },
+    currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => { closed.push('busy') },
+  })
+  for (const effect of busy.instance.effects) await effect.callback()
+  listeners[listeners.length - 1].listener({ key: 'Escape' })
+  assert.equal(closed.length, 1, '安装中 Esc 不关闭')
+  const backdrop = findByClass(busy.tree, WORKBENCH_CLASSES.updateDialogBackdrop)
+  assert.equal(backdrop.props.onClick, undefined, '安装中遮罩不可点关闭')
+  assert.ok(buttonByLabel(busy.tree, zhCN.updateActionClose) !== null, '关闭按钮始终在（可访问性）')
 })

@@ -5,10 +5,11 @@ export const zhCN = {
   versionHint: '当前运行的宿主插件版本',
   versionUnknown: '版本未知',
   loadingHost: '正在读取 Host…',
-  hostStaleTitle: '宿主插件是旧构建，请重启 web profile',
-  hostStaleHint: '客户端产物刷新页面就会换新，宿主产物只有重启 profile 才会换。现在跑着的宿主代码比你看到的界面旧，'
-    + '审核会按旧逻辑挂到「当前会话」下（而不是建在工作空间里的审核根会话），所以先不要发起审核。',
-  hostStaleGate: '宿主插件是旧构建：请先重启 web profile',
+  hostStaleTitle: '宿主插件是旧构建：请完全退出并重新打开 DeepSeek Harness',
+  hostStaleHint: '客户端产物刷新页面就会换新，宿主产物只有完全退出并重新打开 DeepSeek Harness 才会换。现在跑着的宿主代码比你看到的界面旧，'
+    + '审核会按旧逻辑挂到「当前会话」下（而不是建在工作空间里的审核根会话），所以先不要发起审核。'
+    + '退出时要**完全退出**（macOS 上关闭窗口不等于退出：从应用菜单选择「退出」，或按 Command-Q），再重新打开。',
+  hostStaleGate: '宿主插件是旧构建：请先完全退出并重新打开 DeepSeek Harness',
   loadingEnv: '正在自检环境',
   // 统一等待页里的第二行：说清"等的是什么、等完会发生什么"。
   // 说清"等的是什么、等完会怎样"；刻意不提任何模块名（等待页不该出现"报告审核"这类字眼，
@@ -874,6 +875,47 @@ export const zhCN = {
   updateCheckFailedManual: '检查更新失败，请稍后重试。',
   updateInstallFailed: '更新失败，当前版本仍可继续使用。',
   updateCancelFailed: '取消更新失败，更新可能仍在进行，请稍后重试。',
+
+  // 版本徽标成为更新入口后的悬停说明（点击打开更新面板）。
+  updateBadgeTitle: '查看 CRWU 更新（当前 {version}）',
+  updateBadgeTitleUpdate: '有新版本可以安装（当前 {version}）',
+  updateBadgeTitleUpdated: 'CRWU 已经是新版本（{version}）',
+  updateBadgeTitleRestart: '新版本已安装：需要完全退出并重新打开 DeepSeek Harness',
+  updateBadgeTitleDev: '本地开发安装（dev）：不参与自助更新',
+
+  // 更新面板
+  updateDialogTitle: 'CRWU 更新',
+  updateFieldCurrent: '当前版本',
+  updateFieldTarget: '目标版本',
+  updateFieldPublished: '发布时间',
+  updateFieldSource: '公开来源',
+  updateFieldStage: '安装阶段',
+  updateSourceNpmmirror: '国内镜像（npmmirror）',
+  updateSourceNpm: '官方源（npm）',
+  updateStageConnecting: '正在连接更新源',
+  updateStageDownloading: '正在下载安装包',
+  updateStageInstalling: '正在写入插件目录',
+  updateStageCancelling: '正在取消…',
+  updateActionCheck: '检查更新',
+  updateActionInstall: '安装更新',
+  updateActionCancel: '取消安装',
+  updateActionClose: '关闭',
+  updateActionOk: '我知道了',
+  updateNoCandidateLine: '当前没有可安装的新版本。',
+  updateDiagnostics: '诊断信息（不含凭据、私有源地址与完整日志）',
+  updateDiagCheck: '检查结论',
+  updateDiagInstall: '安装结论',
+  updateDiagStage: '安装阶段',
+  updateDiagTarget: '目标版本',
+  updateDiagSource: '来源类型',
+  updateDiagError: '最近错误',
+  updateDiagNone: '无',
+
+  // 安装完成与重启：**只给手动重启指引**，不声称 CRWU 能重启桌面端。
+  updateInstalledLine: 'CRWU v{version} 已安装。请完全退出并重新打开 DeepSeek Harness，使新版生效。',
+  updateUpdatedLine: 'CRWU 已更新到 v{version}。',
+  updateRestartMac: '在 macOS 上，关闭窗口不一定退出应用：请从应用菜单选择「退出」，或按 Command-Q，然后重新打开 DeepSeek Harness。',
+  updateRestartOther: '请完全退出 DeepSeek Harness（不只是关闭窗口），再重新打开。',
   updateInstallCancelled: '已取消更新，当前版本继续可用。',
   activePrefix: '已有审核进行中：',
   activeSuffix: '（同一时间只允许一条，其它条目已禁用）。',

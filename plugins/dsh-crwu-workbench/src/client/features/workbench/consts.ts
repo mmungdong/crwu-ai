@@ -32,6 +32,35 @@ export const WORKBENCH_CLASSES = {
   versionDev: 'crwu-audit-version-dev',
   versionInstalled: 'crwu-audit-version-installed',
   versionUnknown: 'crwu-audit-version-unknown',
+  /**
+   * 版本徽标成为**自助更新入口**后的附加类（侧栏入口与面板头部共用同一枚徽标）。
+   *
+   * 它只是"这枚徽标可点"，形状仍是 `.crwu-audit-version`；语气由下面三个修饰类表达。
+   */
+  updateBadge: 'crwu-audit-update-badge',
+  /** 有可安装的新版本。 */
+  updateBadgeAccent: 'crwu-audit-update-badge-accent',
+  /** 正在安装 / 已经更新到新版本（正向进行态）。 */
+  updateBadgeOk: 'crwu-audit-update-badge-ok',
+  /** 已经装好、等待重启。 */
+  updateBadgeWarn: 'crwu-audit-update-badge-warn',
+
+  /** 自助更新面板（`UpdateDialog.tsx`）：固定浮层 + 遮罩，盖在面板之上。 */
+  updateDialogBackdrop: 'crwu-audit-update-dialog-backdrop',
+  updateDialog: 'crwu-audit-update-dialog',
+  updateDialogHead: 'crwu-audit-update-dialog-head',
+  updateDialogTitle: 'crwu-audit-update-dialog-title',
+  updateDialogBody: 'crwu-audit-update-dialog-body',
+  updateDialogNotice: 'crwu-audit-update-dialog-notice',
+  updateDialogNoticeHint: 'crwu-audit-update-dialog-notice-hint',
+  updateDialogStages: 'crwu-audit-update-dialog-stages',
+  updateDialogStage: 'crwu-audit-update-dialog-stage',
+  updateDialogStageOn: 'crwu-audit-update-dialog-stage-on',
+  updateDialogReason: 'crwu-audit-update-dialog-reason',
+  updateDialogError: 'crwu-audit-update-dialog-error',
+  updateDialogActions: 'crwu-audit-update-dialog-actions',
+  updateDialogDiag: 'crwu-audit-update-dialog-diag',
+  updateDialogDiagRow: 'crwu-audit-update-dialog-diag-row',
   /** 头部右侧那句问候（`下午好，某某某`）；姓名拿不到时整句不渲染。 */
   greeting: 'crwu-audit-greeting',
   description: 'crwu-audit-description',
@@ -2109,4 +2138,81 @@ body[data-ds-dark-theme] .crwu-audit-root {
 .crwu-audit-mono { font-family: var(--crwu-font-mono); font-size: 12.5px; }
 .crwu-audit-placeholder-tag { background: var(--crwu-surface-subtle); border-color: var(--crwu-border); color: var(--crwu-text-secondary); }
 .crwu-audit-loading, .crwu-audit-loading-inline { color: var(--crwu-text-secondary); }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   21. 自助更新：可点的版本徽标 + 更新面板（Task 6）
+
+   徽标沿用 §… 的 .crwu-audit-version（10px 等宽小标签），这里只加"可点"的语气与三种状态色；
+   语气一律写成**双类**（.crwu-audit-version.crwu-audit-update-badge-*），理由见 §3.5：
+   单类会被 §20 的覆盖层吃掉。
+
+   更新面板是 position: fixed 浮层：遮罩 940 / 面板 941（高过抽屉的 900/901，
+   低于授权那类真正的阻塞层）。整块都长在 .crwu-audit-root 里，所以 --crwu-* 照常继承。
+   ──────────────────────────────────────────────────────────────────────────── */
+.crwu-audit-update-badge { cursor: pointer; font-family: inherit; }
+.crwu-audit-update-badge:hover { background: var(--crwu-hover); border-color: var(--crwu-border-strong); }
+.crwu-audit-update-badge:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-version.crwu-audit-update-badge-accent {
+  color: var(--crwu-brand);
+  border-color: color-mix(in srgb, var(--crwu-brand) 45%, transparent);
+  background: color-mix(in srgb, var(--crwu-brand) 10%, transparent);
+}
+.crwu-audit-version.crwu-audit-update-badge-ok {
+  color: var(--dsw-alias-state-success-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+}
+.crwu-audit-version.crwu-audit-update-badge-warn {
+  color: var(--dsw-alias-state-warn-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+}
+
+.crwu-audit-update-dialog-backdrop {
+  position: fixed; inset: 0; z-index: 940;
+  background: var(--crwu-scrim);
+  animation: crwu-audit-scrim-in 140ms var(--crwu-ease) both;
+}
+.crwu-audit-update-dialog {
+  position: fixed; z-index: 941; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  box-sizing: border-box; width: 460px; max-width: calc(100vw - 32px); max-height: calc(100vh - 64px);
+  display: flex; flex-direction: column;
+  padding: var(--crwu-space-5); border-radius: var(--crwu-radius-lg);
+  border: 1px solid var(--crwu-border-strong); background: var(--crwu-surface);
+  box-shadow: var(--crwu-shadow-dialog);
+  animation: crwu-audit-float-in 160ms var(--crwu-ease) both;
+}
+.crwu-audit-update-dialog-head { display: flex; align-items: center; gap: var(--crwu-space-3); }
+.crwu-audit-update-dialog-title {
+  flex: 1 1 auto; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--crwu-text-primary);
+}
+.crwu-audit-update-dialog-body { margin-top: var(--crwu-space-3); overflow: auto; min-height: 0; }
+.crwu-audit-update-dialog-notice {
+  margin-bottom: var(--crwu-space-3); padding: var(--crwu-space-3);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 35%, transparent);
+  border-left-width: 3px; border-radius: var(--crwu-radius-md);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent);
+  color: var(--crwu-text-primary); font-size: 13px; line-height: 20px;
+}
+.crwu-audit-update-dialog-notice-hint { margin-top: var(--crwu-space-2); color: var(--crwu-text-secondary); }
+.crwu-audit-update-dialog-stages { display: flex; align-items: center; gap: var(--crwu-space-2); margin-top: var(--crwu-space-3); }
+.crwu-audit-update-dialog-stage {
+  display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--crwu-border); background: var(--crwu-surface-subtle);
+  color: var(--crwu-text-secondary); font-size: 12px; line-height: 18px;
+}
+.crwu-audit-update-dialog-stage-on {
+  border-color: color-mix(in srgb, var(--crwu-brand) 40%, transparent);
+  background: color-mix(in srgb, var(--crwu-brand) 10%, transparent);
+  color: var(--crwu-text-primary); font-weight: 600;
+}
+.crwu-audit-update-dialog-reason { margin-top: var(--crwu-space-3); color: var(--crwu-text-secondary); font-size: 12.5px; line-height: 19px; }
+.crwu-audit-update-dialog-error { margin-top: var(--crwu-space-3); color: var(--dsw-alias-state-error-primary); font-size: 12.5px; line-height: 19px; }
+.crwu-audit-update-dialog-actions { display: flex; justify-content: flex-end; gap: var(--crwu-space-2); margin-top: var(--crwu-space-4); }
+.crwu-audit-update-dialog-diag { margin-top: var(--crwu-space-4); border-top: 1px solid var(--crwu-border); padding-top: var(--crwu-space-3); }
+.crwu-audit-update-dialog-diag-row { display: flex; gap: var(--crwu-space-3); padding: 2px 0; align-items: baseline; }
+
+@media (prefers-reduced-motion: reduce) {
+  .crwu-audit-update-dialog-backdrop, .crwu-audit-update-dialog { animation: none; }
+}
 `

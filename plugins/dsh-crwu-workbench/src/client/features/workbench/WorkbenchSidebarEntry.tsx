@@ -3,7 +3,11 @@ import { BrandMark } from '../../components/BrandMark.tsx'
 import { AuditIcon, BadgeCheckIcon, BadgeWarnIcon, EnvIcon, EvalIcon, type IconProps } from '../../components/icons.tsx'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { envLampOf, useEnvStatus, type EnvStatusStore } from '../environment/status.ts'
-import { buildTagOf, useBuild, type BuildStore } from './build-store.ts'
+import { buildTagOf, currentVersionOf, useBuild, type BuildStore } from './build-store.ts'
+import { useUpdateStore } from '../update/react.ts'
+import { updateViewModelOf, type UpdateBadgeTone } from '../update/view-model.ts'
+import type { UpdateDialogStore } from '../update/dialog-store.ts'
+import type { UpdateStore } from '../update/update-store.ts'
 import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
 import { envMarkTitle, isUnderDevelopment, MODULE_IDS, moduleLabel, type ModuleId } from './modules.ts'
 import { useModule, useModuleStore, type ModuleStore } from './module-store.ts'
@@ -41,6 +45,19 @@ export interface WorkbenchSidebarEntryProps {
   /** 「现在跑的是哪一份插件」（dev / 具体版本）。 */
   build: BuildStore
   /**
+   * 由 `apply()` 创建并下发的更新状态：与主面板里的更新面板是**同一份**。
+   * 缺省（单测直接渲染）时徽标退回 build store 的形态标签。
+   */
+  update?: UpdateStore
+  /** 由 `apply()` 创建的更新面板开关状态（点徽标要打开它）。 */
+  updateDialog?: UpdateDialogStore
+  /** 点版本徽标：打开工作台面板 + 打开更新面板（由 apply 绑好）。 */
+  onOpenUpdate?: () => void
+  /** 当前平台（重启说明用）；缺省按 other。 */
+  platform?: 'mac' | 'other'
+  /** 过期判据用的时钟；缺省本机时钟（测试注入固定值）。 */
+  now?: () => number
+  /**
    * 由 `apply()` 创建并下发的模块状态：侧栏子项与面板里的页必须是同一个模块。
    * 缺省（单测直接渲染）时就地造一份，属于组件实例，不是模块级单例。
    */
@@ -65,6 +82,14 @@ const MARK_OF: Record<string, string> = {
   idle: C.sideEntryMarkIdle,
 }
 
+/** 更新徽标的语气 → 附加类（形状仍是 `.crwu-audit-version`）。 */
+const UPDATE_TONE_CLASSES: Record<UpdateBadgeTone, string> = {
+  neutral: '',
+  accent: C.updateBadgeAccent,
+  warn: C.updateBadgeWarn,
+  success: C.updateBadgeOk,
+}
+
 const GLYPH: Record<ModuleId, (props: IconProps) => React.ReactElement> = {
   eval: EvalIcon,
   audit: AuditIcon,
@@ -76,8 +101,20 @@ export function WorkbenchSidebarEntry(props: WorkbenchSidebarEntryProps): React.
   const current = useModule(modules)
   const snapshot = useEnvStatus(props.store)
   const build = useBuild(props.build)
+  // 更新状态是**同一个 store**（apply 里创建的唯一一份）：徽标读它，面板里的更新面板也读它。
+  const updateSnapshot = useUpdateStore(props.update)
   const tone = envLampOf(snapshot)
   const tag = buildTagOf(build)
+  const updateView = props.update === undefined
+    ? null
+    : updateViewModelOf({
+        snapshot: updateSnapshot,
+        currentVersion: currentVersionOf(build),
+        auditBusy: false,
+        nowMs: (props.now ?? Date.now)(),
+        buildKind: build.buildKind,
+        platform: props.platform ?? 'other',
+      })
   const active = props.usePanelInfo === undefined
     ? false
     : props.usePanelInfo((info) => info.activePanelId === WORKBENCH_PANEL_KEY)
@@ -90,8 +127,11 @@ export function WorkbenchSidebarEntry(props: WorkbenchSidebarEntryProps): React.
     if (env.env === null && !env.busy) void props.store.refresh()
     const info = props.build.get()
     if (info.rev === '' && info.error === '') void props.build.refresh()
+    // 自助更新同样由这个常驻入口负责**首次**初始化；面板也会调一次，
+    // 而 store 自己保证幂等 + 单飞（两边加起来只发一次 status/check）。
+    if (props.update !== undefined && !props.update.get().initialized) void props.update.initialize()
     return undefined
-  }, [props.store, props.build])
+  }, [props.store, props.build, props.update])
 
   const markClass = [C.sideEntryMark, MARK_OF[tone] ?? C.sideEntryMarkIdle].join(' ')
   // 环境结论标记 = 一枚 16px 圆徽标（iOS 设置风：实心色圆底 + 白字形）。
@@ -141,7 +181,17 @@ export function WorkbenchSidebarEntry(props: WorkbenchSidebarEntryProps): React.
     <div className={C.sideCardHead}>
       <span className={C.sideEntryGlyph}><BrandMark size={16} /></span>
       <span className={C.sideCardTitle}>{zhCN.sidebarLabel}</span>
-      <span className={[C.version, BUILD_TAG_CLASSES[tag.tone]].join(' ')} title={tag.title}>{tag.text}</span>
+      {/* 版本徽标：**它本身是自助更新入口**（用户口径：可以只让徽标可点）。
+          没有更新 store 时退回 build store 的形态标签（单测直接渲染组件的情形）。 */}
+      {updateView === null
+        ? <span className={[C.version, BUILD_TAG_CLASSES[tag.tone]].join(' ')} title={tag.title}>{tag.text}</span>
+        : <button
+            type="button"
+            className={[C.version, C.updateBadge, UPDATE_TONE_CLASSES[updateView.badgeTone]].filter((item) => item !== '').join(' ')}
+            title={updateView.badgeTitle}
+            aria-label={updateView.badgeTitle}
+            onClick={props.onOpenUpdate}
+          >{updateView.badgeText}</button>}
     </div>
 
     {/* 卡身：三个子项，顺序固定（报告评估 / 报告审核 / 环境信息），不按条件重排。 */}

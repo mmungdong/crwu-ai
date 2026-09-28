@@ -1791,3 +1791,72 @@ test('50. 当前 revision 的新观察可以正常推进阶段（不是把所有
   installGate.resolve()
   await installing
 })
+
+// ---------------------------------------------------------------------------
+// 十、Task 6：界面直接渲染所需的派生值（来源标签 / 阶段标签 / 重启说明）
+// ---------------------------------------------------------------------------
+
+test('51. ViewModel 给出公开来源与安装阶段的中文标签，且不出现百分比', () => {
+  assert.equal(vm(snapshotOf({ check: checkAvailable() })).sourceKindLabel, zhCN.updateSourceNpmmirror)
+  assert.equal(
+    vm(snapshotOf({ check: checkAvailable({ candidate: candidate({ sourceKind: 'npm' }) }) })).sourceKindLabel,
+    zhCN.updateSourceNpm,
+  )
+  assert.equal(vm(snapshotOf({ check: checkUpToDate })).sourceKindLabel, '')
+
+  const stages = [
+    ['connecting', zhCN.updateStageConnecting],
+    ['downloading', zhCN.updateStageDownloading],
+    ['installing', zhCN.updateStageInstalling],
+    ['cancelling', zhCN.updateStageCancelling],
+  ]
+  for (const [stage, label] of stages) {
+    const view = vm(snapshotOf({ install: installInstalling({ stage }), installing: true }))
+    assert.equal(view.installStageLabel, label, stage)
+    assert.equal(view.installStageLabel.includes('%'), false, '阶段不伪造百分比')
+  }
+  assert.equal(vm(snapshotOf({ check: checkAvailable() })).installStageLabel, '')
+})
+
+test('52. 徽标悬停说明包含当前版本与更新结论', () => {
+  const plain = vm(snapshotOf())
+  assert.equal(plain.badgeTitle, zhCN.updateBadgeTitle.replace('{version}', 'v0.0.11'))
+  const available = vm(snapshotOf({ check: checkAvailable() }))
+  assert.equal(available.badgeTitle, zhCN.updateBadgeTitleUpdate.replace('{version}', 'v0.0.11'))
+  const awaiting = vm(snapshotOf({ install: installAwaiting() }))
+  assert.equal(awaiting.badgeTitle, zhCN.updateBadgeTitleRestart)
+})
+
+test('53. 安装完成说明逐字正确，macOS 说明明确"关闭窗口不等于退出"', () => {
+  const awaiting = vm(snapshotOf({ install: installAwaiting({ targetVersion: '0.0.12' }) }))
+  assert.ok(awaiting.installNotice !== null)
+  assert.equal(
+    awaiting.installNotice.line,
+    'CRWU v0.0.12 已安装。请完全退出并重新打开 DeepSeek Harness，使新版生效。',
+  )
+  assert.equal(awaiting.installNotice.line, zhCN.updateInstalledLine.replace('{version}', '0.0.12'))
+
+  const mac = vm(snapshotOf({ install: installAwaiting() }), { platform: 'mac' })
+  const hint = mac.installNotice.hint
+  assert.ok(hint.includes('关闭窗口'), '要说清关闭窗口 ≠ 退出')
+  assert.ok(hint.includes('不一定'), '不能只写"关闭窗口后重新打开"')
+  assert.ok(hint.includes('退出'), '要给出应用菜单里的退出')
+  assert.ok(hint.includes('Command-Q'), '要给出键盘方式')
+  assert.equal(vm(snapshotOf({ install: installAwaiting() }), { platform: 'other' }).installNotice.hint, zhCN.updateRestartOther)
+
+  assert.equal(vm(snapshotOf({ check: checkAvailable() })).installNotice, null)
+})
+
+test('54. 不存在"立即重启"这类动作，也不声称 CRWU 重启过桌面端', () => {
+  const view = vm(snapshotOf({ install: installAwaiting() }))
+  const texts = [view.badgeText, view.badgeSuffix, view.badgeTitle, view.installNotice.line, view.installNotice.hint].join('\n')
+  for (const forbidden of ['立即重启', '自动重启', '一键重启', '重启完成', '已重启']) {
+    assert.equal(texts.includes(forbidden), false, forbidden)
+  }
+  for (const [key, value] of Object.entries(zhCN)) {
+    if (typeof value !== 'string' || !key.startsWith('update')) continue
+    for (const forbidden of ['立即重启', '自动重启', '重启完成', '已重启']) {
+      assert.equal(value.includes(forbidden), false, `${key}: ${forbidden}`)
+    }
+  }
+})

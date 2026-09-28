@@ -48,6 +48,13 @@ export interface UpdateViewModelInput {
   auditBusy: boolean
   /** 当前时间（毫秒）。过期判据只认它，View Model 不读时钟。 */
   nowMs: number
+  /**
+   * Host 构建形态（`dev` = 源码检出 / link 安装）。dev 不参与自助更新，徽标直接写 `dev`。
+   * 缺省空串：那就只看检查结论里的 `unsupported/development-install`。
+   */
+  buildKind?: 'dev' | 'installed' | ''
+  /** 当前平台：决定重启说明里的 macOS 提示。缺省 `other`。 */
+  platform?: 'mac' | 'other'
 }
 
 export interface UpdateViewModel {
@@ -55,6 +62,8 @@ export interface UpdateViewModel {
   badgeText: string
   /** 徽标后缀（`有更新` / `待重启` / `正在更新…` …）；无后缀时为空串。 */
   badgeSuffix: string
+  /** 徽标悬停说明（含当前版本与更新结论）。 */
+  badgeTitle: string
   badgeTone: UpdateBadgeTone
   hasCandidate: boolean
   currentVersion: string
@@ -88,6 +97,26 @@ export interface UpdateViewModel {
   cancelErrorText: string
   /** 安装失败的稳定分类（Task 6 想按类给不同文案时用它）。 */
   installErrorKind: UpdateInstallErrorKind | null
+  /** 公开来源类型的中文标签（npmmirror / npm）；没有候选时为空串。 */
+  sourceKindLabel: string
+  /** 安装阶段的诚实中文（**没有百分比**）；不在安装中时为空串。 */
+  installStageLabel: string
+  /** 安装完成 / 等待重启的说明；不需要重启时为 null。 */
+  installNotice: { line: string; hint: string } | null
+}
+
+/** 安装阶段 → 诚实的离散中文（**不写百分比、不写预计剩余时间**）。 */
+const STAGE_LABELS: Record<UpdateInstallStage, string> = {
+  connecting: zhCN.updateStageConnecting,
+  downloading: zhCN.updateStageDownloading,
+  installing: zhCN.updateStageInstalling,
+  cancelling: zhCN.updateStageCancelling,
+}
+
+/** 公开来源类型 → 本地中文标签（私有源地址永远不进界面）。 */
+const SOURCE_LABELS: Record<UpdateSourceKind, string> = {
+  npmmirror: zhCN.updateSourceNpmmirror,
+  npm: zhCN.updateSourceNpm,
 }
 
 const BLOCK_TEXTS: Record<UpdateInstallBlockReason, string> = {
@@ -109,6 +138,8 @@ function isFresh(expiresAt: string, nowMs: number): boolean {
 
 export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel {
   const { snapshot, currentVersion, auditBusy, nowMs } = input
+  const platform = input.platform ?? 'other'
+  const buildKind = input.buildKind ?? ''
   const check = snapshot.check
   const install = snapshot.install
   const error = snapshot.error
@@ -128,6 +159,8 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
   const checking = snapshot.checking || (check !== null && check.status === 'checking')
   const unsupported = check !== null && check.status === 'unsupported' ? check.reason : null
   const candidateExpired = candidate !== null && !isFresh(candidate.expiresAt, nowMs)
+  // dev 形态：Host 的构建事实说 dev，或者检查结论说"本地开发安装不参与自助更新"。
+  const isDev = buildKind === 'dev' || unsupported === 'development-install'
 
   // 优先级（固定；有测试钉住）：
   // 1. 等待重启：磁盘已经改了，重启前不许再动 profile（设计 §9）；
@@ -158,7 +191,7 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
   let badgeSuffix = ''
   let badgeTone: UpdateBadgeTone = 'neutral'
   let badgeText = versionLabel
-  if (unsupported === 'development-install') {
+  if (isDev) {
     // dev 形态不显示版本号标签（与侧栏那枚小标签同一个口径）。
     badgeText = zhCN.buildTagDev
   } else if (showUpdated) {
@@ -181,6 +214,23 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
   if (badgeSuffix !== '') {
     badgeText = `${versionLabel}${zhCN.updateBadgeSeparator}${badgeSuffix}`
   }
+
+  // 悬停说明：把"当前跑的是哪一版 + 更新到了哪一步"说清（点击进入更新面板）。
+  let badgeTitle = zhCN.updateBadgeTitle.replace('{version}', versionLabel)
+  if (isDev) badgeTitle = zhCN.updateBadgeTitleDev
+  else if (showUpdated) badgeTitle = zhCN.updateBadgeTitleUpdated.replace('{version}', versionLabel)
+  else if (awaitingRestart) badgeTitle = zhCN.updateBadgeTitleRestart
+  else if (candidate !== null) badgeTitle = zhCN.updateBadgeTitleUpdate.replace('{version}', versionLabel)
+
+  // 安装完成 / 等待重启的说明：**只给手动重启的指引**，不声称 CRWU 能重启桌面端。
+  const installNotice = installCurrent && install !== null && install.status === 'awaiting-restart'
+    ? {
+        line: zhCN.updateInstalledLine.replace('{version}', install.targetVersion),
+        hint: platform === 'mac' ? zhCN.updateRestartMac : zhCN.updateRestartOther,
+      }
+    : installCurrent && install !== null && install.status === 'updated'
+      ? { line: zhCN.updateUpdatedLine.replace('{version}', install.version), hint: '' }
+      : null
 
   // 错误按动作分派：只有"用户主动检查失败"才走检查那句；安装 / 取消各自说自己那句。
   const showManualCheckError =
@@ -218,5 +268,13 @@ export function updateViewModelOf(input: UpdateViewModelInput): UpdateViewModel 
     showCancelError,
     cancelErrorText: showCancelError ? zhCN.updateCancelFailed : '',
     installErrorKind: installCurrent && install !== null && install.status === 'failed' ? install.kind : null,
+    badgeTitle,
+    sourceKindLabel: candidate === null ? '' : SOURCE_LABELS[candidate.sourceKind],
+    installStageLabel: installing
+      ? (install !== null && install.status === 'installing'
+          ? STAGE_LABELS[install.stage]
+          : zhCN.updateStageCancelling)
+      : (cancelling ? zhCN.updateStageCancelling : ''),
+    installNotice,
   }
 }
