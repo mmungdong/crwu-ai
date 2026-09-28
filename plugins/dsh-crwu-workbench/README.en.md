@@ -173,8 +173,6 @@ and the installed Host automatically reads that packaged copy. Distribution need
 provenance comes from GitHub Actions OIDC in CI, not from a local publish. **Trusted Publishing is not
 enabled today**; it is only a *future migration option* documented in `docs/releasing.md` §3.3.
 
-
-
 The complete operator procedure, including authentication setup, failure recovery, and rollback, is in
 [`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md).
 Never run a real `npm publish` by hand. The release path is tag-driven and gated:

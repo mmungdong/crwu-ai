@@ -423,6 +423,15 @@ git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
 （`v*` 留给仓里的 Go CLI，两条发布线分开）：先断言
 **tag 与 `package.json` / `VERSION` 一致**，再跑完整门禁与产物自检，最后发布。
 
+**当前发布方式（0.0.12 及以后）：只走 tag → GitHub Actions → CI 发布，禁止在本机手工 `npm publish`。**
+推 `plugin-v0.0.12` 这类 tag 时，`release.yml` 会校验 tag 与 `package.json` / `VERSION` 一致，
+再由 CI 用仓库 Secret `NPM_TOKEN` 执行 `npm publish --provenance`（provenance 来自 GitHub Actions OIDC）；
+**Trusted Publishing 尚未启用**，它只是 `docs/releasing.md` §3.3 记录的未来迁移方案。
+本机只允许 `npm publish --dry-run`（dry-run 不是发布）。
+
+下面这段是 **0.0.10 初次建包时的历史记录**，只用于解释 provenance 的本机限制，
+**不得**照它去发 0.0.12 或任何后续版本（那时包还不存在，才必须在本机建包）：
+
 **首次发布（引导）必须在本机做，而且不能带 `--provenance`**（2026-09-28 实测）：
 `--provenance` 只在受支持的 CI（GitHub Actions 的 OIDC）里成立，本机 provider 是 `null`，
 npm 会直接以 `EUSAGE: Automatic provenance generation not supported for provider: null` 拒绝发布。
