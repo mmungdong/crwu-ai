@@ -4,8 +4,11 @@
  * 这里允许出现 registry 地址与失败归因：它们只在 Host 内部用于决策与脱敏诊断，
  * 到 Client 的只有 `src/shared/update/types.ts` 里的规范化字段。
  */
-import type { UpdateCandidate, UpdateSourceKind } from '../../shared/update/types.ts'
+import type { PluginRegistries } from '@deepseek-ai/dsh-plugin-manager'
+
+import type { UpdateCandidate, UpdateCheckState, UpdateSourceKind } from '../../shared/update/types.ts'
 import type { UpdateSourceDescriptor } from '../../shared/update/consts.ts'
+import type { HostBuildKind } from '../build-info.ts'
 
 /** 一个可请求的公开源；形状由 `shared/update/consts.ts` 的固定常量决定。 */
 export type UpdateSource = UpdateSourceDescriptor
@@ -70,4 +73,54 @@ export interface UpdateDiscovery {
 export interface DiscoverLatestDeps extends RegistryDeps {
   /** 缺省用固定公共源；测试可注入自定义源以覆盖超时与合并顺序。 */
   sources?: readonly UpdateSource[]
+}
+
+/**
+ * 注入的发现函数：入参只有"当前版本"，**不接受**包名、registry、源列表或版本区间。
+ *
+ * 缺省实现是 Task 1 的 `discoverLatestVersion`（固定 npmmirror + npm 两个公共源）；
+ * 测试注入替身，因此单元测试不访问公网。
+ */
+export type UpdateDiscoveryFn = (currentVersion: string) => Promise<UpdateDiscovery>
+
+/**
+ * 检查器的注入端口。
+ *
+ * **不依赖 Context**：这里没有 `ctx.get(...)`，Cordis 接线留给后续任务。
+ * `registries` 缺失（服务不在）与 `buildKind === 'dev'` 都是"不支持自助更新"，而不是失败。
+ */
+export interface UpdateCheckPorts {
+  /** 当前运行版本（Host 构建常量）。来自请求的版本值不参与任何判断。 */
+  version: string
+  /** 源码检出（`dev`）不参与自助更新，避免 npm 包覆盖开发中的 link/file 安装。 */
+  buildKind: HostBuildKind
+  now: () => Date
+  /** Plugin Manager 的 `registries()`；缺失即 manager-unavailable。 */
+  registries?: () => Promise<PluginRegistries>
+  /** discovery 注入点；缺省用 Task 1 的固定两源发现。 */
+  discover?: UpdateDiscoveryFn
+}
+
+export interface UpdateCheckOptions {
+  /** 用户手动"检查更新"：绕过成功缓存与失败退避，但**不绕过** dev / manager / 私有源限制。 */
+  force?: boolean
+}
+
+/** 每个 Host 插件实例一个检查器：缓存、退避与单飞都是实例状态。 */
+export interface UpdateChecker {
+  /** 当前结论（不触发任何上游请求）。 */
+  status(): UpdateCheckState
+  /**
+   * 自动或手动检查。
+   *
+   * 并发调用共享同一次上游往返（单飞）；自动检查复用 6 小时内的成功结果，并在失败后
+   * 10 分钟内不再访问上游。
+   */
+  check(options?: UpdateCheckOptions): Promise<UpdateCheckState>
+  /**
+   * 当前**仍可授权安装**的候选（供安装服务使用）。
+   *
+   * 判据是此刻重新核对 `expiresAt`：过期候选只能作历史展示，不能授权安装。
+   */
+  installableCandidate(): UpdateCandidate | undefined
 }
