@@ -10,29 +10,26 @@ import { fileSystem, resolveTarget } from '../fs/paths.ts'
  * 为什么不是 `node:fs`：插件跑在 Host 进程里，直接用 Node 文件 API 会绕过 DSH 的
  * 文件服务与沙箱策略。「删掉上一轮同名产物」这种动作必须走与其它命令同一条路径。
  *
- * 三条口径（2026-09-28 Windows 适配收紧）：
- * 1. 命令串由 `platform/shell.ts` 按平台生成 —— 这里不再出现 `cmd /c`、`mkdir`、`rm` 之类的字面量；
- * 2. **失败必须传播**：过去 Windows 上 `cmd /c mkdir` 任意失败都被当成成功，
- *    后果是「以为目录建好了，下一步写文件才炸」；现在只把「已经是目标状态」视为成功；
- * 3. **后置条件要回读**：命令退出码为 0 不等于文件真的没了 / 目录真的在（编码、占用、虚拟文件系统
- *    都可能骗人），所以两个操作都用 `ctx.fs.stat` 复核一次。
+ * 三条口径（2026-09-28 收紧，含一次复查修正）：
+ * 1. 命令串由 `platform/shell.ts` 按平台生成 —— 这里不再出现 `cmd /c`、`mkdir`、`rm` 之类字面量；
+ * 2. **失败必须传播**：只把「目标已经是我们要的状态」视为成功。旧形态在 Windows 上把任意
+ *    mkdir 失败都当成功，故障会推迟到「下一步写文件才炸」，归因到完全无关的地方；
+ * 3. **后置条件要回读**，而且回读本身有**三种结果**（2026-09-28 复查修）：
+ *    存在 / 不存在 / **查不出来**。DSH `fs.stat` 的契约是「不存在返回 `undefined`，
+ *    真故障（权限、解析、基础设施）抛异常」——把异常也折叠成「不存在」，
+ *    就会在 `Access denied` 时回报「删除成功」，或把一次读不到的目录当成已建好。
+ *    所以「查不出来」一律按基础设施失败如实上报，不猜。
  */
 export async function removeFileIfExists(
   ctx: Context,
   path: string,
   options: { workdir: string; platform: string; signal?: AbortSignal },
 ): Promise<{ ok: boolean; error: string }> {
-  const fs = fileSystem(ctx)
-  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用' }
-  try {
-    const info = await fs.stat(await resolveTarget(ctx, path))
-    if (info === undefined) return { ok: true, error: '' }
-    if (info.type !== 'file') return { ok: false, error: `目标不是普通文件，拒绝删除：${path}` }
-  } catch (error) {
-    // 不存在就是「没什么可删的」，不是错误。
-    void error
-    return { ok: true, error: '' }
-  }
+  const probe = await probePath(ctx, path)
+  if (probe.kind === 'error') return { ok: false, error: `无法确认目标状态：${probe.error}（${path}）`.slice(0, 300) }
+  if (probe.kind === 'absent') return { ok: true, error: '' }
+  if (probe.type !== 'file') return { ok: false, error: `目标不是普通文件，拒绝删除：${path}` }
+
   const run = await runShell(ctx, removeFileCommand(path, options.platform), {
     workdir: options.workdir,
     timeoutMs: 20_000,
@@ -42,8 +39,11 @@ export async function removeFileIfExists(
     return { ok: false, error: (text(run.stderr) || text(run.error) || '删除旧产物失败').slice(0, 300) }
   }
   // 后置条件：退出码 0 不等于真的删掉了（占用 / 只读属性 / 被虚拟化的路径都可能骗过退出码）。
-  const stillThere = await existsAsFile(ctx, path)
-  if (stillThere) return { ok: false, error: `删除命令返回成功，但文件仍然存在：${path}` }
+  const after = await probePath(ctx, path)
+  if (after.kind === 'error') {
+    return { ok: false, error: `删除命令返回成功，但无法确认目标是否已删除：${after.error}`.slice(0, 300) }
+  }
+  if (after.kind === 'present') return { ok: false, error: `删除命令返回成功，但文件仍然存在：${path}` }
   return { ok: true, error: '' }
 }
 
@@ -58,38 +58,43 @@ export async function ensureDirectory(
     timeoutMs: 20_000,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
+  const after = await probePath(ctx, path)
+  if (after.kind === 'error') {
+    // 连目标状态都确认不了时不许报成功：这正是「以为建好了、下一步写文件才炸」的来源。
+    return { ok: false, error: `无法确认目录是否已创建：${after.error}（${path}）`.slice(0, 300) }
+  }
+  if (after.kind === 'present' && after.type === 'directory') {
+    // 命令失败但目标已经是我们要的状态 → 幂等成功（重审会再走一次）。
+    return { ok: true, error: '' }
+  }
   if (!run.ok) {
-    // 只有「目标已经是我们要的状态」才算成功 —— 那由下面的后置条件判定，不是由退出码猜。
-    const alreadyThere = await existsAsDirectory(ctx, path)
-    if (alreadyThere) return { ok: true, error: '' }
     return { ok: false, error: (text(run.stderr) || text(run.error) || '创建目录失败').slice(0, 300) }
   }
-  if (!await existsAsDirectory(ctx, path)) {
-    return { ok: false, error: `创建目录命令返回成功，但目录不存在：${path}` }
+  if (after.kind === 'present') {
+    return { ok: false, error: `创建目录命令返回成功，但目标不是目录：${path}` }
   }
-  return { ok: true, error: '' }
+  return { ok: false, error: `创建目录命令返回成功，但目录不存在：${path}` }
 }
 
-/** 目标是否是普通文件（路径不存在 / 解析失败都算「不是」）。 */
-async function existsAsFile(ctx: Context, path: string): Promise<boolean> {
-  const fs = fileSystem(ctx)
-  if (fs === undefined) return false
-  try {
-    return (await fs.stat(await resolveTarget(ctx, path)))?.type === 'file'
-  } catch (error) {
-    void error
-    return false
-  }
-}
+/**
+ * 目标状态的**三态**探测。
+ *
+ * `absent` 只对应「`fs.stat` 明确回了 `undefined`」。抛异常一律进 `error` ——
+ * 它与「没有这个文件」是两件事，合并就会把权限/解析故障说成成功。
+ */
+type PathProbe =
+  | { kind: 'absent' }
+  | { kind: 'present'; type: string }
+  | { kind: 'error'; error: string }
 
-/** 目标是否是目录。 */
-async function existsAsDirectory(ctx: Context, path: string): Promise<boolean> {
+async function probePath(ctx: Context, path: string): Promise<PathProbe> {
   const fs = fileSystem(ctx)
-  if (fs === undefined) return false
+  if (fs === undefined) return { kind: 'error', error: 'Host 文件服务不可用' }
   try {
-    return (await fs.stat(await resolveTarget(ctx, path)))?.type === 'directory'
+    const info = await fs.stat(await resolveTarget(ctx, path))
+    if (info === undefined) return { kind: 'absent' }
+    return { kind: 'present', type: text(info.type) }
   } catch (error) {
-    void error
-    return false
+    return { kind: 'error', error: error instanceof Error ? error.message : String(error) }
   }
 }
