@@ -5262,15 +5262,11 @@ test('更新面板有无障碍语义：role/aria-modal/关联标题/关闭按钮
   assert.ok(find(rendered.tree, (node) => node.props?.id === dialog.props['aria-labelledby']) !== null, '关联的标题必须真的存在')
   assert.ok(buttonByLabel(rendered.tree, zhCN.updateActionClose) !== null, '要有明确关闭按钮')
 
-  const listeners = []
-  globalThis.document = {
-    ...fakeDocument().document,
-    addEventListener: (type, listener) => { listeners.push({ type, listener }) },
-    removeEventListener: () => {},
-  }
+  // 键盘处理挂在 dialog 元素上（随 render 原子更新）：Esc 由它处理。
   for (const effect of rendered.instance.effects) await effect.callback()
-  assert.equal(listeners[0]?.type, 'keydown', '要挂键盘监听（Esc 关闭）')
-  listeners[0].listener({ key: 'Escape' })
+  const escOf = (tree) => find(tree, (node) => node.props?.role === 'dialog').props.onKeyDown
+  assert.equal(typeof escOf(rendered.tree), 'function', '要能处理 Escape')
+  escOf(rendered.tree)({ key: 'Escape' })
   assert.equal(closed.length, 1, '安全状态下 Esc 关闭')
 
   // 安装进行中：Esc 与遮罩都不关闭（避免误触丢状态），关闭按钮仍在
@@ -5279,7 +5275,7 @@ test('更新面板有无障碍语义：role/aria-modal/关联标题/关闭按钮
     currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => { closed.push('busy') },
   })
   for (const effect of busy.instance.effects) await effect.callback()
-  listeners[listeners.length - 1].listener({ key: 'Escape' })
+  escOf(busy.tree)({ key: 'Escape' })
   assert.equal(closed.length, 1, '安装中 Esc 不关闭')
   const backdrop = findByClass(busy.tree, WORKBENCH_CLASSES.updateDialogBackdrop)
   assert.equal(backdrop.props.onClick, undefined, '安装中遮罩不可点关闭')
@@ -5289,9 +5285,8 @@ test('更新面板有无障碍语义：role/aria-modal/关联标题/关闭按钮
 // ── Task 6 审查修正：真实装配 / 审核占用 / 空版本 / 模态焦点 ────────────────────
 
 /** 一个能模拟"焦点"的 document 替身：给弹窗的焦点接管与 Tab 循环用。 */
-function fakeFocusDocument() {
+function fakeFocusDocument(elements = null) {
   const listeners = []
-  const created = []
   const doc = {
     activeElement: null,
     getElementById: () => dialogNode,
@@ -5303,19 +5298,30 @@ function fakeFocusDocument() {
       if (index >= 0) listeners.splice(index, 1)
     },
   }
-  const makeFocusable = (name) => ({
-    name,
-    focus() { doc.activeElement = this; created.push(name) },
+  // 元素带 tag/disabled，**真的按传入 selector 过滤**：看不见 disabled 不入选、
+  // summary 只有选择器里写了才会出现 —— 否则焦点循环测试就是假通过。
+  const nodes = (elements ?? [
+    { name: 'close', tag: 'button' },
+    { name: 'check', tag: 'button' },
+    { name: 'install', tag: 'button' },
+  ]).map((spec) => ({
+    name: spec.name,
+    tag: spec.tag,
+    disabled: spec.disabled === true,
+    focus() { doc.activeElement = this },
+  }))
+  const matches = (node, selector) => selector.split(',').map((one) => one.trim()).some((token) => {
+    const tag = token.replace(/:not\(\[disabled\]\)$/, '').replace(/\[.*$/, '')
+    if (node.tag !== tag) return false
+    if (token.includes(':not([disabled])') && node.disabled) return false
+    return true
   })
-  /** 弹窗里"当前可用的可聚焦元素"（disabled 的不在列表里）。 */
-  let focusables = ['install', 'check', 'close'].map(makeFocusable)
   const dialogNode = {
-    focusables,
-    setFocusables(names) { focusables = names.map(makeFocusable); dialogNode.focusables = focusables },
-    querySelectorAll: () => focusables,
+    focusables: () => nodes.filter((node) => !node.disabled),
+    querySelectorAll: (selector) => nodes.filter((node) => matches(node, selector)),
     focus() { doc.activeElement = dialogNode },
   }
-  return { doc, listeners, dialogNode, focused: created }
+  return { doc, listeners, dialogNode, focused: [] }
 }
 
 test('apply 真实装配：点侧栏版本徽标 = 打开面板 + 打开同一份更新弹窗（卡头仍不可点）', () => {
@@ -5355,60 +5361,6 @@ test('apply 真实装配：点侧栏版本徽标 = 打开面板 + 打开同一�
   assert.equal(selected.length, 1)
 })
 
-test('审核真的在跑（audit-status 的 active.key）必须禁用安装并给出审核原因', async () => {
-  const active = { key: '2026-301705-LX10170', childId: 'child-1', since: 1 }
-  installDoc()
-  // 报告审核页要的其余数据也一并备齐（否则渲染那一页会缺字段）。
-  const auditBody = (activeKey) => ({
-    boot: { body: bootOk() },
-    env: { body: okEnvBody() },
-    pending: { body: { ok: true, error: '', rows: [], formName: '报告审核', page: 1, size: 20, total: 0, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
-    'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { ...active, key: activeKey } } },
-    'oss-index': { body: { ok: true, error: '', bucket: 'b', prefix: '', count: 0, items: {}, truncated: false } },
-  })
-  const ops = stubOps(auditBody(active.key))
-  const update = updateStoreStub({ check: updateAvailable() })
-  // 真实链路：模块状态先停在「报告审核」（面板才会去轮询 audit-status），
-  // 再让面板按 RPC 回来的 active.key 决定 gatingHasAudit。
-  const { createModuleStore } = await import(new URL('src/client/features/workbench/module-store.ts', ROOT).href)
-  const modules = createModuleStore()
-  modules.navigate('audit', { state: 'ready' })
-  const props = {
-    services: fakeServices(),
-    modules,
-    build: fakeBuildStore({ version: '9.9.9' }),
-    update,
-    updateDialog: fakeDialogStore(true),
-    now: () => UPDATE_NOW,
-    platform: 'mac',
-  }
-  // 多轮挂载：第一轮拿到 env 才会去问 audit-status，第二轮才把 active.key 折算成"审核在跑"。
-  let tree = render(WorkbenchPanel, props).tree
-  for (let round = 0; round < 3; round += 1) {
-    for (const effect of globalThis.__crwuTestInstance.effects) await effect.callback()
-    await settle()
-    tree = rerender(WorkbenchPanel, props)
-  }
-  assert.equal(ops.filter((op) => op === 'audit-status').length > 0, true, '面板要真的问过 audit-status')
-  const dialog = find(tree, (node) => node.props?.role === 'dialog')
-  assert.ok(dialog !== null, '更新弹窗要在')
-  const install = buttonByLabel(dialog, zhCN.updateActionInstall)
-  assert.equal(install.props.disabled, true, '已有审核在运行时必须禁用安装')
-  assert.equal(textOf(dialog).includes(zhCN.updateReasonAuditActive), true)
-
-  // 反向：只有报告列表在加载（active.key 为空）时**不得**被说成"审核任务正在进行"
-  installDoc()
-  stubOps(auditBody(''))
-  let idle = render(WorkbenchPanel, props).tree
-  for (let round = 0; round < 3; round += 1) {
-    for (const effect of globalThis.__crwuTestInstance.effects) await effect.callback()
-    await settle()
-    idle = rerender(WorkbenchPanel, props)
-  }
-  const idleDialog = find(idle, (node) => node.props?.role === 'dialog')
-  assert.equal(textOf(idleDialog).includes(zhCN.updateReasonAuditActive), false, '没有审核在跑就不能说"有审核任务正在进行"')
-  assert.equal(buttonByLabel(idleDialog, zhCN.updateActionInstall).props.disabled, false)
-})
 
 test('Host 还没回报版本时不得显示孤立的 v（徽标、悬停说明、弹窗当前版本）', async () => {
   for (const unknown of [{ version: '', rev: '' }, { version: '', rev: '' , buildKind: ''}]) {
@@ -5440,42 +5392,185 @@ test('Host 还没回报版本时不得显示孤立的 v（徽标、悬停说明�
   }
 })
 
-test('模态焦点：打开进入弹窗、Tab/Shift+Tab 在弹窗内循环、关闭后焦点还回去', async () => {
-  const { UpdateDialog } = await import(new URL('src/client/features/update/UpdateDialog.tsx', ROOT).href)
-  const fake = fakeFocusDocument()
-  globalThis.document = fake.doc
-  const outside = { name: 'outside', focus() { fake.doc.activeElement = this } }
-  fake.doc.activeElement = outside // 打开前焦点在背景（侧栏）上
 
-  const snapshot = updateStoreStub({ check: updateAvailable() }).get()
+// ── Task 6 第 3 轮：轮询 cleanup / summary 焦点 / critical 陈旧窗口 ──────────────
+
+/**
+ * 挂载面板若干轮，**收集每一轮 effect 返回的 cleanup**。
+ *
+ * 为什么必须收集：审核模块激活后每轮都会 `setInterval(refreshAudits, 10_000)`，
+ * 测试如果只跑 effect 不跑 cleanup，进程会被这些定时器拖住不退出（既泄漏句柄，
+ * 又可能让上一组的轮询读已经替换掉的全局 fetch）。
+ */
+async function mountPanelRounds(props, rounds = 3) {
+  const cleanups = []
+  let tree = render(WorkbenchPanel, props).tree
+  for (let round = 0; round < rounds; round += 1) {
+    for (const effect of globalThis.__crwuTestInstance.effects) {
+      const cleanup = await effect.callback()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+    }
+    await settle()
+    tree = rerender(WorkbenchPanel, props)
+  }
+  return { tree, cleanups }
+}
+
+/** 逆序执行 cleanup（React 的卸载顺序），任何一步抛错都不影响其余释放。 */
+function unmountAll(cleanups) {
+  for (const cleanup of [...cleanups].reverse()) {
+    try {
+      cleanup()
+    } catch (error) {
+      // 释放阶段的异常不该掩盖用例结论，但要如实抛出来让人看见。
+      throw error
+    }
+  }
+}
+
+test('审核在跑：active.key 禁用安装；卸载后不留轮询定时器（测试进程能自然退出）', async () => {
+  const active = { key: '2026-301705-LX10170', childId: 'child-1', since: 1 }
+  const body = (activeKey) => ({
+    boot: { body: bootOk() },
+    env: { body: okEnvBody() },
+    pending: { body: { ok: true, error: '', rows: [], formName: '报告审核', page: 1, size: 20, total: 0, query: '', filterMode: '', escalated: false, escalateAvailable: false } },
+    'audit-status': { body: { ok: true, audits: [], parentSessionId: '', active: { ...active, key: activeKey } } },
+    'oss-index': { body: { ok: true, error: '', bucket: 'b', prefix: '', count: 0, items: {}, truncated: false } },
+  })
+  const { createModuleStore } = await import(new URL('src/client/features/workbench/module-store.ts', ROOT).href)
+
+  const runScenario = async (activeKey) => {
+    installDoc()
+    const ops = stubOps(body(activeKey))
+    const modules = createModuleStore()
+    modules.navigate('audit', { state: 'ready' })
+    const props = {
+      services: fakeServices(),
+      modules,
+      build: fakeBuildStore({ version: '9.9.9' }),
+      update: updateStoreStub({ check: updateAvailable() }),
+      updateDialog: fakeDialogStore(true),
+      now: () => UPDATE_NOW,
+      platform: 'mac',
+    }
+    const { tree, cleanups } = await mountPanelRounds(props)
+    return { tree, cleanups, ops }
+  }
+
+  // 第一组：Host 确认有审核在跑
+  const first = await runScenario(active.key)
+  try {
+    assert.equal(first.ops.filter((op) => op === 'audit-status').length > 0, true, '面板要真的问过 audit-status')
+    const dialog = find(first.tree, (node) => node.props?.role === 'dialog')
+    assert.equal(buttonByLabel(dialog, zhCN.updateActionInstall).props.disabled, true, '已有审核在运行时必须禁用安装')
+    assert.equal(textOf(dialog).includes(zhCN.updateReasonAuditActive), true)
+  } finally {
+    // 必须在切到 idle 场景之前**完整卸载**（否则第一组的轮询会跨场景读新的 fetch）
+    unmountAll(first.cleanups)
+  }
+
+  // 第二组：没有审核在跑（报告列表加载不算）
+  const second = await runScenario('')
+  try {
+    const dialog = find(second.tree, (node) => node.props?.role === 'dialog')
+    assert.equal(textOf(dialog).includes(zhCN.updateReasonAuditActive), false, '没有审核在跑就不能说"有审核任务正在进行"')
+    assert.equal(buttonByLabel(dialog, zhCN.updateActionInstall).props.disabled, false)
+  } finally {
+    unmountAll(second.cleanups)
+  }
+})
+
+test('诊断信息 summary 参与焦点循环（Tab 能到达、首尾能循环）', async () => {
+  const { UpdateDialog } = await import(new URL('src/client/features/update/UpdateDialog.tsx', ROOT).href)
+  const fake = fakeFocusDocument([
+    { name: 'close', tag: 'button' },
+    { name: 'check', tag: 'button' },
+    { name: 'install', tag: 'button' },
+    { name: 'diag', tag: 'summary' },
+  ])
+  globalThis.document = fake.doc
   const rendered = render(UpdateDialog, {
-    snapshot, currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => {},
+    snapshot: updateStoreStub({ check: updateAvailable() }).get(),
+    currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => {},
   })
   const cleanups = rendered.instance.effects.map((effect) => effect.callback())
+  try {
+    // summary 必须在"当前可用可聚焦元素"里（选择器漏了它，键盘用户永远到不了诊断信息）
+    assert.deepEqual(
+      fake.dialogNode.focusables().map((one) => one.name),
+      ['close', 'check', 'install', 'diag'],
+      'summary 必须在焦点循环里',
+    )
+    const dialog = find(rendered.tree, (node) => node.props?.role === 'dialog')
+    const onKeyDown = dialog.props.onKeyDown
+    assert.equal(typeof onKeyDown, 'function', '键盘处理必须挂在 dialog 元素上（随 render 原子更新）')
 
-  assert.equal(fake.doc.activeElement?.name, 'install', '打开后焦点要进入弹窗（第一个可用控件）')
-  const keydown = fake.listeners.find((one) => one.type === 'keydown')
-  assert.ok(keydown !== undefined, '要挂键盘监听')
+    fake.doc.activeElement = fake.dialogNode.focusables().at(-1)
+    onKeyDown({ key: 'Tab', shiftKey: false, preventDefault() {} })
+    assert.equal(fake.doc.activeElement.name, 'close', 'Tab 从最后一项回到第一项')
 
-  // Tab：从最后一个可用控件回到第一个
-  fake.doc.activeElement = fake.dialogNode.focusables[2]
-  keydown.listener({ key: 'Tab', shiftKey: false, preventDefault() {} })
-  assert.equal(fake.doc.activeElement?.name, 'install', 'Tab 在最后一个要回到第一个')
+    fake.doc.activeElement = fake.dialogNode.focusables()[0]
+    onKeyDown({ key: 'Tab', shiftKey: true, preventDefault() {} })
+    assert.equal(fake.doc.activeElement.name, 'diag', 'Shift+Tab 从第一项回到最后一项（也就是 summary）')
 
-  // Shift+Tab：从第一个回到最后一个
-  fake.doc.activeElement = fake.dialogNode.focusables[0]
-  keydown.listener({ key: 'Tab', shiftKey: true, preventDefault() {} })
-  assert.equal(fake.doc.activeElement?.name, 'close', 'Shift+Tab 在第一个要回到最后一个')
+    // disabled 的控件不进入循环
+    const disabled = fakeFocusDocument([
+      { name: 'close', tag: 'button' },
+      { name: 'install', tag: 'button', disabled: true },
+    ])
+    globalThis.document = disabled.doc
+    assert.deepEqual(disabled.dialogNode.focusables().map((one) => one.name), ['close'], 'disabled 不入循环')
 
-  // disabled 的按钮不进循环（弹窗只报两个可用控件时，循环只在这两个之间）
-  fake.dialogNode.setFocusables(['install', 'close'])
-  fake.doc.activeElement = fake.dialogNode.focusables[1]
-  keydown.listener({ key: 'Tab', shiftKey: false, preventDefault() {} })
-  assert.equal(fake.doc.activeElement?.name, 'install')
-  assert.equal(fake.dialogNode.focusables.length, 2, 'disabled 的按钮不在可聚焦列表里')
+    // 打开后焦点进入弹窗
+    globalThis.document = fake.doc
+    fake.doc.activeElement = { name: 'outside', focus() { fake.doc.activeElement = this } }
+    const reopened = render(UpdateDialog, {
+      snapshot: updateStoreStub({ check: updateAvailable() }).get(),
+      currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => {},
+    })
+    const reopenCleanups = reopened.instance.effects.map((effect) => effect.callback())
+    assert.equal(fake.doc.activeElement.name, 'close', '打开后焦点进入弹窗（第一个可用控件）')
+    // 关闭/卸载：焦点还给打开前的元素
+    const outside = fake.doc.activeElement
+    unmountAll(reopenCleanups)
+    assert.notEqual(fake.doc.activeElement, outside, '卸载后不再停在弹窗里')
+  } finally {
+    unmountAll(cleanups)
+  }
+})
 
-  // 关闭/卸载：焦点还给打开前的元素，并且监听器被摘掉
-  for (const cleanup of cleanups) if (typeof cleanup === 'function') cleanup()
-  assert.equal(fake.doc.activeElement, outside, '关闭后焦点要还给打开前的元素')
-  assert.equal(fake.listeners.filter((one) => one.type === 'keydown').length, 0, '监听器必须随卸载释放')
+test('critical 状态跃迁：rerender 成 installing 后立即按 Esc 不得关闭（不等被动 effect）', async () => {
+  const { UpdateDialog } = await import(new URL('src/client/features/update/UpdateDialog.tsx', ROOT).href)
+  const fake = fakeFocusDocument([{ name: 'close', tag: 'button' }, { name: 'install', tag: 'button' }])
+  globalThis.document = fake.doc
+  let closed = 0
+  const base = {
+    snapshot: updateStoreStub({ check: updateAvailable() }).get(),
+    currentVersion: '9.9.9', nowMs: UPDATE_NOW, platform: 'mac', onClose: () => { closed += 1 },
+  }
+  // 挂载为 idle，并跑完这一轮的 effect（聚焦/恢复焦点那一套）
+  const mounted = render(UpdateDialog, base)
+  const cleanups = mounted.instance.effects.map((effect) => effect.callback())
+  try {
+    const idle = find(mounted.tree, (node) => node.props?.role === 'dialog')
+    idle.props.onKeyDown({ key: 'Escape' })
+    assert.equal(closed, 1, '安全状态下 Esc 关闭')
+
+    // 同一实例重渲染为 installing：**故意不跑**新收集的被动 effect
+    const busyTree = rerender(UpdateDialog, {
+      ...base,
+      snapshot: { ...base.snapshot, install: { status: 'installing', stage: 'installing', targetVersion: '9.9.10', startedAt: '2026-09-28T10:00:00.000Z' }, installing: true },
+    })
+    const busy = find(busyTree, (node) => node.props?.role === 'dialog')
+    busy.props.onKeyDown({ key: 'Escape' })
+    assert.equal(closed, 1, '关键动作进行中：当前 render 的 Esc 就必须不关闭（不能等被动 effect）')
+
+    // 反向：回到安全状态，当前 render 的 Esc 立刻又能关
+    const safeTree = rerender(UpdateDialog, base)
+    const safe = find(safeTree, (node) => node.props?.role === 'dialog')
+    safe.props.onKeyDown({ key: 'Escape' })
+    assert.equal(closed, 2, '回到安全状态后当前 render 的 Esc 必须能关')
+  } finally {
+    unmountAll(cleanups)
+  }
 })
