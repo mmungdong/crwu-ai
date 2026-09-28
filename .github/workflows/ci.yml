@@ -233,9 +233,13 @@ jobs:
       # 回归、路径与凭据权限的 Windows 分支都在这里。日志 tee 到文件，失败时上传为 artifact。
       - name: tests under native PowerShell
         run: |
+          # 末尾必须**显式 exit**：GitHub 的 pwsh 壳用脚本末尾的 `$LASTEXITCODE` 当步骤退出码，
+          # 中间任何一条原生命令都会改写它。存下来 → 报告 → 显式退出，形状固定、不会误判。
           $log = Join-Path $env:RUNNER_TEMP 'native-pwsh-tests.log'
           npm test 2>&1 | Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testsExit = $LASTEXITCODE
+          if ($testsExit -ne 0) { Write-Host "npm test 失败（退出码 $testsExit），日志已写入 $log" }
+          exit $testsExit
 
       # 失败时上传合同测试日志。**只上传测试输出**：不含凭据、不 dump 环境变量。
       - name: upload native PowerShell logs

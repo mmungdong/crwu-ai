@@ -109,9 +109,17 @@ jobs:
 
       - name: an undeclared platform must fail loudly (no arch fallback)
         run: |
+          # 这一步**预期** `node` 退出码非零，所以它是一条「反向」断言：
+          # ① 先把退出码存进变量 —— `$LASTEXITCODE` 会被后面的每条原生命令覆盖；
+          # ② 断言之后必须**显式 `exit 0`**。GitHub 的 pwsh runner 在脚本末尾会用
+          #    `$LASTEXITCODE` 当步骤退出码（内置 pwsh 壳的 `$ErrorActionPreference='stop'`
+          #    之外还会 `exit $LASTEXITCODE`），`Write-Host` **不会**把它清成 0 ——
+          #    于是「预期失败」的那一步会真的把 job 判红，依赖它的 publish 永远起不来。
           node scripts/smoke-windows-binaries.mjs --platform=win32-arm64
-          if ($LASTEXITCODE -eq 0) { throw "win32-arm64 没有随包二进制，冒烟却报成功" }
-          Write-Host "OK  win32-arm64 被如实拒绝（退出码 $LASTEXITCODE）"
+          $smokeExit = $LASTEXITCODE
+          if ($smokeExit -eq 0) { throw "win32-arm64 没有随包二进制，冒烟却报成功" }
+          Write-Host "OK  win32-arm64 被如实拒绝（退出码 $smokeExit）"
+          exit 0
 
   publish:
     needs: [binaries, windows-binary-smoke]
