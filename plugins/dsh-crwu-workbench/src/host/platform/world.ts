@@ -32,7 +32,11 @@ export function createWorldFacts(ctx: Context): WorldFacts {
       return platform
     },
     async home() {
-      if (home === null) home = await detectHome(ctx)
+      if (home === null) {
+        // 主目录探测要走**当前平台**的方言：Windows 上只能问 PowerShell 的环境变量，
+        // 而不是先试 `python3` / `printf`（那两条在 Windows 上只是两次 command-not-found）。
+        home = await detectHome(ctx, { platform: await this.platform() })
+      }
       return home
     },
     async workdir() {

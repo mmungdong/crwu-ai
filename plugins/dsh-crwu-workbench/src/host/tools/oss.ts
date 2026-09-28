@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
 import { isSafeSeqNo } from '../../shared/consts.ts'
 import { normalizeOss } from '../environment/manifest.ts'
-import { shellInvoke } from '../environment/probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { sanitizeOssError } from '../oss/sanitize.ts'
 
 // 兼容再导出：脱敏器搬到了 `host/oss/sanitize.ts`（环境探测与上传共用一份），

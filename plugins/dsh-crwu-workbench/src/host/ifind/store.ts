@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { isWindowsPlatform } from '../platform/detect.ts'
+import { mkdirCommand, privateFileCommand, removeFileCommand } from '../platform/shell.ts'
 import { runShell, shellUnavailable } from '../shell/run.ts'
 
 /**
@@ -271,21 +271,18 @@ export async function writeIfindSecret(
   const fs = fileSystem(ctx)
   if (fs === undefined) return writeFailure('infrastructure', 'Host 文件服务不可用，无法保存同花顺 iFinD 凭据', path)
 
-  const platform = text(options.platform) || process.platform
+  // 平台**由调用方注入**，不再回退 `process.platform`：回退会让单测与真实运行使用不同方言，
+  // Windows 分支永远测不到 —— 而这里曾经正是这样漏掉 `cmd` 语义的。
+  const platform = text(options.platform)
+  if (platform === '') return writeFailure('infrastructure', '未知平台，拒绝在没有平台事实的情况下写凭据', path)
   const dir = ifindStateDir(home)
-  // Windows 上是 PowerShell：`mkdir -p` 的 `-p` 依赖参数名缩写匹配，`chmod` 根本不是命令，
-  // `rm -f` 的 `-f` 在 `Remove-Item` 上同时前缀匹配 `-Force` 与 `-Filter`（报「参数名不明确」）。
-  // 所以这三条都按平台分开写，Windows 用 PowerShell 自身等价的幂等写法。
-  const mkdirCommand = isWindowsPlatform(platform)
-    ? `New-Item -ItemType Directory -Force -Path ${shellQuote(dir, platform)} | Out-Null`
-    : `mkdir -p ${shellQuote(dir, platform)}`
-  const mkdir = await runShell(ctx, mkdirCommand, {
+  const mkdirRun = await runShell(ctx, mkdirCommand(dir, platform), {
     workdir: home, timeoutMs: 15_000, escalate: true,
   })
-  const dirReady = mkdir.ok
+  const dirReady = mkdirRun.ok
   if (!dirReady) {
     return writeFailure('infrastructure',
-      `创建插件状态目录失败：${text(mkdir.stderr) || text(mkdir.error) || dir}`.slice(0, 300), path)
+      `创建插件状态目录失败：${text(mkdirRun.stderr) || text(mkdirRun.error) || dir}`.slice(0, 300), path)
   }
 
   const body = `${JSON.stringify({ [IFIND_CREDENTIAL_FIELD]: verdict.value }, null, 2)}\n`
@@ -300,19 +297,19 @@ export async function writeIfindSecret(
   }
 
   // 权限**必须回读核对**：chmod 在个别文件系统上会静默无效，而 0600 是这份文件的安全边界。
-  // Windows 没有 POSIX 权限位、也没有 `chmod` 命令：这一项在 Windows 上**不适用**（凭据文件在
-  // 用户配置目录内，由用户 ACL 保护），所以跳过而不是伪造一条必然失败的命令 —— 跳过后报
-  // `chmodOk: true` 表示「没有未收紧的权限」，不是「假装 chmod 成功了」。
+  // Windows 没有 POSIX 权限位、也没有 `chmod` 命令：`privateFileCommand` 返回空串表示**不适用**
+  // （凭据文件在用户配置目录内，由用户 ACL 保护），跳过而不是伪造一条必然失败的命令。
   let chmodOk = true
   let chmodError = ''
-  if (!isWindowsPlatform(platform)) {
-    const chmod = await runShell(ctx, `chmod 600 ${shellQuote(path, platform)}`, {
+  const chmodCommand = privateFileCommand(path, platform)
+  if (chmodCommand !== '') {
+    const chmodRun = await runShell(ctx, chmodCommand, {
       workdir: home, timeoutMs: 15_000, escalate: true,
     })
-    chmodOk = chmod.ok
-    chmodError = chmod.ok
+    chmodOk = chmodRun.ok
+    chmodError = chmodRun.ok
       ? ''
-      : (text(chmod.stderr) || text(chmod.error) || '权限设置命令没有跑起来').slice(0, 200)
+      : (text(chmodRun.stderr) || text(chmodRun.error) || '权限设置命令没有跑起来').slice(0, 200)
   }
   return {
     ok: true, errorKind: '', error: '', dirReady, chmodOk, chmodError, mode: 'file',
@@ -337,13 +334,11 @@ export async function clearIfindSecret(
     }
   }
   if (home === '') return { ok: false, errorKind: 'infrastructure', error: '主目录未知，无法清除同花顺 iFinD 凭据', mode: 'file' }
-  const platform = text(options.platform) || process.platform
-  // POSIX `rm -f` 的语义是「文件不存在也算成功」，Windows 用 `-ErrorAction SilentlyContinue` 对齐
-  // （`rm -f` 在 PowerShell 里会因 `-f` 与 `-Filter` / `-Force` 二义而直接失败）。
-  const removeCommand = isWindowsPlatform(platform)
-    ? `Remove-Item -LiteralPath ${shellQuote(ifindCredentialPath(home), platform)} -Force -ErrorAction SilentlyContinue`
-    : `rm -f ${shellQuote(ifindCredentialPath(home), platform)}`
-  const result = await runShell(ctx, removeCommand, {
+  const platform = text(options.platform)
+  if (platform === '') {
+    return { ok: false, errorKind: 'infrastructure', error: '未知平台，拒绝在没有平台事实的情况下清除凭据', mode: 'file' }
+  }
+  const result = await runShell(ctx, removeFileCommand(ifindCredentialPath(home), platform), {
     workdir: home, timeoutMs: 15_000, escalate: true,
   })
   if (!result.ok) {
@@ -352,18 +347,4 @@ export async function clearIfindSecret(
       mode: 'file' }
   }
   return { ok: true, errorKind: '', error: '', mode: 'file' }
-}
-
-/**
- * 平台引用方式。
- *
- * 与 `environment/probe.ts` 的 `shellQuote` 同一判据（POSIX 单引号 / Windows 也是单引号 ——
- * Windows 上 DSH 跑的是 PowerShell，单引号才是纯字面量，双引号会插值），
- * 这里各写一份是因为 `probe.ts` 已经反向依赖本模块（`checkIfindSecret` 由它复用），
- * 再互相 import 会成环。两处都只有两行，且都有单测钉着 Windows 分支。
- */
-export function shellQuote(value: unknown, platform: string): string {
-  const raw = text(value)
-  if (!isWindowsPlatform(text(platform))) return `'${raw.replace(/'/g, "'\\''")}'`
-  return `'${raw.replace(/'/g, "''")}'`
 }

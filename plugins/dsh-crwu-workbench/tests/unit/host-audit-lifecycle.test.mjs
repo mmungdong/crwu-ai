@@ -8,6 +8,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { applyShellEffect } from '../helpers/shell-effects.mjs'
+
 const ROOT = new URL('../../', import.meta.url)
 
 const { auditStart, auditStop, auditStatus, auditRelease } = await import(new URL('src/host/audit/ops.ts', ROOT).href)
@@ -52,8 +54,14 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
         return {
           resolve: (request) => request,
           async execute(request) {
-            trace.push({ kind: 'shell', command: String(request?.command ?? '') })
+            const command = String(request?.command ?? '')
+            trace.push({ kind: 'shell', command })
             const exitCode = patch.shellFails === true ? 1 : 0
+            // 让成功的建/删命令在 fs 替身上真的生效：实现会回读后置条件（见 helpers/shell-effects.mjs）。
+            applyShellEffect(command, exitCode, {
+              addDir: (path) => directories.add(path),
+              removeFile: (path) => { delete files[path] },
+            })
             return { result: async () => ({ exitCode, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: exitCode === 0 ? '' : 'stub', truncated: false } }) }
           },
         }

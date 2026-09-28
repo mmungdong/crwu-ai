@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { runShell } from '../shell/run.ts'
-import { shellInvoke } from '../environment/probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import type { ShellResult } from '../shell/run.ts'
 

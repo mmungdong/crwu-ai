@@ -20,9 +20,12 @@ const ROOT = new URL('../../', import.meta.url)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const {
-  shellQuote, shellInvoke, probePackageIntegrity, packageIntegrityPaths,
+  buildOssProbeCommand, probePackageIntegrity, packageIntegrityPaths,
   probeOss, resolveOssutil, ossutilMissingMessage, serviceChecks,
 } = await import(new URL('src/host/environment/probe.ts', ROOT).href)
+// 引用与命令位置已经集中到 `platform/shell.ts`：这里的断言随实现一起搬过去，
+// 表格化的逐字断言在 `tests/unit/host-platform-shell.test.mjs` 里更全。
+const { shellQuote, shellInvoke } = await import(new URL('src/host/platform/shell.ts', ROOT).href)
 const { checkIfindSecret, readIfindSecret, writeIfindSecret, clearIfindSecret, ifindCredentialPath, ifindStateDir } =
   await import(new URL('src/host/ifind/store.ts', ROOT).href)
 const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
@@ -409,13 +412,34 @@ test('Windows 上探测命令是可执行的 PowerShell：以 `&` 开头、路�
   assert.equal(command.includes('"'), false, '不得出现 cmd 式双引号')
 })
 
-test('Windows 上清单给的探测模板同样补调用运算符', async () => {
+test('Windows 上清单给的探测模板同样补调用运算符，且每个占位符都逐个引用', async () => {
   const shell = shellStub(() => ({ stdout: 'ok\n' }))
-  const oss = { ...DEFAULT_MANIFEST.oss, bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/ --endpoint {endpoint}' }
+  const oss = { ...DEFAULT_MANIFEST.oss, prefix: 'my audit', bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/{prefix}/ --endpoint {endpoint}' }
   await probeOss(ctxOf(packagedFs({ platform: 'win32-x64' }), shell.ctx), oss, 'win32-x64')
   const command = shell.calls[0] ?? ''
-  assert.equal(command.startsWith("& '"), true, `模板里的 {{ossutil}} 就是命令位置：${command}`)
-  assert.match(command, / --endpoint oss-cn-x\.aliyuncs\.com$/)
+  assert.equal(command.startsWith("& '"), true, `模板里的 {ossutil} 就是命令位置：${command}`)
+  // 每个占位符的值都按平台引用成字面量：旧实现把动态值裸拼进去，一个空格就能改写命令结构。
+  // （占位符夹在词中间时，引用后的片段与裸文本相邻拼接，两个方言都把整段当一个参数。）
+  assert.equal(command.endsWith("--endpoint 'oss-cn-x.aliyuncs.com'"), true, command)
+  assert.equal(command.includes("'my audit/'"), true, `带空格的占位符必须被引用：${command}`)
+  assert.equal(command.includes('{prefix}'), false, '占位符必须被替换掉')
+})
+
+test('旧字符串模板是 deprecated 兼容路径：未知占位符、换行与空可执行文件都必须拒绝', () => {
+  const base = { ...DEFAULT_MANIFEST.oss, bucket: 'bkt', endpoint: '', enabled: true }
+  const rejected = (probeCommand) => {
+    const built = buildOssProbeCommand({ ...base, probeCommand }, '/opt/ossutil', 'darwin-arm64')
+    assert.equal(built.ok, false, `应当拒绝：${probeCommand}`)
+    return built.error
+  }
+  assert.match(rejected('{ossutil} ls {nope}'), /未知占位符/)
+  assert.match(rejected('{ossutil} ls oss://a\nb'), /换行/)
+  assert.match(rejected('{ossutil} ls {oops'), /花括号/)
+  assert.equal(buildOssProbeCommand(base, '', 'darwin-arm64').ok, false)
+  // 默认路径是**结构化**的，不经过任何模板。
+  const built = buildOssProbeCommand(base, '/opt/ossutil', 'darwin-arm64')
+  assert.equal(built.ok, true)
+  assert.equal(built.deprecated, false)
 })
 
 // ── iFinD 凭据：**插件自有存储**（不再是技能目录里的 mcp_config.json）────────────
@@ -548,7 +572,7 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
   assert.equal(result.mode, 'file')
   assert.equal(ctx.commands.some((command) => command.includes('chmod')), false, 'Windows 不得执行 chmod')
   assert.equal(
-    ctx.commands.some((command) => command.startsWith('New-Item -ItemType Directory -Force -Path ')),
+    ctx.commands.some((command) => /^New-Item -ItemType Directory -Force -Path '.+' \| Out-Null$/.test(command)),
     true,
     `建目录必须是幂等的 PowerShell 写法：${ctx.commands.join(' | ')}`,
   )
@@ -557,6 +581,9 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
   assert.equal(result.chmodError, '')
 
   await clearIfindSecret(ctx, home, { platform: 'win32-x64' })
-  assert.equal(ctx.commands.some((command) => command.startsWith('Remove-Item -LiteralPath ')), true)
+  const remove = ctx.commands.find((command) => command.startsWith('if (Test-Path -LiteralPath ')) ?? ''
+  assert.notEqual(remove, '', `删除必须是 PowerShell 幂等写法：${ctx.commands.join(' | ')}`)
+  assert.match(remove, /-ErrorAction Stop \}$/, '真实失败必须能传播（不能 SilentlyContinue）')
+  assert.equal(remove.includes('SilentlyContinue'), false)
   assert.equal(ctx.commands.some((command) => command.startsWith('rm -f ')), false)
 })

@@ -6,7 +6,7 @@ import { applyDeploymentConfig } from '../config/deployment.ts'
 import { runCrwu } from '../crwu/run.ts'
 import type { WhoamiResult } from '../system/identity.ts'
 import { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } from './manifest-default.ts'
-import { shellInvoke } from './probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import type { EnvManifest } from '../environment/manifest-default.ts'
 import {

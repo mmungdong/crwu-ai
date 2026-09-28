@@ -1,8 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { text } from '../../shared/utils/value.ts'
-import { isWindowsPlatform } from '../platform/detect.ts'
-import { quoteArg } from '../environment/manifest.ts'
+import { mkdirCommand } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
 import { agentRegistry } from './spawn.ts'
 import { auditToolsVisible } from './preflight.ts'
@@ -122,11 +121,11 @@ export function auditRootUsability(ctx: Context, state: WorkbenchState, workspac
 /**
  * 目录不存在就建（`workspaceRegistry.create` 要求目录已存在）。
  *
- * Windows 的 `mkdir`（cmd 内建）本身就会建中间目录，加 `-p` 反而不认，所以按平台分两种写法。
+ * 命令由 `platform/shell.ts` 按平台生成：POSIX 是 `mkdir -p`，Windows 是 PowerShell 的
+ * `New-Item -ItemType Directory -Force`（`cmd` 的 `mkdir` 既不认 `-p`，引号解析也是第二套规则）。
  */
 async function ensureDirectory(ctx: Context, path: string, workspace: string, platform: string): Promise<string> {
-  const command = `mkdir ${isWindowsPlatform(platform) ? '' : '-p '}${quoteArg(path)}`
-  const result = await runShell(ctx, command, { timeoutMs: 20_000, workdir: workspace })
+  const result = await runShell(ctx, mkdirCommand(path, platform), { timeoutMs: 20_000, workdir: workspace })
   return result.ok ? '' : (result.error === '' ? `创建目录失败：${path}` : `创建目录失败：${result.error}`)
 }
 

@@ -4,7 +4,7 @@ import { fileSystem, isFile, resolveTarget } from '../fs/paths.ts'
 import { runCrwu, describeFailure } from '../crwu/run.ts'
 import { parseSessionOutput, type H3yunSession } from '../h3yun/session.ts'
 import { readOssCred, type OssCredView } from '../oss/cred.ts'
-import { shellQuote, shellInvoke } from '../environment/probe.ts'
+import { shellInvoke, clipboardCommand, openExternalCommand } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import { defaultCaseRoot } from '../audit/state.ts'
@@ -43,10 +43,7 @@ export interface SimpleResult {
 export async function clipboard(deps: SystemDeps, args: Record<string, unknown>): Promise<SimpleResult> {
   const content = text(args.text)
   if (content === '') return { ok: false, error: '没有内容' }
-  const command = deps.platform.startsWith('darwin')
-    ? 'pbcopy'
-    : (deps.platform.startsWith('win32') ? 'clip' : 'xclip -selection clipboard 2>/dev/null || xsel -b')
-  const run = await runShell(deps.ctx, command, {
+  const run = await runShell(deps.ctx, clipboardCommand(deps.platform), {
     workdir: await deps.workdir(),
     timeoutMs: 20_000,
     escalate: true,
@@ -84,12 +81,7 @@ export async function openPath(deps: SystemDeps, args: Record<string, unknown>):
     return failed(`路径解析失败：${error instanceof Error ? error.message : String(error)}`)
   }
 
-  const command = deps.platform.startsWith('darwin')
-    ? `open ${shellQuote(path, deps.platform)}`
-    : (deps.platform.startsWith('win32')
-      ? `cmd /c start "" ${shellQuote(path, deps.platform)}`
-      : `xdg-open ${shellQuote(path, deps.platform)}`)
-  const run = await runShell(deps.ctx, command, {
+  const run = await runShell(deps.ctx, openExternalCommand(path, deps.platform), {
     workdir: await deps.workdir(),
     timeoutMs: 30_000,
     escalate: true,

@@ -292,14 +292,14 @@ test('fileSystem exposes the optional service without requiring injection', () =
  * 必须有一条对源码形态的断言，把两种会复发的写法钉死：
  *   ① 模板以 `${shellQuote(可执行文件…)}` 开头（命令位置被当成参数位置引用）；
  *   ② `argv.map(… shellQuote …).join(' ')`（整条命令自己拼，绕过了调用运算符）。
- * 唯一允许出现这两种写法的地方是 `shellQuote` / `shellInvoke` 自己的实现。
+ * 唯一允许出现这两种写法的地方是 `shellQuote` / `shellInvoke` 自己的实现（`src/host/platform/shell.ts`）。
  */
 test('命令位置只能走 shellInvoke（Windows 的 PowerShell 调用运算符 `&`）', async () => {
   const { readFile, readdir } = await import('node:fs/promises')
   const { join } = await import('node:path')
   const { fileURLToPath } = await import('node:url')
   const root = fileURLToPath(new URL('src/host', ROOT))
-  const dialectHome = fileURLToPath(new URL('src/host/environment/probe.ts', ROOT))
+  const dialectHome = fileURLToPath(new URL('src/host/platform/shell.ts', ROOT))
 
   const walk = async (dir) => {
     const out = []

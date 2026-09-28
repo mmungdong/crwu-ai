@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
-import { shellInvoke } from '../environment/probe.ts'
+import { shellInvoke } from '../platform/shell.ts'
 import { requireBundledCommand } from '../platform/command.ts'
 import { runShell } from '../shell/run.ts'
 import { DWS_ALLOWED_PREFIXES, DWS_ESCALATION_PREFIXES, DWS_STDOUT_MAX, DWS_TIMEOUT_MS } from './consts.ts'

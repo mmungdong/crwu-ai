@@ -17,6 +17,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { applyShellEffect } from '../helpers/shell-effects.mjs'
+
 const ROOT = new URL('../../', import.meta.url)
 
 const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
@@ -96,9 +98,17 @@ function shellOk(stdout = '', stderr = '', exitCode = 0) {
 function makeShell(handler) {
   const requests = []
   const commands = []
+  /**
+   * 内存 fs 替身；由 `makeDeps` 注入。
+   *
+   * 实现会**回读后置条件**（命令成功 !== 目录真的在），所以替身里的 shell 必须把成功的建/删命令
+   * 真的作用到 fs 上，否则这条替身就是一台「命令成功但文件系统没变」的假机器。
+   */
+  let fs = null
   return {
     requests,
     commands,
+    attachFs(next) { fs = next },
     service: {
       resolve(request) {
         requests.push(request)
@@ -114,6 +124,12 @@ function makeShell(handler) {
         commands.push(spec.command)
         const result = handler(spec)
         if (result === null) throw new Error(`不允许执行的命令：${spec.command}`)
+        if (fs !== null) {
+          applyShellEffect(spec.command, result.exitCode, {
+            addDir: (path) => fs.dirs.add(path),
+            removeFile: (path) => fs.files.delete(path),
+          })
+        }
         return { result: async () => result }
       },
     },
@@ -200,6 +216,7 @@ function makeDeps({ fs, shell, tools, state, form } = {}) {
   const theState = state ?? makeState()
   const theFs = fs ?? makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/knowledge`] })
   const theShell = shell ?? makeShell(() => shellOk('{}'))
+  if (typeof theShell.attachFs === 'function') theShell.attachFs(theFs)
   const registry = tools ?? makeRegistry()
   const ctx = makeCtx({ fs: theFs, shell: theShell.service, tools: registry })
   const theForm = form ?? makeForm()
