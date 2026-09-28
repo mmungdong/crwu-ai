@@ -702,6 +702,9 @@ test('the npm release path is wired: publishable, self-checked before publish', 
   assert.match(pkg.scripts.prepack, /build:lib/)
   assert.match(pkg.scripts['build:lib'], /prepare\.mjs --force/)
   assert.ok(pkg.files.includes('scripts/prepare.mjs'), 'prepare 入口必须随包发布')
+  // prepare 的 tsdown 入口解析器：少了它，员工安装 tarball 时 prepare 会「找不到模块」，
+  // 而本地 link 开发与 `npm test` 都在有 src 的检出里跑，永远看不出来。
+  assert.ok(pkg.files.includes('scripts/lib/cli-entry.mjs'), 'prepare 依赖的 JS 入口解析器必须随包发布')
   assert.equal('compat:dsh' in pkg.scripts, true, 'DSH 兼容矩阵要有可直接跑的门禁命令')
   assert.equal(pkg.scripts['compat:dsh'], 'node scripts/check-dsh-compat.mjs')
 })
