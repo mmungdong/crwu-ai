@@ -7,6 +7,24 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.11 · 2026-09-28
+
+修复「新报告一律发起不了」：审核启动报
+`输入快照交接未完成，已终止本次审核（未创建子代理）：输入快照交接失败（input）：案例目录不存在或不是目录：<工作空间>/<流水号>`。
+
+- 根因：`<工作空间>/<流水号>` 是 Host 自己的约定（`shared/utils/case-dir.ts` 的 `caseDirOf`），
+  但**没有任何代码建过它** —— 案例内的每一个 Tool（bootstrap / `crwu_h3yun_file_get` /
+  `knowledge_materialize` / `oss_publish` / `dingtalk_*`）都先过 `requireCaseDir`（要求目录**已存在**），
+  而 `crwu_audit_case_bootstrap` 又必须在**创建子代理之前**把输入快照落进这个目录。
+  旧形态是审核子代理自己 `mkdir -p`（2026-09-25 的坑速查里记着它把材料下到 `cases/<流水号>` 那次）；
+  改成结构化 Tool 之后那条路没有了，于是只有**已经审过**（目录已存在）的报告能再发起，新报告永远卡在门禁上。
+- 修复：`audit-start` 在交接输入快照**之前**由 Host 自己建出案例目录（`mkdir -p`，复用
+  `tools/case-files.ts` 的 `ensureDirectory`，workdir 是工作空间）；建不出来就在创建子代理之前
+  以 `创建案例目录失败：<路径>（原因）` 终止。目录已存在时是空操作，重审走同一段代码。
+- 测试：`host-audit-lifecycle.test.mjs` 新增两条（trace 断言「先 mkdir → 再 bootstrap → 最后建子代理」
+  的次序；shell 失败时中止且不占用门禁），并把该文件的 shell 替身从「永远失败」改成默认成功、
+  可记录命令（`makeCtx` 的 `trace`）。
+
 ## package · 0.0.10 · 2026-09-27
 
 环境信息页进一步收敛普通员工不需要关注的技术说明：

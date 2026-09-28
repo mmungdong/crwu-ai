@@ -11,6 +11,7 @@ import { agentRegistry, startChild, stopChild } from './spawn.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { ensureAuditRoot } from './root.ts'
 import { auditToolsVisible, bootstrapInputSnapshot, capabilityPreflight } from './preflight.ts'
+import { ensureDirectory } from '../tools/case-files.ts'
 import type { H3yunFormResolver } from '../h3yun/form.ts'
 import type { PythonRuntimeResolver } from '../runtime/python.ts'
 import { caseDirOf } from '../../shared/utils/case-dir.ts'
@@ -186,6 +187,22 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     const objectId = text(args.objectId)
     const caseDir = caseDirOf(state.workspacePath || state.caseRoot, seqNo)
     if (caseDir === '') return failed('缺少案例目录：请先在第 ① 步选定工作空间，并确认任务带有流水号。')
+
+    // 硬门禁四的前置：**案例目录必须先由 Host 建出来**。
+    //
+    // 为什么非有这一步不可：`<工作空间>/<流水号>` 是 Host 自己的约定（`caseDirOf`），
+    // 而写进这个目录的每一个案例内 Tool 都先过 `requireCaseDir`（**要求目录已存在**），
+    // 其中 `crwu_audit_case_bootstrap` 又必须在**创建子代理之前**把输入快照落进去。
+    // 谁都不建这个目录时，新报告就永远卡在「案例目录不存在或不是目录」
+    // （2026-09-28 用户报的真实故障：只有审过的报告能再发起，新报告一律发起不了）。
+    // 旧形态是审核子代理自己 `mkdir -p`；改成结构化 Tool 之后那条路没有了 —— 只能由 Host 补。
+    // 目录已存在时 `mkdir -p` 是空操作，重审走同一段代码。
+    const madeCase = await ensureDirectory(ctx, caseDir, {
+      workdir: state.workspacePath || state.caseRoot,
+      platform: await deps.world.platform(),
+    })
+    if (!madeCase.ok) return failed(`创建案例目录失败：${caseDir}（${madeCase.error}）`)
+
     const form = await deps.form.ensure()
     if (!form.ok) return failed(`无法定位氚云表单（报告审核），已终止本次审核：${form.error}`)
 

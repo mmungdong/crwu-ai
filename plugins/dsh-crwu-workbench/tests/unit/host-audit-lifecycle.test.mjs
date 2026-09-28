@@ -34,8 +34,14 @@ function fakeWorld(patch = {}) {
   }
 }
 
-/** ctx：shell 失败、fs 内存化、sessions/agents/subagents 按需注入。 */
-function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [], patch = {} } = {}) {
+/**
+ * ctx：fs 内存化、sessions/agents/subagents 按需注入。
+ *
+ * `trace` 是**跨面的事件流水**（shell 命令 / Tool 调用 / 子代理创建），用例据此断言
+ * 顺序 —— 「先建案例目录，再交接快照，最后建子代理」这种次序只能靠它证明。
+ * shell 默认成功（`patch.shellFails: true` 才模拟命令跑失败）。
+ */
+function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [], patch = {}, trace = [] } = {}) {
   const directories = new Set(dirs)
   const listDirs = { ...entries }
   /** 工具调用流水（用例据此断言各只调一次、agent scope 传对了）。 */
@@ -45,8 +51,10 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
       if (name === 'shell') {
         return {
           resolve: (request) => request,
-          async execute() {
-            return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub', truncated: false } }) }
+          async execute(request) {
+            trace.push({ kind: 'shell', command: String(request?.command ?? '') })
+            const exitCode = patch.shellFails === true ? 1 : 0
+            return { result: async () => ({ exitCode, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: exitCode === 0 ? '' : 'stub', truncated: false } }) }
           },
         }
       }
@@ -74,6 +82,7 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
           get: () => ({ name: 'crwu_audit_capabilities' }),
           async execute(input) {
             toolCalls.push({ name: input.name, arguments: input.arguments, agent: input.agent })
+            trace.push({ kind: 'tool', name: input.name })
             if (input.name === 'crwu_audit_case_bootstrap') {
               if (patch.bootstrapFails === true) {
                 return { isError: false, value: { ok: false, errorKind: 'cli', error: '取数失败：记录接口没跑起来' } }
@@ -105,7 +114,7 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
     },
   }
   // 保持原契约：`makeCtx()` 返回的就是 ctx（用例直接当 ctx 用），工具调用流水挂在它上面。
-  return Object.assign(ctx, { toolCalls })
+  return Object.assign(ctx, { toolCalls, trace })
 }
 
 function makeState(patch = {}) {
@@ -485,6 +494,50 @@ test('输入快照交接失败时在创建子代理之前终止', async () => {
   assert.match(result.error, /输入快照交接未完成/)
   assert.match(result.error, /取数失败/)
   assert.equal(state.activeChildId, '')
+})
+
+test('启动审核先由 Host 建出案例目录，再交接快照，最后才建子代理', async () => {
+  // 2026-09-28 用户报的真实故障：新报告的 `<工作空间>/<流水号>` 谁都没建过，
+  // 而 `crwu_audit_case_bootstrap` 与全部案例内 Tool 都要过 `requireCaseDir`（要求目录已存在），
+  // 于是新报告一律卡在「案例目录不存在或不是目录」。旧形态是审核子代理自己 `mkdir -p`，
+  // 改成结构化 Tool 之后那条路没了 —— 这一步必须由 Host 在**创建子代理之前**补上。
+  const trace = []
+  const ctx = makeCtx({
+    trace,
+    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_provider, request) { trace.push({ kind: 'start' }); return { id: 'child-1', provider: 'spawn', dispose: async () => {}, request } },
+    },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { delegationDepth: 0 } } : undefined) },
+  })
+  const { deps } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const started = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(started.ok, true)
+
+  const mkdirAt = trace.findIndex((event) => event.kind === 'shell' && event.command.includes('/cases/space/S1'))
+  const bootstrapAt = trace.findIndex((event) => event.kind === 'tool' && event.name === 'crwu_audit_case_bootstrap')
+  const startAt = trace.findIndex((event) => event.kind === 'start')
+  assert.notEqual(mkdirAt, -1, 'Host 必须建案例目录（mkdir -p 工作空间下的流水号目录）')
+  assert.match(trace[mkdirAt].command, /mkdir -p/, '目录已存在时不能报错（重审会再走一次）')
+  assert.notEqual(bootstrapAt, -1, '输入快照交接必须发生')
+  assert.equal(mkdirAt < bootstrapAt, true, '快照要落进案例目录，必须先有目录')
+  assert.equal(bootstrapAt < startAt, true, '交接失败必须在创建子代理之前终止')
+})
+
+test('案例目录建不出来时在创建子代理之前终止', async () => {
+  const ctx = makeCtx({
+    patch: { shellFails: true },
+    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /创建案例目录失败/)
+  assert.match(result.error, /\/cases\/space\/S1/)
+  assert.equal(state.activeChildId, '', '目录都没建出来就不许占用门禁')
 })
 
 test('DSH Python 不可用时在创建子代理之前终止（不许退回系统 python3）', async () => {
