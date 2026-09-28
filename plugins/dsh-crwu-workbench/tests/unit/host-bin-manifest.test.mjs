@@ -229,3 +229,19 @@ test('release strict mode is wired to the require-all judgement', async () => {
   assert.match(source, /发布严格模式要求自带二进制/, '完全没有 bin 在 strict 下必须是失败，不是警告')
   assert.match(source, /strict && problems\.length > 0/, '已经不合格时不再重复打 108MB 的包')
 })
+
+test('release strict mode neutralizes an inherited npm dry_run before the real pack', async () => {
+  // 真实故障：`npm publish --dry-run`（发布手册 §5.3 的必做一步）会把 npm_config_dry_run=true
+  // 设进整棵进程树，并**继承**给严格模式里那次真正的 `npm pack` → 打不出 .tgz →
+  // `npm run pack:assert:strict` 必红，而 CI 单独跑这一步（npm publish --provenance，不是 dry-run）
+  // 永远看不出来。断言钉的是「那次 pack 的子进程环境必须显式关掉它」。
+  //
+  // 只做源码接线断言：真跑一遍要打 108MB 的 tarball，且 CI 的单元测试 job 上 `bin/` 根本没装配，
+  // 行为断言在那边只会变成 skip —— 这与本文件既有的接线断言口径一致。
+  const source = await readFile(join(ROOT, 'scripts', 'assert-pack.mjs'), 'utf8')
+  assert.match(
+    source,
+    /'pack', '--pack-destination', work, '--ignore-scripts'\], \{\s*cwd: ROOT,\s*maxBuffer: 64 \* 1024 \* 1024,\s*env: \{ \.\.\.process\.env, npm_config_dry_run: 'false' \},?\s*\}\)/,
+    '真实 pack 的子进程环境必须显式 npm_config_dry_run=false（否则 npm publish --dry-run 之下打不出 tarball）',
+  )
+})

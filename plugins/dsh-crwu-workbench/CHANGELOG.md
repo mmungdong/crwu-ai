@@ -24,6 +24,11 @@
 - 测试：`host-audit-lifecycle.test.mjs` 新增两条（trace 断言「先 mkdir → 再 bootstrap → 最后建子代理」
   的次序；shell 失败时中止且不占用门禁），并把该文件的 shell 替身从「永远失败」改成默认成功、
   可记录命令（`makeCtx` 的 `trace`）。
+- 顺带修发布清单里的一个既存红项：`npm publish --dry-run` 会把 `npm_config_dry_run=true` 继承给
+  `pack:assert:strict` 内部那次**真正的** `npm pack` → 打不出 tarball → 严格自检报「没有产出 tarball」。
+  现在那次 pack 的子进程环境显式 `npm_config_dry_run: 'false'`（`assert-pack.mjs`，
+  与 `host-package.test.mjs` 同一处理），`host-bin-manifest.test.mjs` 加一条接线断言盯着它。
+  CI 的真实发布（`npm publish --provenance`）本来就不受影响，只是发布手册 §5.3 这一步以前过不去。
 
 ## package · 0.0.10 · 2026-09-27
 

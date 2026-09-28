@@ -205,9 +205,14 @@ if (strict && problems.length > 0) {
   // 真正打一份 tarball 并解包：只有这样才能证明「进包的字节」与清单一致。
   const work = await mkdtemp(`${tmpdir()}/crwu-strict-pack-`)
   try {
+    // `env` 里显式关掉继承来的 dry_run：`npm publish --dry-run`（发布手册 §5.3 的必做一步）
+    // 会把 `npm_config_dry_run=true` 设进整棵进程树，而这个变量会被下面这次**真正的** `npm pack`
+    // 继承 → 一个字节都不产出 → 严格模式必红，且报的是「没有产出 tarball」这种看起来像 npm 坏了的话。
+    // 上面那次清单用的 `--dry-run` 是**显式参数**，不受影响。
     await run(npm.command, [...npm.args, 'pack', '--pack-destination', work, '--ignore-scripts'], {
       cwd: ROOT,
       maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, npm_config_dry_run: 'false' },
     })
     const { readdir, readFile: readTarball } = await import('node:fs/promises')
     const produced = await readdir(work)
