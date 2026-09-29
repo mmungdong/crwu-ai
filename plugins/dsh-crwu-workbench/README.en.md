@@ -227,7 +227,8 @@ version in `CHANGELOG.md`.
 > range and **skips the whole bundle** on any mismatch (recorded in `skippedBundles`) — the symptom is "the plugin
 > is installed but nothing appears", with a clean startup log; the plugin manager also marks the row
 > "incompatible with DSH \<version\>" and disables it. The check reads `peerDependencies`, not `engines.dsh`.
-> Note that `^0.1.7-rc.2` means `>=0.1.7-rc.2 <0.2.0-0` and therefore **excludes** `0.2.0-rc.1`.
+> Note that `^0.1.7-rc.2` means `>=0.1.7-rc.2 <0.2.0-0` and therefore **excludes** `0.2.0-rc.1`;
+> `^0.2.0-rc.1` covers the whole 0.2.0 line, `0.2.0-rc.2` included.
 
 ### Supported platforms
 
@@ -237,7 +238,7 @@ version in `CHANGELOG.md`.
 | macOS / Linux | darwin-arm64 / linux-x64 | POSIX dialect; only `darwin-arm64` ships bundled binaries. |
 | CPU | `win32-x64` / `darwin-arm64` | **`win32-arm64` is explicitly unsupported**: the plugin reports a capability gap and never silently falls back to x64. |
 | Node.js | `^22.19.0 \|\| >=24` | CI covers 22 and 24 on both Linux and Windows. |
-| DSH | `0.1.7-rc.2` line, `0.2.0-rc.1` line | `npm run compat:dsh` installs each line's full peer set into a clean project and calls DSH's own compatibility check; `0.3.x` is out of scope. |
+| DSH | `0.1.7-rc.2` line, `0.2.0` line (package-by-package diffed up to `0.2.0-rc.2`) | `npm run compat:dsh` installs each line's full peer set into a clean project and calls DSH's own compatibility check; `0.3.x` is out of scope. One representative version per line — later rc patches and the stable release on the same line are covered by range semantics. |
 | Local paths | drive-letter absolute paths, spaces, CJK, single quotes | e.g. `C:\Users\Jane\Case's Work`. |
 | UNC | `\\server\share\…` | **Delegated to the underlying DSH `fs`**; when it cannot resolve, the plugin returns a readable "cannot resolve case directory: … (reason)" instead of building a broken path. Not yet accepted end-to-end on a real share. |
 

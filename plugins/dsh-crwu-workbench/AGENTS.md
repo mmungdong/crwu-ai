@@ -1311,8 +1311,15 @@ peer 范围比对，**「Every declared range must match; prereleases participat
   事故正是这一条（DSH 升到 0.2.0-rc.1 后 0.0.13 被整体判为不兼容）。
 - **加线之前先逐包比对 API**：把两条线的 `@deepseek-ai/dsh-*` tarball 都 `npm pack` 下来逐文件 diff，
   确认插件用到的部分没变（0.1.7-rc.2 → 0.2.0-rc.1 的实测结论：7 个 peer 里 5 个字节相同，
-  `dsh-client-ui-sidebar` 只多 1 行埋点、`dsh-client-ui-layout` 只多一段 Windows 标题栏 CSS）。
+  `dsh-client-ui-sidebar` 只多 1 行埋点、`dsh-client-ui-layout` 只多一段 Windows 标题栏 CSS；
+  0.2.0-rc.1 → 0.2.0-rc.2 的实测结论：16 个包**所有 `.d.ts` 零差异**，13 个只有 `package.json`
+  版本号变化，另 3 个只有运行时代码小改动 —— 所以业务代码零改动）。
   比对结论写进 `CHANGELOG.md`。**只改区间不做比对等于赌**。
+- **同一条线内的新 rc 也要进验证矩阵**：区间语义本来就覆盖它，不必改 peer，但**必须**把该线的
+  **代表版本**换进 `scripts/check-dsh-compat.mjs` 的 `RUNTIMES`、`tests/unit/host-package.test.mjs`
+  的 `SUPPORTED_DSH_RUNTIMES`，并让 `devDependencies` 跟着挪到该线 —— 否则 `npm run typecheck`
+  与 `compat:dsh` 验的还是旧版本，「支持」只是一句声明。一条线只留一个代表版本，
+  同线后续 rc 与正式版由区间语义覆盖（0.2 线的代表是 `0.2.0-rc.2`）。
 - 精确版本豁免写在 **profile 自己的 `compatibility.json`**（不在本包），由插件管理器写入；
   「同一个版本只发一次」的纪律意味着**豁免不是升级路径**，改 API 就该发新版本。
 - `devDependencies` 里**必须同时列出全部 7 个 peer**（哪怕并不 import）：npm 的 peer 自动安装会为

@@ -116,7 +116,7 @@ C:\Users\<测试用户>\测试 Work\Case's [1]
 Windows / 架构：   <...>  (x64)
 PowerShell：       <7.x>
 Node：             <22.x|24.x>
-DSH：              <0.1.7-rc.2|0.2.0-rc.1>
+DSH：              <0.1.7-rc.2|0.2.0-rc.2>
 插件 / tarball：   <0.0.14>  sha256=<...>
 
 [1] 安装与加载

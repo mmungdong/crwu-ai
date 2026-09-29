@@ -7,6 +7,41 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.18 · 2026-09-29 · chore · 把 DSH 0.2 线的验证矩阵推进到 `0.2.0-rc.2`
+
+桌面端 DSH 已升到 `0.2.0-rc.2`。**业务代码零改动** —— 逐包比对证明这条线内没有 API 漂移，
+要补的是"声明支持"与"真的验过"之间的差：仓库原先只在矩阵里验到 `0.2.0-rc.1`。
+
+**逐包比对结论**（2026-09-29，把 16 个插件用到的 `@deepseek-ai/dsh-*` 在 rc.1 / rc.2 各
+`npm pack` 一次，解包后逐文件 diff）：
+
+| 差异 | 包 |
+| --- | --- |
+| **所有 `.d.ts` 零差异** | 16/16 |
+| 只有 `package.json`（版本号 + 内部依赖表） | 13 个：`dsh-tools` / `dsh-agent` / `dsh-sandbox-policy` / `dsh-user-approval` / `dsh-skill-filesystem` / `dsh-host-webserver` / `dsh-plugin-manager` / `dsh-shell` / `dsh-session` / `dsh-fs` / `dsh-util-values` / `dsh-client-ui-layout` / `dsh-app-boot` |
+| 另有运行时代码小改动 | `dsh-subagent/lib/typert.host.js` 多一条 `user-question-reply` typert 协议声明；`dsh-client-ui-renderer/lib/client.js` 加一个 `useMemo`；`dsh-client-ui-sidebar/lib/client.js` 去掉品牌按钮外层 `Tooltip` 并换版本号 |
+
+据此：把 `src/` 复制进一个只装了 `0.2.0-rc.2` 完整 peer 集的临时工程跑 `tsc --noEmit`，
+**0 error**；插件用到的 slot / Tool / Shell / Sandbox / Subagent API 一个都没变。
+
+**本版改了什么**
+
+1. **兼容矩阵的代表版本换成 `0.2.0-rc.2`**：`scripts/check-dsh-compat.mjs` 的 `RUNTIMES`
+   与 `tests/unit/host-package.test.mjs` 的 `SUPPORTED_DSH_RUNTIMES`。一条声明线只放一个
+   代表版本（同线后续 rc 与正式版由 `^0.2.0-rc.1` 的区间语义覆盖），`0.3.x` 仍然明确不在范围内。
+2. **`devDependencies` 从 `^0.1.7-rc.2` 挪到 `^0.2.0-rc.2`**（15 个，与全部 peer 一一对应）：
+   默认的 `npm run typecheck` / `npm test` 现在验的就是员工装到的那条线，而不是旧线。
+   `peerDependencies` 与 `engines.dsh` **不动** —— `^0.1.7-rc.2 || ^0.2.0-rc.1` 本来就覆盖 rc.2，
+   0.1.7 线的用户不受影响。
+3. 文档同步：`README.md` / `README.en.md` 的支持矩阵与兼容段落、`AGENTS.md` §8.6
+   （新增「同一条线内的新 rc 也要进验证矩阵」一条）、`docs/development-notes.md` §11
+   （新增一行"升级 DSH 到同线新 rc 怎么办"的完整处置步骤）、`docs/windows-acceptance.md`
+   的 DSH 版本栏。
+
+**验证**：`npm run check`（含 `version:check` / `config:check` / `skills:check` /
+`skills:cli-guard` / `dws:check` / `typecheck` / 全量单测 / `build` / `smoke:built`）、
+`npm run pack:assert`，以及 `npm run compat:dsh`（0.1.7-rc.2 与 0.2.0-rc.2 两条线各真装一遍）。
+
 ## package · 0.0.15 · 2026-09-28
 
 **协议 18：本机访问从「调用方声明提权」改成「具名操作 + 版本化授权收据」，

@@ -999,9 +999,11 @@ test('every declared peer dependency is a real DSH package reference', async () 
  * 改成 `disabled: true`，界面报「与 DSH 不兼容」。`engines.dsh` **不参与**判定。
  *
  * 这里列的是**我们逐包比对过 API 的线**；同一条线内后续的 rc 补丁与正式版由区间语义覆盖，
- * 不必逐个列举（`^0.2.0-rc.1` 已含 `0.2.0`…`0.2.x`）。
+ * 不必逐个列举（`^0.2.0-rc.1` 已含 `0.2.0`…`0.2.x`）。0.2 线的代表版本是 **rc.2**：
+ * 2026-09-29 把 16 个 `@deepseek-ai/dsh-*` 的 rc.1 / rc.2 tarball 逐文件 diff 过，
+ * **所有 `.d.ts` 零差异**，只有 3 个包有运行时代码的小改动（见 `scripts/check-dsh-compat.mjs`）。
  */
-const SUPPORTED_DSH_RUNTIMES = ['0.1.7-rc.2', '0.1.7', '0.2.0-rc.1']
+const SUPPORTED_DSH_RUNTIMES = ['0.1.7-rc.2', '0.1.7', '0.2.0-rc.2']
 
 test('用 DSH **自己**的兼容判定跑一遍：受支持的三条线都不禁用，0.3 线明确禁用', async (t) => {
   // 上面那条测试用的是我们自己重写的 `semver.satisfies` 判据。这一条换成
