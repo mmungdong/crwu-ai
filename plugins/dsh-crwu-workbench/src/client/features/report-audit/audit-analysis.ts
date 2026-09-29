@@ -20,7 +20,7 @@ import { asRecord, textOf } from './audit-summary.ts'
 import { freshnessOf, type AuditContextSnapshot, type FreshnessStatus, type FreshnessVerdict, type VersionEvidence } from './audit-freshness.ts'
 import { formatDateTime, stampValue } from './time.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
-import { fetchRules } from './assistant-context.ts'
+import { fetchRules, materialLines, type DiscussionFacts } from './assistant-context.ts'
 
 /**
  * 一条资料的**远端来源**（用户 §10）。
@@ -356,7 +356,16 @@ function rawKv(label: string, value: string): string {
  * （用户 §19：用 Harness 的附件 / 文件 / 工作空间上下文，不要把完整文件塞进 System Prompt；
  * 会话就建在案例根目录下，模型可以自己按路径回看原文）。
  */
-export function buildAuditContextBlock(context: AuditAnalysisContext): string {
+export function buildAuditContextBlock(
+  context: AuditAnalysisContext,
+  /**
+   * Host 登记的材料白名单（协议 23，来自 `discussion-material-open`）。
+   *
+   * 与报告讨论共用同一段 `fetchRules`（它要求按落盘名下载），所以这一段也必须给 ——
+   * 否则分析会话读到"用下面给出的落盘名"却找不到"下面"。缺省（旧宿主 / 没登记）时整段不写。
+   */
+  materials?: DiscussionFacts['materials'],
+): string {
   const meta = [
     rawKv(zhCN.auditCtxSeqNo, context.seqNo),
     rawKv(zhCN.auditCtxProject, context.project),
@@ -401,6 +410,7 @@ export function buildAuditContextBlock(context: AuditAnalysisContext): string {
     `${zhCN.auditCtxSourceHead}（${String(context.sources.length)}）：`,
     ...sources,
     ...missing,
+    ...materialLines(materials),
     ...fetchRules(context.caseDir),
   ].join('\n')
 }

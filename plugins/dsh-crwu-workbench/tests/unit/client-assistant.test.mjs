@@ -205,6 +205,59 @@ test('已经有讨论会话就复用（不新建）', async () => {
   assert.deepEqual(calls.using, [], '复用时连 retain 都不用做')
 })
 
+test('材料登记（协议 23）：新建与**恢复**都要登记，且用的是 Host 回传的案例目录与附件名', async () => {
+  const material = {
+    ok: true, error: '', caseDir: '/Users/me/中瑞世联工作空间/S-1',
+    attachmentCount: 1,
+    attachments: [{ fileId: 'c8ef13b8-1111', fileName: '广兴建筑v3.zip', localName: '广兴建筑v3__c8ef13b8.zip', fileSize: '20342311', nameTotal: 2 }],
+  }
+  const seen = []
+  const openMaterial = async (sessionId) => { seen.push(sessionId); return material }
+
+  // ① 新建：登记发生在**拿到会话 id 之后**，调用方据此再发 kickoff。
+  const fresh = fakePort()
+  const created = await ensureDiscussion({ port: fresh.port, sessions: [], ...BASE, openMaterial })
+  assert.deepEqual(seen, ['session-new'])
+  assert.equal(created.ok, true)
+  assert.equal(created.material.caseDir, material.caseDir)
+
+  // ② 恢复已有的：**也必须重新登记**（范围只活在 Host 内存里，重启/TTL 之后就失效了）。
+  seen.length = 0
+  const reused = fakePort({ existing: 'session-old' })
+  const sessions = [{ id: 'session-old', displayTitle: discussionTitle(FACTS.seqNo) }]
+  const again = await ensureDiscussion({ port: reused.port, sessions, ...BASE, openMaterial })
+  assert.deepEqual(seen, ['session-old'], '恢复路径也要登记，且登记的是那条已有会话')
+  assert.equal(again.created, false)
+  assert.equal(again.material.caseDir, material.caseDir)
+
+  // ③ 提示词里给出的落盘名来自 Host（不是本地拼的），并且 fileId 成对出现。
+  const brief = discussionBrief({ ...FACTS, caseDir: material.caseDir, materials: material.attachments })
+  assert.equal(brief.includes('广兴建筑v3.zip'), true)
+  assert.equal(brief.includes('材料-源/广兴建筑v3__c8ef13b8.zip'), true)
+  assert.equal(brief.includes('c8ef13b8-1111'), true)
+  assert.equal(brief.includes(zhCN.aiMaterialsHead), true)
+})
+
+test('材料登记失败：**不发 kickoff**（调用方拿到 ok:false），会话保留可重试', async () => {
+  const fail = async () => ({ ok: false, error: '取不到附件清单' })
+  const fresh = fakePort()
+  const result = await ensureDiscussion({ port: fresh.port, sessions: [], ...BASE, openMaterial: fail })
+  assert.equal(result.ok, false)
+  assert.match(result.error, new RegExp(zhCN.aiMaterialFailed))
+  assert.match(result.error, /取不到附件清单/)
+  // 会话**建出来了**（保留）：用户点一下重试即可，不降级去扫本机目录。
+  assert.deepEqual(fresh.calls.create.length, 1)
+  // 抛错的形态也要变成人话，不许把异常抛到界面上。
+  const thrower = fakePort()
+  const thrown = await ensureDiscussion({ port: thrower.port, sessions: [], ...BASE, openMaterial: async () => { throw new Error('boom') } })
+  assert.equal(thrown.ok, false)
+  assert.match(thrown.error, /boom/)
+  // 旧宿主（没有这个能力）→ 行为与以前完全一致：不登记、也不报错。
+  const legacy = fakePort()
+  const old = await ensureDiscussion({ port: legacy.port, sessions: [], ...BASE })
+  assert.deepEqual(old, { ok: true, id: 'session-new', created: true })
+})
+
 test('forceNew（气泡里选「新建对话」）：有旧的也新建，并命名成下一条序号', async () => {
   const { port, calls } = fakePort()
   const sessions = [

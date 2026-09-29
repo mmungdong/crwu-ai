@@ -128,6 +128,7 @@
 | [`docs/development-notes.md`](dsh-crwu-workbench/docs/development-notes.md) | 动交付形态、Cordis 生命周期、Host 操作、协议号、沙箱与授权、测试与发版 | 三条加载契约、生命周期归属表、bundle patch 的 `baseUrl` 陷阱、Host/Client 分开加载与协议号、沙箱与授权口径、「我是谁」的来源、增删 Host 操作的最小清单、本地开发循环与两道人工关卡、测试与证伪纪律、发版与同版本不可覆盖、常见坑速查表 |
 | [`docs/PRD-workbench-sidebar-modules.md`](dsh-crwu-workbench/docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块、面板壳的形态与口径 | 需求与取舍、历次返工记录、真机几何证据与证伪清单 |
 | [`docs/releasing.md`](dsh-crwu-workbench/docs/releasing.md) | 准备或执行 npm 发版 | 认证配置、版本升级、完整门禁、`plugin-v*` tag、Actions、发布后验收、失败恢复与回滚 |
+| [`docs/acceptance-0.0.34.md`](dsh-crwu-workbench/docs/acceptance-0.0.34.md) | 走 0.0.34 / 协议 24 的验收（案例目录创建 + 工作空间归属 + 讨论会话材料范围） | 七条成功标准的判据与对照物、link 形态的部署（build + 完全重启，不需要装 tgz）、三类失败文案、先取哪三样证据、"我没有验证的"清单 |
 | [`docs/desktop-acceptance-0.0.15.md`](dsh-crwu-workbench/docs/desktop-acceptance-0.0.15.md) | 走 0.0.15 的桌面验收 | P/W/M 三条人工矩阵的记录模板、强制各种失败的现场手法、tag 的前置条件与日志脱敏要求 |
 
 三条维护要求：

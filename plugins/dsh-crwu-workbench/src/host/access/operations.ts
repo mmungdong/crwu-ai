@@ -21,8 +21,22 @@ import type { LocalAccessCapability } from '../../shared/access/types.ts'
  * 就先判"不认识这个操作"）。新增能力必须显式登记 —— 默认拒绝。
  */
 
-/** 一次本机访问是谁发起的。它决定"这个来源配不配做这件事"。 */
-export type LocalAccessSource = 'panel' | 'audit-tool' | 'host-background'
+/**
+ * 一次本机访问是谁发起的。它决定"这个来源配不配做这件事"。
+ *
+ * `audit-host` 与 `audit-tool` **刻意分开**（2026-09-30）：两者都是审核链路，但发起位置与
+ * 需要的权限完全不同 ——
+ *
+ * - `audit-host`：**插件自己的审核编排**（`audit-start` → 建案例目录 → 建审核根会话…
+ *   在 Host 的顶层 `ctx` 里跑，没有 Agent 作用域，因此拿不到审核子会话的沙箱边界）。
+ *   它唯一要做的事就是创建 `<已选工作空间>/<流水号>` 这一级案例目录。
+ * - `audit-tool`：**审核子代理调用业务 Tool**（跑在子会话自己的 scope 里，沙箱边界已经是
+ *   本轮案例目录，所以在案例目录内的建/删**不需要**提权）。
+ *
+ * 合并成一个来源会让"谁在什么沙箱下建目录"重新变成一个只能从调用点读出来的事实 ——
+ * 那正是这张表要消灭的东西。
+ */
+export type LocalAccessSource = 'panel' | 'audit-host' | 'audit-tool' | 'host-background'
 
 /**
  * 封闭操作表。
@@ -38,7 +52,6 @@ export type LocalAccessOperation =
   | 'ifind.credential.permission'
   | 'h3yun.session.status'
   | 'h3yun.session.login'
-  | 'h3yun.session.bind'
   | 'h3yun.session.refresh'
   | 'h3yun.forms.read'
   | 'h3yun.records.read'
@@ -62,6 +75,10 @@ export type LocalAccessOperation =
   | 'system.browser.open'
   | 'system.clipboard.write'
   | 'system.case-file.open'
+  | 'system.case-directory.write'
+  | 'system.case-file.read'
+  | 'system.case-file.write'
+  | 'system.workspace-directory.read'
 
 export interface LocalAccessDescriptor {
   /**
@@ -110,7 +127,6 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'ifind.credential.permission',
   'h3yun.session.status',
   'h3yun.session.login',
-  'h3yun.session.bind',
   'h3yun.session.refresh',
   'h3yun.forms.read',
   'h3yun.records.read',
@@ -134,11 +150,17 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'system.browser.open',
   'system.clipboard.write',
   'system.case-file.open',
+  'system.case-directory.write',
+  'system.case-file.read',
+  'system.case-file.write',
+  'system.workspace-directory.read',
 ] as const satisfies readonly LocalAccessOperation[]
 
 const PANEL: readonly LocalAccessSource[] = ['panel']
 const PANEL_OR_BACKGROUND: readonly LocalAccessSource[] = ['panel', 'host-background']
-const EVERY_SOURCE: readonly LocalAccessSource[] = ['panel', 'audit-tool', 'host-background']
+/** 审核链路的两个来源：编排（`audit-host`）与子会话 Tool（`audit-tool`）。 */
+const AUDIT_SOURCES: readonly LocalAccessSource[] = ['audit-host', 'audit-tool']
+const EVERY_SOURCE: readonly LocalAccessSource[] = ['panel', 'audit-host', 'audit-tool', 'host-background']
 
 /**
  * 唯一的描述表。
@@ -174,9 +196,6 @@ export const LOCAL_ACCESS_OPERATIONS = {
     allowedSources: PANEL_OR_BACKGROUND,
   },
   'h3yun.session.login': {
-    capability: 'h3yun-credential-store', transport: 'shell', privileged: true, allowedSources: PANEL,
-  },
-  'h3yun.session.bind': {
     capability: 'h3yun-credential-store', transport: 'shell', privileged: true, allowedSources: PANEL,
   },
   // 主动续期（面板打开时顺手做一次）：同样要读钥匙串并回写，所以是特权 + 只给面板。
@@ -259,6 +278,46 @@ export const LOCAL_ACCESS_OPERATIONS = {
   },
   'system.case-file.open': {
     capability: 'system-integration', transport: 'shell', privileged: true, allowedSources: PANEL,
+  },
+  // 审核启动时创建 `<已选工作空间>/<流水号>` 这一级案例目录（2026-09-30）。
+  //
+  // 为什么必须是**特权**的具名操作：DSH 默认的 `workspace-write` 只允许在**会话 cwd**
+  // （= 员工打开面板的那个目录）之内写，而案例目录在员工选定的工作空间里 —— 那通常在工作区之外。
+  // 于是插件调用 `mkdir` 会拿到 `Operation not permitted`，而**员工自己对这个目录是有写权限的**。
+  // 修法不是把整个会话调成 `danger-full-access`，而是把这一条命令逐次声明清楚：
+  // 路径由 Host 从状态里算出来（模型与客户端都提交不了），工作目录限定在已选工作空间，
+  // 建完再回读后置条件。
+  // 两个来源都能建**同一级**目录，而且路径都由 Host 从状态里算：
+  // - `audit-host`：审核启动（`audit-start`）；
+  // - `panel`：报告讨论的材料准备（`discussion-material-open`）—— 讨论会话要先有案例目录
+  //   才能把材料落进去，而这条 RPC 是面板发起的。
+  'system.case-directory.write': {
+    capability: 'system-integration', transport: 'shell', privileged: true,
+    allowedSources: ['audit-host', 'panel'],
+  },
+  // 案例目录**之内**的建目录 / 删文件（输入快照目录、知识文档目录、清理上一轮同名产物）。
+  //
+  // **不提权**：这些调用来自审核子代理（`audit-tool`），而子会话的沙箱边界本来就是本轮案例
+  // 目录 —— 边界之内不需要 `danger-full-access`，能给最小权限就给最小。
+  'system.case-file.write': {
+    capability: 'system-integration', transport: 'shell', privileged: false,
+    allowedSources: ['audit-tool'],
+  },
+  // 案例目录**之内**的只读探测（目录在不在、目标是不是普通文件）。
+  // 与 `case-file.write` 同一条判据：子会话的边界就是案例目录，读边界之内**不提权**。
+  'system.case-file.read': {
+    capability: 'system-integration', transport: 'shell', privileged: false,
+    allowedSources: ['audit-tool'],
+  },
+  // 工作空间 / 案例目录 / 本地报告文件的**只读**探测（`test -d` / `Test-Path`）。
+  //
+  // 为什么不继续用 `ctx.fs.stat`：那座 fs 沙箱与 shell 沙箱是同一条策略，员工选的工作空间在
+  // 会话 cwd 之外时，插件连"这个目录在不在"都问不出来 —— 而"不存在"与"读不到"在界面上
+  // 是两句完全不同的话（去重选 vs 去查权限）。这里逐次声明提权，把只读探测也放在
+  // 结构化事实上。
+  'system.workspace-directory.read': {
+    capability: 'system-integration', transport: 'shell', privileged: true,
+    allowedSources: [...AUDIT_SOURCES, 'panel'],
   },
 } as const satisfies Record<LocalAccessOperation, LocalAccessDescriptor>
 

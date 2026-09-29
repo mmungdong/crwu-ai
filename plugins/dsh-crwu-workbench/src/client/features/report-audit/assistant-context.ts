@@ -50,6 +50,15 @@ export interface DiscussionFacts {
   fetchedAt: string
   /** 远端来源清单（provider + 远端标识 + 版本/时间 + 指纹），**不含 localPath**。 */
   sources: readonly string[]
+  /**
+   * **Host 登记的材料白名单**（协议 23，来自 `discussion-material-open`）。
+   *
+   * 为什么单列出来，而不是只把附件名混在上面的 `files` 里：`fileId` 与**落盘名**必须成对给出 ——
+   * 模型要拿 `fileId` 调 Tool、拿 `localName` 当 `relativePath`，而报告里可能挂着两个同名附件
+   * （靠落盘名里的标识区分）。缺这一段时模型只能自己拼名字，那正是"同名互相覆盖"的来源。
+   * 空数组 = 本次没有可下载的附件（**不是**"随便下"）。
+   */
+  materials?: readonly { fileId: string; fileName: string; localName: string; fileSize: string; nameTotal: number }[]
 }
 
 /**
@@ -131,9 +140,27 @@ export function discussionBrief(facts: DiscussionFacts): string {
     '',
     `${zhCN.auditCtxSourceHead}（${String(facts.sources.length)}）：`,
     ...sources,
+    // Host 登记的材料白名单：fileId ↔ 落盘名成对给出（同名附件靠落盘名区分）。
+    ...materialLines(facts.materials),
     // 取数规则：唯一允许的目录 + 用哪个 Tool 取 + 每次新建会话都重下 + 禁止扫描本机。
     ...fetchRules(facts.caseDir),
   ].join('\n')
+}
+
+/**
+ * 「本次登记的材料」那一段。**没有登记信息时整段不写**（旧宿主）：宁可不给，
+ * 也不给一个"看着像白名单"的空段 —— 模型会以为一个附件都不许下。
+ */
+export function materialLines(materials: DiscussionFacts['materials']): string[] {
+  if (materials === undefined) return []
+  const rows = materials.length === 0
+    ? [`- ${zhCN.aiMaterialsEmpty}`]
+    : materials.map((item) => {
+      const sameName = item.nameTotal > 1 ? `（${zhCN.aiMaterialSameName} ${String(item.nameTotal)} 件）` : ''
+      const size = item.fileSize.trim() === '' ? '' : ` · ${item.fileSize.trim()} B`
+      return `- ${item.fileName}${sameName} → \`材料-源/${item.localName}\` · fileId \`${item.fileId}\`${size}`
+    })
+  return ['', `${zhCN.aiMaterialsHead}`, ...rows]
 }
 
 /**

@@ -35,6 +35,13 @@ export type PythonRuntimeState = 'ok' | 'capability-gap' | 'missing-package' | '
 
 export interface PythonRuntimeView {
   ok: boolean
+  /**
+   * **没问到答案**（工具不可用 / 调用抛错 / 超时 / 工具报错）——不等于运行时缺失。
+   *
+   * 环境自检没有会话 agent，而 `load_workspace_dependencies` 需要 agent 作用域；
+   * 这一支由环境模型渲染成非阻塞项，真正的拦阻留在 `audit-start`（那条带审核根 agent）。
+   */
+  unresolved: boolean
   state: PythonRuntimeState
   /** 绝对路径；拿不到时为空串。**不回显**给模型的任何提示词都用它。 */
   path: string
@@ -97,8 +104,8 @@ export function distributionsOf(raw: unknown): Record<string, string> {
 export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFacts }): PythonRuntimeResolver {
   let cache: PythonRuntimeView | null = null
 
-  const failed = (state: PythonRuntimeState, error: string): PythonRuntimeView => ({
-    ok: false, state, path: '', versionText: '', distributions: {}, missingPackages: [], error,
+  const failed = (state: PythonRuntimeState, error: string, unresolved = false): PythonRuntimeView => ({
+    ok: false, state, unresolved, path: '', versionText: '', distributions: {}, missingPackages: [], error,
     source: PYTHON_RUNTIME_SOURCE,
   })
 
@@ -109,7 +116,7 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
       const ctx = deps.ctx
       const registry = ctx.get('tools') as ToolsRuntimeLike | undefined
       if (registry === undefined || typeof registry.execute !== 'function') {
-        return failed('capability-gap', 'Host tools 服务不可用，无法解析 DSH 自带 Python')
+        return failed('capability-gap', 'Host tools 服务不可用，无法解析 DSH 自带 Python', true)
       }
 
       // ① 问 DSH：运行时在哪、装了什么。超时与抛错都要如实区分。
@@ -130,14 +137,15 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
         : await Promise.race([pending, timer.timeout(RESOLVE_TIMEOUT_MS).then(() => ({ kind: 'timeout' as const }))])
       if (raced.kind === 'timeout') {
         controller.abort(new Error('解析 DSH Python 超时'))
-        return failed('capability-gap', `解析 DSH 自带 Python 超时（${Math.round(RESOLVE_TIMEOUT_MS / 1000)} 秒内没有返回）`)
+        return failed('capability-gap', `解析 DSH 自带 Python 超时（${Math.round(RESOLVE_TIMEOUT_MS / 1000)} 秒内没有返回）`, true)
       }
       if (raced.kind === 'threw') {
-        return failed('capability-gap', `调用 load_workspace_dependencies 失败：${raced.error instanceof Error ? raced.error.message : String(raced.error)}`)
+        return failed('capability-gap', `调用 load_workspace_dependencies 失败：${raced.error instanceof Error ? raced.error.message : String(raced.error)}`, true)
       }
       if (raced.result.isError === true) {
         const info = raced.result.error ?? {}
-        return failed('capability-gap', `load_workspace_dependencies 报错（${text(info.code) || text(info.name) || 'unknown'}）：${text(info.message)}`)
+        // 这一支就是员工实测命中的那种：工具需要 agent 作用域，而自检没有 —— **没问到**，不是缺失。
+        return failed('capability-gap', `load_workspace_dependencies 报错（${text(info.code) || text(info.name) || 'unknown'}）：${text(info.message)}`, true)
       }
       const value = asRecord(raced.result.value)
       const python = text(value.python).trim()
@@ -173,6 +181,7 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
       const missingPackages = REQUIRED_PYTHON_PACKAGES.filter((name) => text(distributions[name]) === '')
       const view: PythonRuntimeView = {
         ok: missingPackages.length === 0,
+        unresolved: false,
         state: missingPackages.length === 0 ? 'ok' : 'missing-package',
         path: python,
         versionText,

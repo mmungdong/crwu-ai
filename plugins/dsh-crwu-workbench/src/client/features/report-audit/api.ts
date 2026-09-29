@@ -143,6 +143,27 @@ export interface ReportFilesResult {
   truncated: boolean
 }
 
+/**
+ * `discussion-material-open` 的应答（协议 23）。
+ *
+ * 客户端只提交 `sessionId` / `seqNo` / `objectId`；`caseDir` 与白名单都由 **Host** 算出来
+ * 并回传 —— 界面把它们原样写进 kickoff 提示词，不自己拼路径、也不自己猜附件名。
+ */
+export interface DiscussionMaterialResult {
+  ok: boolean
+  error: string
+  errorKind?: string
+  sessionId?: string
+  seqNo?: string
+  objectId?: string
+  /** Host 算出的案例目录（讨论会话唯一允许读写的本机路径）。 */
+  caseDir?: string
+  /** 白名单到期时刻（毫秒）：界面据此提示"重新登记"。 */
+  expiresAt?: number
+  attachmentCount?: number
+  attachments?: Array<{ fileId: string; fileName: string; localName: string; fileSize: string; nameTotal: number }>
+}
+
 export interface OssResultResult {
   ok: boolean
   error: string
@@ -191,25 +212,6 @@ export interface SimpleResult {
  * 更新那四个方法来自 `features/update/api.ts`（`UpdateApi`）——门面在这里**组合**，
  * 操作名只有一份（`UPDATE_METHOD_OPERATION`），不在这里再手写字符串。
  */
-/**
- * 钉钉登录的一份快照（协议 21）。
- *
- * `url` / `userCode` 是**尽力解析**的结果（`dws` 只保证人类可读输出），
- * `tail` 是 CLI 原文 —— 界面两个都给，解析不出来也不影响流程。
- */
-export interface DwsLoginSnapshotView {
-  phase: 'running' | 'ok' | 'failed' | 'timeout'
-  ok: boolean
-  device: boolean
-  url: string
-  userCode: string
-  tail: string
-  error: string
-  timedOut: boolean
-  sandboxBlocked: boolean
-  advice: string
-}
-
 export interface WorkbenchApi extends UpdateApi {
   boot: () => Promise<BootResult>
   /** `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存。 */
@@ -220,6 +222,13 @@ export interface WorkbenchApi extends UpdateApi {
   auditStop: (args?: { childId?: string }) => Promise<StopResult>
   /** 一份报告的全部相关文件（只列举、不下载）：面板一打开就查，见 AssistantPanel。 */
   reportFiles: (args: { seqNo: string; objectId?: string }) => Promise<ReportFilesResult>
+  /**
+   * 报告讨论会话的**受限材料登记**（协议 23）。
+   *
+   * 新建**或**恢复一条讨论会话之后、发 kickoff 提示词之前调；Host 会重新从氚云取一次附件清单，
+   * 把这一批 `fileId` 记进内存白名单。失败时**不登记**（讨论会话保持原样，也不发 kickoff）。
+   */
+  discussionMaterialOpen: (args: { sessionId: string; seqNo: string; objectId: string }) => Promise<DiscussionMaterialResult>
   ossIndex: (args?: { seqNo?: string }) => Promise<OssIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
   ossLink: (args: { key: string }) => Promise<OssLinkResult>
@@ -268,25 +277,13 @@ export interface WorkbenchApi extends UpdateApi {
    * 是一句人话加下一步动作。客户端**不许**自己按错误文本去猜沙箱问题 —— 那会与 Host 的判据漂移。
    */
   relogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean; advice?: string }>
-  dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean; advice?: string }>
   /**
-   * 绑定氚云网页会话（协议 20）：**内置浏览器扫码链路的唯一凭据出口**。
+   * 钉钉登录（`dws auth login`，CLI 自己拉起**系统浏览器**）。
    *
-   * 客户端在面板内嵌的 lease 浏览器里读到 `h3_token` 之后**立刻**调它；Host 经标准输入把它
-   * 交给 `crwu h3yun session bind --token-stdin`，落到 OS 凭据存储。令牌不落盘、不回显、
-   * 不进日志；失败只回 CLI 的一句话（见 Host 侧 `bindH3yunSession`）。
+   * ⚠️ 没有 `device` 入参、也没有 start/status 两阶段（2026-09-30 下掉）：DSH 不提供设备码登录，
+   * 也不轮询登录进度。需要设备码的用户在本机终端跑 `dws auth login --device`。
    */
-  h3yunSessionBind: (args: { token: string }) => Promise<SimpleResult & { session: { userId: string; expiresAt: string; expiresIn: string } | null }>
-  /**
-   * 钉钉登录（协议 21）：起一次登录并拿第一份快照。
-   *
-   * `dws auth login` 要等人扫码/授权，5 分钟才结束 —— 旧接口只能同步等它，URL 到界面时
-   * 用户早已不在等。所以拆成 start/status：这里立刻回来；`url` / `userCode` 是**尽力解析**
-   * 的结果，`tail` 才是 CLI 原文，界面两者都给。
-   */
-  dwsLoginStart: (args?: { device?: boolean }) => Promise<DwsLoginSnapshotView>
-  /** 轮询登录快照；从没起过返回 `null`。 */
-  dwsLoginStatus: () => Promise<DwsLoginSnapshotView | null>
+  dwsLogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean; advice?: string }>
   clipboard: (args: { text: string }) => Promise<SimpleResult>
   openPath: (args: { path: string }) => Promise<SimpleResult & { path: string }>
   crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number }) => Promise<Record<string, unknown>>
@@ -367,6 +364,7 @@ export const workbenchApi: WorkbenchApi = {
   auditStart: (args) => call('audit-start', args),
   auditStop: (args) => call('audit-stop', args),
   reportFiles: (args) => call('report-files', args),
+  discussionMaterialOpen: (args) => call('discussion-material-open', args),
   ossIndex: (args) => call('oss-index', args ?? {}),
   ossResult: (args) => call('oss-result', args),
   ossLink: (args) => call('oss-link', args),
@@ -383,10 +381,7 @@ export const workbenchApi: WorkbenchApi = {
   dwsLocalDoctor: () => call('dws-local-doctor'),
   dwsLocalPermissionRepair: (args) => call('dws-local-permission-repair', args),
   relogin: () => call('relogin'),
-  dwsLogin: (args) => call('dws-login', args),
-  h3yunSessionBind: (args) => call('browser-session-bind', args),
-  dwsLoginStart: (args) => call('dws-login-start', args),
-  dwsLoginStatus: () => call('dws-login-status'),
+  dwsLogin: () => call('dws-login'),
   clipboard: (args) => call('clipboard', args),
   openPath: (args) => call('open-path', args),
   crwu: (args) => call('crwu', args),
@@ -412,6 +407,7 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   auditStart: 'audit-start',
   auditStop: 'audit-stop',
   reportFiles: 'report-files',
+  discussionMaterialOpen: 'discussion-material-open',
   ossIndex: 'oss-index',
   ossResult: 'oss-result',
   ossLink: 'oss-link',
@@ -429,9 +425,6 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   dwsLocalPermissionRepair: 'dws-local-permission-repair',
   relogin: 'relogin',
   dwsLogin: 'dws-login',
-  h3yunSessionBind: 'browser-session-bind',
-  dwsLoginStart: 'dws-login-start',
-  dwsLoginStatus: 'dws-login-status',
   clipboard: 'clipboard',
   openPath: 'open-path',
   crwu: 'crwu',

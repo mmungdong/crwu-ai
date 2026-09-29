@@ -45,10 +45,14 @@ function makeCtx(options = {}) {
   const attached = []
   const presetResolves = []
   const presetMounts = []
+  /** 每一次 shell 调用都记下来：口径要求「插件不建工作空间目录」，判据就是这里为空。 */
+  const shellRuns = []
   const dirs = new Set(options.dirs ?? ['/cases/space'])
+  /** 「存在但不是目录」的路径（工作空间选成了一个文件）：`fs.stat` 回 `type: 'file'`。 */
+  const files = new Set(options.files ?? [])
   const policyServices = auditPolicyServices({ ...(options.preset === undefined ? {} : { preset: options.preset }) })
   const liveAgents = new Map(Object.entries(options.liveAgents ?? {
-    'parent-1': makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), {
+    'parent-1': makeAuditAgent(makeAuditSession({ cwd: '/cases/space' }), {
       id: 'parent-1',
       followup(message) { probes.push(message) },
       async whenIdle() {},
@@ -56,9 +60,9 @@ function makeCtx(options = {}) {
   }))
   // 会话头是**可变**的：真实 DSH 里 `agents.create` 发布会话之后 `sessions.get` 立刻查得到，
   // 改名（sessionTitle.rename 要求会话活着）就靠这一点。
-  const headers = { 'parent-1': { cwd: '/cases/space/S1' }, ...(options.headers ?? {}) }
+  const headers = { 'parent-1': { cwd: '/cases/space' }, ...(options.headers ?? {}) }
   return {
-    created, renamed, probes, attached, presetResolves, presetMounts,
+    created, renamed, probes, attached, presetResolves, presetMounts, shellRuns,
     get(name) {
       if (name === 'agents') {
         return {
@@ -102,7 +106,21 @@ function makeCtx(options = {}) {
       }
       if (name === 'workspaceRegistry') {
         const entity = {
-          id: 'w1', path: '/cases/space', async attachSession(sessionId) { attached.push(sessionId) },
+          id: 'w1',
+          path: '/cases/space',
+          /**
+           * ⚠️ **照 DSH 的判据来**（`@deepseek-ai/dsh-workspace` 的 `attachSession`）：
+           * `if (cwd !== this.record.path) throw …` —— 会话的 cwd 必须**逐字等于**工作空间路径。
+           * 替身不加这一条，2026-09-30 那个 bug（根建在案例目录 → 挂不上 → 只能落「未分组」）
+           * 在单测里就永远看不见：`attached` 照样有记录、用例全绿。
+           */
+          async attachSession(sessionId) {
+            const cwd = headers[sessionId]?.cwd ?? ''
+            if (cwd !== this.path) {
+              throw new Error(`cannot attach session '${sessionId}' to workspace '${this.path}': its cwd resolves to '${cwd}'`)
+            }
+            attached.push(sessionId)
+          },
         }
         return {
           async resolveByPath(path) {
@@ -122,7 +140,8 @@ function makeCtx(options = {}) {
         })
         return {
           resolve: (request) => request,
-          async execute() {
+          async execute(request) {
+            shellRuns.push(request)
             return { result: async () => (options.mkdirFails === true ? result(1, 'sandbox unavailable') : result(0, '')) }
           },
         }
@@ -131,7 +150,10 @@ function makeCtx(options = {}) {
         return {
           async resolve(path) { return { targetKey: path, displayPath: path } },
           async stat(target) {
-            return dirs.has(String(target.targetKey).replace(/[\\/]+$/, '')) ? { type: 'directory' } : undefined
+            const key = String(target.targetKey).replace(/[\\/]+$/, '')
+            if (dirs.has(key)) return { type: 'directory' }
+            if (files.has(key)) return { type: 'file' }
+            return undefined
           },
           async readText() { return '{}' },
           async writeText() { return { operation: 'update', version: 'v' } },
@@ -196,7 +218,7 @@ test('probeMessage is a plain user message carrying the probe instruction', () =
 
 /** 插件选定的工作空间。 */
 const WS = '/cases/space'
-/** 本轮的案例目录（协议 19 起：审核根的 cwd 与沙箱边界都是它）。 */
+/** 本轮的案例目录（协议 24 起：它是**案例 scope** 的锚，不再是会话 cwd/沙箱边界）。 */
 const CASE = `${WS}/S1`
 /** 一条 scope 完整的根记录（新形态）。 */
 const rootOf = (patch = {}) => ({
@@ -214,23 +236,24 @@ test('auditRootUsability：没有根 / 工作空间级旧根 / 别的案例的�
   const foreign = makeState({ auditRoot: rootOf({ casePath: `${WS}/S2` }) })
   assert.match(auditRootUsability(makeCtx(), foreign, CASE).reason, /另一个案例目录/)
 
-  // 复用判据的锚是**案例目录**，不是工作空间：同一个案例目录的根仍然可用
-  //（工作空间换了 → `<工作空间>/<流水号>` 也变了 → 那时 casePath 不同，走上面那条）。
+  // **案例身份**的锚是案例目录：同一个案例目录的根仍然可用（`casePath` 变了才走上面那条）。
+  // 记录里的 `workspacePath` 只是展示字段 —— **边界取自当前 state 的工作空间**（见 `auditBoundaryOf`），
+  // 所以这一条仍然可用；换了工作空间时 `casePath` 必然一起变，由上面那条拦住。
   const otherWorkspace = makeState({ auditRoot: rootOf({ workspacePath: '/cases/other' }) })
   assert.equal(auditRootUsability(makeCtx(), otherWorkspace, CASE).ok, true,
-    '工作空间字段只用于侧栏分组与展示；安全边界是案例目录')
+    '展示字段不影响可用性；边界与案例身份分别由 state 工作空间与记录 casePath 决定')
 
   const dead = makeState({ auditRoot: rootOf({ sessionId: 'gone' }) })
   assert.match(auditRootUsability(makeCtx(), dead, CASE).reason, /不在运行中/)
 
   const asSubagent = makeState({ auditRoot: rootOf() })
-  const subCtx = makeCtx({ headers: { 'parent-1': { cwd: CASE, origin: 'subagent' } } })
+  const subCtx = makeCtx({ headers: { 'parent-1': { cwd: WS, origin: 'subagent' } } })
   assert.match(auditRootUsability(subCtx, asSubagent, CASE).reason, /本身是子代理/)
 
-  // cwd 还是工作空间 → 子会话会继承到工作空间，同样不可用。
+  // cwd 不是已选工作空间（这里是案例目录）→ 挂不到工作空间下、边界也不对，不可用。
   const wrongCwd = makeState({ auditRoot: rootOf() })
-  const cwdCtx = makeCtx({ headers: { 'parent-1': { cwd: WS } } })
-  assert.match(auditRootUsability(cwdCtx, wrongCwd, CASE).reason, /不是本轮的案例目录/)
+  const cwdCtx = makeCtx({ headers: { 'parent-1': { cwd: CASE } } })
+  assert.match(auditRootUsability(cwdCtx, wrongCwd, CASE).reason, /不是已选工作空间/)
 })
 
 test('C-02 · 带着不受限 permission preset 的审核根**不可复用**（策略也是可用性的一部分）', () => {
@@ -245,7 +268,7 @@ test('C-02 · 带着不受限 permission preset 的审核根**不可复用**（�
   }
 })
 
-test('auditRootUsability 接受"cwd 就是本轮案例目录"的活根', () => {
+test('auditRootUsability 接受"cwd 就是已选工作空间"的活根（协议 24）', () => {
   const state = makeState({ auditRoot: rootOf({ title: 'x' }) })
   assert.deepEqual(auditRootUsability(makeCtx(), state, CASE), { ok: true, reason: '' })
 })
@@ -274,12 +297,12 @@ test('ensureAuditRoot 不复用**别的案例**的根，也不复用工作空间
     assert.equal(result.ok, true, `${label}：${result.error}`)
     assert.equal(result.created, true, `${label} 必须新建一个根`)
     assert.equal(ctx.created.length, 1, label)
-    assert.equal(ctx.created[0].meta.cwd, CASE, `${label}：新根的 cwd 必须是本轮案例目录`)
+    assert.equal(ctx.created[0].meta.cwd, WS, `${label}：新根的 cwd 必须是**已选工作空间**（协议 24）`)
     assert.equal(state.auditRoot.casePath, CASE, `${label}：钩子要记的是本轮案例目录`)
   }
 })
 
-test('ensureAuditRoot creates a top-level session whose cwd and boundary are the case dir', async () => {
+test('ensureAuditRoot 建的顶层会话：cwd = 已选工作空间（协议 24，会话才挂得上工作空间）', async () => {
   const ctx = makeCtx()
   const state = makeState()
   const result = await ensureAuditRoot({ ctx, state, world: fakeWorld(), access: makeTestAccess(ctx).access }, { casePath: CASE })
@@ -288,9 +311,10 @@ test('ensureAuditRoot creates a top-level session whose cwd and boundary are the
 
   assert.equal(ctx.created.length, 1)
   const request = ctx.created[0]
-  // 这就是「挂到我的工作空间下面」的全部含义：**cwd 是本轮案例目录**（不是整个工作空间），
-  // 而且**不是**子代理；侧栏分组仍靠 `attachSession`（下面断言）。
-  assert.equal(request.meta.cwd, CASE, '根的 cwd 必须是本轮的案例目录')
+  // 这就是「挂到我的工作空间下面」的全部含义：**cwd = 已选工作空间**
+  //（DSH 的沙箱边界就是会话 cwd，而 `attachSession` 要求 cwd 逐字等于工作空间路径），
+  // 而且**不是**子代理；侧栏分组靠 `attachSession`（下面断言）。
+  assert.equal(request.meta.cwd, WS, '根的 cwd 必须是**已选工作空间**')
   assert.equal('parentAgent' in request, false, '不带 parentAgent = 顶层会话，不挂在别人下面')
   assert.equal(request.meta.agentPreset, 'default-preset', '没指定就跟部署默认 preset')
   assert.equal(request.agentOptions.model, 'deepseek-flash')
@@ -302,9 +326,10 @@ test('ensureAuditRoot creates a top-level session whose cwd and boundary are the
   assert.equal(state.auditRoot.sessionId, request.sessionId, '钩子要落到 state 上')
   assert.equal(state.auditRoot.workspacePath, WS, '工作空间仍要记：侧栏分组与展示用它')
   assert.equal(state.auditRoot.casePath, CASE, '案例目录才是复用判据的锚')
-  // 沙箱边界回读必须是案例目录（上面 `policy` 里的断言从策略层再钉一次）。
+  // 沙箱边界回读必须是**已选工作空间**（协议 24：边界 = 会话 cwd = 工作空间路径）。
+  // 案例目录仍是复用判据与案例 scope 的锚（上一行），两件事不要混。
   assert.equal(result.policy.ok, true, result.policy.error)
-  assert.equal(result.policy.workspaceRoot, CASE, '回读的边界必须是本轮案例目录')
+  assert.equal(result.policy.workspaceRoot, WS, '回读的边界必须是已选工作空间')
 })
 
 test('ensureAuditRoot follows the preset of the session you are working in', async () => {
@@ -363,20 +388,66 @@ test('ensureAuditRoot keeps the hook clean when the preflight fails', async () =
   assert.equal(state.auditRoot.sessionId, '', '预检不过就不落钩子：下次会重新建，而不是复用一个跑不动的根')
 })
 
-test('ensureAuditRoot creates the directory and registers the workspace when missing', async () => {
-  const ctx = makeCtx({ noWorkspace: true, dirs: [] })
+test('ensureAuditRoot registers an existing directory as the workspace without creating anything', async () => {
+  const ctx = makeCtx({ noWorkspace: true, dirs: ['/cases/space'] })
   const state = makeState()
   const result = await ensureAuditRoot({ ctx, state, world: fakeWorld(), access: makeTestAccess(ctx).access }, { casePath: CASE })
   assert.equal(result.ok, true, result.error)
   assert.equal(result.notes.some((note) => note.includes('登记成工作空间')), true)
+  // 口径：插件只**登记**已有目录，绝不建文件系统目录 —— 一次 shell 都不许跑。
+  assert.deepEqual(ctx.shellRuns, [], '登记已有目录不需要 mkdir，也不该有任何 shell 调用')
 })
 
-test('ensureAuditRoot reports a real failure instead of silently proceeding', async () => {
-  const ctx = makeCtx({ noWorkspace: true, mkdirFails: true })
-  const result = await ensureAuditRoot({ ctx, state: makeState(), world: fakeWorld() }, { casePath: CASE })
+test('ensureAuditRoot refuses to start when the chosen workspace directory is gone', async () => {
+  // 「工作空间不存在 → 直接失败」：以前会 mkdir 补建，那会让写错的路径悄悄变成一个新目录。
+  const ctx = makeCtx({ noWorkspace: true, dirs: [] })
+  const result = await ensureAuditRoot({ ctx, state: makeState(), world: fakeWorld(), access: makeTestAccess(ctx).access }, { casePath: CASE })
   assert.equal(result.ok, false)
-  assert.match(result.error, /创建目录失败/)
-  assert.equal(ctx.created.length, 0, '目录都建不出来，就不要建会话')
+  assert.match(result.error, /工作空间目录不存在/)
+  assert.match(result.error, /重新选择一个已有目录/)
+  assert.equal(ctx.created.length, 0, '工作空间不成立就不要建会话')
+  assert.deepEqual(ctx.shellRuns, [], '不得用 mkdir / New-Item 补建工作空间')
+})
+
+test('ensureAuditRoot refuses to start when the chosen workspace path is a file, not a directory', async () => {
+  // §8-5：路径存在但**不是目录**同样阻塞（不静默当成工作空间、更不建目录）。
+  const ctx = makeCtx({ noWorkspace: true, dirs: [], files: ['/cases/space'] })
+  const result = await ensureAuditRoot({ ctx, state: makeState(), world: fakeWorld(), access: makeTestAccess(ctx).access }, { casePath: CASE })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /工作空间目录不存在/)
+  assert.equal(ctx.created.length, 0)
+  assert.deepEqual(ctx.shellRuns, [])
+})
+
+test('ensureAuditRoot refuses to start when no workspace was chosen at all', async () => {
+  const ctx = makeCtx()
+  const state = makeState()
+  state.workspacePath = ''
+  state.caseRoot = ''
+  const result = await ensureAuditRoot({ ctx, state, world: fakeWorld(), access: makeTestAccess(ctx).access }, { casePath: CASE })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /尚未选定工作空间/)
+  assert.match(result.error, /已有目录/)
+  assert.equal(ctx.created.length, 0)
+  assert.deepEqual(ctx.shellRuns, [])
+})
+
+test('审核根与工作空间解析里**没有**任何建目录的代码（静态判据）', async () => {
+  // §8-8 / §8-10 的静态一半：运行时轨迹证明"这一次没建"，静态判据证明"以后也建不了"。
+  // 允许自动创建的只有 `<工作空间>/<流水号>` 案例目录，而它由 `audit/ops.ts` 用
+  // `tools/case-files.ts` 的 `ensureDirectory` 建 —— 审核根与工作空间解析这两个模块
+  // **不许**出现 mkdir / New-Item / ensureDirectory。
+  const { readFile } = await import('node:fs/promises')
+  for (const file of [
+    'src/host/audit/root.ts',
+    'src/host/workspace/resolve.ts',
+    'src/host/workspace/ops.ts',
+  ]) {
+    const source = await readFile(new URL(file, ROOT), 'utf8')
+    for (const banned of ['mkdirCommand', 'mkdir -p', 'New-Item', 'ensureDirectory']) {
+      assert.equal(source.includes(banned), false, `${file} 不许出现「${banned}」`)
+    }
+  }
 })
 
 test('auditRootView explains the two states the panel shows', () => {

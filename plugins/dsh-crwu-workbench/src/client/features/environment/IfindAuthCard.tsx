@@ -49,15 +49,37 @@ export function ifindStateLabel(state: string): string {
 }
 
 /**
+ * 凭据视图 → 卡片状态词（统一六态：未配置 / 待验证 / 已配置并验证 / 验证失败 / 数据权限不足 / 暂时不可用）。
+ *
+ * 判据顺序刻意如此：
+ * 1. **真的取到过数据**才算「已配置并验证」—— `state === 'authenticated'` 只说明认证过了；
+ * 2. 权益不足与凭据错误必须分开（处置人不同：管理员 vs 员工自己）；
+ * 3. 认证通过但没取到数据 → 「待验证」，**绝不**显示成已验证。
+ */
+export function ifindCredentialLabel(credential: {
+  state: string
+  dataVerified?: boolean | undefined
+  errorKind?: string | undefined
+}): string {
+  if (credential.dataVerified === true) return zhCN.envIfindStateVerified
+  if (credential.errorKind === 'entitlement') return zhCN.envIfindStateEntitlement
+  if (credential.state === 'authenticated') return zhCN.envIfindStateUnverified
+  return ifindStateLabel(credential.state)
+}
+
+/**
  * 状态 → 色调（只有保存或「重新验证」得到的真实取数结论才是绿的）。
  *
- * 「已保存、没验过」与「认证过了但没取到数」都用 `busy`（琥珀）而不是 `bad`：
- * 它们不是故障，是"还没证据" —— 说成红色会让员工以为填错了，而去重填一份本来没问题的 key。
+ * ⚠️ **它是可选数据源（2026-09-30），所以永远不报红**：红 = "必须处理"，
+ * 而外部数据没配/没验过并不拦报告审核。除"真的取到过数据"以外一律用 `busy`（琥珀）：
+ * - 未配置 → 就是"未配置"，不是故障（用户口径：这里直接显示未配置就可以）；
+ * - 已保存没验过 / 认证过但没取到数 → "还没证据"；
+ * - key 无效 / 服务不可达 → 需要看一眼，但也**不拦人**，所以还是琥珀 + 就地说明原因。
+ *
+ * 第二参数保留（调用方仍然传 `dataVerified`）：它才是"能不能用"的判据。
  */
-export function ifindStateTone(state: string, dataVerified = false): 'ok' | 'busy' | 'bad' {
-  if (dataVerified) return 'ok'
-  if (state === 'authenticated' || state === 'unverified') return 'busy'
-  return 'bad'
+export function ifindStateTone(_state: string, dataVerified = false): 'ok' | 'busy' | 'bad' {
+  return dataVerified ? 'ok' : 'busy'
 }
 
 /**
@@ -124,6 +146,7 @@ export function IfindAuthCard(props: IfindAuthCardProps): React.ReactElement {
   }, [credentialKey])
 
   // 已保存时收起输入框（"允许替换"而不是"每次都逼你重填"）。
+  // 「已保存」= 有凭据（长度 > 0）或认证通过：它同时决定"显示能力清单 / 展开输入框"。
   const saved = credential.ok === true || credential.tokenLength > 0
   const showInput = !saved || replacing
   const tone = ifindStateTone(credential.state, credential.dataVerified === true)
@@ -229,9 +252,12 @@ export function IfindAuthCard(props: IfindAuthCardProps): React.ReactElement {
     <div className={C.itemMain}>
       <div className={C.itemHead}>
         <span className={C.itemName}>{zhCN.envIfindCardTitle}</span>
-        <Chip text={ifindStateLabel(credential.state)} tone={tone} />
+        <Chip text={ifindCredentialLabel(credential)} tone={tone} />
       </div>
       <div className={C.itemNote}>{zhCN.envIfindCardHint}</div>
+      {/* 未配置时**只显示「未配置」与填写入口**（用户口径 2026-09-30）：能力清单等已配置后再展开，
+          不在一开始就堆一屏说明。 */}
+      {saved ? <div className={C.itemNote}>{zhCN.envIfindCoverage}</div> : null}
       {/* 从哪里获得 + 怎么填：非程序员要能照着做完（不用去问 Agent）。 */}
       <div className={C.itemNote}>{zhCN.envIfindHowTo}</div>
       {/* 已保存时只给**脱敏摘要**（长度），永不显示 API-Key 本身。 */}

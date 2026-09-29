@@ -90,6 +90,24 @@ export interface AuditRecord {
 }
 
 /** Host 插件实例的进程内状态。 */
+/** 一次审核发起失败的全部可留档事实（脱敏：不含命令原文、不含凭据）。 */
+export interface AuditFailureRecord {
+  /** ISO 时刻。 */
+  at: string
+  /** 失败的一句话（与界面看到的一致）。 */
+  reason: string
+  /** 发起阶段：门禁 / 工作空间 / 案例目录 / 根会话 / 策略 / 预检 / 快照 / 子会话。 */
+  stage: string
+  /** 失败归因（`infrastructure` / `sandbox` / `permission` / `policy` / `capability-gap` …）。 */
+  errorKind: string
+  seqNo: string
+  objectId: string
+  caseDir: string
+  attemptId: string
+  /** 上下文备注（含被降级吞掉的事实，如「没能挂到工作空间」）。 */
+  notes: string[]
+}
+
 export interface WorkbenchState {
   /** 当前有效清单：激活时由内置清单叠加 YAML，env 自检后再补入远程环境信息。 */
   manifest: EnvManifest
@@ -104,6 +122,16 @@ export interface WorkbenchState {
   workspaceId: string
   /** 审核记录是否已从磁盘恢复（每个实例一次）。 */
   registryLoaded: boolean
+  /**
+   * **最近一次审核发起失败的全部信息**（落盘，跨重启还在）。
+   *
+   * 为什么要有它（2026-09-30）：`audit-start` 的失败详情只出现在那次 RPC 的返回里 ——
+   * 界面上是一句话，进程一重启就没了。真机连挂三次，每次都要靠"复现 + 读代码"倒推是哪一步、
+   * 什么归因、沙箱事实是什么。这张记录把那一句话背后**所有结构化事实**留在磁盘上：
+   * 阶段、归因、notes（含"没能挂到工作空间"这类被吞掉的降级）、案例目录、attemptId、时刻。
+   * 成功发起审核时清空。
+   */
+  lastAuditFailure?: AuditFailureRecord
   /** 正在创建中的任务标识；非空即拒绝新的创建请求（防重复点击并发起两条）。 */
   startingKey: string
   /** childId → 活的进程内句柄；绝不进任何 JSON 返回值。 */

@@ -109,7 +109,7 @@ function samePath(a: string, b: string): boolean {
  * 用在「复用一个已有的审核根」时：策略漂移（有人手动切过、或上一版代码没设）必须被拦下，
  * 而不是带着错的边界继续跑。
  */
-export function inspectAuditRootPolicy(ctx: Context, agent: unknown, casePath: string): AuditPolicyView {
+export function inspectAuditRootPolicy(ctx: Context, agent: unknown, boundaryPath: string): AuditPolicyView {
   const session = (agent as { session?: Session } | undefined)?.session
   const fail = (error: string, patch: Partial<AuditPolicyView> = {}): AuditPolicyView => ({
     ok: false, error,
@@ -117,7 +117,7 @@ export function inspectAuditRootPolicy(ctx: Context, agent: unknown, casePath: s
     ...patch,
   })
   if (session === undefined) return fail('审核根会话没有可用的 session（拿不到策略事实）')
-  if (casePath === '') return fail('缺少案例目录：无法确认沙箱边界')
+  if (boundaryPath === '') return fail('缺少已选工作空间：无法确认沙箱边界')
 
   const facts = delegatedPolicyFacts(ctx, session)
   const resolved = resolvedPolicy(ctx, session)
@@ -143,18 +143,20 @@ export function inspectAuditRootPolicy(ctx: Context, agent: unknown, casePath: s
   // ③ 边界必须是**本轮的案例目录**（不是工作空间）：工作空间级边界会让通用 shell / fs
   //    能改同一工作空间里的**其他案例**。判据与 Tool 的 `requireAuditScope` 同一条：
   //    精确相等（Windows 上大小写不敏感）。
-  if (!samePath(resolved.workspaceRoot, casePath)) {
-    return fail(`审核根会话的沙箱边界是 ${resolved.workspaceRoot || '（空）'}，不是本轮的案例目录 ${casePath}`, base)
+  if (!samePath(resolved.workspaceRoot, boundaryPath)) {
+    return fail(`审核根会话的沙箱边界是 ${resolved.workspaceRoot || '（空）'}，不是已选工作空间 ${boundaryPath}`
+      + '（协议 24：DSH 的边界就是会话 cwd，而 cwd 必须等于工作空间路径才挂得上工作空间）', base)
   }
   // ③.5 会话自己的 cwd 也必须是案例目录：子会话继承的是**父会话的 cwd**，
   //     边界对了而 cwd 还是工作空间，通用 fs 的默认落点仍然指向别处（两件事都要对）。
   //
-  //     cwd 是我们在 `agents.create({ meta: { cwd: casePath } })` 里给的，这里是**回读核对**；
+  //     cwd 是我们在 `agents.create({ meta: { cwd: 工作空间 } })` 里给的，这里是**回读核对**；
   //     读不到（某些部署形态的 Session 头不带 cwd）时不假装核对过 —— 边界回读（第 ③ 条）才是硬门禁，
-  //     这一条在能读到的时候必须相符。
+  //     这一条在能读到的时候必须相符。协议 24 起，这一条与第 ③ 条**是同一个值**（边界 = cwd）——
+  //     两条留着的理由不同：一条说"沙箱会拦到哪儿"，一条说"会话挂在哪棵工作空间树下"。
   const cwd = text((session as unknown as { header?: Record<string, unknown> }).header?.cwd)
-  if (cwd !== '' && !samePath(cwd, casePath)) {
-    return fail(`审核根会话的 cwd 是 ${cwd}，不是本轮的案例目录 ${casePath}`, base)
+  if (cwd !== '' && !samePath(cwd, boundaryPath)) {
+    return fail(`审核根会话的 cwd 是 ${cwd}，不是已选工作空间 ${boundaryPath}`, base)
   }
   // ④ 审批策略：无人值守审核必须在 `never` 之下运行 —— 申请不到审批，也不能把员工晾在一个
   //    永远不会有人回答的弹窗上。审批能力没装配时同样算不可用（那意味着策略不由我们决定）。
@@ -176,7 +178,7 @@ export function inspectAuditRootPolicy(ctx: Context, agent: unknown, casePath: s
  * 顺序是硬要求：先写（两条覆盖）→ 再回读（模式 / 边界 / 审批）→ 最后按 DSH 的委派口径
  * 确认「子会话将要继承到什么」。任何一步不对就返回结构化失败，**不创建子代理**。
  */
-export function applyAuditRootPolicy(ctx: Context, agent: unknown, casePath: string): AuditPolicyView {
+export function applyAuditRootPolicy(ctx: Context, agent: unknown, boundaryPath: string): AuditPolicyView {
   const session = (agent as { session?: Session } | undefined)?.session
   if (session === undefined) {
     return {
@@ -184,9 +186,9 @@ export function applyAuditRootPolicy(ctx: Context, agent: unknown, casePath: str
       sandboxMode: '', workspaceRoot: '', approvalPolicy: '', permissionPreset: '',
     }
   }
-  if (casePath === '') {
+  if (boundaryPath === '') {
     return {
-      ok: false, error: '缺少案例目录：没有可用的沙箱边界，拒绝创建审核根',
+      ok: false, error: '缺少已选工作空间：没有可用的沙箱边界，拒绝创建审核根',
       sandboxMode: '', workspaceRoot: '', approvalPolicy: '', permissionPreset: '',
     }
   }
@@ -200,5 +202,5 @@ export function applyAuditRootPolicy(ctx: Context, agent: unknown, casePath: str
       sandboxMode: '', workspaceRoot: '', approvalPolicy: '', permissionPreset: '',
     }
   }
-  return inspectAuditRootPolicy(ctx, agent, casePath)
+  return inspectAuditRootPolicy(ctx, agent, boundaryPath)
 }

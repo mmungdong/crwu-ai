@@ -108,15 +108,6 @@ function makeCtx({ shellLines = {}, shellDown = [], dirs = [], files = {}, infos
   }
 }
 
-/** DSH 自带 Python 就绪时主 agent 那个依赖函数会回的形状。 */
-function healthyPython(patch = {}) {
-  return {
-    ok: true, state: 'ok', path: '/opt/dsh/python/bin/python3', versionText: '3.12.3',
-    distributions: { openpyxl: '3.1.2', 'python-docx': '1.1.2', pandas: '2.2.2' },
-    missingPackages: [], error: '', source: 'DSH 自带（bundled runtime）',
-    ...patch,
-  }
-}
 
 /** 全部就绪：插件包完整、DSH 运行时正常、氚云/钉钉已登录、OSS 可用、iFinD 配好、工作空间选定。 */
 function healthyContext(patch = {}) {
@@ -186,11 +177,6 @@ function depsOf(ctx, patch = {}) {
       access: makeTestAccess(ctx, { state }).access,
       home: patch.home ?? '/Users/x', platform: patch.platform ?? 'darwin-arm64',
       sessionRoot: async () => '/cases/session',
-      // DSH 自带 Python 的解析：主 agent 接线后才会传。缺省给一个就绪的替身；
-      // 显式传 `null` 表示「宿主还没接线」，用来验 capability gap。
-      ...(patch.pythonRuntime === null
-        ? {}
-        : { pythonRuntime: patch.pythonRuntime ?? (async () => healthyPython()) }),
       // 「我是谁」的来源：只有传了才会有 me（见身份那条用例）。
       ...(patch.identity === undefined ? {} : { identity: patch.identity }),
     },
@@ -214,11 +200,11 @@ test('a healthy environment reports allOk with nothing blocked', async () => {
   assert.equal(state.workspacePath, '/cases/space')
   assert.equal(result.workspace.chosen, true)
 
-  // 六块分区各就各位：插件包 / 运行时 / 授权（氚云+钉钉）/ 交付（OSS）/ 外部（iFinD）/ 工作空间。
+  // 分区各就各位：插件包 / 授权（氚云+钉钉）/ 交付（OSS）/ 外部（iFinD）/ 工作空间。
   assert.equal(result.packageIntegrity.ok, true)
   assert.deepEqual(result.packageIntegrity.tools.map((tool) => tool.name), ['crwu', 'dws', 'ossutil'])
-  assert.equal(result.runtime.ok, true)
-  assert.equal(result.runtime.source, 'DSH 自带（bundled runtime）')
+  // DSH 自带运行时**不在**环境自检里（2026-09-29 起）：只在 `audit-start` 解析。
+  assert.equal('runtime' in result, false, '运行时不再进环境结论')
   assert.deepEqual(result.services.map((service) => service.id), ['h3yun', 'dingtalk'])
   assert.equal(result.services[0].state, '正常')
   assert.equal(result.services[1].state, '已登录')
@@ -244,11 +230,13 @@ test('a healthy environment reports allOk with nothing blocked', async () => {
   assert.equal(result.state.capabilities.delivery, true)
   assert.equal(result.state.capabilities.externalData, true)
   assert.equal(result.state.total, result.state.passed, '通过率只统计必需项，必须自洽')
-  assert.equal(result.state.total, 9,
-    '必需项 = 包 / 运行时 / 平台 / 工作空间 / 授权 / 氚云 / 钉钉 / OSS / iFinD（iFinD 自 2026-09-26 起必检）')
+  // 7 项必需项：包 / 平台 / 工作空间 / 授权 / 氚云 / 钉钉 / OSS。
+  // DSH 自带运行时自 2026-09-29 起不再进环境自检；iFinD 自 2026-09-30 起是**可选数据源**。
+  assert.equal(result.state.total, 7,
+    '必需项 = 包 / 平台 / 工作空间 / 授权 / 氚云 / 钉钉 / OSS')
 })
 
-test('iFinD 是必检项：未配置即阻塞，且不是 degraded（2026-09-26 口径）', async () => {
+test('iFinD 是**可选数据源**：未配置只降级、不阻塞，也不关基础能力（2026-09-30 口径）', async () => {
   // 同一套"其它全部健康"的夹具，只把 iFinD 凭据文件拿掉。
   const ctx = healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
@@ -258,31 +246,28 @@ test('iFinD 是必检项：未配置即阻塞，且不是 degraded（2026-09-26 
   const result = await loadEnvironment(deps, {})
 
   assert.equal(result.external.state, 'unconfigured')
-  assert.equal(result.external.required, true, '清单里 iFinD 必须是必需项')
-  assert.equal(result.state.userSetup.ifind.required, true, '事实层必须标记必需')
-  // 阻塞，而且**不是** degraded。
-  assert.notEqual(result.state.status, 'degraded', '未配置 iFinD 不得只降级放行')
-  assert.equal(result.state.status, 'action-required', '员工自己填 API-Key → action-required')
-  assert.equal(result.state.proceed, false, '未通过就不得放行需要环境的页面')
-  assert.equal(result.blocked.length > 0, true, '必须产生阻塞项')
-  // 能力：global / auditCore / externalData 全关（delivery 依赖 auditCore，也一起关）。
-  assert.equal(result.state.capabilities.global, false)
-  assert.equal(result.state.capabilities.auditCore, false, 'iFinD 未通过不得放行报告审核')
-  assert.equal(result.state.capabilities.externalData, false, 'iFinD 未通过即关闭外部数据能力')
-  assert.equal(result.state.capabilities.delivery, false)
-  // 进必需项分母，且通过率与结论自洽。
-  assert.equal(result.state.total, 9, 'iFinD 必须在必需项分母里')
-  assert.equal(result.state.passed < result.state.total, true)
-  // issue：blocking，归属 user，双 scope（global 拦导航 + external-data 关能力）。
+  assert.equal(result.external.required, false, '清单里 iFinD 是可选项')
+  assert.equal(result.state.userSetup.ifind.required, false, '事实层必须标记非必需')
+  // 只降级，**不阻塞**：基础环境照旧可放行。
+  assert.equal(result.state.status, 'degraded', '未配置外部数据源 → degraded（可放行）')
+  assert.equal(result.state.proceed, true, '基础环境已就绪，照常放行')
+  assert.deepEqual(result.blocked, [], '不许产生任何阻塞项')
+  assert.equal(result.state.capabilities.global, true, '不拦全局导航')
+  assert.equal(result.state.capabilities.auditCore, true, '不拦报告审核')
+  assert.equal(result.state.capabilities.delivery, true)
+  assert.equal(result.state.capabilities.externalData, false, '只关掉外部数据能力')
+  // 不进必需项分母：通过率仍然是满的。
+  assert.equal(result.state.total, 7, 'iFinD 不在必需项分母里')
+  assert.equal(result.state.passed, result.state.total)
+  // issue：非阻塞、只挂 external-data 一个 scope、归属仍按原因分派。
   const ifindIssues = result.state.issues.filter((issue) => issue.id.startsWith('ifind'))
   assert.equal(ifindIssues.length >= 1, true)
   for (const issue of ifindIssues) {
-    assert.equal(issue.blocking, true, `${issue.id} 必须是阻塞项`)
-    assert.equal(issue.owner, 'user', '未填写 → 员工自己能修')
+    assert.equal(issue.blocking, false, `${issue.id} 必须是非阻塞项`)
+    assert.equal(issue.owner, 'user', '未配置 → 员工自己能修')
+    assert.equal(issue.scope, 'external-data', '只影响外部数据能力')
     assert.notEqual(issue.action, '')
   }
-  assert.deepEqual(ifindIssues.map((issue) => issue.scope).sort(), ['external-data', 'global'],
-    'global 让统一导航拦回环境页，external-data 让 auditCore 一起关掉')
 })
 
 test('iFinD 三类失败分别派给 user / admin / system', async () => {
@@ -303,21 +288,27 @@ test('iFinD 三类失败分别派给 user / admin / system', async () => {
     const { deps } = depsOf(contextWithIfindVerification(failed), { ifindTransport: makeIfindTransport({ tools: ['t'], call }) })
     const result = await loadEnvironment(deps, {})
     const issue = result.state.issues.find((item) => item.id === 'ifind')
-    assert.equal(issue.blocking, true, call)
+    // 归属仍然按原因分派（界面据此说清"谁来修"），但**都不阻塞**：
+    // 外部数据是可选能力，它的问题不该让基础环境变成"要管理员处理 / 系统故障"。
+    assert.equal(issue.blocking, false, call)
+    assert.equal(issue.scope, 'external-data', call)
     assert.equal(issue.owner, owner, `${call} → ${issue.owner}（${issue.message}）`)
     assert.match(issue.action, action, call)
-    assert.equal(result.state.status, owner === 'admin' ? 'admin-required' : (owner === 'system' ? 'system-blocked' : 'action-required'), call)
+    assert.equal(result.state.status, 'degraded', call)
+    assert.equal(result.state.capabilities.auditCore, true, call)
+    assert.equal(result.state.capabilities.externalData, false, call)
   }
 })
 
-test('iFinD 认证通过但没取到数据：仍然算未通过（不许放行）', async () => {
+test('iFinD 认证通过但没取到数据：算**外部数据未就绪**，但基础环境照常放行', async () => {
   const { deps } = depsOf(contextWithIfindVerification(verificationFrom({ dataVerified: false, errorKind: 'entitlement', error: '权益不足' })), { ifindTransport: makeIfindTransport({ tools: ['t'], call: 'isError' }) })
   const result = await loadEnvironment(deps, {})
   assert.equal(result.external.ok, true, '认证确实是过的')
   assert.equal(result.external.dataVerified, false)
-  assert.equal(result.state.userSetup.ifind.state, 'unverified')
-  assert.equal(result.state.proceed, false, '认证过但取不到数 = 未通过')
-  assert.equal(result.state.capabilities.auditCore, false)
+  assert.equal(result.state.userSetup.ifind.state, 'unverified', '认证过但取不到数 → 待验证')
+  assert.equal(result.state.proceed, true, '基础环境仍可放行')
+  assert.equal(result.state.capabilities.auditCore, true, '报告审核不受影响')
+  assert.equal(result.state.capabilities.externalData, false, '只关外部数据能力')
 })
 
 test('统一环境模型：必需项缺失是 action-required，且归属与处置对得上', async () => {
@@ -347,29 +338,6 @@ test('统一环境模型：必需项缺失是 action-required，且归属与处�
     assert.notEqual(issue.action, '', `${issue.id} 必须给一个具体动作`)
   }
   assert.equal(result.state.passed < result.state.total, true)
-})
-
-test('统一环境模型：包与运行时故障归 system，页面不派给员工', async () => {
-  const ctx = healthyContext({ packaged: false })
-  const { deps } = depsOf(ctx, {
-    pythonRuntime: async () => healthyPython({ ok: false, state: 'capability-gap', path: '', error: '缺少 bundled runtime' }),
-  })
-  const result = await loadEnvironment(deps, {})
-
-  assert.equal(result.state.status, 'system-blocked')
-  const system = result.state.issues.filter((issue) => issue.blocking && issue.owner === 'system')
-  const ids = system.map((issue) => issue.id)
-  assert.ok(ids.includes('package'), '包不完整必须是 system')
-  assert.ok(ids.includes('runtime'), '运行时不可用必须是 system')
-  // 员工**能看见的那两块**（账号连接 / 交付与外部数据）不得提示安装二进制、装系统 Python、改 PATH。
-  // 技术细节（包内路径、清单、sha256）本来就在"开发者诊断"里，不受这条约束。
-  const employeeVisible = JSON.stringify({
-    setup: result.state.userSetup,
-    issues: result.state.issues.map((issue) => ({ ...issue, owner: issue.owner })),
-  })
-  for (const banned of ['请安装', '装 Python', 'export PATH', 'command -v', 'which ', '下载并安装']) {
-    assert.equal(employeeVisible.includes(banned), false, `员工可见结论里不得出现「${banned}」：${employeeVisible.slice(0, 400)}`)
-  }
 })
 
 test('统一环境模型：平台未识别是 system 事实，不是员工任务', async () => {
@@ -426,31 +394,6 @@ test('统一环境模型：必需 Tool 不可见是 system 故障（audit 范围
   assert.equal(result.state.capabilities.auditCore, false)
 })
 
-test('自检不执行 command -v python3，也不拿 /usr/bin/python3 当就绪依据', async () => {
-  // 替身**故意**让 PATH 与系统 python3 都「可用」：只要实现还去看它们，这条就会翻。
-  const ctx = healthyContext({
-    shellLines: {
-      'command -v': { stdout: '/usr/bin/python3\n' },
-      '/usr/bin/python3 --version': { stdout: 'Python 3.12.0\n' },
-      'h3yun session status': { stdout: JSON.stringify({ data: { expiresAt: '2099-01-01T00:00:00Z' } }) },
-      'dws auth status': { stdout: JSON.stringify({ authenticated: true }) },
-      ' ls ': { stdout: 'ok\n' },
-    },
-  })
-  // 不传 pythonRuntime：宿主还没接线 → 必须是能力缺口，不是「系统没装 python3」。
-  const { deps } = depsOf(ctx, { pythonRuntime: null })
-  const result = await loadEnvironment(deps, {})
-
-  const commands = ctx.specs.map((spec) => spec.command).join('\n')
-  assert.equal(commands.includes('command -v'), false, `不该跑 command -v：${commands}`)
-  assert.equal(commands.includes('python3'), false, `不该跑任何 python3 命令：${commands}`)
-  assert.equal(result.runtime.state, 'capability-gap')
-  assert.equal(result.runtime.ok, false)
-  assert.equal(JSON.stringify(result.runtime).includes('/usr/bin/python3'), false, '系统 python3 不能成为就绪依据')
-  assert.equal(JSON.stringify(result.runtime).includes('未安装'), false, 'capability gap 不能说成「未安装」')
-  assert.ok(result.blocked.some((item) => item.startsWith('DSH 脚本运行时')), '运行时不可用要如实阻塞')
-})
-
 test('不对 dws 执行 version（会在二进制旁落 .dws/ 运行残留，pack:assert 会判成运行残留）', async () => {
   const ctx = healthyContext()
   const { deps } = depsOf(ctx)
@@ -461,57 +404,6 @@ test('不对 dws 执行 version（会在二进制旁落 .dws/ 运行残留，pac
     assert.equal(spec.command.includes('dws version'), false, `不该执行 dws version：${spec.command}`)
     assert.equal(/\bversion\b/.test(spec.command), false, `内置组件一律不问版本：${spec.command}`)
   }
-})
-
-test('DSH Python 缺失 → capability gap，并给出「不需要装系统 Python」的处置', async () => {
-  const ctx = healthyContext()
-  const { deps } = depsOf(ctx, {
-    pythonRuntime: async () => healthyPython({
-      ok: false, state: 'capability-gap', path: '', versionText: '', distributions: {},
-      error: 'DSH 自带 Python 运行时不可用（bundled runtime 缺失）',
-    }),
-  })
-  const result = await loadEnvironment(deps, {})
-
-  assert.equal(result.runtime.ok, false)
-  assert.equal(result.runtime.state, 'capability-gap')
-  assert.match(result.runtime.error, /capability|缺失|不可用/)
-  assert.equal(result.runtime.source, 'DSH 自带（bundled runtime）')
-  assert.equal(result.blocked.filter((item) => item.startsWith('DSH 脚本运行时')).length, 1, '运行时只算一个故障')
-  assert.equal(result.state.issues.filter((item) => item.id === 'runtime').length, 1)
-  assert.equal(result.allOk, false)
-})
-
-test('openpyxl 缺失 → missing-package，点名缺哪个包，且只算一个运行时故障', async () => {
-  const ctx = healthyContext()
-  const { deps } = depsOf(ctx, {
-    pythonRuntime: async () => healthyPython({ ok: false, state: 'missing-package', missingPackages: ['openpyxl'], error: '' }),
-  })
-  const result = await loadEnvironment(deps, {})
-
-  assert.equal(result.runtime.ok, false)
-  assert.equal(result.runtime.state, 'missing-package')
-  assert.deepEqual(result.runtime.missingPackages, ['openpyxl'])
-  assert.match(result.runtime.error, /openpyxl/, 'Host 侧也要把缺的包名说出来')
-  assert.equal(result.blocked.filter((item) => item.startsWith('DSH 脚本运行时')).length, 1)
-})
-
-test('运行时解析抛错时如实报 failed，而不是假装就绪', async () => {
-  const ctx = healthyContext()
-  const { deps } = depsOf(ctx, { pythonRuntime: async () => { throw new Error('boom') } })
-  const result = await loadEnvironment(deps, {})
-  assert.equal(result.runtime.ok, false)
-  assert.equal(result.runtime.state, 'failed')
-  assert.match(result.runtime.error, /boom/)
-})
-
-test('env 的 refresh 参数原样转给运行时解析（由界面「重新自检」传）', async () => {
-  const ctx = healthyContext()
-  const calls = []
-  const { deps } = depsOf(ctx, { pythonRuntime: async (options) => { calls.push(options); return healthyPython() } })
-  await loadEnvironment(deps, { refresh: true })
-  await loadEnvironment(deps, {})
-  assert.deepEqual(calls, [{ refresh: true }, { refresh: false }])
 })
 
 test('插件包不完整只贡献一个阻塞项：三件组件不各占一项', async () => {
@@ -632,7 +524,7 @@ test('a missing packaged ossutil does not block as 「ossutil 未安装」 but a
   assert.equal(result.delivery.oss.ossutilPath, '')
 })
 
-test('a logged-out service is blocked by its label, and so is a missing iFinD key', async () => {
+test('a logged-out service is blocked by its label; a missing iFinD key only degrades', async () => {
   const ctx = healthyContext({
     shellLines: {
       // 氚云没绑定、钉钉没登录
@@ -645,8 +537,13 @@ test('a logged-out service is blocked by its label, and so is a missing iFinD ke
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
   assert.ok(result.blocked.some((item) => item.includes('氚云')))
-  // iFinD 自 2026-09-26 起是必检项：缺失同样进阻塞项（旧口径"缺失不阻塞"已被产品要求覆盖）。
-  assert.equal(result.blocked.some((item) => item.includes('iFinD')), true, 'iFinD 缺失必须进阻塞项')
+  // iFinD 自 2026-09-30 起是**可选数据源**：缺失只降级，绝不进阻塞项。
+  assert.equal(result.blocked.some((item) => item.includes('iFinD')), false, 'iFinD 缺失不许进阻塞项')
+  assert.equal(
+    result.state.issues.filter((item) => item.id.startsWith('ifind')).every((item) => item.blocking === false),
+    true,
+    'iFinD 的问题一律非阻塞（基础必检项的问题才是阻塞项）',
+  )
   assert.equal(result.services[0].state, '未绑定')
   // 钉钉这条命令现在**自己带无沙箱权限**去问（员工零配置），所以它回的 `authenticated:false`
   // 是真答案 → 如实报「未登录」并计入阻塞。谎报只可能出现在「命令没跑起来」那条路径。
@@ -820,7 +717,6 @@ test('A-03 授权前零副作用：不起凭据子进程、不读凭据文件，
 
   // 正控：授权前**该做**的检查照常做完了（不是整页失败）。
   assert.equal(result.packageIntegrity.ok, true)
-  assert.equal(result.runtime.ok, true)
 })
 
 /** 未授权的 ctx（配置文件里没有授权标记）+ 记录它发出的 shell 请求。 */
@@ -933,7 +829,7 @@ test('环境校验只读取已保存的 iFinD 验证结论，普通检查与 ref
   assert.equal(transport.calls.length, 0, '点击重新检查环境也不得主动请求 iFinD')
 })
 
-test('iFinD 取数验证失败时：明确归因，且**不**谎报已认证（现在会阻塞）', async () => {
+test('iFinD 取数验证失败时：明确归因、不谎报已认证，但只降级不阻塞', async () => {
   for (const [call, kind, pattern] of [['isError', 'entitlement', /权益/], ['http401', 'credential', /API-Key/], ['empty', 'infrastructure', /空内容|没有取到/]]) {
     const verification = call === 'isError'
       ? verificationFrom({ dataVerified: false, errorKind: 'entitlement', error: '权益不足' })
@@ -945,13 +841,15 @@ test('iFinD 取数验证失败时：明确归因，且**不**谎报已认证（�
     assert.equal(result.external.dataVerified, false, call)
     assert.equal(result.external.errorKind, kind, `${call} → ${result.external.errorKind}`)
     assert.match(result.external.reason, pattern, call)
-    // 必检项：不通过就阻塞（iFinD 自 2026-09-26 起不再是条件能力）。
-    assert.equal(result.blocked.length > 0, true, call)
-    assert.equal(result.state.proceed, false, call)
-    assert.equal(result.state.capabilities.auditCore, false, call)
+    // 可选数据源：不通过只降级（基础环境与报告审核照常）。
+    assert.equal(result.blocked.includes(''), false)
+    assert.equal(result.state.status, 'degraded', call)
+    assert.equal(result.state.proceed, true, call)
+    assert.equal(result.state.capabilities.auditCore, true, call)
+    assert.equal(result.state.capabilities.externalData, false, call)
     const issue = result.state.issues.find((item) => item.id === 'ifind')
-    assert.equal(issue.blocking, true, call)
-    assert.match(issue.message, /iFinD API-Key 未通过验证/, call)
+    assert.equal(issue.blocking, false, call)
+    assert.match(issue.message, /外部数据核查未就绪/, call)
   }
 })
 
@@ -965,8 +863,8 @@ test('认证通过但没取到数据：状态必须说「未验证」，不能�
   assert.equal(result.external.dataVerified, false)
 })
 
-test('iFinD 是必检项：清单里 required=true（旧口径 required=false 已被覆盖）', async () => {
-  assert.equal(DEFAULT_MANIFEST.ifind.required, true, 'iFinD 必须是必需项')
+test('iFinD 是可选数据源：清单里 required=false，未配置不阻塞整体环境', async () => {
+  assert.equal(DEFAULT_MANIFEST.ifind.required, false, 'iFinD 必须是可选项（2026-09-30 口径）')
   const ctx = healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
     '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
@@ -974,9 +872,11 @@ test('iFinD 是必检项：清单里 required=true（旧口径 required=false �
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
   assert.equal(result.external.ok, false, '缺凭据要如实显示为未配置')
-  assert.equal(result.external.required, true)
-  assert.equal(result.allOk, false, '缺 iFinD 之后环境整体不再健康')
-  assert.equal(result.state.proceed, false)
+  assert.equal(result.external.required, false)
+  assert.equal(result.allOk, true, '缺 iFinD 不阻塞：必需项全过 → allOk 仍为真')
+  assert.equal(result.state.proceed, true)
+  assert.equal(result.state.status, 'degraded', '可选数据源未就绪 → degraded（可放行）')
+  assert.equal(result.state.capabilities.externalData, false)
 })
 
 // ── Host 侧能力门禁（带失效策略的快照 + fail closed）─────────────────────────
@@ -1057,38 +957,45 @@ test('Host 门禁的判据表：audit-start 判 auditCore；停止/释放与修�
   assert.deepEqual(Object.keys(OPERATION_CAPABILITY).sort(), ['audit-start', 'oss-upload'])
 })
 
-test('Host 门禁：iFinD 未通过时 audit-start 被拒（页面绕过也没用）', async () => {
+test('Host 门禁：iFinD 未配置**不再**拒绝 audit-start（外部数据是可选能力）', async () => {
   const { createCapabilityGate, decideCapability, capabilityForOperation } =
     await import(new URL('src/host/environment/gate.ts', ROOT).href)
-  // 真实自检的结论（iFinD 未填 → 阻塞 + external-data scope 关掉 auditCore）。
+  // 真实自检的结论：基础环境全过、只有 iFinD 未配置 → degraded + auditCore 仍为 true。
   const { deps } = depsOf(healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
     '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } }))
   const env = await loadEnvironment(deps, {})
-  assert.equal(env.state.capabilities.auditCore, false)
+  assert.equal(env.state.status, 'degraded')
+  assert.equal(env.state.capabilities.auditCore, true)
+  assert.equal(env.state.capabilities.externalData, false, '只有外部数据能力被关掉')
 
-  const gate = createCapabilityGate(async () => ({
-    ok: true, status: env.state.status, proceed: env.state.proceed,
-    issues: env.state.issues, blocked: env.blocked, checkError: env.state.checkError,
-    state: env.state,
-  }), { ttlMs: 60_000 })
+  const gate = createCapabilityGate(async () => env.state, { ttlMs: 60_000 })
 
   const verdict = await decideCapability(await gate.snapshot(), capabilityForOperation('audit-start'))
   assert.equal(capabilityForOperation('audit-start'), 'auditCore')
-  assert.equal(verdict.allowed, false, 'iFinD 未通过时 Host 门禁必须拒绝 audit-start')
-  assert.match(verdict.reason, /iFinD|环境/)
+  assert.equal(verdict.allowed, true, '外部数据未配置不得拦报告审核')
 })
 
-test('Host 门禁：拿不到凭据时保守拒绝；补齐之后放行', async () => {
+test('Host 门禁：未填 iFinD 也放行；基础必检项缺失时仍然 fail closed', async () => {
   const { decideCapability } = await import(new URL('src/host/environment/gate.ts', ROOT).href)
-  // 未填 iFinD → 拒。
+  // 未填 iFinD（基础环境全过）→ 放行（可选数据源）。
   const missing = depsOf(healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
     '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } }))
-  const blocked = await loadEnvironment(missing.deps, {})
-  assert.equal((await decideCapability({ at: 0, refresh: false, state: blocked.state }, 'auditCore')).allowed, false)
+  const degraded = await loadEnvironment(missing.deps, {})
+  assert.equal((await decideCapability({ at: 0, refresh: false, state: degraded.state }, 'auditCore')).allowed, true)
+  // 工作空间没选（基础必检项）→ 拒。
+  const blocked = decideCapability({
+    at: 0, refresh: false,
+    state: {
+      status: 'action-required', proceed: false,
+      capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
+      blocked: ['未找到工作空间，请手动选择'], issues: [], checkError: '',
+    },
+  }, 'auditCore')
+  assert.equal(blocked.allowed, false)
   // 填好并真的取到数据 → 放行。
   const ready = depsOf(healthyContext())
   const ok = await loadEnvironment(ready.deps, {})

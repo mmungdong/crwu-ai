@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { environmentStateOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
-import { requiredTallyOf, type EnvironmentTally } from '../../../shared/environment/model.ts'
+import { requiredTallyOf, statusProceedable, type EnvironmentTally } from '../../../shared/environment/model.ts'
 
 /**
  * 环境自检的**共享状态**。
@@ -114,9 +114,13 @@ export function envLampOf(snapshot: EnvSnapshot): EnvLampTone {
   if (snapshot.busy) return 'busy'
   // 判据优先走统一环境模型（`state.status`），旧宿主没有 `state` 时才回落到 `allOk` ——
   // 「就绪」必须与门禁（`statusProceedable`）说同一件事，否则灯是绿的而页面进不去。
+  //
+  // ⚠️ `degraded` **也是绿的**（2026-09-30）：它现在唯一的来源是"外部数据源没配置"这类
+  // **非必需项**，而 `degraded` 与 `ready` 一样放行。以前这里只认 `ready`，于是未配置 iFinD
+  // 时侧栏是红点、环境页却写「基础环境已就绪」—— 正是这一层要消灭的自相矛盾。
   const state = snapshot.env.state
   if (state === undefined) return snapshot.env.allOk === true ? 'ok' : 'bad'
-  return state.status === 'ready' ? 'ok' : 'bad'
+  return statusProceedable(state.status) ? 'ok' : 'bad'
 }
 
 /**

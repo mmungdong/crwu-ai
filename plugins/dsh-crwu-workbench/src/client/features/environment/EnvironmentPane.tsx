@@ -3,16 +3,14 @@ import { Badge, Button, Chip, LoadingBar, Meter, Notice, Spinner, StatusDot } fr
 import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
-import { headlineOf, workbenchApi, type DwsLoginSnapshotView, type EnvResult } from '../report-audit/api.ts'
+import { headlineOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
 import type { AccessDiagnosticView, DwsLocalDoctorView, DwsLocalRepairView } from '../../../shared/types.ts'
 import type { SetupItemView } from '../../../shared/environment/model.ts'
 import { WorkspaceCard } from '../workbench/WorkspaceCard.tsx'
 import type { ClientServices } from '../workbench/services.ts'
-import { IfindAuthCard } from './IfindAuthCard.tsx'
-import { H3yunBrowserLogin } from './H3yunBrowserLogin.tsx'
-import { DwsLoginCard } from './DwsLoginCard.tsx'
-import { openUrlWithBuiltinFirst } from './open-url.ts'
 import { DwsLocalCard } from './DwsLocalCard.tsx'
+import { IfindAuthCard } from './IfindAuthCard.tsx'
+import { needsWindowsAdminReminder } from './platform-note.ts'
 import { LocalAccessConsentCard } from './LocalAccessConsentCard.tsx'
 import { consentGranted, consentOf } from './local-access.ts'
 import { OssCredCard } from './OssCredCard.tsx'
@@ -64,24 +62,17 @@ export interface EnvironmentPaneProps {
   checkedAt?: string
   /** 重新检查环境（只刷新本地环境结论，不会主动重跑 iFinD 远程验证）。 */
   onRefresh: () => void
-  onRelogin: () => void
-  onDwsLogin: () => void
   /**
-   * 把内置浏览器里读到的氚云会话令牌交给 Host（协议 20）。
+   * 走**本机 CLI**登录氚云（`crwu h3yun session login`）。
    *
-   * **可选**：没给就不渲染那张卡片（例如别的宿主形态）。令牌在这里只过一次手：
-   * 卡片不做任何本地判断、不落任何存储，Host 的结论才是判据。
+   * 这是**兼容路径**：CLI 自己拉起**系统浏览器**，DSH 不创建浏览器 Tab、不显示二维码、
+   * 不读浏览器 Cookie、也不轮询登录进度（2026-09-30 口径）。凭据由 CLI 写进本机凭据存储，
+   * 面板只负责触发与"重新检查"。
    */
-  onBindH3yunToken?: (token: string) => Promise<{ ok: boolean; error: string }>
-  /** 设备码登录：浏览器打不开 / 远程无头时的退路（`dws auth login --device`）。 */
-  onDwsLoginDevice?: () => void
-  /**
-   * 钉钉登录两阶段（协议 21）。**可选**：没给就不渲染那张卡片（旧宿主 / 别的形态）。
-   * `start` 立刻回快照，`status` 轮询到终态。
-   */
-  onDwsLoginStart?: (args: { device: boolean }) => Promise<DwsLoginSnapshotView>
-  onDwsLoginStatus?: () => Promise<DwsLoginSnapshotView | null>
-  /** 最近一次登录的结果（成功、失败原因、CLI 打印的 URL 或设备码）；空串 = 还没点过。 */
+  onRelogin: () => void
+  /** 走**本机 CLI**登录钉钉（`dws auth login`，系统浏览器 OAuth 回调）。**无设备码入口**。 */
+  onDwsLogin: () => void
+  /** 最近一次登录的结果（成功 / 失败原因）；空串 = 还没点过。 */
   loginMessage?: string
   /** 被门禁拦住时的界面状态：`running` 正在检查、`blocked` 检查没过。 */
   gate?: 'idle' | 'running' | 'blocked'
@@ -90,8 +81,7 @@ export interface EnvironmentPaneProps {
   /**
    * 统一导航层给出的**完整拦截理由**（`module-store` 的 `gateReason`）。
    *
-   * 优先用它：iFinD 未通过时门禁会把话说具体（「进入【报告审核】前，请先完成 iFinD API-Key 验证」），
-   * 页面自己拼一句通用文案会把这层信息丢掉。
+   * 优先用它：被拦的原因可能来自任一基础必检项，页面自己拼一句通用文案会把那层信息丢掉。
    */
   gateReason?: string
   /** 浏览器侧可选服务（目录选择器 / 工作空间注册表 / layout）。 */
@@ -189,7 +179,6 @@ function diagnosticRows(
 ): DiagnosticRow[] {
   const health = env.state?.systemHealth
   const integrity = env.packageIntegrity
-  const runtime = env.runtime
   const root = env.auditRoot
   const session = env.sessionWorkspace
   const buildDetails = [
@@ -224,11 +213,6 @@ function diagnosticRows(
       label: zhCN.envDiagPackages,
       value: `${String(integrity.tools.filter((tool) => tool.ok).length)}/${String(integrity.tools.length)} · ${integrity.ok ? zhCN.envDiagOk : zhCN.envDiagBad}`,
       details: health === undefined || health.packageIntegrity.reason === '' ? [] : [health.packageIntegrity.reason],
-    },
-    {
-      label: zhCN.envDiagRuntime,
-      value: `${runtime.path === '' ? zhCN.envUnset : runtime.path} · ${runtime.versionText} · ${runtime.source}`,
-      details: runtime.missingPackages.length === 0 ? [] : [`${zhCN.envRuntimeMissingPackages}${runtime.missingPackages.join('、')}`],
     },
     { label: zhCN.envDiagPlatform, value: env.platform === '' ? zhCN.envNotResolved : env.platform },
     {
@@ -266,12 +250,6 @@ function diagnosticRows(
         tool.reason === '' ? '' : `${zhCN.envReason}：${tool.reason}`,
       ].filter((item) => item !== ''),
     })),
-    { label: zhCN.envRuntimeExpect, value: runtime.expect },
-    { label: zhCN.envRuntimeRequiredPackages, value: runtime.requiredPackages.join(' / ') },
-    {
-      label: zhCN.envRuntimeDistributions,
-      value: Object.entries(runtime.distributions).map(([name, version]) => `${name} ${version}`).join(' · ') || zhCN.envUnset,
-    },
     {
       label: zhCN.envProbe,
       value: env.delivery.probe.state === '' ? (env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail) : env.delivery.probe.state,
@@ -322,6 +300,16 @@ function toneOfItem(item: SetupItemView): 'ok' | 'busy' | 'bad' {
   return 'bad'
 }
 
+/**
+ * **可选**步骤的状态语气。
+ *
+ * 可选能力（外部数据源）不该报红：红 = "必须处理"。所以除了"真的就绪"，它一律用琥珀
+ * —— 未配置就是"未配置"，不是故障（用户口径 2026-09-30：同花顺这里直接显示未配置就可以）。
+ */
+function toneOfOptionalItem(item: SetupItemView): 'ok' | 'busy' | 'bad' {
+  return item.state === 'ok' || item.state === 'authenticated' ? 'ok' : 'busy'
+}
+
 function itemStateText(item: SetupItemView): string {
   if (item.state === 'ok' || item.state === 'authenticated') return zhCN.envItemOk
   if (item.state === 'unverified') return zhCN.envIfindStateUnverified
@@ -365,7 +353,10 @@ function StatusSummary(props: {
   gateReason?: string | undefined
 }): React.ReactElement {
   const head = headlineOf(props.env)
-  const ok = head.status === 'ready' && head.proceed
+  // 「基础环境已就绪」= 可以放行（`ready` 或 `degraded`）。`degraded` 现在唯一的来源是
+  // **可选的外部数据源**没配置：它不该让顶部显示"还需完成 0 项"这种自相矛盾的话
+  // （顶部文案与侧栏那枚绿灯、与统一门禁必须说同一件事）。
+  const ok = (head.status === 'ready' || head.status === 'degraded') && head.proceed
   // OSS 的探测结果里没有独立时间戳，所以"这次自检的时刻"（store 在应答落地时记的 `checkedAt`）
   // 仍可作为 OSS 事实时间；iFinD 的 checkedAt 则来自最近一次用户主动验证。
   const verifiedAt = lastVerifiedAt(props.env, props.checkedAt ?? '')
@@ -456,13 +447,19 @@ function StepNav(props: {
               {step.state === 'done' ? <CheckIcon size={13} /> : String(step.index)}
             </span>
             <span className={C.stepText}>
-              <span className={C.stepTitle}>{step.title}</span>
+              <span className={C.stepTitle}>
+                {step.title}
+                {/* 基础必检项的**红色星号**：外部数据源（iFinD）是可选能力，刻意**不带** —— 页面才不乱。 */}
+                {step.required ? <span className={C.stepRequired} aria-hidden={true}>{zhCN.envStepRequiredMark}</span> : null}
+              </span>
               <span className={C.stepState}>{step.stateText}</span>
             </span>
           </button>
         </li>
       })}
     </ol>
+    {/* 星号的含义只说一次：必检项必须配好，可选的外部数据源不带星号、也不拦审核。 */}
+    <div className={C.stepLegend} data-crwu-env-step-legend="1">{zhCN.envStepRequiredHint}</div>
   </nav>
 }
 
@@ -477,16 +474,30 @@ function StepPanel(props: {
     <header className={C.stepPanelHead}>
       <div className={C.stepPanelTitle}>
         {`${zhCN.envStepOf}${String(step?.index ?? 1)}${zhCN.envStepOfTail} · ${step?.title ?? ''}`}
+        {step?.required === true
+          ? <span className={C.stepRequired} aria-label={zhCN.envStepRequiredHint}>{zhCN.envStepRequiredMark}</span>
+          : null}
       </div>
       {props.state === undefined
         ? null
-        : <Chip text={itemStateText(props.state)} tone={toneOfItem(props.state)} />}
+        : <Chip
+            text={itemStateText(props.state)}
+            tone={step?.required === false ? toneOfOptionalItem(props.state) : toneOfItem(props.state)}
+          />}
     </header>
     {props.children}
   </section>
 }
 
-/** 账号连接步骤：一次性授权 + 氚云 + 钉钉。 */
+/**
+ * 账号连接步骤：一次性授权 + 氚云 + 钉钉。
+ *
+ * ⚠️ **只读取、检查已有凭据**（2026-09-30 口径）：DSH **不再提供**内置浏览器扫码登录
+ * （协议 20 的浏览器视图 + Cookie 读取已删除），也**不再提供**钉钉设备码登录与登录进度轮询
+ * （协议 21 的两阶段卡片已删除）。留下的两颗按钮走的是**本机 CLI**：
+ * CLI 自己拉起**系统浏览器**完成授权，插件只触发并随后「重新检查」。
+ * 所以文案里不许再出现"内置浏览器""设备码""等待浏览器授权"这类承诺。
+ */
 function AccountsStep(props: EnvironmentPaneProps & {
   env: EnvResult
   authorized: boolean
@@ -520,40 +531,20 @@ function AccountsStep(props: EnvironmentPaneProps & {
         <Button label={zhCN.envLoginH3yun} small disabled={!authorized} onClick={props.onRelogin} />
       </div>}
     />
-    {/* 内置浏览器登录（协议 20）：优先路径 —— 面板里就地起一个宿主的浏览器视图，
-        扫码后插件自己从页面 cookie 读到 h3_token 并交给 CLI。上面那颗按钮是 CLI 自己
-        拉起浏览器的老路径，Windows 上会被机器策略挡住，保留作回退。 */}
-    {props.onBindH3yunToken === undefined
-      ? null
-      : <H3yunBrowserLogin
-          enabled={authorized}
-          onBind={props.onBindH3yunToken}
-          onDone={props.onRefresh}
-        />}
+    <div className={C.muted}>{zhCN.envLoginNoBuiltinBrowser}</div>
     <SetupRow
       id={props.env.services.find((service) => service.id === 'dingtalk')?.label ?? '钉钉认证'}
       item={props.env.state?.userSetup.dingtalk ?? { state: 'unknown', value: '', reason: '', required: true }}
       extra={<div className={C.layerActions}>
         <Button label={zhCN.dwsLogin} small disabled={!authorized} onClick={props.onDwsLogin} />
-        {/* 默认那条会开浏览器等回调；无浏览器（SSH / 无头）时设备码才走得通。
-            ⚠️ 它**不是**"沙箱挡住浏览器"的退路：设备码同样要抢 `~/.dws` 的登录态锁。 */}
-        {props.onDwsLoginDevice === undefined
-          ? null
-          : <Button label={zhCN.dwsLoginDevice} small disabled={!authorized} onClick={props.onDwsLoginDevice} />}
       </div>}
     />
-    {/* 钉钉两阶段登录（协议 21）：起后台 `dws auth login`，把授权 URL / 设备码摆出来，
-        再轮询到终态。上面那两颗是"同步等 5 分钟"的老路径，保留作回退与对照。 */}
-    {props.onDwsLoginStart === undefined || props.onDwsLoginStatus === undefined
-      ? null
-      : <DwsLoginCard
-          enabled={authorized}
-          onStart={props.onDwsLoginStart}
-          onStatus={props.onDwsLoginStatus}
-          onOpenUrl={(url) => { openExternal(props.services, url) }}
-          onCopy={(text) => { void copyToClipboard(text) }}
-          onDone={props.onRefresh}
-        />}
+    <div className={C.muted}>{zhCN.envDwsLoginNoDeviceCode}</div>
+    {/* Windows 专属提醒（非阻塞）：钉钉 CLI（dws）要碰 `<HOME>\.dws` 的登录态与锁文件，
+        进程权限不够时会以"锁被占用 / 拒绝访问"结束，表现却是钉钉登录一直不成功。 */}
+    {needsWindowsAdminReminder(props.env)
+      ? <div data-crwu-env-windows-admin="1"><Notice tone="warn">{zhCN.envWindowsAdminHint}</Notice></div>
+      : null}
     {/* 登录的**前置条件**要说在点之前：这两条命令都要写工作区之外的路径
         （临时浏览器 profile / `~/.dws` 的登录态 / 操作系统凭据存储），
         文件策略不给就一条都走不通 —— 员工不该靠试错去发现这件事。 */}
@@ -659,27 +650,10 @@ function DeveloperDiagnostics(props: {
 }
 
 /**
- * 打开外链：**优先 DSH 内置浏览器**（右侧栏 browser 标签），拿不到才退回系统浏览器。
- *
- * 2026-09-29 用户指出钉钉登录"还是用的外置浏览器" —— 根因就是这里原来直接 `window.open`，
- * 而桌面端会把它转成系统浏览器。判据与降级都收在 `open-url.ts` 里（可单测）。
+ * ⚠️ 这里**没有**「打开外链」的助手了（2026-09-30）：本插件不再优先 / 也不再创建 DSH 内置浏览器
+ * Tab（`open-url.ts` 已删除）。登录由本机 CLI 自己拉起系统浏览器完成，插件这边没有需要在面板里
+ * 打开的 OAuth URL，也没有需要复制的设备码 —— 少一个入口就少一处"DSH 提供内置登录"的错觉。
  */
-function openExternal(services: ClientServices, url: string): void {
-  openUrlWithBuiltinFirst(services, url)
-}
-
-/** 复制文本：优先浏览器剪贴板，失败退回宿主剪贴板 RPC（与诊断区的做法一致）。 */
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText !== undefined) {
-      await navigator.clipboard.writeText(text)
-      return
-    }
-  } catch (error) {
-    void error
-  }
-  await workbenchApi.clipboard({ text })
-}
 
 export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement {
   const { env } = props
@@ -812,6 +786,8 @@ function SetupWorkspace(props: EnvironmentPaneProps & {
         ? <OssCredCard delivery={env.delivery} onSaved={props.onRefresh} />
         : null}
       {active === 'ifind'
+        // 可选外部数据源，排在最后一步：那一步的正文就是卡片本身 ——
+        // 未配置时直接显示「未配置」（用户口径 2026-09-30），不再堆一段口径说明。
         ? <IfindAuthCard credential={env.external} onSaved={props.onRefresh} />
         : null}
       {active === 'workspace'

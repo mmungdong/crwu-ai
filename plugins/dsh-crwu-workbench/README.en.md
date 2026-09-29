@@ -54,19 +54,26 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
    Report Evaluation (marked "in development"), Report Audit, and Environment. Clicking a sub-item
    switches the panel to that module and opens it; the panel itself no longer has a module bar.
 2. If the panel opens on the Environment module, configure it there. The page is a **compact status
-   summary plus a guided configuration workspace** with four steps on the left — **Accounts** (one-time
+   summary plus a guided configuration workspace** with three steps on the left — **Accounts** (one-time
    credential consent, H3Yun sign-in, DingTalk sign-in), **Aliyun OSS** (enter the AccessKey your
-   administrator gave you), **iFinD** (paste your own API-Key) and **Workspace** — and the selected
-   step on the right. It picks the first unfinished step for you and never moves you off a step you
-   chose yourself.
+   administrator gave you) and **Workspace** (pick an **existing** directory; the plugin does not
+   create one) — and the selected step on the right. It picks the first unfinished step for you and
+   never moves you off a step you chose yourself. Below the steps sits the **external-data check**
+   section. Required steps carry a **red asterisk** (* = base configuration, must be completed); the optional
+   iFinD data source is the **last step** and carries **no** asterisk — when nothing is configured that
+   step simply reads "not configured". On Windows the page also reminds you to launch DeepSeek Harness
+   **as administrator**, otherwise the DingTalk CLI cannot read the `\.dws` login state.
+   Accounts are **read and checked, not created here**: the two sign-in buttons run the local CLI,
+   which opens your **system browser**. DSH ships no built-in-browser QR sign-in, no QR code, no
+   device code and no login polling.
    Secrets are typed only on that page: never paste them into a chat and never let an agent fill them
    in for you. **Both credentials are verified with a real external request** — the OSS AccessKey by a
    read-only `ossutil ls` against the configured delivery prefix, the iFinD API-Key by a real
-   `tools/call` data pull. A missing or unverified iFinD API-Key is a **blocking** item (it is a
-   required check since 2026-09-26): protected pages are held back until a real data pull succeeds,
-   and the notice names the iFinD API-Key explicitly. The environment page itself is always reachable,
-   and it no longer carries an "Enter report audit" button — use the left sidebar once the summary says
-   the environment is ready.
+   `tools/call` data pull. iFinD is an **optional** data source (since 2026-09-30): a missing or
+   unverified API-Key only degrades `externalData` — the base environment still reads "ready", report
+   audit is not blocked, and the section says that external-data items will be recorded as "not
+   checked". The environment page itself is always reachable, and it no longer carries an "Enter report
+   audit" button — use the left sidebar once the summary says the environment is ready.
    `crwu` / `dws` / `ossutil` **ship with the plugin** — there is nothing to install, and section
    **② Bundled components** only ever reports "package incomplete / platform unsupported" if one is missing.
    Section **③ DSH script runtime** reports the **DSH-bundled** Python (with its `openpyxl` and other

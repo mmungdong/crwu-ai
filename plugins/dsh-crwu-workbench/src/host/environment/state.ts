@@ -8,7 +8,7 @@ import type {
 } from '../../shared/environment/model.ts'
 import { capabilitiesOf, overallStatusOf, requiredTallyOf } from '../../shared/environment/model.ts'
 import type { PackageIntegrityCheck, ServiceCheck } from './probe.ts'
-import type { RuntimeView, WorkspaceView } from '../../shared/types.ts'
+import type { WorkspaceView } from '../../shared/types.ts'
 import {
   LOCAL_ACCESS_REQUIRED_REASON,
   type LocalAccessConsentView,
@@ -39,8 +39,6 @@ import {
 
 /** 插件包不完整时的**唯一**一条阻塞文案（三件组件不许各占一项）。 */
 export const PACKAGE_BLOCKER = '插件内置组件'
-/** DSH 自带运行时不可用时的**唯一**一条阻塞文案。 */
-export const RUNTIME_BLOCKER = 'DSH 脚本运行时'
 
 /** `systemHealth.toolRegistry` 的事实：必需 Tool 是否对当前 Agent 可见。 */
 export interface ToolRegistryFacts {
@@ -68,8 +66,6 @@ export interface EnvironmentInput {
   h3yun: ServiceCheck
   dingtalk: ServiceCheck
   packageIntegrity: PackageIntegrityCheck
-  runtime: RuntimeView
-  runtimeRequired: boolean
   oss: {
     /** 部署配置里有没有 bucket / endpoint（没有就是管理员还没配好）。 */
     configured: boolean
@@ -148,7 +144,8 @@ function ossItem(input: EnvironmentInput): SetupItemView {
 }
 
 /**
- * iFinD 的五态。**自 2026-09-26 起是必需项**（`required: true`，进必需项分母）。
+ * iFinD 的五态。**自 2026-09-30 起是可选数据源**（`ifind.required === false`，不进必需项分母，
+ * 未配置/未通过都**不阻塞**环境与报告审核）。
  *
  * 只有「真的取到一次数据」才给 `ok`：认证通过但没取到数据一律留 `unverified` +
  * 说明，绝不显示成「已认证」—— 那会让员工以为可以取数，真跑审核时才发现不行。
@@ -190,14 +187,6 @@ function packageItem(integrity: PackageIntegrityCheck): SetupItemView {
     || integrity.note
     || '插件内置组件不可用'
   return item('invalid', integrity.platform, reason)
-}
-
-function runtimeItem(runtime: RuntimeView, required: boolean): SetupItemView {
-  if (runtime.ok === true) return item('ok', runtime.versionText === '' ? 'DSH 自带' : `Python ${runtime.versionText}`, '', required)
-  const reason = runtime.missingPackages.length > 0
-    ? `DSH 自带运行时缺少必需包：${runtime.missingPackages.join('、')}`
-    : (runtime.error || 'DSH 自带脚本运行时不可用')
-  return item('invalid', runtime.path, reason, required)
 }
 
 function platformItem(platform: string): SetupItemView {
@@ -316,12 +305,6 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
     push('package', 'system', true, 'global', '重新安装插件或联系管理员',
       `${PACKAGE_BLOCKER}：${input.packageIntegrity.note || '插件包不完整 / 平台不受支持'}`)
   }
-  if (input.runtimeRequired && input.runtime.ok !== true) {
-    push('runtime', 'system', true, 'global', '联系维护者确认 DSH 运行时',
-      input.runtime.missingPackages.length > 0
-        ? `${RUNTIME_BLOCKER}：DSH 自带运行时缺少必需包 ${input.runtime.missingPackages.join('、')}`
-        : `${RUNTIME_BLOCKER}：DSH 自带脚本运行时不可用（不是系统 Python 的问题，也不由员工安装）`)
-  }
   if (input.platform === '') {
     push('platform', 'system', true, 'global', '联系维护者确认运行平台',
       '运行平台未识别：无法核对随包发布的组件')
@@ -372,11 +355,10 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
       `OSS 交付不可用：${input.oss.probe.detail || input.oss.probe.state || '探测失败'}`)
   }
 
-  // ⑥ 外部数据（iFinD）。**自 2026-09-26 起是必需项**：未通过即阻塞，且必须**指名**归属 ——
-  // 三类原因的处置完全不同，混成一句「iFinD 不可用」会让员工与管理员来回踢皮球：
-  // - 没填 / API-Key 无效或过期 → owner=user（员工自己能修）；
-  // - 账号没有数据权益 → owner=admin（要管理员开通）；
-  // - 网络 / 超时 / 协议 / 上游不可达 → owner=system（员工和管理员都修不了，稍后重试）。
+  // ⑥ 外部数据（iFinD）。**自 2026-09-30 起是可选数据源**：未通过时只记一条**非阻塞** issue，
+  // 只关掉 `capabilities.externalData` —— 基础环境、报告审核都不受影响（`global` / `auditCore` 不动）。
+  // 仍然**指名归属**，因为"怎么修"三类完全不同（未配置 → 员工自己填；无权益 → 管理员开通；
+  // 网络不可达 → 谁都不用改，稍后重试），界面与审核结果里记的「未检查」原因都要用。
   if (granted && (input.ifind.ok !== true || input.ifind.dataVerified !== true)) {
     const kind = input.ifind.errorKind
     const unconfigured = input.ifind.tokenLength === 0
@@ -388,12 +370,12 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
       ? '联系管理员开通同花顺 iFinD 数据权益'
       : (infrastructure
         ? '稍后重新验证（同花顺 iFinD 服务不可达）'
-        : (unconfigured ? '填写你自己的同花顺 iFinD API-Key' : '重新填写同花顺 iFinD API-Key'))
-    const cause = input.ifind.reason || (unconfigured ? '还没有填写同花顺 iFinD API-Key' : '未通过真实取数验证')
-    // scope 双写（global + external-data）：前者让统一导航把它拦回环境页，后者关掉 auditCore ——
-    // 光关外部数据却放行审核是自相矛盾的，审核装配里本来就要取外部数据。
-    push('ifind', owner, true, 'global', action, `同花顺 iFinD API-Key 未通过验证：${cause}`)
-    push('ifind-external', owner, true, 'external-data', action, `同花顺 iFinD 外部数据不可用：${cause}`)
+        : (unconfigured ? '配置外部数据源（同花顺 iFinD API-Key）' : '重新填写同花顺 iFinD API-Key'))
+    const cause = input.ifind.reason || (unconfigured ? '还没有配置外部数据源' : '未通过真实取数验证')
+    // ⚠️ `blocking: false` 是这条的**全部要点**：它让总状态落到 `degraded`（可放行）、
+    // 通过率分母不含它、统一导航也不拦人；只有 `externalData` 能力被关掉。
+    push('ifind', owner, false, 'external-data', action,
+      `外部数据核查未就绪（同花顺 iFinD）：${cause}。不影响进入报告审核，涉及外部数据的项目会标记为「未检查」。`)
   }
   return issues
 }
@@ -413,7 +395,6 @@ export function buildEnvironmentState(input: EnvironmentInput): EnvironmentState
   }
   const systemHealth = {
     packageIntegrity: packageItem(input.packageIntegrity),
-    dshRuntime: runtimeItem(input.runtime, input.runtimeRequired),
     platform: platformItem(input.platform),
     toolRegistry: toolRegistryItem(input.toolRegistry),
   }

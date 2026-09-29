@@ -155,12 +155,13 @@ export const DEFAULT_MANIFEST: EnvManifest = {
   },
   ifind: {
     label: '同花顺 iFinD（外部数据）',
-    // **必需项**（2026-09-26 产品口径覆盖了旧的 OPT-006-R1 · F-008）：
-    // iFinD 不再是"可选外部数据能力"，而是环境必检、必通过项。未通过时：
-    // 记阻塞 issue（owner 按 credential / entitlement / infrastructure 分派给 user / admin / system）、
-    // 关闭 global / auditCore / externalData 能力、进必需项分母，并让统一导航拦回环境页。
-    // 判据是**真的取到一次数据**（`initialize → tools/list → tools/call`），不是"文件在、字段非空"。
-    required: true,
+    // **可选项**（2026-09-30 口径，覆盖 2026-09-26 的「必需项」）：iFinD 是外部数据源，
+    // 不是基础环境的必配项。未配置时：
+    // - **不阻塞**（`global` / `auditCore` 都不受影响，员工照常进报告审核）；
+    // - 仍记一条 **非阻塞** issue（scope = `external-data`），只关掉 `capabilities.externalData`；
+    // - 涉及外部数据的项目在审核结果里记「未检查」，而不是让整条审核跑不起来。
+    // 判据仍是**真的取到一次数据**（`initialize → tools/list → tools/call`），不是"文件在、字段非空"。
+    required: false,
     field: 'auth_token',
     placeholder: 'your ifind-mcp key',
     applyUrl: 'https://mcp.51ifind.com/',

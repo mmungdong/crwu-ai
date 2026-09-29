@@ -135,6 +135,19 @@ export function sessionsOfKind<T extends { id: string; displayTitle?: string; ti
   return FIND_OF[kind](sessions, seqNo)
 }
 
+/**
+ * 材料登记的应答（Host 的 `discussion-material-open`）。
+ *
+ * **客户端不参与计算**：`caseDir` 与附件清单都是 Host 给的，界面只往下传。
+ */
+export interface DiscussionMaterialOpen {
+  ok: boolean
+  error: string
+  caseDir?: string
+  attachmentCount?: number
+  attachments?: ReadonlyArray<{ fileId: string; fileName: string; localName: string; fileSize: string; nameTotal: number }>
+}
+
 export interface EnsureDiscussionInput {
   port: DiscussionPort | undefined
   /** 会话列表快照（来自标准 hook `useSessions`）。 */
@@ -146,10 +159,20 @@ export interface EnsureDiscussionInput {
   forceNew?: boolean
   /** 业务来源（默认报告讨论）；决定会话名前缀与"找回哪一类会话"。 */
   kind?: DiscussionKind
+  /**
+   * **受限材料登记**（协议 23）：拿到会话 id 之后、发 kickoff 之前调一次。
+   *
+   * 只在**报告讨论**这条链路上传（审核结果分析走的是另一条资料路径）。新建与**恢复**
+   * 都要调 —— 范围只活在 Host 内存里，重启或 TTL 过期后旧会话默认是拿不到材料的。
+   *
+   * 它失败时**不登记、也不发 kickoff**（调用方拿到 `ok:false` 就提前返回），
+   * 会话本身保留：用户点一下重试即可，不降级去扫本机目录、也不自己去查氚云。
+   */
+  openMaterial?: (sessionId: string) => Promise<DiscussionMaterialOpen>
 }
 
 export type EnsureDiscussionResult =
-  | { ok: true; id: string; created: boolean; renameError?: string }
+  | { ok: true; id: string; created: boolean; renameError?: string; material?: DiscussionMaterialOpen }
   | { ok: false; error: string }
 
 function describe(cause: unknown): string {
@@ -231,10 +254,31 @@ export async function ensureDiscussion(input: EnsureDiscussionInput): Promise<En
     return { ok: false, error: zhCN.aiUnsupported }
   }
   const kind = input.kind ?? 'report_discussion'
+  /**
+   * 登记材料范围。**新建与恢复都走这里** —— 范围只活在 Host 内存里（重启 / TTL 之后失效），
+   * 只在首次创建时登记一次的话，用户过一会儿回来接着聊就取不到附件了。
+   */
+  const openMaterialFor = async (id: string): Promise<{ ok: true; material?: DiscussionMaterialOpen } | { ok: false; error: string }> => {
+    if (input.openMaterial === undefined) return { ok: true }
+    let material: DiscussionMaterialOpen
+    try {
+      material = await input.openMaterial(id)
+    } catch (cause: unknown) {
+      return { ok: false, error: `${zhCN.aiMaterialFailed}${describe(cause)}` }
+    }
+    if (material.ok !== true) {
+      const detail = material.error !== '' ? material.error : zhCN.aiMaterialUnknown
+      return { ok: false, error: `${zhCN.aiMaterialFailed}${detail}` }
+    }
+    return { ok: true, material }
+  }
   const existing = FIND_OF[kind](sessions, seqNo)[0]
   if (input.forceNew !== true && existing !== undefined) {
+    // 恢复：**重新登记**一次范围（白名单要按此刻远端有什么刷新），再让调用方接着聊。
+    const opened = await openMaterialFor(existing.id)
+    if (!opened.ok) return opened
     // 不复用分支里也不「跳」：跳由调用方的 `onOpenDiscussion` 负责（见 DiscussionPort 注释）。
-    return { ok: true, id: existing.id, created: false }
+    return { ok: true, id: existing.id, created: false, ...(opened.material === undefined ? {} : { material: opened.material }) }
   }
   if (workspaceId === '' && workspacePath === '') return { ok: false, error: zhCN.aiNoWorkspace }
   try {
@@ -247,9 +291,17 @@ export async function ensureDiscussion(input: EnsureDiscussionInput): Promise<En
     const renameError = renamed.ok
       ? ''
       : (renamed.missing ? zhCN.aiUnsupported : `${zhCN.aiRenameFailed}${renamed.error}`)
+    // 材料登记：**在 kickoff 之前**。失败就**不登记、也不发 kickoff**（调用方提前返回），
+    // 但会话**保留** —— 用户点一下重试即可，不降级去扫本机目录、也不自己去查氚云。
+    const opened = await openMaterialFor(id)
+    if (!opened.ok) return opened
     // 建完**不在这里跳**：调用方拿到 id 后调 `onOpenDiscussion`（面板接到 uiWorkspace.openSession）。
     // 两处都跳会连线两次 replaceMain，也会让「谁负责跳」变得说不清。
-    return { ok: true, id, created: true, ...(renameError === '' ? {} : { renameError }) }
+    return {
+      ok: true, id, created: true,
+      ...(renameError === '' ? {} : { renameError }),
+      ...(opened.material === undefined ? {} : { material: opened.material }),
+    }
   } catch (cause: unknown) {
     return { ok: false, error: `${zhCN.aiCreateFailed}${describe(cause)}` }
   }

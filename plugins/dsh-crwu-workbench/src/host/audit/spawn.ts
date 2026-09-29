@@ -47,6 +47,22 @@ export function agentRegistry(ctx: Context): AgentRegistry | undefined {
   return ctx.get('agents') as AgentRegistry | undefined
 }
 
+/**
+ * 面板**已绑定的父会话**对应的 agent（`bind-session` 落盘的那个 id）。
+ *
+ * 为什么需要它：环境自检跑在 `host-background`，RPC 负载里只有 `{ op, args }`、**没有会话上下文**，
+ * 而 `load_workspace_dependencies` 需要 agent 作用域 —— 不带 agent 调它就是"工具报错"，
+ * 运行时于是永远解析不出来（2026-09-29 员工 Windows 实测：会话里调同一个工具返回完整载荷）。
+ * 审核启动用的就是这个 agent，自检复用同一个来源，两处口径一致。
+ *
+ * 没绑定 / 拿不到 → `undefined`，调用方退回不带 agent 的调用（那种情况只报「待复核」，不判缺失）。
+ */
+export function boundParentAgent(ctx: Context, parentSessionId: string): unknown {
+  const id = text(parentSessionId)
+  if (id === '') return undefined
+  return agentRegistry(ctx)?.get(id as SessionId)
+}
+
 /** 可选的 subagents 服务。 */
 export function subagentRegistry(ctx: Context): SubagentRuntime | undefined {
   return ctx.get('subagents') as SubagentRuntime | undefined

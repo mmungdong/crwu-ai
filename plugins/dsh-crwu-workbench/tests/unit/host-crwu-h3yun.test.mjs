@@ -35,11 +35,13 @@ test('runCrwu refuses anything that is not the crwu binary', async () => {
 
 test('B-07/B-08：crwu 子命令 → 本机访问操作的固定映射（钥匙串读取必须提权，表外默认拒绝）', async () => {
   // 协议 18：提权不再是调用方给的布尔值，而是**子命令自己**的属性。
-  // `session` 整段登记（2026-09-28 修）：`login` 写钥匙串，而 `status` / `bind` **读**钥匙串 ——
+  // `session` 登记了 login / status / refresh：`login` 写钥匙串，另两个**读**钥匙串 ——
   // 受限沙箱下读不到就会回 `secret not found in keyring`，那是**假结论**（界面会显示成「未登录」）。
   assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'login']), 'h3yun.session.login')
   assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'status']), 'h3yun.session.status')
-  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'bind']), 'h3yun.session.bind')
+  // ⚠️ `bind` 自协议 22 起**不再登记**：内置浏览器扫码那条链路整体下掉，
+  // 插件不再有把网页令牌交给 CLI 的通道 —— 员工要在终端绑定时自己跑 CLI。
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'bind']), null)
   assert.equal(crwuOperationOf(['crwu', 'h3yun', 'records', 'list']), 'h3yun.records.read')
   assert.equal(crwuOperationOf(['crwu', 'h3yun', 'forms', 'search']), 'h3yun.forms.read')
   assert.equal(crwuOperationOf(['crwu', 'h3yun', 'files', 'list']), 'h3yun.files.read')

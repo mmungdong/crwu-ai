@@ -17,11 +17,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyShellEffect } from '../helpers/shell-effects.mjs'
+import { applyShellEffect, probeAnswer, probeKey } from '../helpers/shell-effects.mjs'
 import { grantedConsent, missingConsent } from '../helpers/local-access-fixture.mjs'
 import { makeTestAccess } from '../helpers/local-access-broker-fixture.mjs'
 
 const ROOT = new URL('../../', import.meta.url)
+const { createDiscussionScopeRegistry } = await import(
+  new URL('src/host/audit/discussion-scope.ts', ROOT).href)
+const { openDiscussionMaterial } = await import(
+  new URL('src/host/audit/discussion-material.ts', ROOT).href)
+const { makeSandboxedFs, makeSandboxedShell, makeSessionPolicyService } = await import(
+  new URL('tests/helpers/fs-sandbox-stub.mjs', ROOT).href)
 
 const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
 const { registerCrwuTools, missingAuditTools } = await import(new URL('src/host/tools/register.ts', ROOT).href)
@@ -140,6 +146,15 @@ function makeShell(handler) {
       },
       async execute(spec) {
         commands.push(spec.command)
+        // 只读路径探测由替身按内存 fs **忠实**回答（实现用它回读后置条件）；
+        // 其余命令照旧交给用例自己的 handler。
+        if (fs !== null) {
+          const probe = probeAnswer(spec.command, {
+            hasDir: (path) => fs.dirs.has(probeKey(path)),
+            hasFile: (path) => fs.files.has(probeKey(path)),
+          })
+          if (probe !== undefined) return { result: async () => shellOk(probe) }
+        }
         const result = handler(spec)
         if (result === null) throw new Error(`不允许执行的命令：${spec.command}`)
         if (fs !== null) {
@@ -154,8 +169,8 @@ function makeShell(handler) {
   }
 }
 
-function makeCtx({ fs, shell, tools }) {
-  const services = { fs, shell, tools }
+function makeCtx({ fs, shell, tools, sandboxPolicy }) {
+  const services = { fs, shell, tools, sandboxPolicy }
   return {
     get(name) { return services[name] },
     on() { return () => {} },
@@ -232,7 +247,7 @@ function makeForm({ code = 'FORM-1', name = '报告审核', fails = false } = {}
   }
 }
 
-function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64' } = {}) {
+function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64', discussionScopes } = {}) {
   const theState = state ?? makeState()
   const theFs = fs ?? makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/knowledge`] })
   const theShell = shell ?? makeShell(() => shellOk('{}'))
@@ -241,14 +256,17 @@ function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64' } =
   const ctx = makeCtx({ fs: theFs, shell: theShell.service, tools: registry })
   const theForm = form ?? makeForm()
   const { access } = makeTestAccess(ctx, { state: theState })
+  // 讨论会话的受限材料范围（协议 23）：缺省是空注册表（没有会话被登记过）。
+  const scopes = discussionScopes ?? createDiscussionScopeRegistry()
   return {
-    ctx, fs: theFs, shell: theShell, registry, state: theState, form: theForm,
+    ctx, fs: theFs, shell: theShell, registry, state: theState, form: theForm, discussionScopes: scopes,
     deps: {
       ctx,
       config: { ...CONFIG },
       state: theState,
       access,
       form: theForm.resolver,
+      discussionScopes: scopes,
       world: {
         platform: async () => platform,
         home: async () => '/Users/x',
@@ -688,6 +706,378 @@ test('crwu_h3yun_file_get downloads one attachment inside the case directory and
   assert.equal(shell.commands.length, 1, '被拒绝的请求不许发出任何命令')
 })
 
+test('两个同名附件不许互相覆盖：目标名必须带上这件附件自己的 fileId 标识', async () => {
+  // 真实现场：一份报告里挂着两个 `广兴建筑v3.zip`（fileId 不同）。按文件名落盘时第二件会
+  // **静默覆盖**第一件，审核只看到一份材料 —— 既可能漏检，也答不了"重复上传还是两个版本"。
+  const FIRST = 'c8ef13b8-1111-2222-3333-444455556666'
+  const SECOND = 'e17ec3db-aaaa-bbbb-cccc-ddddeeeeffff'
+  const shell = makeShell((spec) => {
+    const out = /--out '?([^'\s]+)'?/.exec(spec.command)
+    if (spec.command.includes('file get') && out !== null) {
+      shellFs.addFile(out[1], 'ZIP')
+      return shellOk(JSON.stringify({ ok: true, data: { file: out[1] } }))
+    }
+    return null
+  })
+  const shellFs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/材料-源`] })
+  const { deps, registry } = makeDeps({ fs: shellFs, shell })
+  withAuditScope(deps.state, { casePath: CASE_DIR, allowedAttachmentIds: [FIRST, SECOND] })
+  registerCrwuTools(deps.ctx, deps)
+
+  // ① 不带标识 → 在任何进程之前拒绝，并给出正确的名字。
+  const bare = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+    { fileId: FIRST, caseDir: CASE_DIR, relativePath: '材料-源/广兴建筑v3.zip' },
+    new AbortController().signal))
+  assert.equal(bare.value.ok, false)
+  assert.equal(bare.value.errorKind, 'policy')
+  assert.match(String(bare.value.error), /__c8ef13b8/)
+  assert.deepEqual(shell.commands, [], '被拒绝的请求不许发出任何命令')
+
+  // ② 各带各的标识 → 两件都落盘，谁也不覆盖谁。
+  for (const [fileId, name] of [[FIRST, '广兴建筑v3__c8ef13b8.zip'], [SECOND, '广兴建筑v3__e17ec3db.zip']]) {
+    const done = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+      { fileId, caseDir: CASE_DIR, relativePath: `材料-源/${name}` },
+      new AbortController().signal))
+    assert.equal(done.value.ok, true, String(done.value.error))
+    assert.equal(done.value.path, `${CASE_DIR}/材料-源/${name}`)
+  }
+  assert.equal(shellFs.files.has(`${CASE_DIR}/材料-源/广兴建筑v3__c8ef13b8.zip`), true)
+  assert.equal(shellFs.files.has(`${CASE_DIR}/材料-源/广兴建筑v3__e17ec3db.zip`), true,
+    '第二件必须落在自己的名字上，而不是覆盖第一件')
+})
+
+// ── 讨论会话的受限材料范围（协议 23） ───────────────────────────────────────
+
+/**
+ * 登记一条**报告讨论会话**的材料范围（同 `discussion-material-open` 的效果）。
+ *
+ * 讨论不是审核：它没有审核记录，`objectId` 由 Host 在登记时自己取一次数，
+ * 白名单就是那一刻远端有的那批 `fileId`。
+ */
+function withDiscussionScope(scopes, patch = {}) {
+  return scopes.register({
+    sessionId: patch.sessionId ?? DISCUSSION_SESSION,
+    seqNo: SEQ,
+    objectId: 'obj-1',
+    caseDir: CASE_DIR,
+    allowedAttachmentIds: patch.allowedAttachmentIds ?? ['f-1'],
+    ...patch,
+  })
+}
+
+const DISCUSSION_SESSION = 'session-discussion-1'
+
+test('已登记的讨论会话可以下载白名单附件（这是"讨论会话取不到材料"的修复）', async () => {
+  const NAME = '广兴建筑v3__c8ef13b8.zip'
+  const FILE_ID = 'c8ef13b8-1111-2222-3333-444455556666'
+  const shell = makeShell((spec) => {
+    const out = /--out '?([^'\s]+)'?/.exec(spec.command)
+    if (spec.command.includes('file get') && out !== null) {
+      shellFs.addFile(out[1], 'ZIP')
+      return shellOk(JSON.stringify({ ok: true, data: { file: out[1] } }))
+    }
+    return null
+  })
+  const shellFs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/材料-源`] })
+  const scopes = createDiscussionScopeRegistry()
+  const { deps, registry } = makeDeps({ fs: shellFs, shell, discussionScopes: scopes })
+  withDiscussionScope(scopes, { allowedAttachmentIds: [FILE_ID] })
+  registerCrwuTools(deps.ctx, deps)
+
+  const done = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+    { fileId: FILE_ID, caseDir: CASE_DIR, relativePath: `材料-源/${NAME}` },
+    new AbortController().signal, DISCUSSION_SESSION))
+  assert.equal(done.value.ok, true, String(done.value.error))
+  assert.equal(done.value.path, `${CASE_DIR}/材料-源/${NAME}`)
+  assert.equal(shellFs.files.has(`${CASE_DIR}/材料-源/${NAME}`), true)
+})
+
+test('讨论会话：清单外的 fileId、别人的案例目录、未登记的会话一律拒绝且零命令', async () => {
+  const shell = makeShell(() => shellOk(JSON.stringify({ ok: true })))
+  const shellFs = makeFs({ dirs: [CASE_DIR] })
+  const scopes = createDiscussionScopeRegistry()
+  const { deps, registry } = makeDeps({ fs: shellFs, shell, discussionScopes: scopes })
+  withDiscussionScope(scopes, { allowedAttachmentIds: ['f-1'] })
+  registerCrwuTools(deps.ctx, deps)
+
+  const cases = [
+    ['清单外的 fileId', { fileId: 'f-2', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }, DISCUSSION_SESSION, 'policy'],
+    ['别人的案例目录', { fileId: 'f-1', caseDir: `${CASE_DIR}/别的`, relativePath: '材料-源/a.pdf' }, DISCUSSION_SESSION, 'policy'],
+    ['工作空间根当案例目录', { fileId: 'f-1', caseDir: '/cases/space', relativePath: '材料-源/a.pdf' }, DISCUSSION_SESSION, 'policy'],
+    ['没登记过的会话', { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }, 'session-plain-1', 'policy'],
+  ]
+  for (const [label, args, sessionId, kind] of cases) {
+    const result = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet, args, new AbortController().signal, sessionId))
+    assert.equal(result.value.ok, false, label)
+    assert.equal(result.value.errorKind, kind, label)
+  }
+  assert.deepEqual(shell.commands, [], '被拒绝的请求一个进程都不许起')
+})
+
+test('讨论会话不能查记录、也不能列举附件（它不是氚云查询入口）', async () => {
+  const shell = makeShell(() => shellOk(JSON.stringify({ ok: true, data: [] })))
+  const scopes = createDiscussionScopeRegistry()
+  const { deps, registry } = makeDeps({ shell, discussionScopes: scopes })
+  withDiscussionScope(scopes)
+  registerCrwuTools(deps.ctx, deps)
+
+  for (const name of [TOOL_NAMES.h3yunRecordGet, TOOL_NAMES.h3yunFilesList]) {
+    const result = await registry.execute(scopedExec(name, { objectId: 'obj-1', caseDir: CASE_DIR },
+      new AbortController().signal, DISCUSSION_SESSION))
+    assert.equal(result.value.ok, false, name)
+    assert.equal(result.value.errorKind, 'policy', name)
+    assert.match(String(result.value.error), /报告讨论会话/, name)
+  }
+  assert.deepEqual(shell.commands, [], '拒绝要在任何 fs / shell 之前发生')
+})
+
+// ── 讨论会话材料登记（`discussion-material-open`，协议 23） ──────────────────
+
+/**
+ * 给 ctx 补一个 `sessions` 替身（登记要判"这条会话是不是子代理"）。
+ *
+ * `makeCtx` 的 `get` 只认识 fs / shell / tools，所以这里就地包一层 ——
+ * 与真实装配一致：`sessions.get(id)?.header` 是那条判据的唯一来源。
+ */
+function withSessions(ctx, headers) {
+  const inner = ctx.get.bind(ctx)
+  ctx.get = (name) => {
+    if (name === 'sessions') return { get: (id) => (headers[id] === undefined ? undefined : { header: headers[id] }) }
+    return inner(name)
+  }
+  return ctx
+}
+
+test('discussion-material-open：Host 自己取一次数，只把这一批 fileId 写进白名单', async () => {
+  const shell = makeShell((spec) => {
+    if (spec.command.includes('records get')) return shellOk(RECORD_JSON)
+    if (spec.command.includes('files list')) return shellOk(FILES_JSON)
+    return shellOk('{}')
+  })
+  const fs = makeFs({ dirs: ['/cases/space', CASE_DIR] })
+  const scopes = createDiscussionScopeRegistry()
+  const { deps } = makeDeps({ shell, fs, form: makeForm({ code: 'FORM-1' }), state: makeState({ workspacePath: '/cases/space' }), discussionScopes: scopes })
+  withSessions(deps.ctx, { 'sess-1': { origin: '', delegationDepth: 0 } })
+
+  const view = await openDiscussionMaterial({ ...deps, scopes, world: deps.world }, {
+    sessionId: 'sess-1', seqNo: SEQ, objectId: 'obj-1',
+  })
+  assert.equal(view.ok, true, view.error)
+  assert.equal(view.caseDir, CASE_DIR, '案例目录由 Host 算，不由调用方提交')
+  assert.equal(view.attachmentCount, 1)
+  assert.equal(view.attachments[0].fileId, 'f1')
+  assert.equal(view.attachments[0].localName, '报告.zip')
+  assert.equal(view.expiresAt > Date.now(), true)
+  // 白名单真的落进了注册表（Tool 那一侧读的就是它）。
+  assert.deepEqual([...scopes.use('sess-1').allowedAttachmentIds], ['f1'])
+  assert.equal(scopes.use('sess-1').caseDir, CASE_DIR)
+  // 同一 attempt 只取一次数：records get 与 files list 各一条。
+  assert.equal(shell.commands.filter((command) => command.includes('records get')).length, 1)
+  assert.equal(shell.commands.filter((command) => command.includes('files list')).length, 1)
+})
+
+test('discussion-material-open：子代理会话被拒绝（讨论是顶层会话），零命令', async () => {
+  const shell = makeShell(() => shellOk('{}'))
+  const fs = makeFs({ dirs: ['/cases/space', CASE_DIR] })
+  const scopes = createDiscussionScopeRegistry()
+  const { deps } = makeDeps({ shell, fs, state: makeState({ workspacePath: '/cases/space' }), discussionScopes: scopes })
+  withSessions(deps.ctx, { 'sess-1': { origin: 'subagent', delegationDepth: 1 } })
+
+  const view = await openDiscussionMaterial({ ...deps, scopes, world: deps.world }, {
+    sessionId: 'sess-1', seqNo: SEQ, objectId: 'obj-1',
+  })
+  assert.equal(view.ok, false)
+  assert.equal(view.errorKind, 'policy')
+  assert.match(view.error, /子代理/)
+  assert.deepEqual(shell.commands, [], '身份不对就不许起任何进程')
+  assert.equal(scopes.size(), 0)
+})
+
+test('discussion-material-open：对象与流水号对不上就拒绝，而且**不再去取附件**', async () => {
+  const otherRecord = JSON.stringify({ data: { ObjectId: 'obj-1', SeqNo: '另一个流水号' } })
+  const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(otherRecord) : shellOk(FILES_JSON)))
+  const fs = makeFs({ dirs: ['/cases/space', CASE_DIR] })
+  const scopes = createDiscussionScopeRegistry()
+  const { deps } = makeDeps({ shell, fs, form: makeForm({ code: 'FORM-1' }), state: makeState({ workspacePath: '/cases/space' }), discussionScopes: scopes })
+  withSessions(deps.ctx, { 'sess-1': { origin: '', delegationDepth: 0 } })
+
+  const view = await openDiscussionMaterial({ ...deps, scopes, world: deps.world }, {
+    sessionId: 'sess-1', seqNo: SEQ, objectId: 'obj-1',
+  })
+  assert.equal(view.ok, false)
+  assert.equal(view.errorKind, 'input')
+  assert.match(view.error, /流水号/)
+  assert.equal(shell.commands.filter((command) => command.includes('files list')).length, 0,
+    '身份没核对通过就不该去取附件（否则会把别人的清单登记成这条报告的）')
+  assert.equal(scopes.size(), 0, '失败不登记')
+})
+
+test('discussion-material-open：没有工作空间 / 参数不合法时拒绝，且不登记', async () => {
+  const shell = makeShell(() => shellOk('{}'))
+  const scopes = createDiscussionScopeRegistry()
+  const { deps } = makeDeps({ shell, fs: makeFs({ dirs: [CASE_DIR] }), state: makeState({ workspacePath: '' }), discussionScopes: scopes })
+  withSessions(deps.ctx, { 'sess-1': { origin: '', delegationDepth: 0 } })
+
+  for (const [label, args] of [
+    ['没有工作空间', { sessionId: 'sess-1', seqNo: SEQ, objectId: 'obj-1' }],
+    ['缺 sessionId', { seqNo: SEQ, objectId: 'obj-1' }],
+    ['流水号形状不合法', { sessionId: 'sess-1', seqNo: '../../etc', objectId: 'obj-1' }],
+    ['缺 objectId', { sessionId: 'sess-1', seqNo: SEQ }],
+  ]) {
+    const view = await openDiscussionMaterial({ ...deps, scopes, world: deps.world }, args)
+    assert.equal(view.ok, false, label)
+    assert.equal(view.errorKind, 'input', label)
+  }
+  assert.equal(scopes.size(), 0)
+})
+
+test('氚云三条 Tool 的授权矩阵（协议 23）：三种调用者 × 三个工具，逐格钉住', async () => {
+  // 这张矩阵是**刻意**的，不是现状的副产品：
+  // - `file_get` 是"取材料"的入口 → 只有**审核子会话**与**已登记的讨论会话**能进来；
+  //   普通顶层会话一律拒绝（这正是"普通 DeepSeek 对话不是材料入口"的落点）。
+  // - `record_get` / `files_list` 是**按 objectId 的查询能力**，`crwu-h3yun-query` 技能
+  //   （自动触发的那种"查一下这个报告"）依赖它在**普通会话**里可用，所以那里**保持既有规则**
+  //   （不变宽、也不变窄）；但**已登记的讨论会话**不许用它们 —— 讨论拿到的是"登记那一刻的
+  //   那批附件"，让它顺手查记录就把一次受限授权变成了通用读能力。
+  const record = JSON.stringify({ data: { ObjectId: 'obj-1', SeqNo: SEQ, F1: 'x' } })
+  const files = JSON.stringify({ data: [{ field: 'F1', fileId: 'f-1', fileName: 'a.pdf', fileSize: '3', contentType: 'application/pdf' }] })
+  const shell = makeShell((spec) => {
+    if (spec.command.includes('records get')) return shellOk(record)
+    if (spec.command.includes('files list')) return shellOk(files)
+    const out = /--out '?([^'\s]+)'?/.exec(spec.command)
+    if (spec.command.includes('file get') && out !== null) {
+      shellFs.addFile(out[1], 'PDF')
+      return shellOk(JSON.stringify({ ok: true }))
+    }
+    return null
+  })
+  const shellFs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/材料-源`] })
+  const scopes = createDiscussionScopeRegistry()
+  const { deps, registry } = makeDeps({ fs: shellFs, shell, discussionScopes: scopes })
+  // ① 审核子会话：记录里的白名单 ['f-1']
+  withAuditScope(deps.state, { childId: AUDIT_CHILD, casePath: CASE_DIR, allowedAttachmentIds: ['f-1'] })
+  // ② 已登记的讨论会话
+  withDiscussionScope(scopes, { sessionId: DISCUSSION_SESSION, allowedAttachmentIds: ['f-1'] })
+  registerCrwuTools(deps.ctx, deps)
+
+  const PLAIN = 'session-plain-1'
+  const call = (name, args, sessionId) => registry.execute(scopedExec(name, args, new AbortController().signal, sessionId))
+  const FILE_IN = { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }
+  const FILE_OUT = { fileId: 'f-9', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }
+  const QUERY = { objectId: 'obj-1', caseDir: CASE_DIR }
+
+  // 允许的三格（命令真的跑起来了）。
+  for (const [label, name, args, sessionId] of [
+    ['审核子会话 · file_get（白名单内）', TOOL_NAMES.h3yunFileGet, FILE_IN, AUDIT_CHILD],
+    ['讨论会话 · file_get（白名单内）', TOOL_NAMES.h3yunFileGet, FILE_IN, DISCUSSION_SESSION],
+    ['普通会话 · record_get（既有规则：可用）', TOOL_NAMES.h3yunRecordGet, QUERY, PLAIN],
+    ['普通会话 · files_list（既有规则：可用）', TOOL_NAMES.h3yunFilesList, QUERY, PLAIN],
+  ]) {
+    const before = shell.commands.length
+    const result = await call(name, args, sessionId)
+    assert.equal(result.value.ok, true, `${label}：${String(result.value.error)}`)
+    assert.equal(shell.commands.length > before, true, `${label} 应当真的执行`)
+  }
+
+  // 拒绝的七格（一个进程都不许起）。
+  for (const [label, name, args, sessionId] of [
+    ['审核子会话 · file_get（清单外）', TOOL_NAMES.h3yunFileGet, FILE_OUT, AUDIT_CHILD],
+    ['审核子会话 · record_get', TOOL_NAMES.h3yunRecordGet, QUERY, AUDIT_CHILD],
+    ['审核子会话 · files_list', TOOL_NAMES.h3yunFilesList, QUERY, AUDIT_CHILD],
+    ['讨论会话 · file_get（清单外）', TOOL_NAMES.h3yunFileGet, FILE_OUT, DISCUSSION_SESSION],
+    ['讨论会话 · record_get', TOOL_NAMES.h3yunRecordGet, QUERY, DISCUSSION_SESSION],
+    ['讨论会话 · files_list', TOOL_NAMES.h3yunFilesList, QUERY, DISCUSSION_SESSION],
+    ['普通会话 · file_get（不是材料入口）', TOOL_NAMES.h3yunFileGet, FILE_IN, PLAIN],
+  ]) {
+    const before = shell.commands.length
+    const result = await call(name, args, sessionId)
+    assert.equal(result.value.ok, false, label)
+    assert.equal(result.value.errorKind, 'policy', label)
+    assert.equal(shell.commands.length, before, `${label}：拒绝时必须零命令`)
+  }
+})
+
+// ── 案例内非特权命令的**会话作用域**（2026-09-30 真机回归） ──────────────────
+
+test('回归：输入快照目录必须带**调用方会话的策略**（真机 Operation not permitted）', async () => {
+  // 真机原文（连挂两次）：`创建快照目录失败：mkdir: <案例目录>/输入快照: Operation not permitted`
+  //（操作 system.case-file.write · 来源 audit-tool · 解析为 workspace-write · 实际 workspace-write ·
+  //  沙箱拒绝=是）—— 而案例目录恰恰就是审核根会话的 cwd。
+  // 根因：DSH 的执行器**不持有会话**，请求不带 `sandboxPolicy` 就用部署默认（进程 cwd）。
+  // 所以这条用例的替身会**真的按策略拦人**（缺策略 → 部署默认 → 拒）。
+  const DEFAULT_ROOT = '/work/plugin-default'
+  const fs = makeFs({ dirs: [CASE_DIR] })
+  // ⚠️ fs 也要用"会按策略拦写"的替身：真实现是
+  // `const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()` —— 不传策略就落到部署默认，
+  // 于是三个快照 JSON 写不进去（`FS_SANDBOX_DENIED`），审核停在「未创建子代理」。
+  // 用"永远成功"的 fs 替身时，这一类缺陷在单测里**完全看不见**（2026-09-30 就是这么漏过去的）。
+  const sandboxedFs = makeSandboxedFs({ fs, defaultRoot: DEFAULT_ROOT })
+  const shell = makeSandboxedShell({
+    fs, defaultRoot: DEFAULT_ROOT,
+    routes: [['records get', RECORD_JSON], ['files list', FILES_JSON]],
+  })
+  const policy = makeSessionPolicyService({ defaultRoot: DEFAULT_ROOT, roots: () => CASE_DIR })
+  const registry = makeRegistry()
+  const ctx = makeCtx({ fs: sandboxedFs.service, shell: shell.service, tools: registry, sandboxPolicy: policy.service })
+  const state = makeState({ workspacePath: '/cases/space' })
+  const scopes = createDiscussionScopeRegistry()
+  const { access } = makeTestAccess(ctx, { state })
+  const deps = {
+    ctx,
+    config: { ...CONFIG },
+    state,
+    access,
+    form: makeForm({ code: 'FORM-1' }).resolver,
+    discussionScopes: scopes,
+    world: {
+      platform: async () => 'darwin-arm64',
+      home: async () => '/Users/x',
+      workdir: async () => '/cases/session',
+      cached: () => ({ platform: 'darwin-arm64', home: '/Users/x' }),
+    },
+  }
+  registerCrwuTools(ctx, deps)
+  const args = { objectId: 'obj-1', seqNo: SEQ, caseDir: CASE_DIR, refresh: true }
+
+  // ③ **不带**会话（= 真机那两次的形态）→ 复现真机那句话。
+  //    先跑这一支：目录还不存在，"命令失败但目标已经是目录"的幂等退路救不了它。
+  const orphan = await registry.execute({
+    callId: 'c-orphan', name: TOOL_NAMES.auditCaseBootstrap,
+    arguments: { ...args, attemptId: 'S1-a1-orphan' }, signal: new AbortController().signal,
+    agent: { id: 'parent-1' },
+  })
+  assert.equal(orphan.value.ok, false)
+  assert.match(String(orphan.value.error), /创建快照目录失败/)
+  assert.match(String(orphan.value.error), /system\.case-file\.write/)
+  assert.match(String(orphan.value.error), /沙箱拒绝=是/)
+  assert.match(String(orphan.value.error), /插件 pkg-/, '失败文案要带上插件版本（真机排障第一件事）')
+  assert.equal(fs.dirs.has(`${CASE_DIR}/输入快照`), false, '这一支一个目录都不该建出来')
+  assert.equal(shell.deniedCommands.length, 1, '这一支必须真的被沙箱拦下（否则用例是假的）')
+
+  // ④ **带**会话（生产形态：Host 用审核根 Agent 调它）→ 快照三个 JSON 落盘。
+  const rootSession = { id: 'session-audit-root' }
+  const scoped = await registry.execute({
+    callId: 'c-scope', name: TOOL_NAMES.auditCaseBootstrap,
+    arguments: { ...args, attemptId: 'S1-a1-scope' }, signal: new AbortController().signal,
+    agent: { id: 'parent-1', session: rootSession },
+  })
+  assert.equal(scoped.value.ok, true, String(scoped.value.error))
+  assert.equal(fs.dirs.has(`${CASE_DIR}/输入快照`), true, '快照目录真的建出来了')
+  assert.equal(fs.files.has(`${CASE_DIR}/输入快照/附件清单.json`), true)
+  assert.equal(fs.files.has(`${CASE_DIR}/输入快照/报告记录.json`), true)
+  assert.equal(fs.files.has(`${CASE_DIR}/输入快照/快照元数据.json`), true)
+  assert.deepEqual(sandboxedFs.deniedWrites, [], '带会话这一支不许有任何写入被沙箱拒')
+  const write = sandboxedFs.writes.find((item) => item.target.endsWith('附件清单.json'))
+  assert.equal(write.policy.workspaceRoot, CASE_DIR, '写入必须带上调用方会话解析出来的边界')
+  assert.equal(shell.deniedCommands.length, 1, '带会话这一支不许再被拦')
+  // 请求里必须**逐次声明**调用方会话的边界；提权命令（氚云取数）仍然是 danger-full-access。
+  const mkdir = shell.requests.filter((request) => String(request.command).startsWith('mkdir')).at(-1)
+  assert.equal(mkdir.sandboxPolicy.workspaceRoot, CASE_DIR, '非特权命令的边界 = 调用方会话解析出的案例目录')
+  assert.equal(mkdir.sandboxPolicy.mode, 'workspace-write', '非特权命令不提权')
+  const fetch = shell.requests.filter((request) => String(request.command).includes('records get')).at(-1)
+  assert.equal(fetch.sandboxPolicy.mode, 'danger-full-access', '氚云取数是特权操作，逐次声明提权')
+})
+
 // ── 4：默认沙箱与提权白名单 ─────────────────────────────────────────────────
 
 test('B-04 未授权：审核 Tool 连命令都不发（不是"发了但没提权"）', async () => {
@@ -918,6 +1308,37 @@ test('bootstrap 把快照写进案例目录：记录、附件清单与元数据�
   assert.equal(attached.count, 1)
   assert.equal(attached.files[0].fileId, 'f1')
   assert.equal(JSON.stringify(attached).includes('downloadUrl'), false, '下载 URL 不落盘')
+})
+
+test('bootstrap 给每件附件算好落盘名与同名序号（同名 ZIP 不会互相覆盖）', async () => {
+  const FIRST = 'c8ef13b8-1111-2222-3333-444455556666'
+  const SECOND = 'e17ec3db-aaaa-bbbb-cccc-ddddeeeeffff'
+  const files = JSON.stringify({
+    data: [
+      { field: 'F1', fileId: FIRST, fileName: '广兴建筑v3.zip', fileSize: '20342311', contentType: 'application/zip', downloadUrl: 'https://example.invalid/signed?token=SECRET' },
+      { field: 'F2', fileId: SECOND, fileName: '广兴建筑v3.zip', fileSize: '20342312', contentType: 'application/zip', downloadUrl: 'https://example.invalid/signed?token=SECRET' },
+      { field: 'F3', fileId: 'a1b2c3d4-0000-0000-0000-000000000000', fileName: '清单.xlsx', fileSize: '10', contentType: 'application/vnd.ms-excel', downloadUrl: 'https://example.invalid/signed?token=SECRET' },
+    ],
+  })
+  const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(RECORD_JSON) : shellOk(files)))
+  const fs = makeFs({ dirs: [CASE_DIR] })
+  const { deps, registry } = makeDeps({ shell, fs, form: makeForm({ code: 'FORM-1' }), state: makeState({ workspacePath: '/cases/space' }) })
+  registerCrwuTools(deps.ctx, deps)
+  const result = await registry.execute({
+    callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap,
+    arguments: { objectId: 'obj-1', seqNo: SEQ, caseDir: CASE_DIR, attemptId: 'S1-a1-x', refresh: true },
+    signal: new AbortController().signal,
+  })
+  assert.equal(result.value.ok, true, String(result.value.error))
+  const attached = JSON.parse(String(fs.files.get(`${CASE_DIR}/输入快照/附件清单.json`)))
+  const rows = attached.files
+  assert.deepEqual(rows.map((row) => row.localName), [
+    '广兴建筑v3__c8ef13b8.zip', '广兴建筑v3__e17ec3db.zip', '清单__a1b2c3d4.xlsx',
+  ])
+  assert.deepEqual(rows.map((row) => [row.nameIndex, row.nameTotal]), [[1, 2], [2, 2], [1, 1]],
+    '同名附件要能一眼看出"这是两件"')
+  // 落盘名两两不同 = "不会互相覆盖"的可判定形式。
+  assert.equal(new Set(rows.map((row) => row.localName)).size, rows.length)
 })
 
 // ── 6：钉钉与 OSS ───────────────────────────────────────────────────────────

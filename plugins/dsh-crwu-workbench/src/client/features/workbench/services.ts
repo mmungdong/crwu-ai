@@ -18,7 +18,7 @@ export interface PickedWorkspaceView {
 }
 
 export interface UiWorkspaceService {
-  /** 打开系统目录选择器；用户取消时返回 falsy。 */
+  /** 打开系统目录选择器；用户取消时返回 falsy。**只选已有目录，不建目录**。 */
   pickDirectory?: () => Promise<string | null>
   /**
    * 选中并切换到某个会话：内部是 `replaceMain(sessionId, signal, 'reveal')`
@@ -28,14 +28,22 @@ export interface UiWorkspaceService {
    * 注意客户端 `sessions` 服务上**没有** `open()`：不要写成 `sessions.open(id)`。
    */
   openSession?: (sessionId: string) => void
-  /** 在 parent 下新建目录，返回新目录的绝对路径。 */
-  createDirectory?: (parent: string, name: string) => Promise<string>
+  /**
+   * ⚠️ **不再声明 `createDirectory`**（2026-09-30 口径）：插件不为用户创建工作空间根目录，
+   * 只允许选择已有目录。把这条动词重新接上，就等于恢复了「插件替用户建目录」的能力 ——
+   * 目标目录不存在时唯一正确的处置是让用户重新选一个已有目录，由 Host 拒绝启动审核。
+   */
   /** 在指定工作空间里开一个新会话。 */
   openWorkspace?: (workspaceId: string) => Promise<unknown>
 }
 
 export interface WorkspacesService {
-  /** 把某个目录注册成工作空间。 */
+  /**
+   * 把某个**已经存在**的目录登记成工作空间（不创建文件系统目录）。
+   *
+   * 字段名沿用 DSH 注册表的 `create`（改名会与宿主服务对不上）；语义是**登记**，
+   * 所以调用点必须先用目录选择器拿到真实路径，而不是自己拼一个路径交给它。
+   */
   create?: (input: { path: string }) => Promise<PickedWorkspaceView>
 }
 
@@ -44,7 +52,10 @@ export interface WorkspacesService {
  *
  * 只声明我们用到的那一个动词。**标签类型不是必然存在的**：Web profile 默认关闭它
  * （`disabled: profileContext?.name !== 'desktop'`），旧桌面端也没有这个包 —— 所以
- * `openTab` 可能抛错，调用方必须能退回系统浏览器（见 `environment/open-url.ts`）。
+ * `openTab` 可能抛错，调用方必须能降级。
+ *
+ * ⚠️ 登录**不再**用它（2026-09-30）：`environment/open-url.ts`（内置浏览器优先的打开器）已随
+ * 内置浏览器登录一起删除 —— DSH 不创建浏览器 Tab，登录由本机 CLI 打开系统浏览器。
  */
 export interface SidebarRightService {
   openTab?: (kind: string, options: { params?: { url?: string } }) => unknown

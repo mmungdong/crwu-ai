@@ -9,6 +9,7 @@
  * 未加载 / 已加载 / 失败 / 卸载后迟到响应四种状态下的行为、以及主题 token 与文案的稳定键。
  */
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
@@ -349,6 +350,7 @@ test('侧栏那一席是一张分组卡：卡头 + 三个子项，顺序固定',
   assert.equal(textOf(head).includes(zhCN.sidebarLabel), true)
   assert.ok(find(tree, (node) => String(node.props?.className ?? '').includes(`${WORKBENCH_CLASSES.version} `)))
   // 卡身：三行子项，顺序固定为 报告评估 / 报告审核 / 环境信息 —— 不按条件重排。
+  // （外部数据源不是第四个模块：它是环境信息页配置列表里的一步，必检与否用红色星号区分。）
   const rows = findAll(tree, (node) => node.type === 'button'
     && String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.module))
   // 环境那一行的悬停文案顺带给出自检结论（颜色对色觉障碍用户不可读），所以它带结论后缀。
@@ -801,8 +803,9 @@ test('after boot and env the shell renders the self-check result', async () => {
   assert.equal(text.includes(zhCN.loadingEnv), false, '拿到数据后不该还显示加载中')
   // 顶部**紧凑状态卡**：一句结论 + 通过率 + 最近检查时间。
   assert.equal(text.includes(zhCN.envStatusReady), true, '环境就绪要有明确结论')
-  assert.equal(text.includes('9/9'), true, '通过率与结论必须自洽（只统计必需项，iFinD 在分母里）')
-  // 页面按"我接下来要做什么"分四步（新结构：左侧步骤导航 + 右侧当前步骤）；
+  // 7 项必需项：运行时自 2026-09-29 起不在环境自检里，iFinD 自 2026-09-30 起是可选数据源。
+  assert.equal(text.includes('7/7'), true, '通过率与结论必须自洽（只统计必需项）')
+  // 页面按"我接下来要做什么"分三步（新结构：左侧步骤导航 + 右侧当前步骤）；
   // 技术细节收进默认收起的「开发者诊断」。
   for (const title of [
     zhCN.envStepAccounts, zhCN.envStepOss, zhCN.envStepIfind, zhCN.envStepWorkspace,
@@ -810,15 +813,17 @@ test('after boot and env the shell renders the self-check result', async () => {
   ]) {
     assert.equal(text.includes(title), true, `缺了步骤/折叠区「${title}」`)
   }
-  // 四步都在导航上，而且这一段是全通过的部署。
+  // 四步都在导航上（外部数据源和别的配置项并排），而且这一段是全通过的部署。
   for (const id of ['accounts', 'oss', 'ifind', 'workspace']) {
     assert.equal(stepStateOf(tree, id), 'done', `「${id}」这一步应当是已完成`)
   }
-  // **员工视野里只有他能做的事**：包内组件 / DSH Runtime / 平台 / Tool 可见性只在开发者诊断里，
+  // 必检项带红色星号，可选的外部数据源**不带**（页面才不乱）。
+  assert.equal(text.includes(zhCN.envStepRequiredHint), true, '要说明星号的含义')
+  // **员工视野里只有他能做的事**：包内组件 / 平台 / Tool 可见性只在开发者诊断里，
   // 默认收起 —— 所以正文里看不到技术细节（收起时连它们的行标签都不渲染）。
+  // （DSH 自带运行时自 2026-09-29 起不在环境自检里，相关行与文案已一并移除。）
   assert.equal(text.includes(zhCN.envDiagToolsOk), false, 'Tool 可见性只在开发者诊断里')
   assert.equal(text.includes(zhCN.envPackagesManifest), false, '包内清单路径只在开发者诊断里')
-  assert.equal(text.includes(zhCN.envRuntimeExpect), false, '运行时技术细节只在开发者诊断里')
   assert.equal(text.includes(zhCN.envLayerPackages), false, '旧的"五层"标题不该再出现')
   // AK 掩码是**许可**出现的（它就是脱敏摘要，员工要用来核对是哪一份 AK）；
   // 不许出现的是 Secret 与 SK 明文 —— 那两条在各自卡片的用例里逐字钉住。
@@ -834,7 +839,6 @@ test('a blocked environment names the first thing still missing instead of a sec
       body: {
         ok: true, platform: '',
         packageIntegrity: packagesOk({ ok: false, supported: false, tools: packagesOk().tools.map((tool) => ({ ...tool, present: false, sizeBytes: 0, ok: false, reason: '插件包不完整 / 平台不受支持' })) }),
-        runtime: runtimeOk({ ok: false, state: 'capability-gap', error: '宿主没有接线 DSH 自带 Python 运行时的解析' }),
         external: externalOk({ path: '/cfg', ok: false, state: 'unconfigured', dataVerified: false, dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0 }),
         services: [], blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
         allOk: false, home: '/Users/x', localAccess: grantedConsent(),
@@ -842,7 +846,7 @@ test('a blocked environment names the first thing still missing instead of a sec
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
         state: stateBody({
-          status: 'action-required', proceed: false, allOk: false, passed: 7, total: 9,
+          status: 'action-required', proceed: false, allOk: false, passed: 6, total: 8,
           capabilities: { global: false, auditCore: false, delivery: true, externalData: false },
           userSetup: {
             ...stateBody().userSetup,
@@ -874,21 +878,25 @@ test('a failing env call surfaces the reason instead of an empty panel', async (
   assert.match(textOf(tree), /HTTP 503/)
 })
 
-test('the self-check never shows the iFinD API-Key itself, only its length', async () => {
+test('iFinD 数据源卡片只回长度，绝不回显 API-Key（就在环境信息页的那一步里）', async () => {
   stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const env = okEnvBody()
-  const paneProps = envPaneProps(env)
-  const { tree } = render(EnvironmentPane, paneProps)
-  // 一次只渲染**当前步骤**的正文：就绪时默认停在最后一步（工作空间），所以先切到 iFinD 那一步。
-  assert.equal(
-    findAll(tree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 0,
-    '别的步骤的卡片不常驻（只渲染当前步骤）',
-  )
+  const props = envPaneProps(okEnvBody())
+  const tree = render(EnvironmentPane, props).tree
+  // 外部数据源是**配置步骤里的一步**（用户口径：和别人放在一起，不单开一块）。
   findStep(tree, 'ifind').props.onClick()
-  const after = rerender(EnvironmentPane, paneProps)
+  const after = rerender(EnvironmentPane, props)
   const text = textOf(after)
-  // iFinD 卡片只回**脱敏摘要**（长度），绝不回显 API-Key 本身。
+  // 那一步的正文就是卡片本身（用户口径 2026-09-30：直接显示状态，不再堆口径说明、也不再另起一块）。
+  assert.equal(
+    findAll(after, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 1,
+    'iFinD 那一步渲染它的 API-Key 卡片',
+  )
+  assert.equal(
+    findAll(after, (node) => node.props?.['data-crwu-env-ifind-optional'] !== undefined).length, 0,
+    '那一步不该再有额外的口径块',
+  )
+  // 卡片只回**脱敏摘要**（长度），绝不回显 API-Key 本身。
   assert.equal(text.includes(`${zhCN.ifindConfigured}12`), true, '只回长度')
   assert.equal(text.includes('your ifind-mcp key'), false, '不得出现占位符或任何密钥内容')
   assert.equal(text.includes(zhCN.envIfindNeverAsk), true, '要明说不要把 API-Key 贴进对话')
@@ -1207,7 +1215,38 @@ test('the workspace card asks the user to pick when nothing is chosen', async ()
   const text = textOf(tree)
   assert.equal(text.includes(zhCN.wsMissing), true, '未选定时要明说没找到，并给选择入口')
   assert.equal(text.includes(zhCN.wsPick), true)
-  assert.equal(text.includes(zhCN.wsCreate), true)
+  // 口径（2026-09-30）：插件不为用户创建工作空间根目录 —— 「新建目录」按钮不许再出现。
+  assert.equal(text.includes('新建目录'), false, '没有「新建目录并用作工作空间」按钮')
+  assert.equal(
+    findAll(tree, (node) => typeof node.props?.label === 'string' && node.props.label.includes('新建')).length,
+    0,
+    '一个「新建…」按钮都不许渲染',
+  )
+})
+
+test('picking a directory never creates a directory, even when the service exists', async () => {
+  // §8-2：`UiWorkspaceService.createDirectory` 不再被调用。服务仍然挂在 `uiWorkspace` 上
+  // （宿主可能提供），判据是**调用次数必须是 0** —— 只断言"类型里没有"是不够的。
+  const createdDirs = []
+  const ops = stubOps({ workspace: { body: { ok: true, workspace: { chosen: true, path: '/cases/a' } } } })
+  const { WorkspaceCard } = await import(new URL('src/client/features/workbench/WorkspaceCard.tsx', ROOT).href)
+  const services = fakeServices({
+    uiWorkspace: {
+      pickDirectory: async () => '/cases/a',
+      createDirectory: async (parent, name) => { createdDirs.push([parent, name]); return '/cases/a/crwu-workspace' },
+      openWorkspace: async () => undefined,
+    },
+    workspaces: { create: async ({ path }) => ({ workspaceId: 'w1', path, title: 'A' }) },
+  })
+  const { tree } = render(WorkspaceCard, {
+    workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
+    services,
+    busy: false, message: '', onBusy: () => {}, onMessage: () => {}, onRefresh: () => {},
+  })
+  findButtonLike(tree, zhCN.wsPick).props.onClick()
+  for (let i = 0; i < 6; i += 1) await settle()
+  assert.deepEqual(createdDirs, [], '插件不得创建工作空间根目录')
+  assert.deepEqual(ops, ['workspace'], '只把用户选中的已有目录登记给 Host')
 })
 
 test('picking a directory registers it as a workspace and tells the Host', async () => {
@@ -1532,7 +1571,7 @@ test('暂不允许：不改动任何 Host 状态，界面如实说明功能禁�
       if (body.op === 'boot') return bootOk()
       // 未授权：模型必须**如实**说需要员工先允许本机访问（Host 侧也会拒绝发起审核）。
       return { ...okEnvBody(), localAccess: missingConsent(), state: stateBody({
-        status: 'action-required', proceed: false, allOk: false, passed: 7, total: 9,
+        status: 'action-required', proceed: false, allOk: false, passed: 5, total: 7,
         userSetup: { ...stateBody().userSetup, credentialsConsent: { state: 'unconfigured', value: '', reason: zhCN.envConsentIntro, required: true } },
         issues: [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '允许工作台访问本机账号和配置', message: '还没有允许工作台访问本机账号和配置' }],
         blocked: ['还没有允许工作台访问本机账号和配置'],
@@ -2062,93 +2101,63 @@ test('环境页不再有「复制安装提示词」入口（那套做法已删�
   }
 })
 
-test('the iFinD card never echoes the token and points at the source when missing', async () => {
+test('iFinD 数据源卡片：不取数就不谎报已验证，官方入口与开发者诊断各归其位', async () => {
   stubOps({})
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const base = {
-    error: '', busy: false, onRefresh: () => {},
-    onRelogin: () => {}, onDwsLogin: () => {},
-    services: fakeServices(), wsBusy: false, wsMessage: '', onWsBusy: () => {}, onWsMessage: () => {},
-  }
-  const envBase = {
-    ok: true, platform: 'darwin-arm64', services: [], blocked: [], allOk: true,
-    home: '/Users/x', localAccess: grantedConsent(),
-    packageIntegrity: packagesOk(),
-    runtime: runtimeOk(),
+  const envBase = okEnvBody({
     external: externalOk({
       path: '/cfg.json', ok: false, state: 'unconfigured', dataVerified: false,
       dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0,
     }),
-    delivery: deliveryOk(),
-    state: stateBody(),
-    // 其它必需环境（含工作空间）保持健康，避免"workspace 未选择却 allOk=true"的自相矛盾。
-    workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
-    sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
-  }
-  // iFinD 是**必需项**（2026-09-26 产品口径）：没填就是阻塞，不再有"只有它缺失 = degraded"那一档。
-  const missingProps = { ...base, env: { ...envBase, state: stateBody({
-    status: 'action-required',
-    proceed: false,
-    allOk: false,
-    passed: 7,
-    total: 9,
-    capabilities: { global: false, auditCore: false, delivery: true, externalData: false },
-    userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '还没有保存 iFinD API-Key', required: true } },
-    issues: [
-      { id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD API-Key 未通过验证：还没有保存 iFinD API-Key' },
-      { id: 'ifind-external', owner: 'user', blocking: true, scope: 'external-data', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据不可用：还没有保存 iFinD API-Key' },
-    ],
-  }) } }
-  const missingTree = render(EnvironmentPane, missingProps).tree
-  const text = textOf(missingTree)
-  assert.equal(text.includes(zhCN.envStatusReady), false, 'iFinD 没通过就不能说「环境就绪」')
-  assert.match(text, new RegExp(`${zhCN.envStatusAction}1${zhCN.envStatusActionTail}`), '同一 iFinD 配置即使有两个诊断作用域，也只能算还差 1 项')
-  assert.equal(text.includes('还没有保存 iFinD API-Key'), true, '要说清为什么没过')
-  // 默认停在第一项未完成的步骤 —— 就是 iFinD 这一步，卡片随即可见（一次只渲染当前步骤）。
-  assert.equal(stepStateOf(missingTree, 'ifind'), 'doing', '默认停在 iFinD 这一步')
-  assert.equal(
-    findAll(missingTree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 1,
-    'iFinD 卡片在当前步骤里可见',
-  )
-  // 官方入口是**链接**（href 是属性，不在文本里）：断言链接本身与它的地址。
-  assert.equal(text.includes(zhCN.envIfindGet), true, '要给出「获取 iFinD API-Key」入口')
-  assert.equal(text.includes(zhCN.envIfindNeverAsk), true, '要明说不要让 Agent 代填')
-  const missingLink = find(missingTree, (node) => node.type === 'a')
-  assert.equal(missingLink.props.href, 'https://mcp.51ifind.com/', '链接地址必须来自 Host 下发的 applyUrl')
+  })
+  const paneProps = envPaneProps(envBase)
 
-  // 认证通过 + 真的取到数据：就绪时默认停在最后一步，先切到 iFinD 那一步。
-  const okProps = { ...base, env: { ...envBase,
-    external: externalOk({ path: '/cfg.json' }),
-    state: stateBody({
-      userSetup: { ...stateBody().userSetup, ifind: { state: 'authenticated', value: '已保存（长度 12，不回显）', reason: '', required: true } },
-    }),
-  } }
-  const okTree = render(EnvironmentPane, okProps).tree
-  assert.equal(textOf(okTree).includes(zhCN.envIfindStateAuthenticated), false, '没切过去时看不到 iFinD 卡片')
-  findStep(okTree, 'ifind').props.onClick()
-  const okAfter = rerender(EnvironmentPane, okProps)
-  const okText = textOf(okAfter)
-  // 已认证 + 真的取到数据：卡片上显示「已认证」这一句结论（输入框收起）。
-  assert.equal(okText.includes(zhCN.envIfindStateAuthenticated), true, '认证通过要显示「已认证」')
+  // 未配置：**那一步**给「未配置」+ 官方入口（href 来自 Host 下发的 applyUrl），并明说不要代填。
+  const stepTree = render(EnvironmentPane, paneProps).tree
+  findStep(stepTree, 'ifind').props.onClick()
+  const missing = rerender(EnvironmentPane, paneProps)
+  const missingText = textOf(missing)
+  assert.equal(missingText.includes(zhCN.envIfindStateUnconfigured), true, '未配置要说成未配置')
+  assert.equal(missingText.includes(zhCN.envIfindGet), true, '要给出「获取 iFinD API-Key」入口')
+  assert.equal(missingText.includes(zhCN.envIfindNeverAsk), true, '要明说不要让 Agent 代填')
+  assert.equal(
+    find(missing, (node) => node.type === 'a').props.href,
+    'https://mcp.51ifind.com/',
+    '链接地址必须来自 Host 下发的 applyUrl',
+  )
+  // 那一步**直接显示状态**，且**不出现**任何阻塞告警 / 「必需项」字样。
+  assert.equal(missingText.includes(zhCN.envIfindStateUnconfigured), true, '未配置时就显示「未配置」')
+  // §8「iFinD」6：报告是否涉及外部数据都不知道时**不许**给出误导性的缺失告警 ——
+  // 未配置只说明"会记未检查"，不渲染任何 warn 级别的 Notice，也不出现"必需 / 阻塞"字样。
+  assert.equal(
+    findAll(missing, (node) => node.props?.tone === 'warn').length,
+    0,
+    '未配置外部数据源不产生任何告警块',
+  )
+  for (const forbidden of ['必需完成', '阻塞', '无法进行']) {
+    assert.equal(missingText.includes(forbidden), false, `这一步不许出现「${forbidden}」`)
+  }
+
+  // 已配置且真的取到过数据：只给「已配置并验证」+ 最近验证时间。
+  const okProps = envPaneProps(okEnvBody({ external: externalOk({ path: '/cfg.json' }) }))
+  const okTree0 = render(EnvironmentPane, okProps).tree
+  findStep(okTree0, 'ifind').props.onClick()
+  const okTree = rerender(EnvironmentPane, okProps)
+  const okText = textOf(okTree)
+  assert.equal(okText.includes(zhCN.envIfindStateVerified), true, '取到过数据 → 已配置并验证')
   assert.equal(okText.includes(zhCN.envIfindDataAt.trim()), true, '要显示最近真实验证时间')
-  // 状态已经验过时**不**再说「没取到数据」。
-  assert.equal(okText.includes(zhCN.envIfindNoData), false)
-  assert.equal(okText.includes('abcdefghijkl'), false, '任何情况下都不回显 API-Key')
-  assert.equal(okText.includes('你的令牌'), false, '绝不回显任何 SK 内容')
-  assert.equal(okText.includes(zhCN.envIfindGet), true, '要有「获取 iFinD API-Key」链接')
-  const link = find(okAfter, (node) => node.type === 'a')
-  assert.equal(link.props.href, 'https://mcp.51ifind.com/')
-  // 工具名与取数样本是**技术证据**：用户视图看不到，只在默认收起的「开发者诊断」里。
+  assert.equal(okText.includes(zhCN.envIfindNoData), false, '验过时**不**再说「没取到数据」')
+  // 工具名与取数样本只在**开发者诊断**里（默认收起），不进用户视野。
   assert.equal(okText.includes('get_stock_summary'), false, '验证工具名不进用户视野')
-  assert.equal(okText.includes(zhCN.envDiagIfindSample), false, '取数样本不进用户视野')
-  const verifiedTree = render(EnvironmentPane, okProps).tree
-  expandMaintenance(verifiedTree)
-  const verifiedText = textOf(rerender(EnvironmentPane, okProps))
-  assert.equal(verifiedText.includes(zhCN.envDiagIfindTool), true, '开发者诊断里要给出验证用的工具名')
-  assert.equal(verifiedText.includes('get_stock_summary'), true, '要显示验证用的工具名')
-  assert.equal(verifiedText.includes(zhCN.envDiagIfindSample), true, '开发者诊断里要给出取数样本')
-  assert.equal(verifiedText.includes('{"value":42}'), true, '取数摘要要显示（脱敏后的人工核对证据）')
-  assert.equal(verifiedText.includes('abcdefghijkl'), false, '任何情况下都不回显 API-Key')
+  assert.equal(okText.includes('{"value":42}'), false, '取数样本不进用户视野')
+  const diagTree = render(EnvironmentPane, okProps).tree
+  expandMaintenance(diagTree)
+  const diagText = textOf(rerender(EnvironmentPane, okProps))
+  assert.equal(diagText.includes(zhCN.envDiagIfindTool), true, '开发者诊断里要给出验证用的工具名')
+  assert.equal(diagText.includes('get_stock_summary'), true, '要显示验证用的工具名')
+  assert.equal(diagText.includes(zhCN.envDiagIfindSample), true, '开发者诊断里要给出取数样本')
+  assert.equal(diagText.includes('{"value":42}'), true, '取数摘要要显示（脱敏后人工核对证据）')
+  assert.equal(diagText.includes('abcdefghijkl'), false, '任何情况下都不回显 API-Key')
 })
 
 // ── 环境自检的门禁与右上角指示灯 ────────────────────────────────────────────
@@ -2257,8 +2266,8 @@ function stateBody(patch = {}) {
       h3yun: item('ok', { value: 'userId u1' }),
       dingtalk: item('ok'),
       aliyunOss: item('ok', { value: 'AKID****7890 · AK 正常' }),
-      // iFinD 自 2026-09-26 起是必需项（`required: true`，进必需项分母）。
-      ifind: item('authenticated', { value: 'API-Key 已保存（长度 12，不回显）' }),
+      // iFinD 自 2026-09-30 起是**可选数据源**（`required: false`，不进必需项分母）。
+      ifind: item('authenticated', { value: 'API-Key 已保存（长度 12，不回显）', required: false }),
     },
     systemHealth: {
       packageIntegrity: item('ok'),
@@ -2268,8 +2277,8 @@ function stateBody(patch = {}) {
     },
     capabilities: { global: true, auditCore: true, delivery: true, externalData: true },
     issues: [],
-    passed: 9,
-    total: 9,
+    passed: 7,
+    total: 7,
     blocked: [],
     allOk: true,
     checkError: '',
@@ -2300,7 +2309,7 @@ function okEnvBody(patch = {}) {
 function blockedEnvBody(patch = {}) {
   const state = stateBody({
     status: 'action-required', proceed: false, allOk: false,
-    passed: 7, total: 8,
+    passed: 6, total: 7,
     capabilities: { global: false, auditCore: false, delivery: true, externalData: true },
     userSetup: { ...stateBody().userSetup, workspace: { state: 'unconfigured', value: '', reason: '未找到工作空间「中瑞世联工作空间」，请手动选择', required: true } },
     issues: [{ id: 'workspace', owner: 'user', blocking: true, scope: 'global', action: '选择案例根目录', message: '未找到工作空间「中瑞世联工作空间」，请手动选择' }],
@@ -2412,7 +2421,12 @@ test('a failing self-check blocks the report page and lands on the environment p
   assert.equal(text.includes(zhCN.envActionRecheck), true, '主动作是重新检查')
   // 环境页上**没有**「进入报告审核」按钮（统一导航负责跳转，就绪时也只留一句提示）。
   assert.equal(countButtonsLike(tree, '进入报告审核'), 0, '不通过时更不该有「进入报告审核」按钮')
-  assert.equal(text.includes('进入报告审核'), false, '环境页正文里不许出现这个动作')
+  // ⚠️ 不再断言"字面上不出现"：非阻塞的外部数据提示里有一句「不影响进入报告审核」，
+  // 那是**说明**不是动作。判据是"没有被做成入口"，由上面的按钮计数与这句钉住。
+  assert.equal(
+    findAll(tree, (node) => node.type === 'button' && textOfAll(node).includes('进入报告审核')).length, 0,
+    '环境页不许把「进入报告审核」做成按钮',
+  )
   assert.equal(text.includes('未找到工作空间「中瑞世联工作空间」，请手动选择'), true, '要说清差什么')
 
   // 用户从任意入口想去报告审核：**不进入**目标页，落到环境页并记下被拦的目标。
@@ -2434,43 +2448,54 @@ test('a failing self-check blocks the report page and lands on the environment p
   assert.equal(textOf(blockedNote).includes(zhCN.moduleAudit), true, '要说清拦的是哪一页')
 })
 
-test('iFinD 未通过时：侧栏点报告审核立刻被拦回环境页，并当场给出指名 API-Key 的说明', async () => {
-  // 这条盯的是"拦截说明不用等用户再点一次重新检查"：
-  // 说明直接读统一导航层记下的 `gateReason`（`mod.blocked` + `pendingTarget`）。
-  stubOps({ boot: { body: bootOk() }, env: { body: ifindBlockedEnvBody() } })
+test('外部数据源未就绪：侧栏仍然进得了报告审核；那一步自己说明"不影响审核"', async () => {
+  // 2026-09-30 口径：iFinD 是**可选**数据源 —— 它没配好**不拦**任何页面。
+  // 配置入口就是配置工作区里的那一步（和别的配置项并排），拦截说明只由**基础必检项**触发。
+  stubOps({ boot: { body: bootOk() }, env: { body: externalDegradedEnvBody() } })
   const services = fakeServices()
   const { tree, modules } = await mountChecked(services)
-  assert.equal(textOf(tree).includes(zhCN.tabPending), false, '没通过就不能进报告审核')
-  assert.equal(find(tree, (node) => node.props?.['data-crwu-env-gate'] === 'blocked'), null, '还没被拦过就不该有说明')
-  // 模拟"从侧栏子项点报告审核"：统一导航层是**唯一**入口，面板自己不做页面内特判。
-  modules.navigate('audit', { state: environmentStateOf(ifindBlockedEnvBody()) })
-  const after = rerender(WorkbenchPanel, { services, modules })
-  const note = find(after, (node) => node.props?.['data-crwu-env-gate'] === 'blocked')
-  assert.ok(note, '被拦的那一刻就要有拦截说明')
-  // 指名到项：iFinD 未通过时门禁把话说具体，页面不许把它换成通用文案。
-  assert.match(textOf(note), /进入【报告审核】前，请先完成同花顺 iFinD API-Key 验证/, textOf(note))
-  assert.equal(textOf(after).includes(zhCN.tabPending), false, '报告页不许出来')
+  const text = textOf(tree)
+  assert.equal(text.includes(zhCN.tabPending), true, '通过基础门禁就直接进报告审核（外部数据不拦）')
+  assert.equal(find(tree, (node) => node.props?.['data-crwu-env-gate'] === 'blocked'), null, '没被拦过就不该有说明')
+
+  // 切到环境页：那一步在导航上，且**不带星号**（它不是必检项）。
+  modules.navigate('env', { state: environmentStateOf(externalDegradedEnvBody()) })
+  const envTree = rerender(WorkbenchPanel, { services, modules })
+  const envText = textOf(envTree)
+  assert.equal(
+    findAll(envTree, (node) => node.props?.['data-crwu-env-workspace'] !== undefined).length, 1,
+    '环境步骤工作区在同一页上',
+  )
+  assert.equal(envText.includes(zhCN.envStepIfind), true, 'iFinD 是配置步骤里的一步（和别的配置项并排）')
+  assert.equal(envText.includes(zhCN.envStepRequiredHint), true, '要说明星号的含义')
+  assert.equal(countButtonsLike(envTree, '进入报告审核'), 0, '环境页不许把跳转做成按钮')
+  assert.equal(modules.get().active, 'env')
+  // "这一步是可选的、不影响审核"由直接渲染那一步的用例钉住（`data-crwu-env-ifind-optional`）——
+  // 外壳渲染里 `EnvironmentPane` 的局部 state 在测试替身中不跨 rerender 保留，别在这里假装点了它。
 })
 
-/** iFinD 未通过（必检项阻塞）的环境应答：其它必需项都过，只有 API-Key 没填。 */
-function ifindBlockedEnvBody() {
+/** 基础环境全过、只有外部数据源（iFinD）未就绪的应答：degraded + externalData=false，**零阻塞**。 */
+function externalDegradedEnvBody() {
   const state = stateBody({
-    status: 'action-required', proceed: false, allOk: false,
-    passed: 8, total: 9,
-    capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
-    userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '还没有保存 iFinD API-Key', required: true } },
+    status: 'degraded', proceed: true, allOk: true,
+    passed: 7, total: 7,
+    capabilities: { global: true, auditCore: true, delivery: true, externalData: false },
+    userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '还没有配置外部数据源', required: false } },
     issues: [
-      { id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD API-Key 未通过验证：还没有保存 iFinD API-Key' },
-      { id: 'ifind-external', owner: 'user', blocking: true, scope: 'external-data', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据不可用：还没有保存 iFinD API-Key' },
+      {
+        id: 'ifind', owner: 'user', blocking: false, scope: 'external-data',
+        action: '配置外部数据源（同花顺 iFinD API-Key）',
+        message: '外部数据核查未就绪（同花顺 iFinD）：还没有配置外部数据源。不影响进入报告审核，涉及外部数据的项目会标记为「未检查」。',
+      },
     ],
-    blocked: ['iFinD API-Key 未通过验证：还没有保存 iFinD API-Key'],
+    blocked: [],
   })
   return okEnvBody({
-    allOk: false,
-    blocked: ['iFinD API-Key 未通过验证：还没有保存 iFinD API-Key'],
+    allOk: true,
+    blocked: [],
     external: externalOk({
       path: '/cfg.json', ok: false, state: 'unconfigured', dataVerified: false,
-      dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0, checkedAt: '',
+      dataTool: '', dataSample: '', reason: '还没有配置外部数据源', tokenLength: 0, checkedAt: '',
     }),
     state,
   })
@@ -2697,17 +2722,28 @@ test('envLampOf and envTally derive the light and the pass rate from the snapsho
   assert.equal(envLampOf({ env: okEnvBody(), busy: true, error: '', checkedAt: '' }), 'busy')
   assert.equal(envLampOf({ env: blockedEnvBody(), busy: true, error: '', checkedAt: '' }), 'busy')
 
-  // 参与计数的**只有必需项**：包(1) + 运行时(1) + 平台(1) + 工作空间(1) + 授权(1)
-  // + 氚云(1) + 钉钉(1) + OSS(1) + **iFinD(1)** = 9。
-  // iFinD 自 2026-09-26 起是必需项，所以它在分母里 —— 这正是"环境就绪"与"N/N 通过"
-  // 必须同时成立的原因（旧口径把它当可选，才会出现"就绪 + 8/9"这种自相矛盾）。
+  // `degraded`（唯一来源是**可选**外部数据源未配置）也是**绿灯**：它与 `ready` 一样放行，
+  // 灯与页面结论必须说同一件事，否则会出现"红点 + 基础环境已就绪"的自相矛盾。
+  const degraded = okEnvBody({
+    state: stateBody({
+      status: 'degraded', proceed: true,
+      capabilities: { global: true, auditCore: true, delivery: true, externalData: false },
+      issues: [{ id: 'ifind', owner: 'user', blocking: false, scope: 'external-data', action: '配置外部数据源', message: '外部数据核查未就绪' }],
+    }),
+  })
+  assert.equal(envLampOf({ env: degraded, busy: false, error: '', checkedAt: '' }), 'ok')
+
+  // 参与计数的**只有必需项**：包(1) + 平台(1) + 工作空间(1) + 授权(1)
+  // + 氚云(1) + 钉钉(1) + OSS(1) = 7。
+  // （DSH 自带运行时自 2026-09-29 起不在环境自检里；iFinD 自 2026-09-30 起是**可选数据源**，
+  // 所以它不在分母里 —— 这正是"基础环境已就绪"与"N/N 通过"必须同时成立的原因。）
   const tally = envTally(okEnvBody())
-  assert.equal(tally.total, 9)
-  assert.equal(tally.passed, 9)
+  assert.equal(tally.total, 7)
+  assert.equal(tally.passed, 7)
   assert.equal(tally.ratio, 1)
   const partial = envTally(blockedEnvBody())
-  assert.equal(partial.passed, 8, '工作空间那一项没过；iFinD 也没配')
-  assert.equal(partial.total, 9)
+  assert.equal(partial.passed, 6, '工作空间那一项没过（iFinD 是可选数据源，不参与扣分）')
+  assert.equal(partial.total, 7)
   assert.equal(envTally(null).ratio, 0)
 })
 
@@ -2727,6 +2763,108 @@ function envPaneProps(env, patch = {}) {
   }
 }
 
+test('账号连接只读取、检查已有凭据：没有内置浏览器登录、没有二维码、没有设备码', async () => {
+  // §8「登录」清单 1~4：页面不存在氚云内置浏览器登录按钮 / 不存在钉钉设备码按钮 /
+  // DSH 不打开内置浏览器 Tab / 不生成二维码或设备码。四条一起用两种判据钉住：
+  // ① 相关**模块文件**已经删掉（没有 Tab、没有二维码渲染器、也没有内置浏览器优先的打开器）；
+  // ② 面板上没有任何带这些字样的按钮，正文里也不出现"设备码 / 内置浏览器"这类承诺。
+  for (const gone of [
+    'src/client/features/environment/H3yunBrowserLogin.tsx',
+    'src/client/features/environment/login-browser.ts',
+    'src/client/features/environment/DwsLoginCard.tsx',
+    'src/client/features/environment/open-url.ts',
+  ]) {
+    assert.equal(existsSync(new URL(gone, ROOT)), false, `${gone} 必须已被删除（DSH 不再提供内置登录）`)
+  }
+
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const tree = render(EnvironmentPane, envPaneProps(okEnvBody())).tree
+  const text = textOf(tree)
+  // 账号连接是默认停在的那一步吗？不一定（就绪时停在最后一步），所以显式点开它。
+  findStep(tree, 'accounts').props.onClick()
+  const accounts = rerender(EnvironmentPane, envPaneProps(okEnvBody()))
+  const accountsText = textOf(accounts)
+  // 被删掉的是「提供」那些能力的具体承诺（§3 点名的句子），**不是**"DSH 不提供…"这句免责说明 ——
+  // 后者正是推荐文案（员工要知道为什么点不到二维码 / 设备码）。
+  for (const forbidden of [
+    '在内置浏览器里扫码登录', '准备内置浏览器', '请用钉钉扫描二维码', '已绑定氚云会话',
+    '内置浏览器登录未完成', '用设备码登录', '复制设备码', '等待浏览器授权',
+  ]) {
+    assert.equal(accountsText.includes(forbidden), false, `账号连接里不许再出现「${forbidden}」`)
+  }
+  const labels = findAll(accounts, (node) => node.type === 'button')
+    .map((node) => String(node.props?.label ?? '') + textOf(node))
+  for (const label of labels) {
+    assert.equal(/用设备码登录|设备码登录|在内置浏览器里扫码/.test(label), false, `按钮文案「${label}」不许提设备码 / 内置浏览器登录`)
+  }
+  // 兼容路径仍在：走本机 CLI（打开**系统浏览器**）的两颗按钮 + 说明。
+  assert.ok(findButtonLike(accounts, zhCN.envLoginH3yun), '氚云登录按钮仍在（走本机 CLI）')
+  assert.ok(findButtonLike(accounts, zhCN.dwsLogin), '钉钉登录按钮仍在（走本机 CLI）')
+  assert.equal(accountsText.includes(zhCN.envLoginNoBuiltinBrowser), true, '要明说 DSH 不提供内置浏览器扫码登录')
+  assert.equal(accountsText.includes(zhCN.envDwsLoginNoDeviceCode), true, '要明说 DSH 不提供设备码登录')
+  assert.equal(text.includes(zhCN.loadingEnv), false)
+})
+
+test('可选步骤（同花顺）未配置时只说「未配置」，芯片不报红', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const props = envPaneProps(okEnvBody({
+    external: externalOk({
+      path: '/cfg.json', ok: false, state: 'unconfigured', dataVerified: false,
+      dataTool: '', dataSample: '', reason: '还没有配置外部数据源', tokenLength: 0, checkedAt: '',
+    }),
+    state: stateBody({
+      userSetup: { ...stateBody().userSetup, ifind: { state: 'unconfigured', value: '', reason: '', required: false } },
+    }),
+  }))
+  const tree = render(EnvironmentPane, props).tree
+  findStep(tree, 'ifind').props.onClick()
+  const step = rerender(EnvironmentPane, props)
+  const text = textOf(step)
+  // 状态就是说「未配置」（不堆别的说法）。
+  assert.equal(text.includes(zhCN.envIfindStateUnconfigured), true, '直接显示「未配置」')
+  // 可选步骤的芯片**不报红**（红 = 必须处理）。
+  const chips = findAll(step, (node) => String(node.props?.className ?? '').includes(WORKBENCH_CLASSES.chip))
+  assert.ok(chips.length > 0, '步骤标题旁要有状态芯片')
+  for (const chip of chips) {
+    assert.equal(
+      String(chip.props.className).includes(WORKBENCH_CLASSES.chipBad),
+      false,
+      `可选步骤不该出现红色芯片：${textOf(chip)}`,
+    )
+  }
+})
+
+test('Windows 上提醒"以管理员身份运行"；其它平台不提醒', async () => {
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  // 钉钉 CLI（dws）在 Windows 上要碰 <HOME>\.dws 的登录态与锁文件，权限不足时登录一直不成功。
+  // 提醒挂在**账号连接**这一步（钉钉登录态就在那里），所以要看那一步的正文。
+  const winProps = envPaneProps(okEnvBody({ platform: 'win32-x64' }))
+  const winTree = render(EnvironmentPane, winProps).tree
+  findStep(winTree, 'accounts').props.onClick()
+  const winStep = rerender(EnvironmentPane, winProps)
+  assert.equal(
+    findAll(winStep, (node) => node.props?.['data-crwu-env-windows-admin'] !== undefined).length,
+    1,
+    'Windows 上账号连接那一步要有一条提醒',
+  )
+  const winText = textOf(winStep)
+  assert.equal(winText.includes(zhCN.envWindowsAdminHint), true, '要有那句可执行的提醒')
+  assert.match(zhCN.envWindowsAdminHint, /管理员/, '提醒必须说清"以管理员身份运行"')
+  assert.match(zhCN.envWindowsAdminHint, /钉钉/, '提醒必须说清是为了钉钉 CLI')
+
+  // 非 Windows：一个字都不提（避免无意义的噪音）。
+  const macProps = envPaneProps(okEnvBody())
+  const macTree = render(EnvironmentPane, macProps).tree
+  findStep(macTree, 'accounts').props.onClick()
+  const macStep = rerender(EnvironmentPane, macProps)
+  assert.equal(
+    findAll(macStep, (node) => node.props?.['data-crwu-env-windows-admin'] !== undefined).length,
+    0,
+    '非 Windows 不出现这条提醒',
+  )
+  assert.equal(textOf(macStep).includes(zhCN.envWindowsAdminHint), false)
+})
+
 test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作区 + 折叠的开发者诊断', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const paneProps = envPaneProps(okEnvBody())
@@ -2734,9 +2872,8 @@ test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作�
   const text = textOf(tree)
   for (const expected of [
     zhCN.envStatusReady,           // 顶部紧凑状态摘要
-    zhCN.envStepAccounts,          // 四步导航（顺序固定，不按状态重排）
+    zhCN.envStepAccounts,          // 三步导航（顺序固定，不按状态重排）
     zhCN.envStepOss,
-    zhCN.envStepIfind,
     zhCN.envStepWorkspace,
     zhCN.envStepDone,              // 每一步的状态词
     zhCN.envGroupMaintenance,      // 开发者诊断（默认收起）
@@ -2751,10 +2888,20 @@ test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作�
     '一次只渲染当前步骤',
   )
   assert.equal(findAll(tree, (node) => node.props?.['data-crwu-oss-card'] !== undefined).length, 0, 'OSS 卡片不在当前步骤里')
-  assert.equal(findAll(tree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 0, 'iFinD 卡片不在当前步骤里')
+  // iFinD 卡片随它自己那一步渲染（一次只有**一个**步骤正文）。
+  assert.equal(
+    findAll(tree, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 0,
+    'iFinD 卡片不在当前步骤里（就绪时停在最后一步）',
+  )
+  findStep(tree, 'ifind').props.onClick()
+  const ifindStep = rerender(EnvironmentPane, paneProps)
+  assert.equal(
+    findAll(ifindStep, (node) => node.props?.['data-crwu-ifind-card'] !== undefined).length, 1,
+    '切到 iFinD 那一步才渲染它的卡片',
+  )
   assert.equal(text.includes(zhCN.envConsentTitle), false, '账号连接的正文也不常驻')
-  // 四项都完成：一句完成摘要（而不是"还需完成 0 项"）。
-  assert.equal(findAll(tree, (node) => node.props?.['data-crwu-env-alldone'] !== undefined).length, 1, '四项都完成要给一句完成摘要')
+  // 三项都完成：一句完成摘要（而不是"还需完成 0 项"）。
+  assert.equal(findAll(tree, (node) => node.props?.['data-crwu-env-alldone'] !== undefined).length, 1, '三项都完成要给一句完成摘要')
   assert.equal(text.includes(zhCN.envStepDoneSummary), true)
   // 顶部只允许**一枚**主动作：重新检查。**没有**「进入报告审核」按钮 ——
   // 就绪时只写一句提示（跳转交给左侧栏的统一导航门禁）。
@@ -2764,10 +2911,10 @@ test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作�
     findAll(tree, (node) => node.type === 'button' && textOfAll(node).includes('报告审核')).length, 0,
     '「进入报告审核」不许被做成按钮',
   )
-  // 通过率与结论自洽：只统计必需项。
-  assert.equal(text.includes('9/9'), true)
-  // 技术细节默认看不到（包路径 / 清单 / 平台值 / 运行时版本都在收起的开发者诊断里）。
-  for (const hidden of [zhCN.envPackagesManifest, 'darwin-arm64', zhCN.envRuntimeExpect]) {
+  // 通过率与结论自洽：只统计必需项（运行时不在其中、iFinD 是可选数据源，所以是 7/7）。
+  assert.equal(text.includes('7/7'), true)
+  // 技术细节默认看不到（包路径 / 清单 / 平台值都在收起的开发者诊断里）。
+  for (const hidden of [zhCN.envPackagesManifest, 'darwin-arm64']) {
     assert.equal(text.includes(hidden), false, `「${hidden}」默认不该出现`)
   }
 
@@ -2786,9 +2933,9 @@ test('环境页主区只有员工要处理的事：状态摘要 + 步骤工作�
     findAll(accountsTree, (node) => node.props?.['data-crwu-oss-card'] !== undefined).length, 0,
     '切走之后上一步的正文不在页面上',
   )
-  // 四步都完成时导航上每一步都是 done（步骤名恒定、状态跟着环境模型走）。
-  for (const id of ['accounts', 'oss', 'ifind', 'workspace']) {
-    assert.equal(stepStateOf(accountsTree, id), 'done', `四步都完成时「${id}」应当是 done`)
+  // 三步都完成时导航上每一步都是 done（步骤名恒定、状态跟着环境模型走）。
+  for (const id of ['accounts', 'oss', 'workspace']) {
+    assert.equal(stepStateOf(accountsTree, id), 'done', `三步都完成时「${id}」应当是 done`)
   }
 
   // 还没保存 AK 的部署：默认停在第一项未完成的步骤（OSS），那一步才画表单。
@@ -2818,9 +2965,9 @@ test('工作空间就绪时压缩成摘要；缺失/失效时才展开', async (
   assert.ok(ready.includes(zhCN.wsChange), '摘要态也要能更换')
 
   const missing = textOf(render(EnvironmentPane, envPaneProps(blockedEnvBody())).tree)
-  // 缺失/失效：展开完整卡片 —— 给出选目录 / 新建 / 恢复自动识别。
-  assert.equal(missing.includes(zhCN.wsPick), true, '没选定时要能手动选')
-  assert.equal(missing.includes(zhCN.wsCreate), true)
+  // 缺失/失效：展开完整卡片 —— 给出选已有目录 / 恢复自动识别（没有「新建目录」）。
+  assert.equal(missing.includes(zhCN.wsPick), true, '没选定时要能手动选已有目录')
+  assert.equal(missing.includes('新建目录'), false, '插件不再提供「新建目录并用作工作空间」')
   assert.equal(missing.includes(zhCN.wsMissingDirHint) || missing.includes(zhCN.wsMissing), true)
 })
 
@@ -2831,7 +2978,7 @@ test('没就绪时：说清"还差 N 项"与怎么修，且不出现"请安装�
     ...base,
     blocked: ['插件内置组件：插件包不完整 / 平台不受支持'],
     state: stateBody({
-      status: 'system-blocked', proceed: false, allOk: false, passed: 7, total: 9,
+      status: 'system-blocked', proceed: false, allOk: false, passed: 6, total: 8,
       capabilities: { global: false, auditCore: false, delivery: false, externalData: true },
       systemHealth: { ...stateBody().systemHealth, packageIntegrity: { state: 'invalid', value: '', reason: '插件包不完整：包内缺少 dws', required: true } },
       issues: [{ id: 'package', owner: 'system', blocking: true, scope: 'global', action: '重新安装插件或联系管理员', message: '插件内置组件：插件包不完整 / 平台不受支持' }],
@@ -2857,7 +3004,7 @@ test('没就绪时：说清"还差 N 项"与怎么修，且不出现"请安装�
   assert.equal(expanded.includes('插件包不完整'), true, '系统故障的技术原因要在开发者诊断里可查')
 })
 
-test('开发者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool 可见性 + 技术细节都在里面', async () => {
+test('开发者诊断默认收起：包内组件 / 平台 / Tool 可见性 + 技术细节都在里面', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const paneProps = envPaneProps(okEnvBody())
   const collapsed = render(EnvironmentPane, paneProps)
@@ -2868,14 +3015,12 @@ test('开发者诊断默认收起：包内组件 / DSH Runtime / 平台 / Tool �
   expandMaintenance(collapsed.tree)
   const text = textOf(rerender(EnvironmentPane, paneProps))
   for (const expected of [
-    zhCN.envDiagPackages, zhCN.envDiagRuntime, zhCN.envDiagPlatform, zhCN.envDiagTools,
+    zhCN.envDiagPackages, zhCN.envDiagPlatform, zhCN.envDiagTools,
     // 包路径、清单与字节数这些技术细节也只在开发者诊断里。
+    // （DSH 自带运行时自 2026-09-29 起不再出现在环境自检里，相关行已移除。）
     '/Users/x/.dsh/plugins/dsh-crwu-workbench',
     zhCN.envPackagesManifest,
     zhCN.envPackagesSize,
-    '/opt/dsh/python/bin/python3',
-    'DSH 自带（bundled runtime）',
-    'openpyxl 3.1.2',
     zhCN.envConfigSource,
   ]) assert.equal(text.includes(expected), true, `开发者诊断里缺了「${expected}」`)
 })
@@ -2891,7 +3036,7 @@ test('开发者诊断入口使用 SVG 图标，且不再向员工解释内部检
   assert.equal(textOfAll(head).includes('开发者诊断'), true, '入口应使用面向开发同学的名称')
   assert.equal(findAll(head, (node) => node.type === 'svg').length, 1, '入口标题左侧应有一枚 SVG 诊断图标')
   assert.equal(
-    textOf(collapsed.tree).includes('包内组件、DSH Runtime、平台与 Tool 可见性；员工日常不需要看。'),
+    textOf(collapsed.tree).includes('包内组件、平台与 Tool 可见性；员工日常不需要看。'),
     false,
     '收起时不应再显示内部检查项说明',
   )
@@ -2899,7 +3044,7 @@ test('开发者诊断入口使用 SVG 图标，且不再向员工解释内部检
   head.props.onClick()
   const expanded = rerender(EnvironmentPane, paneProps)
   assert.equal(
-    textOf(expanded).includes('包内组件、DSH Runtime、平台与 Tool 可见性；员工日常不需要看。'),
+    textOf(expanded).includes('包内组件、平台与 Tool 可见性；员工日常不需要看。'),
     false,
     '展开后也不应再显示内部检查项说明',
   )
@@ -2950,7 +3095,7 @@ test('开发者诊断把全部信息放进一个大面板，并补齐插件版�
   for (const expected of [
     'CRWU Workbench 版本', 'v0.0.10',
     '同花顺 iFinD 连接状态', '已连接，真实取数成功',
-    zhCN.envDiagPackages, zhCN.envDiagRuntime, zhCN.envDiagPlatform, zhCN.envDiagTools,
+    zhCN.envDiagPackages, zhCN.envDiagPlatform, zhCN.envDiagTools,
     zhCN.envDiagOssTarget, zhCN.envPackagesRoot, zhCN.envConfigSource,
   ]) assert.equal(panelText.includes(expected), true, `诊断大面板缺少「${expected}」`)
 
@@ -2977,22 +3122,51 @@ test('复制诊断信息会复制面板里的完整可转发文本', async () =>
     for (const expected of [
       'CRWU Workbench 版本: v0.0.10',
       '同花顺 iFinD 连接状态: 已连接，真实取数成功',
-      '包内组件:', 'DSH Runtime:', 'Tool 可见性:', 'OSS 验证目标:',
+      '包内组件:', 'Tool 可见性:', 'OSS 验证目标:',
     ]) assert.equal(copied.includes(expected), true, `复制文本缺少「${expected}」`)
   } finally {
     delete globalThis.navigator
   }
 })
 
-test('环境配置步骤与 API-Key 卡片都明确写成同花顺 iFinD', async () => {
+test('同花顺 iFinD 是配置步骤里的一步（带品牌名），且**不带**必检星号', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const paneProps = envPaneProps(okEnvBody())
-  const rendered = render(EnvironmentPane, paneProps)
-  assert.equal(textOf(rendered.tree).includes('同花顺 iFinD'), true, '步骤导航应让非专业用户认出产品来源')
-
-  findStep(rendered.tree, 'ifind').props.onClick()
-  const ifindStep = rerender(EnvironmentPane, paneProps)
-  assert.equal(textOf(ifindStep).includes('同花顺 iFinD API-Key'), true, '配置卡片标题应带同花顺品牌名')
+  const tree = render(EnvironmentPane, paneProps).tree
+  const text = textOf(tree)
+  // 四步都在导航里，其中 iFinD 与别的配置项并排（用户口径：不单拆一块，页面才不乱）。
+  for (const title of [zhCN.envStepAccounts, zhCN.envStepOss, zhCN.envStepIfind, zhCN.envStepWorkspace]) {
+    assert.equal(text.includes(title), true, `步骤导航缺了「${title}」`)
+  }
+  // 星号只挂在必检项上：导航里数出来的星号数 = 必检步骤数（3），iFinD 那一步没有。
+  const nav = find(tree, (node) => node.props?.['data-crwu-env-stepnav'] !== undefined)
+  const marks = findAll(nav, (node) => String(node.props?.className ?? '') === WORKBENCH_CLASSES.stepRequired)
+  assert.equal(marks.length, 3, '只有三个基础必检项带红色星号')
+  // 当前那一步的面板标题里也有一枚（必检时）—— 就绪时停在最后一步（工作空间，必检）。
+  assert.equal(
+    findAll(find(tree, (node) => node.props?.['data-crwu-env-step-panel'] !== undefined),
+      (node) => String(node.props?.className ?? '') === WORKBENCH_CLASSES.stepRequired).length,
+    1,
+    '面板标题上的星号跟着当前这一步的必检与否走',
+  )
+  const ifindRow = findStep(tree, 'ifind')
+  assert.equal(
+    findAll(ifindRow, (node) => String(node.props?.className ?? '') === WORKBENCH_CLASSES.stepRequired).length,
+    0,
+    'iFinD 是可选外部数据源，不带星号',
+  )
+  for (const id of ['accounts', 'oss', 'workspace']) {
+    assert.equal(
+      findAll(findStep(tree, id), (node) => String(node.props?.className ?? '') === WORKBENCH_CLASSES.stepRequired).length,
+      1,
+      `「${id}」是必检项，要带星号`,
+    )
+  }
+  // 点开那一步：带上同花顺品牌名与覆盖能力。
+  findStep(tree, 'ifind').props.onClick()
+  const ifindText = textOf(rerender(EnvironmentPane, paneProps))
+  assert.equal(ifindText.includes(zhCN.envIfindCardTitle), true, '数据源卡片要带同花顺品牌名')
+  assert.equal(ifindText.includes(zhCN.envIfindCoverage), true, '要列出这个数据源覆盖的能力')
 })
 
 test('a blocked self-check names the missing item and still offers the maintainer fallback', async () => {
@@ -3006,7 +3180,10 @@ test('a blocked self-check names the missing item and still offers the maintaine
   // 「进入报告审核」不再是环境页上的按钮（跳转交给左侧栏的统一导航门禁），
   // 安装提示词那条兜底路径也已整体删除。
   assert.equal(countButtonsLike(tree, '进入报告审核'), 0)
-  assert.equal(text.includes('进入报告审核'), false)
+  assert.equal(
+    findAll(tree, (node) => node.type === 'button' && textOfAll(node).includes('进入报告审核')).length, 0,
+    '环境页不许把「进入报告审核」做成按钮',
+  )
   assert.equal(text.includes('安装提示词'), false, '旧的「复制安装提示词」兜底不该再出现')
   assert.equal(countButtonsLike(tree, zhCN.envActionRecheck) >= 1, true, '主动作是重新检查')
   // 开发者兜底（默认收起的诊断区）仍在同一页上。
@@ -4589,7 +4766,8 @@ test('上下文包：逐字注入 System Instruction，并如实写出缺失项�
   // 取数规则：**只有**案例目录这一条本机路径 + 用哪个 Tool 取 + 每次新建会话都重下 + 禁扫描
   assert.equal(block.includes(zhCN.aiCaseDirHead), true)
   assert.equal(block.includes('/Users/me/中瑞世联工作空间/2026-302474-LX9995-BG8740'), true, '要给出案例目录')
-  assert.equal(block.includes('crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<原文件名>" })'), true)
+  assert.equal(block.includes('crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<落盘名>" })'), true)
+  assert.equal(block.includes('**落盘名必须用下面「本次登记的材料」里给出的那个名字**'), true)
   assert.equal(block.includes('**每一次新建对话都要重新执行**'), true)
   assert.equal(block.includes('**禁止**用 `ls`、`find`、`grep`、`glob`'), true)
   // 除案例目录之外的本地路径一律不许出现（`/Users/me/中瑞世联工作空间` 仅在那一行里）
@@ -4950,7 +5128,7 @@ test('报告讨论上下文：写入远端数据边界 + 唯一的案例目录 +
   assert.equal(text.includes('/Users/me/中瑞世联工作空间/S-1'), true, '要给出本次会话的案例目录')
   assert.equal(text.includes(zhCN.aiFetchRulesHead), true)
   assert.equal(text.includes('`h3yun · <远端标识> · <文件名>` 里的**远端标识就是 `fileId`**'), true)
-  assert.equal(text.includes('crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<原文件名>" })'), true)
+  assert.equal(text.includes('crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<落盘名>" })'), true)
   assert.equal(text.includes('**每次新建对话都必须重新下载**'), true)
   assert.equal(text.includes('**禁止**用 `ls`、`find`、`grep`、`glob`'), true)
   assert.equal(text.includes('不要读任何本机路径'), true)

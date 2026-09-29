@@ -8,6 +8,10 @@ import type { EnvironmentRequirement } from '../../../shared/environment/model.t
  * 顺序就是侧栏那张分组卡上从上到下的顺序，**不要按条件重排**：那张卡是常驻控件，
  * 位置一变用户就得重新找。「报告评估」还没开发，但它照样占一个固定子项 ——
  * 点得开、只给占位说明，用户才知道这里将来有什么。
+ *
+ * ⚠️ 外部数据源（iFinD）**不是**第四个模块（用户口径 2026-09-30）：它是环境信息页**配置列表里的一步**
+ * （见 `features/environment/steps.ts`，必检与否用红色星号区分）。外部数据源是可选的，单开一页会读成
+ * "又一个要配置的模块"，而它要表达的事实本来就属于环境自检。
  */
 
 export type ModuleId = 'eval' | 'audit' | 'env'
@@ -22,13 +26,14 @@ export const MODULE_IDS: readonly ModuleId[] = ['eval', 'audit', 'env']
  * 以前这条判据长在 `WorkbenchPanel` 的 audit 分支上，于是只有面板里的那一页受控，
  * 侧栏子项、报告页内跳转、以后新增的页都各有各的判断。
  *
- * `env` 自己**永远不需要环境**：它就是修复入口，把它也拦住会让用户没有出路。
+ * `env` 自己**永远不需要环境**：它就是修复入口（外部数据核查区块也在这一页里），
+ * 把它也拦住会让用户没有出路。
  */
 export interface ModuleMeta {
   id: ModuleId
   /** 进入这一页要不要先过环境门禁。 */
   requiresEnvironment: boolean
-  /** 需要多严：`global` 覆盖一切，`audit` 只覆盖报告审核（当前只有它更严）。 */
+  /** 需要多严：`global` 覆盖一切，`audit` 只覆盖报告审核。 */
   requirement: EnvironmentRequirement
   /** 还没开发完（侧栏画小标签、正文画占位页）。 */
   underDevelopment: boolean

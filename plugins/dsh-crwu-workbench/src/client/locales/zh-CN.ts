@@ -84,6 +84,10 @@ export const zhCN = {
   // 会话名就是「报告 ↔ 会话」的映射本身；名字没写上，下次点会找不到它、只能再建一条。
   aiRenameFailed: '讨论会话没能按报告命名（下次打开会再新建一条）：',
   aiSendFailed: '发送失败：',
+  // 材料范围登记失败（协议 23）：**不发 kickoff**，会话保留可重试。
+  // 措辞要说清"能重试"，而不是让用户以为报告有问题 —— 也不许提示去别处找文件。
+  aiMaterialFailed: '准备本次会话的材料范围失败（材料一件都不会下载）：',
+  aiMaterialUnknown: '宿主没有说明原因；请重新点一次「与 DeepSeek 讨论报告」。',
   aiSessionPrefix: '报告讨论 · ',
   // 首轮注入给 AI 的上下文（角色 + 职责 + 报告事实），用户 2026-09-22 给的原话
   // 分页
@@ -124,10 +128,14 @@ export const zhCN = {
   // 原来只有一段抽象的数据边界（「不得读取本地文件」），实测模型还是会 `ls -la` / `find cases` /
   // `md5` 去翻工作区猜目录。所以要给出：唯一允许的目录 + 用哪个 Tool 取 + 每次新建会话都重下。
   aiCaseDirHead: '本案例目录（本次会话唯一允许读写的本机路径）：',
+  // Host 登记的材料白名单（协议 23）：只有这一批 fileId 能下载，落盘名由 Host 给出。
+  aiMaterialsHead: '本次登记的材料（只有这批能下载）：',
+  aiMaterialsEmpty: '（这条报告当前没有可下载的附件）',
+  aiMaterialSameName: '同名',
   aiFetchRulesHead: '资料获取规则（**每一次新建对话都要重新执行**）：',
   aiFetchRules: [
     '1. 下面「远端资料」与「资料来源」两张清单就是本次要取的资料；`h3yun · <远端标识> · <文件名>` 里的**远端标识就是 `fileId`**。',
-    '2. 逐件调用 `crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<原文件名>" })` 下载到上面那个案例目录；**下载完成后**才可以在那一个目录内用 `read` / python 读取正文。',
+    '2. 逐件调用 `crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<落盘名>" })` 下载到上面那个案例目录；**落盘名必须用下面「本次登记的材料」里给出的那个名字**（它带着这件附件自己的标识，报告里可能有两个同名附件，按原文件名落盘会互相覆盖，工具会直接拒绝）。**下载完成后**才可以在那一个目录内用 `read` / python 读取正文。',
     '3. **每次新建对话都必须重新下载**：即使磁盘上已经有同名文件也不要直接用它（可能是上一轮、也可能是别的报告留下的过期文件），一律以本次 Tool 下载的结果为准。',
     '4. **禁止**用 `ls`、`find`、`grep`、`glob` 或任何命令去浏览、扫描、查找本机目录；除了上面那一个案例目录，不要读任何本机路径（尤其不要读别的流水号目录）。',
     '5. 不要自己创建目录树：把 `caseDir` 与 `relativePath` 交给 Tool，父目录会自动创建。',
@@ -207,6 +215,7 @@ export const zhCN = {
   // 单项状态词：已就绪 / 未配置 / 需重新登录 / 能力缺口（后两个比"未配置"更准确）
   envItemOk: '已就绪',
   envItemMissing: '未配置',
+  /** 运行时这一项专用：**没问到**答案（不等于缺失），发起审核时会复核。 */
   envItemReauth: '需重新登录',
   // ② 插件内置组件：三件组件是**一个**聚合项；失败时不许出现"请安装 crwu/dws/ossutil"
   envItemPackagesName: '插件内置组件',
@@ -219,7 +228,6 @@ export const zhCN = {
   envRuntimeSourceLabel: '来源 ',
   envRuntimeStateGap: '能力缺口（capability gap）',
   envRuntimeStateMissingPackage: '缺依赖包',
-  envRuntimeMissingPackages: 'DSH 自带运行时缺少依赖包：',
   // 一句人话的用途（运行时用 Host 给的 note）
   envPurposeH3yun: '用来拉「报告审核」待办、读报告记录与附件',
   envPurposeDingtalk: '用来把审核结果回传归档、把交付件发到你自己的钉钉',
@@ -228,10 +236,12 @@ export const zhCN = {
   // 没就绪时"怎么配置"（每项都必须有）
   // 三件组件随插件发布在包内 `bin/<平台>/`，所以"没找到"不是让员工去装命令 —— 是插件包不完整。
   envFixPackages: '插件包不完整 / 平台不受支持：请重新安装中瑞世联工作台插件，或联系管理员确认插件包是否完整。这三件组件由插件按包内绝对路径使用，不从 PATH 上查找，也不需要员工单独配置。',
-  envFixRuntime: '这是插件的能力缺口，不是本机缺少 Python：本插件只用 DSH 自带运行时，不需要系统 Python，也不用改 PATH。请重启 profile，或联系维护者确认 DSH 自带运行时可用。',
   envFixAuthorize: '先点面板上的「同意并继续」完成插件授权（氚云会话 / 钉钉登录态）—— 只需授权一次、长期有效；授权前本插件不可用',
-  envFixH3yun: '点下面的「扫码登录氚云」；会话存在本机凭据存储，令牌不进对话、不发给任何 AI',
-  envFixDws: '点「钉钉登录」按提示授权。若你明知已登录（终端里 dws auth status 是 true），那是本机凭据读取被沙箱拦住，不是没登录 —— 完成插件授权（面板上的「同意并继续」）再点「重新自检」',
+  envFixH3yun: '点「扫码登录氚云」：由本机 CLI 打开**系统浏览器**扫码，会话写进本机凭据存储；'
+    + '令牌不进对话、不发给任何 AI。DSH 不提供内置浏览器扫码登录。',
+  envFixDws: '点「登录钉钉」由本机 CLI 打开**系统浏览器**完成授权（DSH 不提供设备码登录）。'
+    + '若你明知已登录（终端里 dws auth status 是 true），那是本机凭据读取被沙箱拦住，不是没登录 —— '
+    + '完成插件授权（面板上的「同意并继续」）再点「重新检查」',
   envFixService: '按部署说明配置这一项',
   envFixOss: 'AccessKey 找管理员要一次，填进下面的表单；密钥只写在本机配置文件，不回显、不写日志',
   envFixIfind: '把 auth_token 填到配置文件 ',
@@ -242,37 +252,19 @@ export const zhCN = {
   envOssReasonNoCred: '还没有写入 OSS 凭据（AccessKey）',
   envOssReasonNoSecret: '凭据文件里没有 AccessKey Secret',
   envOssOssutilMissing: '插件内置的 ossutil 不可用：这不是凭据问题，是插件包不完整 —— 需要重新安装插件',
-  envLoginH3yun: '扫码登录氚云',
+  envLoginH3yun: '扫码登录氚云（打开系统浏览器）',
   /**
-   * 内置浏览器登录（协议 20）。文案刻意**只描述状态**：令牌与授权码的值永不进这里，
-   * 状态串会被渲染到员工可见的界面上。
+   * 账号连接的**未连接文案**（2026-09-30 口径）：DSH 只读取、检查已有凭据 ——
+   * **不提供**内置浏览器扫码登录、二维码、设备码与登录进度轮询。
+   * 登录由本机 CLI 打开系统浏览器完成（面板上的按钮只是触发它）。
    */
-  loginBrowserStart: '在内置浏览器里扫码登录',
-  loginBrowserIdle: '未开始',
-  loginBrowserPreparing: '正在准备内置浏览器…',
-  loginBrowserWaiting: '请用钉钉扫窗口里的二维码（这是氚云登录页）',
-  loginBrowserBound: '已绑定氚云会话',
-  loginBrowserCodeSeen: '已收到授权回调，正在换取会话…',
-  loginBrowserTimeout: '等待超时；关掉重试一次即可',
-  loginBrowserError: '内置浏览器登录未完成',
-  loginBrowserUnavailable: '当前界面没有内置浏览器（浏览器版 DSH）。请用系统浏览器完成氚云扫码登录后，再走下面那条回退路径绑定会话。',
-  loginBrowserCodeSeenHint: '授权回调来自 {host}（未记录授权码本身）',
+  envH3yunMissing: '未检测到有效的氚云员工会话。请在系统浏览器完成登录后重新检查。',
+  envDingtalkMissing: '未检测到有效的钉钉登录态。请在系统浏览器完成授权后重新检查。',
   /**
-   * 钉钉两阶段登录（协议 21）。`url` / `userCode` 是 Host 从 CLI 输出里**尽力解析**的，
-   * `tail` 才是原文 —— 文案只描述状态，不含任何凭据。
+   * ⚠️ 这里**没有** `loginBrowser*`、**没有** `dwsLogin*`（设备码 / 两阶段 / 轮询快照）这些键了：
+   * 内置浏览器登录（协议 20）与钉钉设备码 / 两阶段登录（协议 21）已经整体下掉
+   * （2026-09-30，协议 22），界面不再有对应文案。留下的只有两颗走本机 CLI 的登录按钮。
    */
-  dwsLoginStart: '登录钉钉',
-  dwsLoginStartDevice: '用设备码登录',
-  dwsLoginIdle: '未开始',
-  dwsPhaseRunning: '等待你在浏览器里完成授权…',
-  dwsPhaseOk: '登录成功',
-  dwsPhaseTimeout: '等待超时（可以重试）',
-  dwsPhaseFailed: '登录失败',
-  dwsLoginOpen: '打开授权链接',
-  dwsLoginCopyLink: '复制链接',
-  dwsLoginUserCode: '设备码',
-  dwsLoginCopyCode: '复制设备码',
-  dwsLoginHint: '授权链接会在系统默认浏览器里打开；完成后这里会自动变成「登录成功」。',
 
   /**
    * 登录按钮的**前置条件**（2026-09-29 员工实测）：两条登录命令都要写工作区之外的路径 ——
@@ -305,9 +297,6 @@ export const zhCN = {
   envPackagesManifest: '包内清单',
   envPackagesExpected: '版本要求',
   envRuntimePath: '运行时路径',
-  envRuntimeExpect: '版本要求',
-  envRuntimeRequiredPackages: '必需包',
-  envRuntimeDistributions: '依赖包版本',
   envReason: '原因',
   envResolvedPath: '实际路径',
   envVersionText: '版本',
@@ -678,20 +667,19 @@ export const zhCN = {
   wsSourceSaved: '上次选择',
   wsSourceManifest: '清单指定',
   wsSourceManual: '手动选择',
-  wsMissing: '没找到清单指定的工作空间，也没有上次的选择，请先选定一个目录。',
+  wsMissing: '尚未选择工作空间，请选择一个已经存在的目录。',
   wsMissingDirBadge: '目录不存在',
   wsMissingDir: '已选定的工作空间目录不在了：',
-  wsMissingDirHint: '请重新选一个目录，或点「恢复自动识别」。插件**不会**自动换到别的工作空间。',
+  wsMissingDirHint: '请选择另一个已经存在的目录。插件不会创建目录，也不会自动切换到其他目录。',
   wsMissingPicked: '已选定过：',
-  wsPick: '选择目录作为工作空间',
-  wsCreate: '新建目录并用作工作空间',
+  wsPick: '选择已有目录作为工作空间',
+  // ⚠️ 没有 `wsCreate`：插件不为用户创建工作空间根目录（案例子目录仍由 Host 自动创建）。
   wsChange: '更换工作空间',
   wsAuto: '恢复自动识别',
   wsAutoRestored: '已恢复自动识别：',
-  wsAutoNone: '没有可自动识别的工作空间，请手动选择。',
+  wsAutoNone: '没有找到可自动识别的已有工作空间，请手动选择一个目录。',
   wsAutoFailed: '恢复自动识别失败：',
-  wsPicked: '案例根目录已选定：',
-  wsCreated: '已新建并选定：',
+  wsPicked: '已登记已有工作空间：',
   wsRemembered: '（已记住，下次不用再选）',
   wsCancelled: '已取消选择',
   wsFailed: '选定失败：',
@@ -739,7 +727,8 @@ export const zhCN = {
   // ── 2026-09-26 环境页重排：紧凑状态摘要 + 引导式配置工作区（步骤导航 + 单步详情）──────
   // 顶部只有一条结论 + 一枚「重新检查」；页面里**不再有**「进入报告审核」按钮
   // （就绪时只做提示，跳转由左侧栏走统一导航门禁）。
-  envStatusReady: '环境已就绪',
+  // 2026-09-30 收敛：步骤里**没有** iFinD（它是可选的外部数据源，搬到了「外部数据核查」）。
+  envStatusReady: '基础环境已就绪',
   envStatusAction: '还需完成 ',
   envStatusActionTail: ' 项',
   envStatusAdmin: '需要管理员处理 ',
@@ -756,7 +745,8 @@ export const zhCN = {
   envActionRecheck: '重新检查',
   envStatusSummary: '已完成 ',
   envStatusSummaryTail: ' 项',
-  // 步骤
+  // 步骤：外部数据源（iFinD）和别的配置项**并排**放在这里；
+  // 基础必检项带红色星号（`envStepRequiredMark`），可选的外部数据**不带**。
   envStepsNavLabel: '环境配置步骤',
   envStepAccounts: '账号连接',
   envStepOss: '阿里云 OSS',
@@ -767,13 +757,26 @@ export const zhCN = {
   envStepDoing: '进行中',
   envStepOf: '第 ',
   envStepOfTail: ' 步',
-  envStepHintAccounts: '你自己的账号：氚云扫码、钉钉登录。密钥类配置在后面的步骤里。',
+  /** 基础必检项的**红色星号**（只有它带；可选外部数据不带，页面才不乱）。 */
+  envStepRequiredMark: '*',
+  envStepRequiredHint: '带 * 的是基础配置，必须完成；同花顺 iFinD 是可选的外部数据源（最后一步），不配也能进入报告审核。',
+  envStepHintAccounts: '你自己的账号：氚云扫码、钉钉登录（都由本机 CLI 打开系统浏览器完成）。密钥类配置在后面的步骤里。',
   envStepHintOss: '用于上传审核交付件，请向管理员获取 AccessKey ID 和 AccessKey Secret。',
-  envStepHintIfind: '用于查询外部金融数据。请粘贴你自己的 API-Key，页面不会回显它。',
+  envStepHintIfind: '可选：用于核对报告引用的行情、财务与公开信息。不配置不影响进入报告审核。',
   envStepHintWorkspace: '审核产物写到这个目录下的「报告流水号」文件夹里。',
-  envStepDoneSummary: '四项配置都已完成。你可以从左侧进入报告审核。',
+  envStepDoneSummary: '基础配置都已完成。你可以从左侧进入报告审核。',
+  /**
+   * Windows 专属提醒（非阻塞）：钉钉 CLI（dws）要碰 `<HOME>\.dws` 的登录态与锁文件，
+   * 进程权限不够时会以"锁被占用 / 拒绝访问"结束，表现却是**钉钉登录一直不成功**。
+   */
+  envWindowsAdminHint: '检测到 Windows：请用「以管理员身份运行」启动 DeepSeek Harness。'
+    + '钉钉 CLI（dws）要访问 <HOME>\.dws 的登录态与锁文件，权限不足时钉钉登录会一直不成功。',
   // 账号连接
-  envAccountsHint: '这些是你自己的账号：氚云扫码、钉钉登录。密钥类配置在后面的步骤里。',
+  envAccountsHint: '这些是你自己的账号：氚云扫码、钉钉登录（都由本机 CLI 打开系统浏览器完成）。密钥类配置在后面的步骤里。',
+  // 登录入口的**能力边界**：DSH 只读、只检查已有凭据，不提供内置浏览器 / 设备码
+  envLoginNoBuiltinBrowser: 'DSH 不提供内置浏览器扫码登录：点上面的按钮由本机 CLI 打开**系统浏览器**完成氚云登录，'
+    + '凭据写进本机凭据存储（面板不显示二维码、不读浏览器 Cookie、不轮询登录进度）。',
+  envDwsLoginNoDeviceCode: 'DSH 不提供设备码登录：点上面的按钮由本机 CLI 打开**系统浏览器**完成钉钉授权。',
   // ── 本机访问授权（协议 18）───────────────────────────────────────────────
   // 文案口径：说的是「允许工作台为**这几个固定功能**访问本机账号和配置」，
   // **不是**「授予插件所有权限」。能力清单逐条可读，与收据里的 capability 一一对应。
@@ -785,7 +788,8 @@ export const zhCN = {
   envConsentCapDws: '读取和更新 .dws 里的钉钉登录状态',
   envConsentCapOss: '读写 .ossutilconfig（交付件回传用的 AccessKey）',
   envConsentCapIfind: '读写 .dsh/crwu-workbench 里的工作台状态和 iFinD API-Key',
-  envConsentCapSystem: '执行插件内置的 crwu / dws / ossutil；登录时打开系统浏览器；写系统剪贴板',
+  envConsentCapSystem: '执行插件内置的 crwu / dws / ossutil；登录时打开系统浏览器；写系统剪贴板；'
+    + '在你选定的工作空间里创建本轮案例目录',
   envConsentBoundary: '不会把凭据交给 Agent；不会向 Agent 开放任意系统命令；可以随时在工作台撤销；'
     + '权限范围升级后会重新询问。审核产物只写进你选定的工作空间。',
   envConsentDone: '已允许工作台访问本机账号和配置（一次允许、长期有效）',
@@ -827,26 +831,32 @@ export const zhCN = {
   envCredInheritedWindowsAcl: '使用当前 Windows 账户 ACL；POSIX 0600 不适用。',
   envCredInherited: '凭据权限由现有机制负责，没有执行额外收紧。',
   envCredHardeningFailed: '凭据已保存，但权限没有收紧成功，请检查文件权限。',
-  // iFinD 步骤
-  envIfindCardTitle: '同花顺 iFinD API-Key',
-  envIfindCardHint: '用于查询外部金融数据。API-Key 由插件保存在本机，页面不回显；保存或点击「重新验证」时才会读取一条测试数据，环境检查只读取最近结论。',
+  // ── iFinD 数据源卡片（配置列表里的一步；可选，不带必检星号）───────────────────
+
+  envIfindCardTitle: '同花顺 iFinD',
+  envIfindCardHint: '用于查询外部金融数据（可选）。API-Key 只保存在本机、页面不回显；'
+    + '保存或点「重新验证」时才真的取一次数据。',
+  envIfindCoverage: '覆盖能力：财务报表 · 收盘价/市值 · 公司属性 · 行业指标 · 公告资讯 · 无风险利率 · Beta · ERP · 债券收益率',
   envIfindSecretLabel: '同花顺 iFinD API-Key',
   envIfindSecretPlaceholder: '粘贴你自己的 API-Key（不会回显）',
   envIfindSubmit: '保存并验证',
   envIfindSubmitting: '正在连接同花顺 iFinD，并读取一条测试数据…',
   envIfindReplace: '替换 API-Key',
-  envIfindClear: '清除已保存的 API-Key',
+  envIfindClear: '清除配置',
   envIfindClearConfirm: '清除后需要重新填写 API-Key 才能取数。确定清除吗？',
   envIfindCleared: '已清除本机保存的 API-Key。',
   envIfindGet: '获取同花顺 iFinD API-Key',
   envIfindHowTo: '从哪里获得：点上面的官方入口，在个人中心里复制你自己的 API-Key，粘贴到本页输入框。',
   envCancel: '取消',
   envIfindNeverAsk: '不要把 API-Key 发到对话里，也不要让 Agent 代填：它只应出现在这个输入框里。',
-  envIfindStateUnconfigured: '未填写',
-  envIfindStateUnverified: '未通过验证',
+  // 状态词（未配置 / 待验证 / 已配置并验证 / 验证失败 / 数据权限不足 / 暂时不可用）
+  envIfindStateUnconfigured: '未配置',
+  envIfindStateUnverified: '待验证',
   envIfindStateAuthenticated: '已认证',
-  envIfindStateInvalid: 'API-Key 无效',
-  envIfindStateUnreachable: '服务不可达',
+  envIfindStateVerified: '已配置并验证',
+  envIfindStateInvalid: '验证失败',
+  envIfindStateEntitlement: '数据权限不足',
+  envIfindStateUnreachable: '暂时不可用',
   // 真实取数验证的结论（与"认证通过"分开说，避免"已认证但不能取数"这种误导）
   envIfindVerified: '验证成功，已读取到测试数据。',
   envIfindRetry: '重新验证',
@@ -863,7 +873,6 @@ export const zhCN = {
   envWsAuto: '自动识别',
   envWsMissing: '选定的目录不在了，请重新选择',
   envDiagPackages: '包内组件',
-  envDiagRuntime: 'DSH Runtime',
   envDiagPlatform: '平台',
   envDiagTools: 'Tool 可见性',
   envDiagPanelTitle: '开发者诊断信息',
@@ -929,8 +938,8 @@ export const zhCN = {
   openWorkbench: '打开工作台',
   runCardSummary: '中瑞世联工作台：环境自检 → 报告审核（单条）→ 自动上云 → 直接开云端审核意见。',
   relogin: '氚云登录',
-  dwsLogin: '钉钉登录',
-  dwsLoginDevice: '设备码登录（无浏览器时）',
+  dwsLogin: '登录钉钉（打开系统浏览器）',
+  // ⚠️ 没有 `dwsLoginDevice`（设备码登录）：DSH 不再提供设备码登录入口（2026-09-30）。
   stopAudit: '停止这条审核',
 
   // ── 停止审核的阶段文案（F2，2026-09-29）────────────────────────────────────

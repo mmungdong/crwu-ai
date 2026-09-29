@@ -91,6 +91,20 @@ export async function runShell(
     workdir?: string
     timeoutMs?: number
     escalate?: boolean
+    /**
+     * **逐次声明的沙箱策略**（调用方用自己的会话 `sandboxPolicy.resolve({ session })` 算出来）。
+     *
+     * 为什么必须有这一条（2026-09-30 真机）：DSH 的执行器**不持有会话**
+     * （`dsh-sandbox-policy` 的原话是 "executors and providers remain session-free"），
+     * 请求里不带 `sandboxPolicy` 时它只会用自己的**部署默认**（`workspace-write` + 配置里的兜底根，
+     * 通常就是进程 cwd）。所以"按某个会话的作用域执行"不是换个 `ctx` 就能成立的 ——
+     * 必须由调用方把那个会话解析出来的策略放进请求里，DSH 自带的 bash / fs 也是这么做的。
+     *
+     * 与 `escalate` 的关系：`escalate` 是**提权**（特权操作专用，策略由操作表钉死为
+     * `danger-full-access`）；`sandboxPolicy` 是调用方算出来的**本会话策略**（非特权操作用它对齐边界）。
+     * 两者都给时以 `sandboxPolicy` 为准（Broker 只会给其中一个）。
+     */
+    sandboxPolicy?: { mode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot: string }
     stdoutMaxBytes?: number
     stdinText?: string
     /**
@@ -111,7 +125,10 @@ export async function runShell(
     return failed('未知会话工作区，无法申请无沙箱执行')
   }
 
-  const requestedMode = options.escalate === true ? 'danger-full-access' : ''
+  // 请求的模式：显式策略 > 提权 > 交给执行器默认（空串 = 我们没声明）。
+  const declared = options.sandboxPolicy
+    ?? (options.escalate === true ? { mode: 'danger-full-access' as const, workspaceRoot: workRoot } : undefined)
+  const requestedMode = declared === undefined ? '' : declared.mode
   let spec: ShellExecSpec
   try {
     spec = shell.resolve({
@@ -121,9 +138,7 @@ export async function runShell(
       stdoutMaxBytes: options.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX_BYTES,
       ...(options.stdinText === undefined ? {} : { stdin: options.stdinText }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.escalate === true
-        ? { sandboxPolicy: { mode: 'danger-full-access', workspaceRoot: workRoot } }
-        : {}),
+      ...(declared === undefined ? {} : { sandboxPolicy: declared }),
     })
   } catch (error) {
     return failed(`执行失败：${failureMessage(error)}`, { ...NO_SANDBOX_FACTS, requested: requestedMode })
@@ -207,6 +222,8 @@ export async function startShell(
   options: {
     workdir?: string
     escalate?: boolean
+    /** 与 `runShell` 同义：调用方按自己的会话解析出来的策略（见那边的长注释）。 */
+    sandboxPolicy?: { mode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot: string }
     stdoutMaxBytes?: number
   } = {},
 ): Promise<ShellStartResult> {
@@ -220,7 +237,9 @@ export async function startShell(
     return { ok: false, error: '未知会话工作区，无法申请无沙箱执行', sandbox: NO_SANDBOX_FACTS }
   }
 
-  const requestedMode = options.escalate === true ? 'danger-full-access' : ''
+  const declared = options.sandboxPolicy
+    ?? (options.escalate === true ? { mode: 'danger-full-access' as const, workspaceRoot: workRoot } : undefined)
+  const requestedMode = declared === undefined ? '' : declared.mode
   let spec: ShellExecSpec
   try {
     spec = shell.resolve({
@@ -229,9 +248,7 @@ export async function startShell(
       // 后台进程自己管超时：执行器的默认死线只适合前台命令。
       onExpiry: 'none',
       ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
-      ...(options.escalate === true
-        ? { sandboxPolicy: { mode: 'danger-full-access', workspaceRoot: workRoot } }
-        : {}),
+      ...(declared === undefined ? {} : { sandboxPolicy: declared }),
     })
   } catch (error) {
     return {

@@ -24,7 +24,7 @@ const { zhCN } = await import(new URL('src/client/locales/zh-CN.ts', ROOT).href)
 /** 一条配置项（`SetupItemView` 的最小形状）。 */
 const item = (state, patch = {}) => ({ state, value: '', reason: '', required: true, ...patch })
 
-/** 四项必需项全通过。`ok` 与 `authenticated` 都是完成态（两种都要覆盖到）。 */
+/** 三项必需项全通过（iFinD 是可选数据源，不在步骤里）。`ok` 与 `authenticated` 都是完成态。 */
 function setupInput(patch = {}) {
   return {
     authorized: true,
@@ -49,13 +49,20 @@ const stepOf = (steps, id) => steps.find((step) => step.id === id)
 
 // ── 顺序与完成判据 ───────────────────────────────────────────────────────────
 
-test('步骤顺序固定为 accounts → oss → ifind → workspace，不按状态重排', () => {
-  assert.deepEqual([...SETUP_STEP_IDS], ['accounts', 'oss', 'ifind', 'workspace'])
+test('步骤顺序固定为 accounts → oss → workspace → ifind，不按状态重排', () => {
+  // 2026-09-30：外部数据源（iFinD）**和别的配置项并排**放在步骤里（用户口径：不要单开一块，页面很乱），
+  // 而且**排在最后一步**（可选能力不该挤在必检项中间）；区别只在"必检与否"——
+  // 它不带红色星号、也不进"还没做完"的统计。
+  assert.deepEqual([...SETUP_STEP_IDS], ['accounts', 'oss', 'workspace', 'ifind'])
   // 后面几步已完成、第一步还没做：顺序也不许变（重排会让用户每次都重新找位置）。
   const steps = setupSteps(setupInput({ authorized: false }))
-  assert.deepEqual(steps.map((step) => step.id), ['accounts', 'oss', 'ifind', 'workspace'])
+  assert.deepEqual(steps.map((step) => step.id), ['accounts', 'oss', 'workspace', 'ifind'])
   // 序号是 1 起的位置号，跟顺序一起固定。
   assert.deepEqual(steps.map((step) => step.index), [1, 2, 3, 4])
+  // 必检标记只有这一个来源：accounts / oss / workspace 带星号，末位的 iFinD 不带。
+  assert.deepEqual(steps.map((step) => [step.id, step.required]), [
+    ['accounts', true], ['oss', true], ['workspace', true], ['ifind', false],
+  ])
 })
 
 test('完成判据只看**自己那一步的项**：ok / authenticated 才算完成；accounts 要授权 + 氚云 + 钉钉', () => {
@@ -75,19 +82,26 @@ test('完成判据只看**自己那一步的项**：ok / authenticated 才算完
   for (const notDone of ['unconfigured', 'unverified', 'invalid', 'unreachable', 'unknown']) {
     assert.equal(statesOf(setupSteps(setupInput({ oss: item(notDone) }))).oss, 'todo', notDone)
   }
-  assert.equal(statesOf(setupSteps(setupInput({ ifind: item('ok') }))).ifind, 'done')
   assert.equal(statesOf(setupSteps(setupInput({ workspace: item('ok') }))).workspace, 'done')
+  // iFinD 是**一步**（所以它有完成态），但它是可选的那一步：状态照实反映，不影响别人。
+  assert.equal(statesOf(setupSteps(setupInput({ ifind: item('ok') }))).ifind, 'done')
+  assert.equal(statesOf(setupSteps(setupInput({ ifind: item('unreachable') }))).ifind, 'todo')
 })
 
 // ── 默认停在哪一步 ───────────────────────────────────────────────────────────
 
-test('默认停在**第一项未完成**；全部完成时停在最后一步', () => {
-  assert.equal(pickStep(setupSteps(setupInput()), null), 'workspace', '全完成 → 最后一步')
+test('默认停在**第一项未完成的必检项**；必检项都完成时停在最后一个必检项', () => {
+  // 末位是可选的 iFinD：默认落点**不是**它（否则等于替用户把它当成"还差这一步"）。
+  assert.equal(pickStep(setupSteps(setupInput()), null), 'workspace', '必检项都完成 → 最后一个必检项')
   assert.equal(pickStep(setupSteps(setupInput({ authorized: false })), null), 'accounts')
   assert.equal(pickStep(setupSteps(setupInput({ h3yun: item('unconfigured') })), null), 'accounts')
   // accounts 做完之后轮到 oss（不是一路"停在最后一步"）。
   assert.equal(pickStep(setupSteps(setupInput({ oss: item('unconfigured') })), null), 'oss')
-  assert.equal(pickStep(setupSteps(setupInput({ ifind: item('unreachable') })), null), 'ifind')
+  // iFinD 未通过**不改变默认落点**：默认只停在第一项未完成的**必检项**上，
+  // 可选数据源不该抢焦点（否则用户会以为它是必做项）。
+  assert.equal(pickStep(setupSteps(setupInput({ ifind: item('unreachable') })), null), 'workspace')
+  // 但必检项真的缺一项时，落点仍然是那一项。
+  assert.equal(pickStep(setupSteps(setupInput({ oss: item('unconfigured'), ifind: item('unreachable') })), null), 'oss')
   // 空清单是退化输入：也要给出一个具体步骤，页面拿它当"当前步骤"。
   assert.equal(pickStep([], null), 'accounts')
 })
@@ -131,9 +145,31 @@ test('当前步骤未完成时是「进行中」；完成了就是「已完成�
 test('allStepsDone：全部完成才为真；空清单不算"全部完成"', () => {
   assert.equal(allStepsDone(setupSteps(setupInput())), true)
   assert.equal(allStepsDone(setupSteps(setupInput({ authorized: false }))), false)
-  assert.equal(allStepsDone(setupSteps(setupInput({ ifind: item('unverified') }))), false)
-  // 空清单一律为假：否则页面会对着一份空清单说"四项都已完成"。
+  // iFinD 未通过**不算**"还没做完"：它不带星号、不进统计（否则页面会永远停在"还没做完"）。
+  assert.equal(allStepsDone(setupSteps(setupInput({ ifind: item('unverified') }))), true)
+  // 但任何一个**必检项**没完成就是没完成。
+  assert.equal(allStepsDone(setupSteps(setupInput({ workspace: item('unconfigured') }))), false)
+  // 空清单一律为假：否则页面会对着一份空清单说"都已完成"。
   assert.equal(allStepsDone([]), false)
+})
+
+// ── Windows 提醒（钉钉 CLI 需要管理员身份）────────────────────────────────────
+
+test('Windows 平台才提醒"以管理员身份运行 DeepSeek Harness"', async () => {
+  const { isWindowsPlatform, needsWindowsAdminReminder } = await import(
+    new URL('src/client/features/environment/platform-note.ts', ROOT).href)
+  // 平台串形如 win32-x64（Host 的探测值）。
+  assert.equal(isWindowsPlatform('win32-x64'), true)
+  assert.equal(isWindowsPlatform('win32-arm64'), true)
+  assert.equal(isWindowsPlatform(' WINDOWS '), false, '不是 win32 前缀就不算（避免猜）')
+  assert.equal(isWindowsPlatform('darwin-arm64'), false)
+  assert.equal(isWindowsPlatform('linux-x64'), false)
+  assert.equal(isWindowsPlatform(''), false, '拿不到平台时按不是 Windows 处理')
+
+  assert.equal(needsWindowsAdminReminder({ platform: 'win32-x64' }), true)
+  assert.equal(needsWindowsAdminReminder({ platform: 'darwin-arm64' }), false)
+  assert.equal(needsWindowsAdminReminder(null), false, '还没有自检结论时不提醒')
+  assert.equal(needsWindowsAdminReminder(undefined), false)
 })
 
 // ── 从 EnvResult 取输入 ──────────────────────────────────────────────────────
@@ -149,7 +185,7 @@ test('setupStepInput：授权缺省值取自 localAccess 收据；旧宿主（�
   assert.equal(setupStepInput(fakeEnv({ localAccess: missingConsent() }), true).authorized, true)
   assert.equal(setupStepInput(fakeEnv(), false).authorized, false)
 
-  // 旧宿主没有统一环境模型：五项都给 unknown 空视图，页面据此走"旧构建"提示而不是假装通过。
+  // 旧宿主没有统一环境模型：各项都给 unknown 空视图，页面据此走"旧构建"提示而不是假装通过。
   const old = setupStepInput(fakeEnv(), true)
   for (const key of ['h3yun', 'dingtalk', 'oss', 'ifind', 'workspace']) {
     assert.equal(old[key].state, 'unknown', key)
@@ -160,7 +196,7 @@ test('setupStepInput：授权缺省值取自 localAccess 收据；旧宿主（�
   assert.equal(setupStepInput(fakeEnv({ state: {} }), true).ifind.state, 'unknown')
 })
 
-test('setupStepInput 从统一环境模型取四项：OSS 取的是 aliyunOss，少一项不影响其它项', () => {
+test('setupStepInput 从统一环境模型取项：OSS 取的是 aliyunOss，少一项不影响其它项', () => {
   const env = fakeEnv({
     state: {
       userSetup: {

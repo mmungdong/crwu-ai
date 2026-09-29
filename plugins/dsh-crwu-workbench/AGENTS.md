@@ -11,6 +11,7 @@
 | [`docs/development-notes.md`](docs/development-notes.md) | 动交付形态 / Cordis 生命周期 / Host 操作 / 协议号 / 沙箱与授权 / 测试与发版：加载契约、`baseUrl` 陷阱、协议号规则、增删操作清单、开发循环与证伪纪律、常见坑速查 |
 | [`docs/PRD-workbench-sidebar-modules.md`](docs/PRD-workbench-sidebar-modules.md) | 改侧栏三模块或面板壳的形态与口径：需求、取舍、历次返工与证伪记录 |
 | [`docs/releasing.md`](docs/releasing.md) | 准备或执行 npm 发版：认证配置、版本升级、完整门禁、`plugin-v*` tag、Actions、发布后验收、失败恢复与回滚 |
+| [`docs/acceptance-0.0.34.md`](docs/acceptance-0.0.34.md) | **走 0.0.34 / 协议 24 的验收**（案例目录创建 + 讨论会话材料范围 + 同名附件）：七条成功标准、这台机器怎么"安装新产物"（link 形态：只 build + 完全重启）、三类失败文案怎么读、第一次真机验收记录（第 1 条已过、第 2 条的根因与修法）、以及"我没有验证的"清单 |
 | [`docs/desktop-acceptance-0.0.15.md`](docs/desktop-acceptance-0.0.15.md) | 走 0.0.15 的桌面验收（P-01…P-18 / W-01…W-07 / M-01…M-10）：记录哪些事实、怎么故意弄坏、什么条件下才允许打 tag |
 | [`docs/review-0.0.15.md`](docs/review-0.0.15.md) | **准备复审 0.0.15 时先读这一份**：按风险排序的复审顺序、每条设计要求的自动化证据在哪、三条真机验证的最短路径、以及「我没有验证的」清单 |
 
@@ -141,10 +142,10 @@ tests/
   比对**字节数**（sha256 从清单读出来进维护者详情，**不**每次自检重算 —— 三个二进制一百多 MB）；
   **不得** `command -v`、**不得**回退 PATH 上的同名命令、**不得**执行 `dws version`（会在二进制旁落
   `.dws/` 状态目录，`pack:assert` 判成运行残留）。缺失文案只能是「插件包不完整 / 平台不受支持」。
-- **`env` 的分区就是界面层级**：`packageIntegrity` / `runtime` / `services`（氚云 + 钉钉，不含 OSS）/
+- **`env` 的分区就是界面层级**：`packageIntegrity` / `services`（氚云 + 钉钉，不含 OSS）/
   `delivery`（OSS 配置 + 凭据 + 连通性）/ `external`（iFinD）+ `workspace`。`blocked` 口径：插件包不完整
-  只算**一个**故障、运行时不可用只算**一个**故障，三件组件与 vendored dws 的 PATH 兼容性都**不得**
-  各占一项、也**不得**阻断自动审核。
+  只算**一个**故障，三件组件与 vendored dws 的 PATH 兼容性都**不得**各占一项、也**不得**阻断自动审核。
+  （DSH 自带运行时自 2026-09-29 起**不在**环境自检里：只在 `audit-start` 由带 agent 作用域的会话解析。）
 
 ## 4. DSH 插件规范
 
@@ -341,7 +342,23 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 6. **保存凭据的 `ok` 由权限回读决定**（P-08/P-09/M-04）：`credentialPermissionSatisfied()`
    说 `failed` 就是顶层 `ok:false`（POSIX 必须回读为 `0600`；Windows 的 `inherited` /
    `host-store` 按设计成立）。"文件写下去了"不等于"保存成功"。
-7. **归因只看结构化事实**：`requested / resolved / ran / denied / runnerFailed` 五项进诊断，
+7. **非特权命令必须把「调用方会话的策略」写进请求**（2026-09-30 真机连挂两次，第二次才定位准）：
+   DSH 的执行器**不持有会话**（`dsh-sandbox-policy` 原话：executors and providers remain
+   session-free）。请求里不带 `sandboxPolicy` 时，它只会用自己的**部署默认** ——
+   `workspace-write` + 配置里的兜底根（通常是进程 cwd）。
+   现场：审核启动时 `mkdir <案例目录>/输入快照` 回
+   `Operation not permitted（解析为 workspace-write · 实际 workspace-write · 沙箱拒绝=是）`，
+   而案例目录恰恰是审核根会话的 cwd。
+   ⚠️ **第一次修错了**：改成"把调用方的 `ctx` 传下去"是**无效**的 —— 执行器是同一个、它不认识会话，
+   换 ctx 只是换了个地方 `ctx.get('shell')`。正确的修法是
+   `BrokerShellOptions.session`（**不是权限开关**）+ Broker 用
+   `ctx.sandboxPolicy.resolve({ session })` 算出策略、作为 `sandboxPolicy` 放进请求
+   （与 DSH 自带的 bash / fs 同一条路）。提权仍只由 `privileged` 决定；
+   非特权操作做的是**对齐调用方会话自己的边界**（案例内的调用点传 `exec.agent.session`）。
+   ⚠️ **替身也要按策略拦人**：`tests/helpers/fs-sandbox-stub.mjs` 复刻了这条语义（缺策略 → 部署默认 → 拒），
+   `host-case-files.test.mjs` 与 `host-tools.test.mjs` 各有一条回归用例；两条都用缺陷注入验过。
+   以前那种"永远成功"的 shell 替身正是这两个缺陷在单测里看不见的原因。
+8. **归因只看结构化事实**：`requested / resolved / ran / denied / runnerFailed` 五项进诊断，
    文本判据只在拿不到事实时兜底（见 `shell/run.ts` 的注释）。OS 级定性（Windows ACL、
    macOS Keychain、文件锁）由子项目 D 的只读 doctor 给出，**不许在这里猜**。
    诊断的**唯一界面出口**是开发者诊断里的「最近的本机访问」（`access-diagnostics`，展开时才取；
@@ -457,19 +474,28 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
 
 | 层 | 字段 | 说明 |
 | --- | --- | --- |
-| 事实 | `userSetup`（workspace / credentialsConsent / h3yun / dingtalk / aliyunOss / ifind）、`systemHealth`（packageIntegrity / dshRuntime / platform / toolRegistry） | 每项一个 `state` + 脱敏 `value` + `reason` + `required`。iFinD 与 OSS **必须是五态**（`unconfigured` / `unverified` / `authenticated` / `invalid` / `unreachable`）—— 压成一个布尔就会把"网络不通"说成"密钥错误" |
+| 事实 | `userSetup`（workspace / credentialsConsent / h3yun / dingtalk / aliyunOss / ifind）、`systemHealth`（`packageIntegrity` / `platform` / `toolRegistry`；DSH 运行时自 2026-09-29 起不在自检里） | 每项一个 `state` + 脱敏 `value` + `reason` + `required`。iFinD 与 OSS **必须是五态**（`unconfigured` / `unverified` / `authenticated` / `invalid` / `unreachable`）—— 压成一个布尔就会把"网络不通"说成"密钥错误" |
 | 解释 | `issues[]`（`id` / `owner: user\|admin\|system` / `blocking` / `scope: global\|audit\|delivery\|external-data` / `action` / `message`） | 总状态、能力开关、通过率、门禁结论**全部从它推出来** |
-| 结论 | `status`（`unknown` / `checking` / `ready` / `degraded` / `action-required` / `admin-required` / `system-blocked` / `check-failed`）、`capabilities`、`passed/total` | `ready` 与 `degraded` 才放行需要环境的页面 |
+| 结论 | `status`（`unknown` / `checking` / `ready` / `degraded` / `action-required` / `admin-required` / `system-blocked` / `check-failed`）、`capabilities`、`passed/total` | `ready` 与 `degraded` 才放行需要环境的页面；**`degraded` 的侧栏灯也是绿的**（它与 `ready` 一样放行，红灯 + "基础环境已就绪"是自相矛盾） |
 
 五条不许退回去的口径：
 
-1. **iFinD 是必需项**（2026-09-26 产品口径，覆盖了旧的 OPT-006-R1 · F-008）：清单
-   `ifind.required=true` ⇒ `userSetup.ifind.required=true`、**进必需项分母**、未通过即**阻塞**，
-   并按原因分派归属：没填 / API-Key 无效或过期 → `user`；账号无数据权益 → `admin`；
-   网络 / 超时 / 协议 / 上游不可达 → `system`。issue 双写 `global` + `external-data` 两个 scope ——
-   前者让统一导航拦回环境页，后者让 `auditCore` 一起关掉（**光关外部数据却放行审核是自相矛盾的**，
-   审核装配里本来就要取外部数据）。
-   `degraded` 这个枚举为将来真正的可选能力保留，但**不得**再由"只有 iFinD 缺失"产生。
+1. **iFinD 是可选数据源**（2026-09-30 用户口径，覆盖 2026-09-26 的「必需项」）：清单
+   `ifind.required=false` ⇒ `userSetup.ifind.required=false`、**不进必需项分母**、未就绪**不阻塞**。
+   它只记一条 **`blocking: false`** 的 issue（scope = `external-data`），于是：
+   - `status` 落到 `degraded`（与 `ready` 一样**放行**，界面顶部照旧写「基础环境已就绪」）；
+   - `global` / `auditCore` / `delivery` **都不受影响**，只有 `capabilities.externalData` 关掉
+     （判据是「有没有 `external-data` 作用域的 issue」，不是"它阻不阻塞"）；
+   - 涉及外部数据的项目在审核结果里记「未检查」，而不是让整条审核跑不起来。
+   - **界面形态**：iFinD 就是配置列表里的**一步**，而且**排在最后**（`SETUP_STEP_IDS =
+     accounts → oss → workspace → ifind`）：**不是**独立模块、也不是页级区块
+     （用户两次返工的口径：单开一块会让页面很乱；可选能力也不该挤在必检项中间）。
+     必检与否只有一份判据 `REQUIRED_SETUP_STEPS`（accounts / oss / workspace）→ 那枚**红色星号**；
+     iFinD 不带星号，且 `pickStep` / `allStepsDone` 都**跳过它**（`pickStep` 在必检项都完成时停在
+     **最后一个必检项**，不是末位的可选项）。可选步骤的状态芯片**不报红**（未配置就说「未配置」，
+     用琥珀；红 = "必须处理"）。
+   归属仍按原因分派（未填 / API-Key 无效 → `user`；无数据权益 → `admin`；网络不可达 → `system`），
+   因为"谁来修"三类不同。**不得**再让它进分母、拦导航或关 `auditCore`。
 2. **判据是"真的取到一次数据"**：`ok`（认证通过 `initialize + tools/list`）与
    `dataVerified`（`tools/call` 返回非错误、非空内容）分开；只有后者为真才通过。没有可安全试取的
    只读工具时如实报权益问题，**不许**去调写 / 批量 / 导入导出类工具，也不许伪装成功。
@@ -489,13 +515,14 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
   `WorkbenchPanel` **不得**再写"能不能进 audit"这种特判；**环境页里也不再放"进入报告审核"按钮**
   （2026-09-26 口径：就绪时只写一句「你可以从左侧进入报告审核」，跳转交给左侧栏的统一入口）；
 - 被拦时不进入目标页 → 记 `pendingTarget` → 落到 `env` → 把「进入【目标页】前…」带出来；
-  iFinD 未通过时那句话**指名 API-Key**（「进入【报告审核】前，请先完成 iFinD API-Key 验证」）；
+  **文案是通用模板**（`进入【报告审核】前，请先完成环境配置：<阻塞项>`）—— iFinD 不再阻塞，
+  所以**不得**再出现"请先完成 iFinD API-Key 验证"那类专门话术；
   检查通过后**只恢复最近一次**被拦的目标；用户中途主动改去别处即取消自动恢复
   （`navigate('env')` 也取消，且**不得**把 active 改回旧目标）；`env` 页始终可进；
 - **Host 侧另有能力门禁**（`src/host/environment/gate.ts`）：界面门禁负责体验，Host 门禁负责
   真实性与绕过防护（同源路由是公开契约）。判据是**同一份环境快照**（60s TTL，`invalidate()`
   在授权 / 换工作空间 / 存凭据 / 登录之后调用），**不为每个操作重跑一遍昂贵自检**；
-  拿不到快照或自检失败一律 fail closed。`audit-start` 判 `auditCore`（iFinD 未过时它就是 false）；
+  拿不到快照或自检失败一律 fail closed。`audit-start` 判 `auditCore`（iFinD 未配置时它仍为 true）；
   **停止审核与释放占用锁不判门禁**（它们是安全出口）。
 
 **真实外部验证（两项都必须打真请求，不许只看文件在不在）**：
@@ -531,7 +558,7 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
   `probe` 默认 **true**；`initialize` → `tools/list` 之后**真的 `tools/call` 取一次数据**。
   两截结论分开：`ok`（认证）与 `dataVerified`（取到数据）—— 认证通过但没取到数据时，
   状态必须是 `unverified` + 明确的 `errorKind`（权益 → 找管理员；凭据 → 重填；网络 → 稍后重试），
-  **绝不显示成「已认证」**，而且是**阻塞项**（见 §4.6 第 1 条）。
+  **绝不显示成「已认证」**；未就绪只让 `capabilities.externalData` 关闭，**不阻塞**（见 §4.6 第 1 条）。
   面板反复刷新由 **30s TTL 缓存**兜住（按凭据指纹作键，换 key 自然失效），
   用户点「重新检查」传 `force: true` **必须绕过缓存**重新真探。
 - **试取工具的选择**（`pickProbeTool`）：只挑只读、必填 ≤ 1、无 boolean/数组/对象参数的工具，
@@ -550,21 +577,69 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
 - **不上游打包**：官方 `call.py` / `call-node.js` / `mcp_config.json` **不进运行包**，也不得把
   「把密钥发给 Agent」「SSL 失败用 `curl -k`」「跑官方脚本」写进任何指引或提示词。
 
-### 4.8 审核会话的沙箱与审批（协议 18 引入，协议 19 收紧到案例目录 · 子项目 C）
+### 4.7.1 Windows：必须提醒"以管理员身份运行"（2026-09-30）
 
-**审核根与审核子会话永远是 `workspace-write` + `approval=never`，边界是本轮案例目录。**
-判据与写入口只有一处：`src/host/audit/policy.ts`。
+钉钉 CLI（`dws`）在 Windows 上要碰 `<HOME>\.dws`：先抢 `<HOME>\.dws\.data.lock`，再把登录态写进
+操作系统凭据存储。进程权限不足时它以"锁被占用 / 拒绝访问"结束，**表现却是钉钉登录一直不成功**
+（员工只会反复点登录）。所以环境页在**平台是 Windows** 时给一条**非阻塞**提醒
+（`features/environment/platform-note.ts` 的 `needsWindowsAdminReminder`，判据只看
+`env.platform` 的 `win32` 前缀；拿不到平台就**不提醒**，不猜）：
+「请用「以管理员身份运行」启动 DeepSeek Harness」。
 
-**一条根只服务一个案例目录**（协议 19）：`ensureAuditRoot` 必须先拿到 Host 算出的 `casePath`，
-把它作为根的 `meta.cwd`，回读 `workspace-write.workspaceRoot` 与 cwd 都等于它；
-工作空间级旧根（`auditRoot.casePath` 为空 / 缺失）判**过期、绝不复用** —— 那是通用 shell / fs
-能改同工作空间其他案例的形态。顺序也是硬要求：**先建案例目录，再建根**（根一诞生就必须有边界），
+- 它是**提醒**，不是门禁：钉钉登录态到底有效没有，仍然由环境自检的探测结论说了算。
+- 挂在**账号连接**那一步（钉钉登录态与两颗登录按钮都在那里），别处不重复。
+- 非 Windows **一个字都不提**（避免噪音）；文案在 `zhCN.envWindowsAdminHint`。
+
+### 4.8 审核会话的沙箱与审批（协议 18 引入 · 协议 24 边界=已选工作空间 · 子项目 C）
+
+**审核根与审核子会话永远是 `workspace-write` + `approval=never`，边界是已选工作空间（协议 24）。**
+判据与写入口只有一处：`src/host/audit/policy.ts`；**案例的隔离由案例 scope 负责**（见本节末）。
+
+**插件不创建任何目录，只有案例目录例外**（2026-09-30 口径）：工作空间根目录必须由用户**先选好、
+且真实存在**；`ensureAuditRoot` 里**没有** `mkdir`（`ensureDirectory` 已删）——
+路径为空 → 「尚未选定工作空间，请先选择一个已有目录」；路径不存在 / 是文件 → 「已选定的工作空间目录不存在，
+请重新选择一个已有目录」，**一律拒绝启动**（不允许"顺手建一个"、也不允许静默切到父会话 cwd 或别的工作空间）。
+目录存在但未登记 → **只登记**（`workspaceRegistry.create`，它要求目录已存在）。
+客户端同样只提供「选择已有目录」：`UiWorkspaceService` 上**不再有** `createDirectory`，
+`WorkspaceCard` 把用户选中的路径原样使用（`tests/unit/client-package.test.mjs` 断言"调用次数为 0"）。
+允许插件自动创建的**只有** `<工作空间>/<流水号>` 这一级案例目录。
+
+**这一级目录的创建必须经 Broker 逐次提权**（2026-09-30 口径，`system.case-directory.write`）：
+它在会话 cwd **之外**，不走 `danger-full-access` 就只会拿到部署默认的 `workspace-write`，
+`mkdir` 回 `Operation not permitted` —— 而员工本人对那个目录是有写权限的（现场就是这个表现）。
+判据全在操作表里，调用链是
+`audit-start → ensureCaseDirectory → system.case-directory.write(danger-full-access, workspaceRoot=已选工作空间) → mkdir → 路径探测回读`；
+失败必须分成三类给出话（沙箱未授权/被降级、操作系统 ACL、工作空间不存在），
+`host/tools/case-files.ts` **不许**再出现裸 `runShell`（`host-access-migration.test.mjs` 的 B-01e 盯着）。
+案例目录**之内**的建/删走 `system.case-file.write` / `system.case-file.read`（**不提权**、来源 `audit-tool`）：
+路径由 Host 按本轮 `casePath` 算出来，逐次带**调用方会话的策略**（见 §4.4.2 第 7 条），
+所以"写哪儿"由 Host 决定、"能不能写"由会话边界决定 —— 两件事都有唯一判据。
+
+**一条根只服务一个案例目录**（记录里的 `casePath` 是锚）：`ensureAuditRoot` 必须先拿到 Host 算出的
+`casePath`；`auditRoot.casePath` 为空 / 缺失的旧记录判**过期、绝不复用**。
+顺序也是硬要求：**先建案例目录，再建根**（根一诞生就必须有边界），
 而占用门禁排在两者之前（被拒的发起零副作用：不建空目录、不起根会话）。
+
+⚠️ **根的 cwd / 沙箱边界 = 已选工作空间**（协议 24，2026-09-30 用户报的第四个故障）。
+DSH 把两件事钉在同一个值上：
+`SandboxPolicyService.resolve()` —— *"**A session cwd is its workspace-write boundary**"*，
+以及 `Workspace.attachSession()` —— `if (cwd !== this.record.path) throw …`。
+所以"审核会话要出现在「中瑞世联工作空间」下面"与"边界只能是某个值"其实是同一件事：
+**cwd 必须等于工作空间路径**（这正是 DSH 自己创建"工作空间下的新会话"的做法：
+`cwd = workspace.path` → `ensureSession` → `attachSession`；本插件"与 DeepSeek 讨论"用的是
+客户端 `sessions.create({ workspaceId })`，同一条口径）。
+协议 19 曾把两者都收到"本轮案例目录"上，结果是审核根永远挂不上工作空间、只能落「未分组」；
+而且从 0.0.24 起插件自己的命令**逐次带策略**（见 §4.4.2 第 7 条），边界不再依赖会话默认值。
+
+**因此跨案例隔离**改由**案例 scope** 承担，它不随 cwd 变化：`requireAuditScope` 要求审核子会话发起的
+每一个案例内 Tool 的 `caseDir` 与本轮记录的 `casePath` **规范解析后精确相等**（工作空间根、兄弟案例、
+案例子目录一律拒绝）。两句话不要混：**会话边界回答"这个进程能写哪儿"，案例 scope 回答"这次审核
+被允许碰哪个案例"**。
 
 | 步骤 | 在哪 | 说明 |
 | --- | --- | --- |
 | 写覆盖 | `applyAuditRootPolicy` | 用 DSH 的 `setSandboxMode` / `setApprovalPolicy`（**不许**手写 `session.append`：会绕开取值校验，且事件名漂移时静默失效） |
-| 回读 | 同一个函数 | `sandboxPolicy.resolve({session})` 必须是 `workspace-write` 且边界**等于本轮的案例目录**（协议 19 起；此前是"选定工作空间"，那让通用 shell / fs 能改同工作空间的其他案例），会话 cwd 也要等于它（读得到时必须相符） |
+| 回读 | 同一个函数 | `sandboxPolicy.resolve({session})` 必须是 `workspace-write` 且边界**等于已选工作空间**（协议 24；DSH 的边界就是会话 cwd，而 cwd 必须等于工作空间路径才挂得上工作空间），会话 cwd 也要等于它（读得到时必须相符） |
 | 预测子会话 | `delegatedPolicyFacts` | 按 DSH 委派捕获口径算"子代理会继承到什么"：沙箱覆盖 = 父的显式覆盖、审批 = `never`、permissionPreset = Auto/Full 时继承 |
 | 拒绝不受限 preset | 同上 | `auto` / `danger-full-access` 是会话**身份**，不是一次覆盖 —— 只能判根不可用，不能"先复用再纠正" |
 | 就绪门禁 | `AuditDeps.readiness` | 创建子代理**之前**再判一次环境（复用界面门禁的同一份快照） |
@@ -575,18 +650,24 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
 1. **不依赖部署默认**：`session 覆盖 ?? 部署默认` 里的默认可以是 `danger-full-access`，
    "审核跟着部署默认走"等于把边界交给别人配 —— 所以显式写、显式回读。
 2. **策略也是根可用性的一部分**：带 `auto` / `danger-full-access` 的根**不复用**（C-02）；
-   边界或 cwd 不是本轮案例目录、或根属于别的案例，同样不复用（协议 19）。
-   ⚠️ **子会话发布后的复查也要传 `caseDir`**（2026-09-29 第二轮复查的 P1）：那里曾传
-   `workspacePath`，于是**每个正常可见的子会话都会被判错并停掉**。配套必须有"真实可见 child +
-   正确案例目录 → 正常启动"的**正向**用例（只测"不对就停"会让期望值写错也全绿）。
+   边界或 cwd 不是**已选工作空间**（协议 24）、或记录里的 `casePath` 属于别的案例，同样不复用。
+   ⚠️ 子会话发布后的复查**传的是 `workspacePath`**（协议 24 起；协议 19 那阵子传 `casePath`，
+   再往前误传过 `workspacePath` 而当时期望值又写错，于是每个正常可见的子会话都被判错停掉 ——
+   2026-09-29 的 P1）。配套必须有"可见 child + 策略正确 → 正常启动"的**正向**用例。
 3. **停止的判据是静默，不是"信号发出去了"**：`stopChild` 返回 `quiesced`（dispose 完成
    **或** Agent 已不在 `running`；问不到状态 → fail closed）。`dispose` 超时**不算**成功，
    没确认静默就**不覆盖旧记录、不删句柄、不释放占用、不起下一条**；等待必须**有界**
    （没有 timer 服务时退化成全局定时器，绝不无界 await）。
-4. **登录只给面板**：`h3yun.session.login` / `dws.auth.login` 的 `allowedSources` 只有 `panel`
-   （`host-access-broker.test.mjs` 盯着），审核 Tool 里没有任何 login 工具
+4. **登录只给面板，而且只走 CLI + 系统浏览器**：`h3yun.session.login` / `dws.auth.login` 的
+   `allowedSources` 只有 `panel`（`host-access-broker.test.mjs` 盯着），审核 Tool 里没有任何 login 工具
    （`host-access-migration.test.mjs` 盯着），提示词里明令"停下并要求员工回工作台"
    （`host-audit-prompt.test.mjs` 在**登录那一段内**逐句断言）。
+   ⚠️ **DSH 不提供登录界面之外的东西**（2026-09-30 口径，协议 22）：`browser-session-bind`
+   （氚云内置浏览器扫码的凭据出口）与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录）
+   **整体删除**；`crwuOperationOf` 不再登记 `h3yun session bind`。账号连接**只读取、检查已有凭据**：
+   面板上的两颗按钮走本机 CLI，CLI 自己拉起**系统浏览器**，插件**不创建浏览器 Tab、不显示二维码、
+   不读浏览器 Cookie、不生成设备码、不轮询登录进度**。CLI 的 `dws auth login --device` 仍然可用，
+   但那是在终端里，不属于插件界面。
 5. **改提示词要绑到段落**：`立即停止本次审核` 这类句子在提示词里出现过多次，
    整篇 `text.includes(...)` 会被别处的同名句子满足（2026-09-29 用缺陷注入证伪过）。
    断言要 `indexOf` 定位到段落再在段内查。
@@ -701,7 +782,8 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
    —— 那会把"最近一次失败是沙箱拦下的，改权限没用"说成"请先登录一次"，把员工指错方向。
 14. **登录必须写工作区之外，所以它的归因比通用规则更强一条**（G 段，2026-09-29）：
    `crwu h3yun session login` 要写临时浏览器 profile（`$TMPDIR`/`%TEMP%\crwu-scan-*`）、
-   `dws auth login`（含 `--device`）要先抢 `<HOME>/.dws/.data.lock`，两者收尾都要写操作系统凭据存储。
+   `dws auth login` 要先抢 `<HOME>/.dws/.data.lock`，两者收尾都要写操作系统凭据存储。
+   （`--device` 只是 **CLI** 自己的能力，插件自 2026-09-30 起不再提供设备码入口 —— 见 §4.8 第 4 条。）
    判据在 `src/host/system/login-failure.ts`：`runnerFailed` → 提权被降级（`requested !== resolved`）
    → `denied` / 实际跑在受限模式 → **原文点名了登录必须写的工作区外目标且带拒绝字样**。
    ⚠️ 第 ④ 条是 `shell/run.ts` 的 `sandboxDenialNote()`「事实干净就不猜文本」的**唯一例外**
@@ -1144,6 +1226,16 @@ dsh plugin --profile <临时 profile> add ./dsh-crwu-workbench-<ver>.tgz
   `caseDir` 为空（旧宿主 / 没选工作空间）时**整段不写** —— 宁可不给，也不给半截路径。
 - **本机路径只允许出现这一条**：上下文里除了案例目录，不许再出现任何 `/Users/...` 之类的路径。
   `client-package.test.mjs` 用正则抽出全部本机路径，断言去重后就等于案例目录那一条。
+- **材料权限要真的登记**（2026-09-30，协议 23）：讨论会话不是审核 —— 它没有审核记录，
+  而 `crwu_h3yun_file_get` 原先只认审核 scope，于是讨论里**一件材料都取不回来**。
+  现在客户端在 `ensureDiscussion`（新建**或**恢复）之后、发 kickoff 之前调
+  `discussion-material-open`，Host 自己重新取一次附件清单、只把那一批 `fileId` 记进
+  **进程内**白名单（`host/audit/discussion-scope.ts`：12 小时 TTL、最多 32 条）。
+  三条不许退回去的口径：① 讨论**不复用**审核 scope（那是扩大边界）；② 案例目录与白名单
+  **全部由 Host 给**（客户端只提交 `sessionId`/`seqNo`/`objectId`）；③ 登记失败**不发 kickoff**、
+  会话保留、给可重试的文案，**不降级**去扫本机目录或自己查氚云。
+  已登记的讨论会话**不能**调 `record_get` / `files_list`（它不是氚云查询入口）；
+  `file_get` 的目标名必须带上这件附件自己的标识（同名附件不许互相覆盖）。
 
 **还没做（按需再上）**：让 `crwu_h3yun_file_get` 支持「只给 `seqNo`、目录由 Host 算」，
 这样模型连路径都不用写。现在先靠提示词 + 共享约定把它约束住；如果真机上仍看到模型乱翻目录，

@@ -22,14 +22,13 @@ import type { LocalAccessSource } from '../access/operations.ts'
 import { adoptWorkspace, autoWorkspace, pickWorkspace } from '../workspace/ops.ts'
 import { sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
+import { openDiscussionMaterial } from '../audit/discussion-material.ts'
+import type { DiscussionScopeRegistry } from '../audit/discussion-scope.ts'
 import { maybeAutoUpload } from '../oss/auto.ts'
 import { ossCredSave, ossIndex, ossLink, ossResult, ossUpload, type OssDeps } from '../oss/ops.ts'
 import { reportFiles } from '../report/files.ts'
 import { createUploadWatch } from '../oss/watch.ts'
-import {
-  bindH3yunSession, clipboard, createDwsLoginRegistry, dwsLogin, openPath, ossCred, relogin, sessionStatus,
-  type DwsLoginRegistry,
-} from '../system/ops.ts'
+import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
 import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { dwsLocalDoctor, dwsLocalPermissionRepair, hasAttributableDwsFailure } from '../dws/local.ts'
@@ -92,13 +91,6 @@ export interface CoreDeps {
    * 操作表推导，避免"声明一份、实现一份"漂移（clipboard 那次就是这么踩的）。
    */
   update?: OperationMap
-  /**
-   * 钉钉登录会话（协议 21）：`dws auth login` 改成后台跑 + 两阶段轮询。
-   *
-   * 由 `apply()` 创建并持有（它握着后台进程与定时器，模块级单例会在卸载后残留进程）。
-   * 没注入时这里自建一个 —— 但那样卸载就没人 dispose，所以生产路径一定要注入。
-   */
-  dwsLogins?: DwsLoginRegistry
 }
 
 export interface HostResolvers {
@@ -111,6 +103,8 @@ export interface HostResolvers {
    * 所有跨边界的调用都带着"操作 + 来源"交给它判。
    */
   access: LocalAccessBroker
+  /** 讨论会话的受限材料范围（协议 23）：`discussion-material-open` 写它，业务 Tool 读它。 */
+  discussionScopes: DiscussionScopeRegistry
 }
 
 export function createCoreOperations(
@@ -121,12 +115,6 @@ export function createCoreOperations(
   resolvers: HostResolvers,
   extra: CoreDeps = {},
 ): OperationMap {
-  /**
-   * 钉钉登录会话：注入优先；没注入就自建一个（自建的那个卸载时没人 dispose，
-   * 所以生产路径由 `apply()` 注入并通过 `ctx.effect` 收尾）。
-   */
-  const dwsLogins = extra.dwsLogins ?? createDwsLoginRegistry()
-
   /**
    * OSS 操作的依赖。
    *
@@ -180,7 +168,10 @@ export function createCoreOperations(
         sessionRoot: () => world.workdir(),
         identity,
         // DSH 自带 Python 由实例级解析器给（成功缓存、失败可显式刷新）。
-        pythonRuntime: (request: { refresh: boolean }) => resolvers.python.check({ refresh: request.refresh }),
+        // **带上面板绑定的父会话 agent**：`load_workspace_dependencies` 需要 agent 作用域，
+        // 而自检本身没有会话上下文 —— 不带 agent 调它只会拿到工具报错，运行时永远解析不出来
+        // （2026-09-29 员工 Windows 实测：会话里调同一个工具返回完整载荷）。
+        // 没绑定会话时退回不带 agent 的调用：那种情况环境页只报「待复核」，不判缺失。
         // 必需 Tool 的可见性：默认按根 Agent 查一次；宿主可注入替身用于测试收窄场景。
         ...(extra.auditTools === undefined
           ? { auditTools: async () => ({ missing: missingAuditTools(ctx, undefined), checked: true }) }
@@ -278,14 +269,12 @@ export function createCoreOperations(
           'oss-index', 'oss-result', 'oss-link', 'oss-upload', 'oss-cred-save',
           // 第 4 层补：一份报告的全部相关文件（只列举、不下载）。
           'report-files',
+          // 协议 23：报告讨论会话的受限材料登记（新建 / 恢复会话后各登记一次）。
+          'discussion-material-open',
           // 第 6 层：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是「读技能目录里的文件」）。
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
           'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
-          // 协议 20：内置浏览器扫码登录的凭据出口（客户端读到 h3_token 后经 stdin 交给 CLI）。
-          'browser-session-bind',
-          // 协议 21：钉钉登录改成后台跑 + 两阶段（URL/设备码在命令还在等回调时就能给界面）。
-          'dws-login-start', 'dws-login-status',
           // 协议 18 · 子项目 D：DWS 本机目录的只读体检与最小权限修复。
           'dws-local-doctor', 'dws-local-permission-repair',
           // 协议 16：自助更新四个操作（安装目标由 Host 自己授权，调用方只能传空参数）。
@@ -455,6 +444,18 @@ export function createCoreOperations(
     },
     // 同上：释放占用锁是应急出口，不判门禁。
     'audit-release': async () => await auditRelease({ ctx, config, state, world, access: resolvers.access, form: resolvers.form, python: resolvers.python }),
+    /**
+     * **报告讨论会话的受限材料登记**（协议 23）。
+     *
+     * 客户端在 `ensureDiscussion`（新建或恢复）之后、发 kickoff 之前调。客户端只能提交
+     * `sessionId` / `seqNo` / `objectId`：案例目录由 Host 算、白名单由 Host 自己重新取一次数
+     * （见 `audit/discussion-material.ts` 的注释）。失败时**不登记**，讨论会话保持原样。
+     */
+    'discussion-material-open': async (args) => await openDiscussionMaterial({
+      ctx, state, world, access: resolvers.access, form: resolvers.form,
+      scopes: resolvers.discussionScopes,
+    }, args),
+
     'report-files': async (args) => await reportFiles(
       {
         ctx,
@@ -540,35 +541,11 @@ export function createCoreOperations(
       return result
     },
 
-    /**
-     * 钉钉登录（协议 21）：起一条**后台**的 `dws auth login` 并立刻给第一份快照。
-     *
-     * 与上面的 `dws-login`（同步等结束）并存：老路径保留给回退与对照，新界面走这一对。
-     * 快照里的 `url` / `userCode` 是**尽力解析**的结果，`tail` 才是原文 —— 界面两者都给。
-     */
-    'dws-login-start': async (args) => await dwsLogins.start(
-      { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
-      args,
-      await world.home(),
-    ),
-    'dws-login-status': async () => dwsLogins.status(),
     session: async () => await sessionStatus({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() }),
 
-    /**
-     * **氚云网页会话绑定**（协议 20）：内置浏览器扫码链路的唯一凭据出口。
-     *
-     * 只接受 `{ token }`；令牌经**标准输入**交给 `crwu h3yun session bind --token-stdin`，
-     * 不进 argv、不落盘、不回显；失败只回 CLI 的一句话（见 `bindH3yunSession`）。
-     * 绑定成功会改变环境结论，所以照 `dws-login` 的办法作废环境快照。
-     */
-    'browser-session-bind': async (args) => {
-      const result = await bindH3yunSession(
-        { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
-        args,
-      )
-      if (result.ok) gate.invalidate()
-      return result
-    },
+    // ⚠️ 2026-09-30：**没有** `browser-session-bind` / `dws-login-start` / `dws-login-status`。
+    // DSH 不再提供氚云内置浏览器扫码登录（协议 20）与钉钉设备码 / 两阶段登录（协议 21）：
+    // 账号连接只读取、检查已有凭据，登录由本机 CLI 自己拉起系统浏览器完成（`relogin` / `dws-login`）。
     'oss-cred': async () => await ossCred(
       { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
       await world.home(),

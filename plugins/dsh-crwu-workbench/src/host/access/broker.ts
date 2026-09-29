@@ -4,6 +4,10 @@ import { runShell, startShell } from '../shell/run.ts'
 import { text } from '../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import type { LocalAccessConsentView } from '../../shared/access/types.ts'
+import type { Session } from '@deepseek-ai/dsh-session'
+import { callerSessionPolicy } from './caller-policy.ts'
+// 只为我们自己解析「调用方会话的策略」用：`Context.sandboxPolicy` 的类型增强。
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import {
   LOCAL_ACCESS_WRITE_TARGETS,
   localAccessDescriptorOf,
@@ -70,6 +74,23 @@ export interface LocalAccessDecision {
 
 export interface BrokerShellOptions {
   workdir?: string
+  /**
+   * **调用方那条会话**（`exec.agent.session`）。
+   *
+   * 为什么需要它（2026-09-30 真机抓到的缺陷，两次）：DSH 的执行器**不持有会话**
+   * （`dsh-sandbox-policy` 的原话是 "executors and providers remain session-free"），
+   * 请求里不带 `sandboxPolicy` 时它只会用自己的**部署默认**（`workspace-write` +
+   * 配置里的兜底根 = 进程 cwd）。所以非特权命令的边界**必须由调用方解析后放进请求里** ——
+   * 换一个 `ctx` 是没用的（执行器是同一个，它不认识会话；第一次的修法就栽在这里）。
+   * 现场表现：审核启动时 `mkdir <案例目录>/输入快照` 回
+   * `Operation not permitted（解析为 workspace-write · 实际 workspace-write · 沙箱拒绝=是）`，
+   * 而案例目录明明就是审核根会话的 cwd。
+   *
+   * ⚠️ **它不是权限开关**：提权仍只由操作描述表决定（`privileged`）。非特权操作在这里做的是
+   * **对齐调用方会话自己的策略**（`ctx.sandboxPolicy.resolve({ session })`）—— 策略由 DSH 的服务
+   * 算，调用方只说明"是哪条会话"；模型与客户端都碰不到这个字段。
+   */
+  session?: Session
   /** 通过 stdin 交给命令的正文（剪贴板这类：拼进命令行会被 shell 解释）。 */
   stdinText?: string
   timeoutMs?: number
@@ -244,15 +265,19 @@ export function createLocalAccessBroker(deps: LocalAccessBrokerDeps): LocalAcces
       const decision = authorize({ ...call, ...(workdir === '' ? {} : { workdir }) })
       if (!decision.ok) return failedShell(decision.error)
 
-      // 非特权操作不传 `sandboxPolicy`（走部署默认沙箱）；特权操作由 `runShell` 逐次声明
-      // `danger-full-access` + `workspaceRoot`（见 `shell/run.ts` 的提权注释）。
+      // 特权操作：由 `runShell` 逐次声明 `danger-full-access` + `workspaceRoot`（提权）。
+      // 非特权操作：**把调用方会话自己的策略放进请求** —— 执行器不持有会话，不带它就会落到
+      // 部署默认（进程 cwd），案例目录里的写操作会被自家沙箱拒掉（2026-09-30 真机两次现场）。
+      const escalated = decision.sandboxPolicy !== undefined
+      const sessionPolicy = escalated ? undefined : callerSessionPolicy(deps.ctx, options.session)
       const result = await runShell(deps.ctx, command, {
         ...(workdir === '' ? {} : { workdir }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(options.stdinText === undefined ? {} : { stdinText: options.stdinText }),
-        escalate: decision.sandboxPolicy !== undefined,
+        ...(sessionPolicy === undefined ? {} : { sandboxPolicy: sessionPolicy }),
+        escalate: escalated,
       })
       const facts = {
         requested: result.sandbox.requested,
@@ -298,10 +323,13 @@ export function createLocalAccessBroker(deps: LocalAccessBrokerDeps): LocalAcces
       const decision = authorize({ ...call, ...(workdir === '' ? {} : { workdir }) })
       if (!decision.ok) return { ok: false, error: decision.error, sandbox: noSandboxFacts() }
 
+      const escalated = decision.sandboxPolicy !== undefined
+      const sessionPolicy = escalated ? undefined : callerSessionPolicy(deps.ctx, options.session)
       const started = await startShell(deps.ctx, command, {
         ...(workdir === '' ? {} : { workdir }),
         ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
-        escalate: decision.sandboxPolicy !== undefined,
+        ...(sessionPolicy === undefined ? {} : { sandboxPolicy: sessionPolicy }),
+        escalate: escalated,
       })
       if (!started.ok) return started
 

@@ -5,8 +5,13 @@ import { text } from '../../shared/utils/value.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { RECORDS_STDOUT_MAX } from '../h3yun/consts.ts'
 import { requireBundledCommand } from '../platform/command.ts'
+import { attachmentLocalName, hasAttachmentDiscriminator } from '../h3yun/attachment-name.ts'
+import { basenameLocalPath, joinLocalPath } from '../../shared/utils/local-path.ts'
+import { readTextIfExists } from '../fs/paths.ts'
+import { SNAPSHOT_ATTACHMENTS_FILE, SNAPSHOT_DIR } from './bootstrap.ts'
 import { allowedCaseRootOf, requireCaseDir, requireInsideCase, isRegularFile, fileSize } from './case-dir.ts'
-import { callerIdentity, callerParentSessionId, isAuditChild, requireAuditScope } from '../audit/scope.ts'
+import { callerIdentity, callerParentSessionId, isAuditChild } from '../audit/scope.ts'
+import { isRegisteredDiscussion, requireMaterialScope } from '../audit/discussion-scope.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from './outcome.ts'
 import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
@@ -56,6 +61,26 @@ async function requireCrwu(ctx: Context, platform: string): Promise<ToolFailure 
   return resolved.ok ? null : failure(resolved.errorKind, resolved.error)
 }
 
+/**
+ * 从本轮输入快照的附件清单里取这件附件**建议的本地名**。
+ *
+ * 只用于**失败文案**（告诉模型正确的名字长什么样）：真正的判据是
+ * `hasAttachmentDiscriminator()`，它不需要读盘 —— 读不到清单时照样拦得住覆盖。
+ */
+async function suggestedAttachmentName(ctx: Context, casePath: string, fileId: string): Promise<string> {
+  const raw = await readTextIfExists(ctx, joinLocalPath(joinLocalPath(casePath, SNAPSHOT_DIR), SNAPSHOT_ATTACHMENTS_FILE))
+  if (raw === '') return ''
+  try {
+    const doc = JSON.parse(raw) as { files?: Array<Record<string, unknown>> }
+    const row = (Array.isArray(doc.files) ? doc.files : []).find((item) => text(item.fileId) === fileId)
+    if (row === undefined) return ''
+    return text(row.localName) || attachmentLocalName(text(row.fileName), fileId)
+  } catch (error) {
+    void error
+    return ''
+  }
+}
+
 /** 模型不能提交二进制/sandbox 参数；schema 里根本没有这些字段。 */
 export function h3yunTools(deps: ToolDeps) {
   const recordGet = defineTool({
@@ -98,6 +123,11 @@ export function h3yunTools(deps: ToolDeps) {
       // 但那个子会话可能还活着 —— 用 scope 判就会在那时放它去读任意 objectId。
       if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
         return { ...failure('policy', '审核子会话不能直接查询氚云记录：本轮记录与附件清单已在输入快照里'), ...base }
+      }
+      // 讨论会话的材料范围**只**包含登记那一刻取到的附件 —— 它不是"氚云查询入口"：
+      // 让它顺手查记录，等于把一次受限授权变成通用读能力。
+      if (isRegisteredDiscussion(deps.discussionScopes, callerIdentity(exec).childId)) {
+        return { ...failure('policy', '报告讨论会话不能查询氚云记录：材料范围只包含登记时取到的那批附件'), ...base }
       }
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
@@ -195,6 +225,9 @@ export function h3yunTools(deps: ToolDeps) {
       if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
         return { ...failure('policy', '审核子会话不能直接查询氚云记录：本轮记录与附件清单已在输入快照里'), count: 0, files: [] }
       }
+      if (isRegisteredDiscussion(deps.discussionScopes, callerIdentity(exec).childId)) {
+        return { ...failure('policy', '报告讨论会话不能列举氚云附件：材料范围只包含登记时取到的那批附件'), count: 0, files: [] }
+      }
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
       if (gap !== null) return { ...gap, count: 0, files: [] }
@@ -276,25 +309,44 @@ export function h3yunTools(deps: ToolDeps) {
       const ctx = toolContext(deps.ctx, exec)
       const fileId = text(args.fileId).trim()
       // **先证身份、再证案例、最后证附件**：三者都成立之前不起任何进程。
-      const caseCheck = await requireAuditScope(ctx, deps.state, exec, { caseDir: args.caseDir })
-      if (!caseCheck.ok) return { ...caseCheck, fileId, path: '', sizeBytes: 0 }
+      // 范围有两种来源（协议 23）：审核子会话的记录范围，或报告讨论会话登记的材料范围。
+      const materialCheck = await requireMaterialScope(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
+      if (!materialCheck.ok) return { ...materialCheck, fileId, path: '', sizeBytes: 0 }
+      const material = materialCheck.material
+      const casePath = material.kind === 'audit' ? material.scope.casePath : material.scope.caseDir
       if (fileId === '') return { ...failure('input', 'fileId 不能为空'), fileId, path: '', sizeBytes: 0 }
       // ⚠️ `fileId` 也是**模型提交**的：此前只要进程能跑，子会话就能把任意附件下到自己的案例目录。
-      // 只认本轮**可信输入快照**里登记过的附件 —— 空白名单意味着"一个都不允许"。
-      if (!caseCheck.scope.allowedAttachmentIds.includes(fileId)) {
+      // 只认**可信范围**里登记过的附件（审核 = 本轮输入快照；讨论 = 登记那一刻的远端清单）
+      // —— 空白名单意味着"一个都不允许"。
+      if (!material.scope.allowedAttachmentIds.includes(fileId)) {
         return {
-          ...failure('policy', '这个附件不在本轮审核的输入快照里：只允许下载本次登记的附件'),
+          ...failure('policy', material.kind === 'audit'
+            ? '这个附件不在本轮审核的输入快照里：只允许下载本次登记的附件'
+            : '这个附件不在本次登记的材料范围里：只允许下载登记时取到的那批附件（请在工作台重新点「与 DeepSeek 讨论报告」刷新）'),
           fileId, path: '', sizeBytes: 0,
         }
       }
-      const target = await requireInsideCase(ctx, caseCheck.casePath, args.relativePath)
+      const target = await requireInsideCase(ctx, casePath, args.relativePath)
       if (!target.ok) return { ...target, fileId, path: '', sizeBytes: 0 }
+      // **两个同名附件不许互相覆盖**：目标名里必须带这件附件自己的 `fileId` 短标识。
+      // 判据是确定性的（不依赖下载顺序），而且在任何进程之前判 —— 想"先下一件再说"也不行。
+      const base = basenameLocalPath(target.path)
+      if (!hasAttachmentDiscriminator(base, fileId)) {
+        const suggested = await suggestedAttachmentName(ctx, casePath, fileId)
+        const wanted = suggested === '' ? attachmentLocalName(base, fileId) : suggested
+        return {
+          ...failure('policy',
+            '下载目标名必须带上附件标识，否则两个同名附件会互相覆盖：'
+            + `请把 \`relativePath\` 写成 \`材料-源/${wanted}\`（或任何以该名字结尾的案例目录内相对路径）`),
+          fileId, path: '', sizeBytes: 0,
+        }
+      }
 
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
       if (gap !== null) return { ...gap, fileId, path: '', sizeBytes: 0 }
       const run = await runCrwu(ctx, ['crwu', 'h3yun', 'file', 'get', '--id', fileId, '--out', target.path], {
-        workdir: caseCheck.casePath,
+        workdir: casePath,
         timeoutMs: 180_000,
         access: deps.access,
         source: 'audit-tool',

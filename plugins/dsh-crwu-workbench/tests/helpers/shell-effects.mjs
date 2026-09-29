@@ -63,3 +63,48 @@ export function applyShellEffect(command, exitCode, fs) {
     return
   }
 }
+
+// ── 只读路径探测（`pathProbeCommand`） ──────────────────────────────────────
+//
+// 2026-09-30 起建 / 删之后的后置条件不再走 `ctx.fs.stat`，而是走 Broker 上的
+// `pathProbeCommand`（`test -d` / `Test-Path -PathType` 的等价值）—— 因为员工选的工作空间
+// 在会话 cwd 之外，"查不出来"与"不存在"必须被实例分开。替身因此也要回答这条命令，
+// 否则每个用例都会撞上「路径探测没有得到结论」。
+
+/** POSIX 探测模板（`pathProbeCommand`）。 */
+const PROBE_SH = new RegExp(`^if \\[ -d (?:${SH}|${BARE}) \\]; then printf %s directory; elif \\[ -f (?:${SH}|${BARE}) \\]; then printf %s file; else printf %s absent; fi$`)
+/** PowerShell 探测模板（`pathProbeCommand`）。 */
+const PROBE_PS = new RegExp(
+  `^if \\(Test-Path -LiteralPath ${PS} -PathType Container\\) \\{ Write-Output 'directory' \\}`
+  + ` elseif \\(Test-Path -LiteralPath ${PS} -PathType Leaf\\) \\{ Write-Output 'file' \\}`
+  + ` else \\{ Write-Output 'absent' \\}$`,
+)
+
+/** 这条命令是不是路径探测；是的话返回它探测的目标路径。 */
+export function pathProbeOf(command) {
+  const text = String(command ?? '')
+  const posix = PROBE_SH.exec(text)
+  if (posix !== null) return unquote(posix[1] ?? posix[2])
+  const powershell = PROBE_PS.exec(text)
+  if (powershell !== null) return unquote(powershell[1])
+  return undefined
+}
+
+/**
+ * 替身对一条路径探测命令的**忠实回答**（`directory` / `file` / `absent`）。
+ *
+ * `fs` 只要回答两个问题：这个路径在不在、它是文件还是目录。返回 `undefined` 表示
+ * "这条命令不是路径探测"，调用方照常走自己的 handler。
+ */
+export function probeAnswer(command, fs) {
+  const target = pathProbeOf(command)
+  if (target === undefined) return undefined
+  if (fs.hasDir(target)) return 'directory'
+  if (fs.hasFile(target)) return 'file'
+  return 'absent'
+}
+
+/** 探测目标与内存 fs 之间的键归一（去掉尾部分隔符：`C:\a\` 与 `C:\a` 是同一个）。 */
+export function probeKey(path) {
+  return String(path ?? '').replace(/[\\/]+$/, '')
+}

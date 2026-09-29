@@ -137,8 +137,9 @@ function snapshotSection(task: LegacyTask, snapshot: AuditInputSnapshot): string
     '',
     '1. `schemaCode` 由 Host 解析，快照里只有它的指纹。**你不需要、也不允许提交或猜测它**。',
     '2. **禁止再次定位或取数**：不要 `records list`、不要搜索表单、不要用 `crwu_h3yun_record_get` 重新取记录、不要在案例目录或其它目录里搜索或复用别的报告的材料。记录事实一律以快照文件为准。',
-    '3. 附件**只按附件清单里的 `fileId`** 逐件调用 `crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<原文件名>" })`；清单外的附件不存在。',
-    '4. 快照里的 `objectId` / `seqNo` 与任务不一致、或快照缺失/读不出时，**立即停止本次审核**并在汇报里写明「数据边界错误：输入快照与任务不符」，不要继续往下做。',
+    '3. 附件**只按附件清单里的 `fileId`** 逐件调用 `crwu_h3yun_file_get({ fileId, caseDir, relativePath: "材料-源/<localName>" })`；清单外的附件不存在。**`relativePath` 的最后一段必须用清单里的 `localName`**（形如 `广兴建筑v3__c8ef13b8.zip`）—— 报告里可能挂着两个同名附件，按文件名落盘会让后一件静默覆盖前一件，工具会直接拒绝不带这件附件标识的目标名。',
+    '4. **同名附件要当成两件材料**：清单里 `nameTotal > 1` 的条目是**同名但不同 `fileId`** 的附件（可能是重复上传，也可能是两个版本）——逐件下载、逐件核对，不许只留一件、也不许把两件当成同一份。',
+    '5. 快照里的 `objectId` / `seqNo` 与任务不一致、或快照缺失/读不出时，**立即停止本次审核**并在汇报里写明「数据边界错误：输入快照与任务不符」，不要继续往下做。',
     '',
   ]
 }
@@ -174,6 +175,26 @@ function pythonSection(runtime: AuditPythonRuntime): string[] {
   ]
 }
 
+/**
+ * 「运行时由你在子会话里解析」那一段（宿主没能问到时的替代）。
+ *
+ * 为什么可以这样：子会话**有 agent 作用域**，能调用 `load_workspace_dependencies` 拿到
+ * `python` 绝对路径与已装包清单；而宿主侧（启动 / 环境自检）跑在 `host-background`、
+ * 没有会话上下文，调同一个工具只会拿到工具报错（2026-09-29 员工机器实测）。
+ * 所以这不是放宽口径，而是把「从哪拿」交给有能力拿到的那一层，并明确禁止任何查找与降级。
+ */
+function pythonUnresolvedSection(): string[] {
+  return [
+    '## 脚本运行时：由你在本会话里解析 DSH 自带 Python',
+    '',
+    '- 宿主这次**没能问到**运行时（它在没有会话作用域时调不到那个工具）—— **这不等于运行时缺失**。',
+    '- 你在本会话里有作用域：**自己调用一次 `load_workspace_dependencies` 工具**，取返回里的 `python` 字段作为**唯一允许的解释器绝对路径**；可用 `pythonDistributions` 核对 `openpyxl` 是否已装。',
+    '- 仍然**禁止**：任何形式的解释器查找（搜索可执行文件、读 shell 环境变量、改 PATH），以及用裸解释器名字（`python` / `python3`）调用。',
+    '- 工具返回里没有 `python`、或它不是可执行文件、或缺 `openpyxl` → **立即停止**并汇报「capability gap：DSH Python 不可用」，不要继续跑脚本。',
+    '',
+  ]
+}
+
 function legacyAuditPrompt(task: LegacyTask) {
   const ws = asText(task.workspace).replace(/\/+$/, '')
   const seq = asText(task.seqNo)
@@ -197,6 +218,9 @@ function legacyAuditPrompt(task: LegacyTask) {
   }
   const python = pythonOf(task.python)
   if (python !== null) L.push(...pythonSection(python))
+  // 宿主**没问到**运行时（启动/自检阶段没有会话作用域）时的替代指令：让子会话自己解析。
+  // 这不是「去找解释器」—— 那个工具是唯一允许的来源，它返回的绝对路径是唯一允许的解释器。
+  else L.push(...pythonUnresolvedSection())
   if (caseDir) {
     // 协议 19 起：审核根的 cwd **就是本案例目录**，沙箱边界（`workspace-write.workspaceRoot`）
     // 也是它 —— 子会话继承这两者，所以"可写范围"在指令里必须说成案例目录，

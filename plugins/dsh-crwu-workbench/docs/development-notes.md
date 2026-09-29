@@ -54,8 +54,9 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 界面是新版、行为是旧版（用户报过「还是挂错位置」，实际是宿主还跑着上一轮 build）。
 
 - `src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL` 是协议代数：**改跨进程契约就 +1**，
-  `ping` / `boot` 都会带上它。当前 = **7**（5→6：`boot`/`ping` 多了 `version`/`buildKind`；
-  6→7：`env` 多了 `me`）；
+  `ping` / `boot` 都会带上它。**当前 = 24**（历史见常量上方的注释：16→…→22 删掉登录类操作、
+  23 新增 `discussion-material-open`、**24 把审核根的 cwd/沙箱边界从"本轮案例目录"改成"已选工作空间"**
+  —— 后者决定审核会话是挂在工作空间下还是落「未分组」，见 §4.8 与 CHANGELOG 0.0.34）；
 - 客户端发现 `boot.protocol !== WORKBENCH_PROTOCOL`：面板上明说「宿主插件是旧构建，请重启 web profile」，
   并把 `canDispatch` 置 false；
 - 排查口诀：`env` 应答里缺字段 = 宿主是旧代。`ping.builtAt` 是**模块加载那一刻**的产物写入时间，
@@ -149,14 +150,33 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 6. 真机上点一下（依赖 `shell` / `fs` / `subagents` / `slots` / `webServer` 或真实外部行为的，
    替身证明不了）。
 
+### 7.1 增删一个**本机访问操作**（`LOCAL_ACCESS_OPERATIONS`）的最小清单
+
+这张表是**另一张表**（`src/host/access/operations.ts`）：跨工作区边界的每一条命令 / 文件写入
+都必须在它上面登记，判据是「需要哪个 capability / 走哪条通道 / 要不要逐次提权 / 允许哪些来源」。
+加一项时：
+
+1. `LocalAccessOperation` 联合类型 + `LOCAL_ACCESS_OPERATION_NAMES` + `LOCAL_ACCESS_OPERATIONS`
+   三处一起加（`satisfies` 保证漏登记就 typecheck 红）；
+2. 想清楚**特权还是不提权**：目标在会话 cwd 之外（钥匙串、`~/.dws`、员工选定的工作空间）才提权；
+   边界之内（审核子会话的案例目录）一律不提权 —— 「能给最小权限就给最小」；
+3. `allowedSources` 要能回答"这个来源**应不应该**做这件事"：`audit-host`（插件自己的审核编排）与
+   `audit-tool`（审核子代理调 Tool）刻意分开，两者的沙箱位置不同；
+4. 必须有**真实调用点**：`host-access-migration.test.mjs` 的 B-01c/B-01e 会断言「登记了没人用」；
+5. `tests/unit/host-access-broker.test.mjs` 会逐项检查描述表的**字段集**（只许四个键）与来源取值；
+   新增来源要同步那张白名单。
+
 当前操作清单与条数**只在 `tests/helpers/frozen-inventory.mjs` 写一份** —— 别在文档里写死数字
 （本文件历史上同时写过 30 与 29 两个互相矛盾的值，就是这么来的）。各测试各写一个裸数字的结果是：
 加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
 
-**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前 = 20，
-20 是新增 `browser-session-bind`）。历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
+**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前 = 23，
+23 是**新增** `discussion-material-open`：报告讨论会话的受限材料范围）。
+历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
 14：删除 `install-prompt`；15：iFinD 改为必需项；18：本机访问授权收据 + 诊断 + DWS 本机目录体检；
-19：审核 scope 收紧到本轮案例目录；20：内置浏览器扫码的凭据出口）写在那个常量的注释里。
+19：审核 scope 收紧到本轮案例目录；20：内置浏览器扫码的凭据出口；21：钉钉登录两阶段；
+22：删掉上面三条登录操作）
+写在那个常量的注释里。
 
 ## 8. 本地开发循环与两道人工关卡
 
@@ -286,7 +306,10 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 自绘面板里读会话事件流总是空 | 会话的**事件窗口只对当前会话打开**（stage 语义），而且绑定与历史是**异步**就绪的 | 绑定/发问前调 `sessions.open(id)`（只切会话选中，**不动主面板**）；读一次 + 挂订阅不够 —— 再加一路 1.2s 轮询（引用比较，没变化不重渲染）；`create` 不支持标题，建完要 `rename`，会话名就是复用凭据 |
 | 事件映射一条都匹配不上（面板空着，控制台也不报错） | 会话事件是**信封 + data**：`{type, seq, time, data:{…}}`，字段在 `data` 里，不在顶层 | 先取 `event.data` 再读 `content/source/message/name`；**单测样本抄真实事件**（真机探针打印一条即可），想当然的平铺样本会让单测全绿而真机全空 |
 | **Windows 上环境页/按钮报 `ParserError`、`意外的标记`，macOS 全绿** | 有调用点**绕过**了中央适配器自己拼命令（模板以 `` `${shellQuote(` `` 开头、`argv.map(…).join(' ')`、`cmd /c …`） | 所有经 `ctx.shell` 的命令只从 `src/host/platform/shell.ts` 生成；`host-platform-shell.test.mjs` 有两条静态门禁盯着（一条历史守卫在 `host-shell-fs.test.mjs`）。新增调用点先看这两处 |
-| 命令返回 0，但目录其实没建出来 / 文件其实没删掉 | 只信退出码 | `ensureDirectory` / `removeFileIfExists` 会用 `ctx.fs.stat` **回读后置条件**；只有「目标已是我们要的状态」才算成功。测试替身必须模拟 shell 副作用（`tests/helpers/shell-effects.mjs`），否则替身会造出「命令成功但文件系统没变」的假机器 |
+| 命令返回 0，但目录其实没建出来 / 文件其实没删掉 | 只信退出码 | `ensureDirectory` / `removeFileIfExists` 会**回读后置条件**（只读路径探测，见下一条）；只有「目标已是我们要的状态」才算成功。测试替身必须模拟 shell 副作用（`tests/helpers/shell-effects.mjs`），否则替身会造出「命令成功但文件系统没变」的假机器 |
+| 只读探测要不要也全走 Broker（`ensureAuditRoot` 的 `fs.stat`、`report/files.ts` 的本地列举） | DSH 的 `workspace-write`（以及默认的 `read-only`）只限制**写**：可写根由 `dsh-sandbox` 的 `writableRoots()` 推导（工作区 + 临时区），**读没有这条限制** | 案例目录那一条链路（建 + 回读后置条件）**必须**走 Broker，因为它是写；其余的只读探测继续用 `ctx.fs`（2026-09-30 决策：不为"可能的读限制"加一层没有证据的间接层）。**实测**：本机 `workspace-write` 下读工作区之外的路径正常（`cat ~/.dsh/profiles/desktop/package.json`、`stat ~/.dsh` 都成功）。真机上如果出现"读不到外部工作空间"，先看那条命令的沙箱事实，再决定要不要把 `system.workspace-directory.read` 铺到那两处 |
+| **案例目录建出来了，紧接着 `mkdir <案例目录>/输入快照` 回 `Operation not permitted（沙箱拒绝=是）`** | **DSH 的执行器不持有会话**：请求里不带 `sandboxPolicy` 时它只用部署默认（`workspace-write` + 兜底根 = 进程 cwd），而案例目录是**调用方那条会话**的 cwd。⚠️ 换 `ctx` 没用（第一次就是这么修的，真机原样复现） | 案例内的调用点把 `exec.agent.session` 交给 Broker（`BrokerShellOptions.session`，**不是权限开关**），Broker 用 `ctx.sandboxPolicy.resolve({ session })` 算出策略放进请求。替身必须**按策略拦人**（`tests/helpers/fs-sandbox-stub.mjs`），否则这类缺陷在单测里永远看不见 |
+| **`mkdir: Operation not permitted` 建不出案例目录**（员工选定工作空间本身可写） | 案例目录在会话 cwd **之外**，而案例目录创建直接调了 `shell/run.ts` 的裸 `runShell` → 拿到部署默认的 `workspace-write`（边界 = 会话 cwd），写被沙箱拒绝；员工本人对那个目录是有写权限的 | 建目录走 Broker 的 `system.case-directory.write`（**特权**、来源 `audit-host`、`workspaceRoot = 员工选定的工作空间`），建完回读后置条件；失败按三分类给话：沙箱拒绝 / 操作系统权限 / 工作空间不存在。`tests/unit/host-access-migration.test.mjs` 的 B-01e 禁止 `case-files.ts` 再出现裸 `runShell`，`host-case-files.test.mjs` 有一台**真的会拦人**的沙箱替身做回归 |
 | Windows 上案例名/目录名变成一整条路径 | `path.split('/')`（Windows 分隔符是 `\`） | 用 `shared/utils/local-path.ts` 的 `basenameLocalPath` / `joinLocalPath`；跨端拼接也走它 |
 | `C:\` 被裁成 `C:`（盘符相对路径），或 UNC 根被裁坏 | `replace(/[\\/]+$/, '')` | 用 `trimTrailingSeparators`（保留 `/`、`C:\`、`\\server\` 这些根本身） |
 | Windows 上说「凭据权限已收紧到 0600」 | `chmodOk: boolean`：Windows 没有 `chmod`，跳过之后只能是 `true` | 协议 17 起用结构化 `permission`（`verified` / `inherited` / `failed` + `mechanism`）；Windows 报 `inherited / windows-acl`，界面文案由 `features/environment/credential-permission.ts` 决定 |
@@ -298,7 +321,8 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 权限收紧「成功」但模式没生效 | 只看了 `chmod` 的退出码；部分文件系统（网络盘、虚拟化挂载）会静默忽略 chmod | `enforceCredentialPermission` 收紧后**回读模式位**（`readFileModeCommand`：GNU `stat -c %a` / BSD `stat -f %Lp`），对不上即 `failed`；`verified` 只能由观察到的 `600` 支撑 |
 | `Access denied` 被回报成「删除成功 / 目录已建好」 | 把 `fs.stat` 的**异常**折叠成「不存在」 | `case-files.ts` 的 `probePath` 是三态（存在 / 不存在 / 查不出来），「查不出来」按基础设施失败上报；只把 `undefined` 当不存在 |
 | 审核子代理「重新定位/搜索报告」：自己发现表单、列记录、翻案例目录 | 交接不完整：启动只给 objectId/seqNo/project，而记录接口要 `schemaCode` | Host 先解析表单 code（实例级 `H3yunFormResolver`，只发现一次、并发共享），再用 `crwu_audit_case_bootstrap` 按精确 objectId 取一次数落成 `输入快照/`；`schemaCode` 不进任何 Tool 参数（`host-tools.test.mjs` 逐字断言） |
-| 新报告点「AI 审核」必失败：`输入快照交接失败（input）：案例目录不存在或不是目录：<工作空间>/<流水号>`（审过的报告却好好的） | `<工作空间>/<流水号>` **谁都没建**：案例内每个 Tool 都过 `requireCaseDir`（要求目录已存在），而 bootstrap 又必须在子代理之前落快照 —— 旧形态是子代理自己 `mkdir -p`，结构化 Tool 化之后那条路没了，于是只有目录已存在的（审过的）报告能再发起 | `audit-start` 在 bootstrap **之前**由 Host 建目录（`tools/case-files.ts` 的 `ensureDirectory`，`mkdir -p`，workdir = 工作空间），失败就在创建子代理之前报 `创建案例目录失败：<路径>（原因）`；`host-audit-lifecycle.test.mjs` 用 trace 钉死「mkdir → bootstrap → start」的次序 |
+| 新报告点「AI 审核」必失败：`输入快照交接失败（input）：案例目录不存在或不是目录：<工作空间>/<流水号>`（审过的报告却好好的） | `<工作空间>/<流水号>` **谁都没建**：案例内每个 Tool 都过 `requireCaseDir`（要求目录已存在），而 bootstrap 又必须在子代理之前落快照 —— 旧形态是子代理自己 `mkdir -p`，结构化 Tool 化之后那条路没了，于是只有目录已存在的（审过的）报告能再发起 | `audit-start` 在 bootstrap **之前**由 Host 建目录（`tools/case-files.ts` 的 `ensureCaseDirectory`，经 `system.case-directory.write`），失败就在创建子代理之前报 `创建案例目录失败：<路径>（原因）`；`host-audit-lifecycle.test.mjs` 用 trace 钉死「mkdir → bootstrap → start」的次序 |
+| 后置条件回读在受限沙箱下「查不出来」，把建好的目录报成失败 | 探测走 `ctx.fs.stat`：它和服务沙箱是同一条策略，"读不到"与"不存在"分不开 | 探测改走 Broker 上的一条命令（`platform/shell.ts` 的 `pathProbeCommand`：`test -d` / `Test-Path -PathType`，**永远以 0 退出、结论只在 stdout**），"命令没跑起来"才是不确定；测试替身要回答它（`tests/helpers/shell-effects.mjs` 的 `probeAnswer`） |
 | 技能脚本报缺 `openpyxl` / 结果不可信 | 用了系统 `python3`：它不是审核运行时 | 只用 `load_workspace_dependencies` 返回的 DSH Python（实例级解析、只缓存成功）；审核启动解析不出来就不建子代理；技能正文禁止裸解释器名字与静默降级 |
 | 环境自检里 packaged 三件套又「未安装」 | 拿 PATH 当判据（Finder 启动的桌面端 PATH 只有 `/usr/bin:/bin`） | packageIntegrity 只认包内 `bin/<平台>/` 与 `bin/manifest.json`（比对 size），**不** `command -v`、**不**回退 PATH、**不**跑 `dws version`（会生成 `.dws/` 残留）；缺了就说「插件包不完整/平台不受支持」 |
 | 自检里出现「未安装 python3」 | 把系统解释器当依赖 | 环境页的 ③ 层是「DSH 脚本运行时」：拿不到就报 capability gap，不检查裸 `python3`、也不接受 `/usr/bin/python3` |
@@ -353,15 +377,17 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 
 - 一个 `blocked[]` 里同时住着「员工该做的」与「员工做不了的」（包不完整 / 无系统 Python /
   改 PATH），界面只能平铺，于是员工被指去装一份插件根本不会用的解释器；
-- iFinD 当时是**条件能力**，却与"氚云没登录"长得一模一样 —— 于是 2026-09-26 的产品口径把它
-  改成了必需项（见 §11.1 的表格与 §11.2）；
+- iFinD 当时是**条件能力**，却与"氚云没登录"长得一模一样 —— 2026-09-26 曾把它改成必需项，
+  2026-09-30 又按用户口径改回**可选数据源**（见下面的表格、§11.2 与 §14 开头的取代说明）；
 - 顶部说「环境就绪」（`allOk`），旁边的通过率说「7/8 通过」（分母把可选项也算进去了）。
 
 四条判据（改这块前先读，测试逐条盯着）：
 
 | 情形 | 结论 |
 | --- | --- |
-| iFinD API-Key 未通过 | **阻塞**（2026-09-26 起它是必需项）：owner 按 credential→user / entitlement→admin / infrastructure→system 分派；`global` + `auditCore` + `externalData` 一起关；进必需项分母 |
+| iFinD API-Key 未通过 | **不阻塞**（2026-09-30 起它是可选数据源）：只记一条 `blocking:false` + scope=`external-data` 的 issue；owner 仍按 credential→user / entitlement→admin / infrastructure→system 分派；只有 `externalData` 关闭，`global` / `auditCore` / `delivery` 与通过率分母都不受影响 |
+| 工作空间未选定 / 目录已消失 | 阻塞（owner=user）：插件**不创建**工作空间根目录，只允许重选一个已有目录 |
+| 未登记但存在的工作空间目录 | **只登记**（`workspaceRegistry.create`），不建目录 |
 | 氚云 / 钉钉 / OSS / 工作空间缺失 | 阻塞（`action-required`，owner=user） |
 | 包 / 运行时 / 平台 / Tool 故障 | 阻塞（`system-blocked`，owner=system，**不派给员工**） |
 | 部署配置缺 bucket | `admin-required`（owner=admin） |
@@ -496,6 +522,13 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 [`windows-acceptance.md`](windows-acceptance.md)。
 
 ## 14. 内置浏览器登录（钉钉 / 氚云，2026-09-29 调研定稿）
+
+> ⚠️ **本节已被 2026-09-30 口径取代（协议 22）**：用户明确 DSH **不再提供**氚云内置浏览器扫码登录、
+> 也不提供钉钉设备码登录。`browser-session-bind` / `dws-login-start` / `dws-login-status` 三条操作、
+> 客户端 `H3yunBrowserLogin` / `DwsLoginCard` / `login-browser.ts` / `open-url.ts` 全部删除；
+> 账号连接只读取、检查已有凭据，登录由**本机 CLI 打开系统浏览器**完成。
+> 下面这一段作为**历史调研记录**保留（它解释了当年为什么这么设计、以及那些真实报错长什么样），
+> 但**不得**据此恢复任何内置登录入口或设备码流程。取代后的口径见插件 `AGENTS.md` §4.6 / §4.8。
 
 背景：Windows 上 `crwu h3yun session login` 要自己拉起一个带 CDP 的 Chromium，机器策略与 ACL 会拒它
 （真实报错见 `src/host/system/auth-scratch.ts` 顶部）。目标是两个登录都改走 **DSH 桌面内置浏览器**，
@@ -693,3 +726,206 @@ CLI 那边也超时了。所以拆成两阶段。
   同一个 Windows 用户（提权只是令牌提权）都能解密凭据，缺的只是**写锁与日志的文件权限**。
 - **不要就地升级随包二进制**：插件自带的 `dws` 按 `bin/manifest.json` 校验，
   在插件目录里跑 `dws upgrade` 会让自检报"插件包不完整"，且下次插件升级会覆盖回去。
+
+## 17. 环境页的「系统故障」：**没问到 ≠ 缺失**（2026-09-29 修正）
+
+### 17.1 现象与实测
+
+员工 Windows 上环境页显示「发现系统故障」，但报告里其它项全绿，只有这一行空着：
+
+```
+DSH Runtime: （未设置） ·  · DSH 自带运行时（load_workspace_dependencies）
+依赖包版本: （未设置）
+```
+
+同一台机器上让 DSH 的会话**带 agent** 调同一个工具，返回是完整的：
+
+```json
+{ "python": "C:\\Users\\…\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe",
+  "pythonPackages": "…\\python\\Lib\\site-packages",
+  "pythonDistributions": { "openpyxl": "3.1.5", "pandas": "3.0.1", "Pillow": "12.3.0", … } }
+```
+
+载荷有 Python、必需包齐全 → **运行时没缺失**，缺的是"插件在自检上下文里问不到它"。
+
+### 17.2 根因
+
+环境自检跑在 `host-background`，**没有会话 agent**（`env` 这条 RPC 的负载只有 `{ op, args }`，
+客户端也不带 session id），而 `load_workspace_dependencies` 需要 agent 作用域。
+于是解析器拿到的是工具报错，**旧实现把它一律渲染成"DSH 自带脚本运行时不可用"** ——
+一条「系统归属 + 阻塞」的 issue，直接把总状态打成 `system-blocked`、把审核入口关掉。
+
+### 17.3 修正口径
+
+1. `PythonRuntimeView` / `RuntimeView` 增加 `unresolved`：**工具不可用 / 调用抛错 / 超时 / 工具报错**
+   都标 `unresolved: true`（"没问到"）；而"工具成功返回但载荷里没有 python""路径不存在/不是文件"
+   "缺必需包"仍是**真·缺失**（`unresolved: false`）；
+2. `environment/state.ts`：`unresolved` 时 issue **非阻塞**（owner 仍是 system，scope 仍是 global），
+   文案说明"发起审核时会以审核根会话复核，拿不到就拒绝启动"；真·缺失照旧阻塞；
+3. 页面那一行用**新状态词 `unresolved`**（客户端渲染成「待复核」、语气中性），不再显示成"未配置/缺失"；
+4. **真正的拦阻留在 `audit-start`**：那条本来就带审核根 agent 调 `python.check({ agent: rootAgent })`，
+   拿不到就 `failed(...)` 终止审核 —— 所以放宽的是"自检的显示与总状态"，不是审核门禁。
+   解析成功会进缓存，因此发起过一次审核之后，环境页那一行会变成"已就绪"。
+
+### 17.4 根因修法（0.0.27）：自检也用**面板绑定的父会话**取 agent
+
+只把"没问到"改成非阻塞还不够 —— 运行时**必须真的能解析出来**，否则审核仍不可用。
+自检这条 RPC 没有会话上下文，但插件状态里本来就有 `bind-session` 落盘的 `parentSessionId`
+（审核启动用的就是它）。所以：`environment/ops.ts` 在调 `pythonRuntime` 之前，
+用 `boundParentAgent(ctx, state.parentSessionId)`（`audit/spawn.ts`，唯一实现）
+取同一个 agent 传给解析器；拿不到就退回不带 agent 的调用（那种情况只报「待复核」）。
+
+实测证据（2026-09-29 员工 Windows）：同一个工具在会话里调用返回完整载荷
+（`python` + `openpyxl 3.1.5` 等），而自检上下文报错 —— 差别就是 agent 作用域。
+
+### 17.5 这条口径的通用教训
+
+**"我没问到"与"事实如此"必须分开**：前者只能降低确定性（未验证 / 待复核），不能升级成故障，
+更不能因此关掉功能入口。原来那句"运行时不可用"是一句**比事实更强**的结论，
+而它带来的后果（审核入口被关）比"显示未知"严重得多。
+
+## 18. DSH 自带运行时**从环境自检里挪走**（2026-09-29，0.0.28）
+
+### 18.1 结论与理由
+
+`load_workspace_dependencies` **需要 agent 作用域**：员工在同一台机器上让 DSH 会话调它，返回完整载荷
+（`python` + `openpyxl 3.1.5` 等），而环境自检跑在 `host-background`、RPC 负载里没有会话上下文，
+调它就是工具报错。围绕这条我们试过两种补救，都不成立：
+
+1. 把"没问到"当"运行时缺失" → 一条**系统归属的阻塞项** → 总状态 `system-blocked`，**审核入口被关**（0.0.26 之前）；
+2. 只把它显示成「待复核」→ 状态不再撒谎，但那一行**永远解析不出来**，员工看到的是"未设置"（0.0.26/0.0.27）。
+
+所以自 0.0.28 起：**这条检查整个移出环境自检** ——
+不再调用解析器、不再有这一行、不再进必需项分母（分母 9 → **8**）、不再影响总状态。
+
+### 18.2 留在哪里
+
+* **`audit-start` 仍然是硬门禁**：它用**审核根 agent** 调 `python.check({ agent: rootAgent })`，
+  拿不到就终止审核。所以能力上没有被放宽，只是"什么时候检查"从"切页面时"改成"真要跑审核时"。
+* 失败文案分两支（`PythonRuntimeView.unresolved`）：**没能问到**（工具调用失败/超时/报错，可重试）
+  与**确实缺失**（载荷没有 python / 路径不可用 / 缺必需包，只能由部署方补运行时）。
+* 取 agent 的唯一实现是 `audit/spawn.ts` 的 `boundParentAgent(ctx, parentSessionId)`
+  （`bind-session` 落盘的那个父会话），`audit-start` 也用它，两处口径一致。
+
+### 18.3 删掉的东西（避免留"以后可能有用"的死代码）
+
+`shared/types.ts` 的 `RuntimeView`、`env.runtime` 分区、`EnvironmentInput.runtime/runtimeRequired`、
+`runtimeItem`、`runtime` issue、客户端三行诊断与 `unresolved` 状态词、以及对应的六条文案键。
+`src/host/runtime/python.ts`（解析器）**保留** —— 它是 `audit-start` 用的。
+
+## 19. 启动审核时的运行时门禁（0.0.29 修正）
+
+### 19.1 症状
+
+员工机器上发起审核后：**案例目录没被创建**、子会话里任何案例内 Tool 都被拒
+（「调用者不在进行中的审核里（或本轮案例范围不完整 / 已结束）」），而能力自检显示三个二进制与
+全部业务 Tool 都 available —— 即"不是能力缺口，是这轮审核根本没成立"。
+
+### 19.2 根因
+
+`audit-start` 在创建案例目录**之前**要解析 DSH 自带运行时，而它拿 agent 的方式是
+`boundParentAgent(ctx, state.parentSessionId)`。宿主侧（`host-background`）**没有会话作用域**时这个查
+询会拿到 `undefined`，于是那次工具调用必然报错 → `python.unresolved === true` →
+**旧实现一律 `failed(...)` 拒绝启动** → 案例目录不建、子会话没有 scope。
+
+### 19.3 修正口径：**「没问到」不再拒绝启动**
+
+| 情形 | 判据 | 处置 |
+| --- | --- | --- |
+| 真·缺失（载荷没有 python / 路径不可用 / 缺必需包） | `ok === false && unresolved !== true` | **仍然拒绝**（fail closed）：否则子代理会退回系统解释器，结果不可信 |
+| **没能问到**（工具调用失败 / 超时 / 报错） | `unresolved === true` | **放行**，并把提示词换成「由你在本会话里解析」那一段 |
+
+放行的依据：**子会话有 agent 作用域**，它自己调一次 `load_workspace_dependencies` 就能拿到
+`python` 绝对路径与已装包清单。提示词（`prompt.ts` 的 `pythonUnresolvedSection`）写死了三件事：
+
+1. 唯一来源是那个工具的返回，绝对路径是唯一允许的解释器；
+2. 仍然禁止任何解释器查找（搜索可执行文件 / 读环境变量 / 改 PATH）与裸解释器名字；
+3. 取不到或缺 `openpyxl` → **立即停止**并汇报「capability gap：DSH Python 不可用」。
+
+这不是放宽安全口径，而是把"从哪拿"交给**有能力拿到**的那一层。
+
+### 19.4 另一个独立阻塞：`workspace-write` 下 pwsh 起不来（0xC0000142）
+
+员工机器上 `workspace-write` 策略下本机 pwsh **每次调用都以 `0xC0000142`（STATUS_DLL_INIT_FAILED）
+结束、零输出**，`danger-full-access` 下正常。这条与运行时无关，但它会**整段**打死审核链路：
+审核根与子会话按设计**恒为 `workspace-write`**（`audit/policy.ts`），而材料准备（工作版重建、
+隐藏区隔离、媒体导出）与交付渲染都走 shell。**这是 DSH 侧（沙箱启动器）的问题，插件不该也
+不能**为了跑通而把审核改成不限沙箱 —— 那等于把"审核边界是本轮案例目录"这条安全口径拆掉。
+处置：把 `0xC0000142` 的证据（策略、命令、零输出）交给 DSH 维护者排查沙箱启动器。
+
+## 20. 配置入口收敛（2026-09-30 · 协议 22）
+
+用户口径一次收敛三件事，实现时**每一条都有一个"看起来更省事、但会退回去"的写法**：
+
+### 20.1 iFinD 从"必需项"改回"可选数据源"
+
+- 清单 `ifind.required=false` ⇒ `userSetup.ifind.required=false`、**不进必需项分母**（7 项而不是 8 项）。
+- issue 只有一条：`blocking:false` + `scope:'external-data'` ⇒ 总状态 `degraded`（**照常放行**），
+  `global` / `auditCore` / `delivery` 都不动，只有 `capabilities.externalData` 关闭。
+- ⚠️ 三个会咬人的地方：
+  1. **侧栏那枚灯的判据是 `statusProceedable`，不是 `status === 'ready'`** —— 只认 `ready` 会让
+     "未配置外部数据源"的部署出现「红点 + 基础环境已就绪」的自相矛盾（`envLampOf`）。
+  2. **环境页顶部同理**：`ok = (ready || degraded) && proceed`，否则未配置 iFinD 时会显示
+     「还需完成 0 项」。
+  3. **门禁文案回到通用模板**。以前 `hasIfindBlocker` 会把它换成"请先完成 iFinD API-Key 验证"，
+     现在 iFinD 不阻塞 —— 那句专门话术必须消失，否则员工会去修一个不拦人的东西。
+- 旧字段与旧文案**没有**保留成"兼容分支"：`ifind-external` 这条 issue 已删（`capabilitiesOf` 改成看
+  scope，而不是看第二条 issue）。
+
+### 20.2 账号连接只读、只检查；登录走 CLI + 系统浏览器
+
+- 删掉：`browser-session-bind`（协议 20）、`dws-login-start` / `dws-login-status`（协议 21）、
+  客户端 `H3yunBrowserLogin.tsx` / `DwsLoginCard.tsx` / `login-browser.ts` / `open-url.ts`、
+  `crwuOperationOf` 里的 `h3yun session bind` 映射、`dwsLogin` 的 `--device` 分支。
+- 留下：`relogin`（`crwu h3yun session login`）与 `dws-login`（`dws auth login`）—— CLI 自己拉起
+  **系统浏览器**；面板只触发 + 「重新检查」。
+- ⚠️ 判据要**两种一起**：文件已删（`existsSync === false`）+ 面板上没有任何按钮/正文承诺
+  "用设备码登录 / 在内置浏览器里扫码"。"DSH 不提供内置浏览器扫码登录"这句**免责说明**是推荐文案，
+  不许被"含'内置浏览器'就报错"的粗糙断言误伤（`client-package.test.mjs` 里踩过一次）。
+
+### 20.3 Windows：提醒"以管理员身份运行"（2026-09-30）
+
+钉钉 CLI（`dws`）在 Windows 上要碰 `<HOME>\.dws`：先抢 `.data.lock`，再把登录态写进操作系统凭据存储。
+进程权限不足时它以"锁被占用 / 拒绝访问"结束，**表现却是钉钉登录一直不成功**（员工只会反复点登录）。
+
+- 判据是**纯函数**：`features/environment/platform-note.ts` 的 `needsWindowsAdminReminder`
+  只看 `env.platform` 的 `win32` 前缀；**拿不到平台就不提醒**（不猜）。
+- 它是**非阻塞提醒**，不是门禁：钉钉登录态到底有效没有，仍由环境自检的探测结论说了算。
+- 挂在**账号连接**那一步（钉钉登录态与两颗登录按钮都在那里），别处不重复；非 Windows 一个字都不提。
+- 文案 `zhCN.envWindowsAdminHint` 必须同时说清两件事：**以管理员身份运行**、**是为了钉钉 CLI**。
+
+### 20.4 插件不创建工作空间根目录
+
+- `ensureAuditRoot` 里**没有** `mkdir`：路径为空 → 「尚未选定工作空间，请先选择一个已有目录」；
+  路径不存在 / 是文件 → 「已选定的工作空间目录不存在，请重新选择一个已有目录」；两种情况都**拒绝启动**。
+- 目录存在但未登记 → **只登记**（`workspaceRegistry.create` 本身要求目录已存在）。
+- 客户端 `UiWorkspaceService` 不再声明 `createDirectory`，`WorkspaceCard` 把选中的路径原样使用。
+- ⚠️ 允许自动创建的**只有** `<工作空间>/<流水号>` 这一级案例目录 —— 审核启动的 shell 轨迹里
+  **不许**出现 `mkdir <工作空间根>`（`host-audit-lifecycle.test.mjs` 按真实 trace 断言）。
+- ⚠️ `@8-5` 那类边界用例要**单独造**：`fs.stat` 回 `type:'file'`（路径存在但不是目录）与
+  "路径不存在"是两种输入，夹具只准备 `dirs` 集合会漏掉前者。
+
+### 20.5 外部数据源（iFinD）**和别的配置项并排**放在步骤里，而且排在最后
+
+用户口径（2026-09-30，返工两次）：**外部数据核查放到环境信息里面去，不要单拆一个目录**；
+**「同花顺这里直接显示未配置就可以」**；**「把同花顺放到最后一个」**。
+
+- 它是 `SETUP_STEP_IDS` 里的**最后一步**（`accounts → oss → workspace → ifind`）：那一步的正文就是
+  `IfindAuthCard`，**不另起一块**（用户口径：单开一块/一页会让页面很乱；可选能力也不该挤在必检项中间）。
+- **未配置时直接显示「未配置」**：芯片一律琥珀（`toneOfOptionalItem` / `ifindStateTone` 只回
+  `ok` / `busy`，红 = "必须处理"），能力清单等已配置后再显示 —— 一开始不堆一屏说明。
+- **必检标记只有一份判据**：`REQUIRED_SETUP_STEPS = ['accounts','oss','workspace']` →
+  `SetupStepView.required` → 界面上那枚**红色星号**（`C.stepRequired`，颜色用
+  `--dsw-alias-state-error-primary`，不写硬编码红）。iFinD **不带**星号。
+- **可选步骤不进"还没做完"**：`pickStep` 只停在第一项未完成的**必检项**，必检项都完成时停在
+  **最后一个必检项**（不是末位的可选项）；`allStepsDone` 只统计必检项 —— 否则未配置 iFinD 的部署会
+  永远停在"还没做完"、默认落点还会跑到可选项上。
+- **不是** `ModuleId`：`MODULE_IDS` 仍是 `eval / audit / env` 三项，`NavigateTarget` 没有 `external`，
+  侧栏卡仍是三行；`EnvironmentRequirement = 'external-data'` 保留（它描述"只看外部数据"的**严格度**，
+  与有没有独立页面无关）。
+- ⚠️ 三次返工的教训：① 做成**第四个侧栏模块**（要搬同一份 `env.external` 事实、还读成"又一个要配置的模块"）；
+  ② 做成**页级区块**（页面上下两块"配置"，很乱）；③ 放在**列表中间**且"未配置"报红（可选能力挤在必检项
+  中间、还像故障）。正确形态是：**它就是配置列表里的最后一步**，必检与否用星号区分，未配置只说
+  「未配置」、不报红、不堆说明。
+- ⚠️ 星号计数断言要限定在**步骤导航**子树里（`data-crwu-env-stepnav`）：面板标题上还有一枚"当前这一步"
+  的星号，对整棵树数数会数出 4 而不是 3。

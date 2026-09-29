@@ -7,6 +7,8 @@ import { localAccessGranted } from '../access/consent.ts'
 import type { LocalAccessBroker } from '../access/broker.ts'
 import type { H3yunFormResolver } from '../h3yun/form.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { DiscussionScopeRegistry } from '../audit/discussion-scope.ts'
 
 /**
  * 所有 CRWU Tool 的共享依赖。
@@ -39,6 +41,14 @@ export interface ToolDeps {
   ifindTimeoutMs?: number
   /** Broker（协议 18）：审核 Tool 的每一次跨边界调用都经它（来源 = audit-tool）。 */
   access: LocalAccessBroker
+  /**
+   * **讨论会话的受限材料范围**（协议 23，进程内、不落盘）。
+   *
+   * `crwu_h3yun_file_get` 的材料门禁要回答"这个调用者能取哪些附件"：
+   * 审核子会话走审核记录里的白名单，**报告讨论会话**走这里登记的 `fileId` 白名单。
+   * 它必须由 `apply()` 创建并随插件生命周期释放（模块级会跨实例串味）。
+   */
+  discussionScopes: DiscussionScopeRegistry
 }
 
 /**
@@ -54,6 +64,18 @@ export interface ToolDeps {
 export function toolContext(root: Context, exec: ToolRunContext): Context {
   const scoped = (exec.agent as { ctx?: Context } | undefined)?.ctx
   return scoped ?? root
+}
+
+/**
+ * 调用方那条**会话**（`exec.agent.session`）。
+ *
+ * 为什么案例内操作必须带上它：DSH 的执行器**不持有会话**，请求里不带 `sandboxPolicy` 时只会用
+ * 部署默认（进程 cwd）。Broker 拿这个会话去 `sandboxPolicy.resolve({ session })`，
+ * 才能让命令落在**调用方自己的**沙箱边界里（审核根 / 子会话的边界就是本轮案例目录）。
+ * 拿不到（老宿主 / 无 Agent 的宿主调用）时返回 `undefined`，由调用方按失败处理。
+ */
+export function callerSession(exec: ToolRunContext): Session | undefined {
+  return (exec.agent as { session?: Session } | undefined)?.session
 }
 
 /** 会话工作目录（命令的默认 workdir）；取不到返回空串。 */

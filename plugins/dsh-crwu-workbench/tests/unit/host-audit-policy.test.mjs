@@ -83,7 +83,7 @@ function applyRealSetters(session, { mode = AUDIT_SANDBOX_MODE, policy = AUDIT_A
   if (cwd !== undefined) session.override.cwd = cwd
 }
 
-test('C-01 · 写入并回读：沙箱 workspace-write、边界是**本轮案例目录**、审批 never', () => {
+test('C-01 · 写入并回读：沙箱 workspace-write、边界是**已选工作空间**、审批 never', () => {
   const session = makeSession()
   const workspacePath = '/cases/ws'
   const ctx = makeCtx({ session, workspaceRoot: 'C:\\ws' })
@@ -135,24 +135,25 @@ test('模式不是 workspace-write（被降级 / 被改漂）→ 拒绝，并说
   assert.match(view.error, /danger-full-access/)
 })
 
-test('沙箱边界不是**本轮案例目录** → 拒绝（工作空间根与兄弟案例都不行）', () => {
-  // 协议 19 起判据从"边界=选定工作空间"收紧成"边界=本轮案例目录"：
-  // 工作空间级边界会让通用 shell / fs 能改同工作空间里的**其他案例**（用户复查 P1 的第 4 条）。
+test('沙箱边界不是**已选工作空间** → 拒绝（案例目录、兄弟工作空间都不行）', () => {
+  // 协议 24 起判据是"边界 = 已选工作空间"：DSH 的边界就是会话 cwd，而 cwd 必须逐字等于
+  // 工作空间路径才挂得上工作空间（`attachSession`）—— 也只有这样审核会话才会出现在
+  // 「中瑞世联工作空间」下面，而不是「未分组」。
+  // ⚠️ 跨案例的隔离**不靠这个边界**，靠 `requireAuditScope`（按本轮 `casePath` 精确相等，见 host-audit-scope）。
+  const caseDirLevel = makeSession()
+  applyRealSetters(caseDirLevel, { cwd: '/cases/space/S1' })
+  const inner = inspectAuditRootPolicy(makeCtx({ session: caseDirLevel }), makeAgent(caseDirLevel), '/cases/space')
+  assert.equal(inner.ok, false)
+  assert.match(inner.error, /不是已选工作空间/)
+
+  // 别的路径（兄弟工作空间）同样必须拒绝。
   const sibling = makeSession()
-  applyRealSetters(sibling, { cwd: '/cases/space/S2' })
-  const other = inspectAuditRootPolicy(makeCtx({ session: sibling }), makeAgent(sibling), '/cases/space/S1')
+  applyRealSetters(sibling, { cwd: '/cases/other' })
+  const other = inspectAuditRootPolicy(makeCtx({ session: sibling }), makeAgent(sibling), '/cases/space')
   assert.equal(other.ok, false)
-  assert.match(other.error, /不是本轮的案例目录/)
+  assert.match(other.error, /不是已选工作空间/)
 
-  // 工作空间根作为边界也**必须**拒绝（这正是收紧前被接受的形态）。
-  const workspaceLevel = makeSession()
-  applyRealSetters(workspaceLevel, { cwd: '/cases/space' })
-  const view = inspectAuditRootPolicy(makeCtx({ session: workspaceLevel }), makeAgent(workspaceLevel), '/cases/space/S1')
-  assert.equal(view.ok, false)
-  assert.match(view.error, /不是本轮的案例目录/)
-
-  // 注：夹具里"边界"就是会话 cwd（与 DSH 一致），所以上面第二条已经覆盖了
-  // "cwd 还是工作空间"这种形态；`auditRootUsability` 另有一条用例从复用路径钉同一件事。
+  // 注：夹具里"边界"就是会话 cwd（与 DSH 一致）；`auditRootUsability` 另有一条用例从复用路径钉同一件事。
 })
 
 test('审批策略不是 never → 拒绝；审批能力没装配同样拒绝（无人值守不能靠部署默认）', () => {

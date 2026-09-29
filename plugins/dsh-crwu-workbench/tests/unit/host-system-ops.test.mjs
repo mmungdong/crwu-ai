@@ -233,17 +233,19 @@ test('every escalated command carries a working directory', async () => {
 
 // ── 登录与会话 ──────────────────────────────────────────────────────────────
 
-test('dwsLogin passes --device only when asked and reports the tails', async () => {
+test('dwsLogin 只跑 `dws auth login`（系统浏览器），**没有**设备码分支，并只回尾部', async () => {
   const ctx = makeCtx({ shell: () => ({ stdout: 'x'.repeat(900) + 'TAIL', stderr: 'err' }) })
-  const result = await dwsLogin(depsOf(ctx), { device: true }, TEST_HOME)
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
   assert.equal(result.ok, true)
-  assert.match(ctx.commands[0], /dws auth login --device/)
+  assert.match(ctx.commands[0], /dws auth login/)
   assert.equal(result.stdoutTail.endsWith('TAIL'), true)
   assert.ok(result.stdoutTail.length <= 600, '只回尾部，避免把整段输出塞进响应')
 
-  const plain = makeCtx({ shell: () => ({ stdout: '' }) })
-  await dwsLogin(depsOf(plain), {}, TEST_HOME)
-  assert.equal(plain.commands[0].includes('--device'), false)
+  // 2026-09-30：DSH 不再提供设备码登录 —— 即使调用方传 `device: true`（旧客户端），
+  // 也**不会**拼出 `--device`（需要设备码的走终端里的 CLI）。
+  const legacy = makeCtx({ shell: () => ({ stdout: '' }) })
+  await dwsLogin(depsOf(legacy), { device: true }, TEST_HOME)
+  assert.equal(legacy.commands[0].includes('--device'), false, '插件不提供设备码登录')
 })
 
 test('dwsLogin surfaces a timeout instead of a silent failure', async () => {
@@ -265,49 +267,7 @@ test('relogin runs the whitelisted crwu session login and parses the session', a
   assert.equal(result.error, '')
 })
 
-// ── 内置浏览器扫码的凭据出口（协议 20）──────────────────────────────────────
-
-const SAMPLE_JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJlbmdpbmVjb2RlIjoiZW5nLTEifQ.signature'
-
-test('browser-session-bind 把令牌走标准输入，绝不进命令行', async () => {
-  const ctx = makeCtx({ shell: () => ({ stdout: JSON.stringify({ ok: true, data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z', expiresIn: '48h' } }) }) })
-  const result = await bindH3yunSession(depsOf(ctx), { token: SAMPLE_JWT })
-
-  assert.equal(result.ok, true)
-  assert.equal(result.session?.userId, 'u1')
-  assert.equal(ctx.commands.length, 1)
-  // ① 命令形状：读标准输入的那条参数，而不是 `--token <jwt>`。
-  assert.match(ctx.commands[0], /h3yun session bind --token-stdin/)
-  // ② 令牌绝不进命令行（同机 `ps` / 任务管理器看不到）。
-  assert.equal(ctx.commands[0].includes(SAMPLE_JWT), false)
-  // ③ 令牌确实经 stdin 交给命令。
-  assert.equal(ctx.specs[0].stdin, SAMPLE_JWT)
-  // ④ 提权仍然由操作身份决定（`h3yun.session.bind` 是特权操作，必须有工作目录）。
-  assert.equal(ctx.specs[0].sandboxPolicy?.mode, 'danger-full-access')
-  assert.equal(ctx.specs[0].sandboxPolicy?.workspaceRoot, '/cases/session')
-  // ⑤ 返回值里没有令牌（界面拿到的只能是一个结论）。
-  assert.equal(JSON.stringify(result).includes(SAMPLE_JWT), false)
-})
-
-test('browser-session-bind 对空令牌与带换行的令牌零调用', async () => {
-  for (const token of ['', '   ', `${SAMPLE_JWT}\n`]) {
-    const ctx = makeCtx({ shell: () => ({ stdout: '{}' }) })
-    const result = await bindH3yunSession(depsOf(ctx), { token })
-    assert.equal(result.ok, false, `${JSON.stringify(token)} 必须被拒`)
-    assert.equal(ctx.commands.length, 0, `${JSON.stringify(token)} 不该起任何进程`)
-    assert.equal(result.session, null)
-    assert.equal(JSON.stringify(result).includes(SAMPLE_JWT), false)
-  }
-})
-
-test('browser-session-bind 失败时只回 CLI 的一句话，不带令牌', async () => {
-  const ctx = makeCtx({ shell: () => ({ exitCode: 1, stderr: 'the session token has already expired; scan again at h3yun.com' }) })
-  const result = await bindH3yunSession(depsOf(ctx), { token: SAMPLE_JWT })
-  assert.equal(result.ok, false)
-  assert.match(result.error, /already expired/)
-  assert.equal(result.session, null)
-  assert.equal(JSON.stringify(result).includes(SAMPLE_JWT), false)
-})
+// ── 登录命令的形状（协议 22 起：DSH 只触发 CLI，不自己指定目录 / 不提供设备码）────
 
 test('登录命令不再替 CLI 指定任何目录（临时目录与配置目录都用默认）', async () => {
   const ctx = makeCtx({ shell: () => ({ stdout: '' }) })

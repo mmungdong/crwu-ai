@@ -737,6 +737,10 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         sources: (pulled === null ? [] : sourcesOf({ pulled, cloud: { htmlKey: '', jsonKey: '' }, info: {}, fetchedAt: new Date().toISOString() }))
           .map((ref) => [ref.provider, ref.remoteId, ref.remoteVersion, ref.remoteUpdatedAt === '' ? '' : formatDateTime(ref.remoteUpdatedAt), ref.digest === '' ? '' : `digest ${ref.digest.slice(0, 16)}`].filter((part) => part !== '').join(' · ')),
       })
+      // 报告讨论的材料范围（协议 23）：Host 自己重新取一次附件清单，只把那一批 `fileId`
+      // 写进内存白名单。**必须在 kickoff 之前**登记 —— 提示词里的落盘名与 fileId 就来自它。
+      // `objectId` 为空（这条报告没有氚云记录）时不登记：没有可下载的附件，也不该拦下讨论。
+      const objectId = facts.objectId
       const created = await ensureDiscussion({
         port: props.port,
         sessions,
@@ -744,16 +748,49 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         workspaceId: props.workspace.id,
         workspacePath: props.workspace.path,
         forceNew: true,
+        ...(objectId === '' ? {} : {
+          openMaterial: async (sessionId: string) => await workbenchApi.discussionMaterialOpen({ sessionId, seqNo: key, objectId }),
+        }),
       })
       if (!created.ok) { setAiError(created.error); return }
       // 命名失败要报：会话名就是「报告 ↔ 会话」的映射，没写上名下次点会再建一条。
       if (created.renameError !== undefined) setAiError(created.renameError)
-      const failure = await askDiscussion(props.port, created.id, discussionPrompt(facts, zhCN.aiKickoff, true))
+      // 案例目录与材料清单以 **Host 回传的**为准（不拿本地拼的那份去覆盖它）。
+      const material = created.material
+      const promptFacts = material === undefined
+        ? facts
+        : {
+          ...facts,
+          ...(material.caseDir === undefined || material.caseDir === '' ? {} : { caseDir: material.caseDir }),
+          ...(material.attachments === undefined ? {} : { materials: material.attachments }),
+        }
+      const failure = await askDiscussion(props.port, created.id, discussionPrompt(promptFacts, zhCN.aiKickoff, true))
       if (failure !== '') setAiError(failure)
       props.onOpenDiscussion(created.id)
     } finally {
       setPulling('')
     }
+  }
+
+  /**
+   * **续聊一条已有的讨论会话**：只切会话（不重新拉文件 / 不重新读 OSS / 不重复注入 Prompt），
+   * 但**要重新登记材料范围** —— 范围只活在 Host 内存里（插件重启 / 12 小时 TTL 之后即失效），
+   * 不登记的话"继续上次聊天"就会取不到附件，而用户看到的又是同一条故障。
+   *
+   * 登记失败**不拦着进会话**：用户点的是"继续聊"，历史与上下文都在；失败原因如实写进面板，
+   * 会话里 `crwu_h3yun_file_get` 也会给出"请重新登记"的可执行文案。
+   */
+  const continueDiscussion = async (key: string, id: string): Promise<void> => {
+    const objectId = factsOf(key).objectId
+    if (objectId !== '') {
+      try {
+        const opened = await workbenchApi.discussionMaterialOpen({ sessionId: id, seqNo: key, objectId })
+        if (!opened.ok) setAiError(`${zhCN.aiMaterialFailed}${opened.error === '' ? zhCN.aiMaterialUnknown : opened.error}`)
+      } catch (cause: unknown) {
+        setAiError(`${zhCN.aiMaterialFailed}${describe(cause)}`)
+      }
+    }
+    props.onOpenDiscussion(id)
   }
 
   /**
@@ -915,6 +952,9 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
     setAuditBusy(true)
     setAnalysisStage(zhCN.auditStagePrepare)
     try {
+      // 与报告讨论同一条材料登记（协议 23）：分析会话也要能把这份报告的附件取进来，
+      // 而 `fetchRules` 是两处共用的那一段。`objectId` 取不到时不登记（没有可下载的附件）。
+      const analysisObjectId = pending.task?.id ?? ''
       const created = await ensureDiscussion({
         port: props.port,
         sessions,
@@ -923,10 +963,16 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         workspacePath: props.workspace.path,
         forceNew: true,
         kind: 'audit_analysis',
+        ...(analysisObjectId === '' ? {} : {
+          openMaterial: async (sessionId: string) => await workbenchApi.discussionMaterialOpen({
+            sessionId, seqNo: pending.context.seqNo, objectId: analysisObjectId,
+          }),
+        }),
       })
       if (!created.ok) { setAiError(created.error); return }
       if (created.renameError !== undefined) setAiError(created.renameError)
-      const failure = await askDiscussion(props.port, created.id, buildAuditContextBlock(pending.context))
+      const failure = await askDiscussion(props.port, created.id,
+        buildAuditContextBlock(pending.context, created.material?.attachments))
       if (failure !== '') setAiError(failure)
       // Context Snapshot：以后打开这条会话时用它判"是否已经过期"。
       // **存的就是刚才注入的那一份**（不是重新算一遍 —— 两份一旦不同，续聊检查会误报）。
@@ -1362,9 +1408,9 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
           onClick={() => {
             if (ask === null) return
             const id = ask.sessions[0]?.id ?? ''
+            const key = ask.key
             setAsk(null)
-            // 续聊：只切会话，不重新拉文件 / 不重新读 OSS / 不重复注入 Prompt。
-            if (id !== '') props.onOpenDiscussion(id)
+            if (id !== '') void continueDiscussion(key, id)
           }}
         >
           <span className={C.aiDialogOptionTitle}>{zhCN.aiContinue}</span>

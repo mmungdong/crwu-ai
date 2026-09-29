@@ -115,7 +115,9 @@ test('B-03 · 操作表封闭且只含策略字段：没有命令 / 二进制 / 
     assert.equal(typeof descriptor.privileged, 'boolean', name)
     assert.equal(descriptor.allowedSources.length > 0, true, name)
     for (const source of descriptor.allowedSources) {
-      assert.equal(['panel', 'audit-tool', 'host-background'].includes(source), true, `${name} → ${source}`)
+      // `audit-host` = 插件自己的审核编排（audit-start → 建案例目录），
+      // 与 `audit-tool`（审核子代理调业务 Tool）刻意分开：两者的沙箱位置不同。
+      assert.equal(['panel', 'audit-host', 'audit-tool', 'host-background'].includes(source), true, `${name} → ${source}`)
     }
   }
   // 表外一律拒绝：这是"默认拒绝"的落点。

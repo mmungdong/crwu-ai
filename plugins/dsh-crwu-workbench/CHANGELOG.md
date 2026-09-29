@@ -7,6 +7,365 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.34 · 2026-09-30 · fix · 审核根绑到已选工作空间 + 快照写入带会话策略（协议 24）
+
+### fix · 审核会话落在「未分组」而不是「中瑞世联工作空间」（用户报的第四个故障）
+
+现场：点「AI 审核」后，侧栏里新会话出现在**未分组**下，而不是环境信息里选定的工作空间下。
+
+- **根因**：DSH 有两条硬规则把"会话 cwd"同时当成两件事，而我们只满足了一件：
+  1. `SandboxPolicyService.resolve()`：*"**A session cwd is its workspace-write boundary**"* —— 边界就是 cwd；
+  2. `Workspace.attachSession()`：`if (cwd !== this.record.path) throw …` —— 挂到工作空间下要求
+     cwd **逐字等于**工作空间路径。
+  我们原先用 `agents.create({ meta: { cwd: 案例目录 } })` 建根，cwd 与工作空间路径不等 →
+  `attachSession` 必然抛错 → 只能落「未分组」。而当时那处 `catch` 只往 `notes` 里塞了一句
+  "会话已建，但没能挂到工作空间"，界面上看不到 —— 所以看起来像"工作空间没定位到"。
+- **正解**（与 DSH 自己创建"工作空间下的新会话"完全同一条口径，也是本插件"与 DeepSeek 讨论"
+  那条链路一直在用的：客户端 `sessions.create({ workspaceId })` →
+  `cwd = workspace.path` → `ensureSession` → `attachSession`）：
+  **审核根的 cwd = 已选工作空间**。子会话继承父会话的 cwd，于是整棵审核树都在工作空间下。
+- **跨案例隔离没有放松，只是换了承担者**：`requireAuditScope` 仍然要求每个案例内 Tool 的
+  `caseDir` 与本轮记录的 `casePath` **规范解析后精确相等**（工作空间根、兄弟案例、案例子目录
+  一律拒绝）—— 这条判据不随 cwd 变化，是跨案例的真正边界。文档里把这两件事分开写清楚了：
+  **会话边界回答"这个进程能写哪儿"，案例 scope 回答"这次审核被允许碰哪个案例"**。
+- 顺带把那个静默降级也修了：`attachSession` 失败不再只进 `notes`（见下条留档）。
+
+### fix · 三个输入快照 JSON 写不进去（`FS_SANDBOX_DENIED`）
+
+`mkdir 输入快照` 修好之后，下一步又断在这里：`ctx.fs.writeText(target, content)` **不带策略**，
+而 `dsh-fs-sandbox` 的 `checkedTarget()` 是
+`const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()` —— 没有会话就落到**部署默认**
+（进程 cwd），于是往案例目录里写文件被自家沙箱拒：
+`cannot write "…": file access denied under workspace-write mode`（`FS_SANDBOX_DENIED`）。
+审核停在「未创建子代理」。
+
+修法与 0.0.33 的 shell 侧完全对称，并且**只留一个解析口**：
+- 新增 `host/access/caller-policy.ts` 的 `callerSessionPolicy(ctx, session)`（从 Broker 里提出来，
+  现在 shell 与 fs 两侧共用同一处判据）；
+- 新增 `case-files.ts` 的 `writeCaseText(...)`：解析目标 → 带策略写入（第 5 个参数）→ **回读核对**；
+  失败按**结构化错误码**归因（`FS_SANDBOX_DENIED` → sandbox，`EACCES`/`EPERM` → permission，
+  其余 infrastructure），不回退到文本猜测；
+- 三个写入点全部改走它：输入快照的三个 JSON（`bootstrap.ts`）、知识库清单（`knowledge.ts`）、
+  钉钉通知幂等状态（`dingtalk.ts`）。
+
+### feat · 审核发起失败**全部留档**（`state.lastAuditFailure`）
+
+真机连挂四次，每次失败详情只存在于那一次 RPC 的返回里，进程一重启就没了 —— 只能靠"复现 + 读代码"
+倒推。现在 `auditStart` 的**每一条失败路径**（同一个闭包，漏不掉）都会把结构化事实落盘并在宿主日志
+留一份：阶段（工作空间 / 案例目录 / 审核根会话 / 输入快照 / …）、`errorKind`（照抄工具回报的
+结构化归因）、Host 算出来的 `caseDir`、`attemptId`、时刻、以及所有 `notes`（含"没能挂到工作空间"
+这类原先被吞掉的降级）。发起成功时清空。**不含命令原文与凭据**。
+
+### test · 覆盖
+
+- `host-audit-root`：**替身照 DSH 的判据拦人** —— `attachSession` 现在会像真实现一样校验
+  `cwd === workspace.path`，cwd 写错就抛。用缺陷注入验过：把根的 cwd 改回案例目录，4 条用例立刻变红
+  （改之前它们全绿 —— 这正是这个 bug 溜到真机的原因）。
+- `host-case-files`：`writeCaseText` 两个分支（不带会话 → `FS_SANDBOX_DENIED` + 归因 sandbox +
+  一个字都没落盘；带会话 → 写入 + 回读一致 + 请求里带着案例边界）。
+- `host-tools`：集成层的 fs 替身也换成**按策略拦写**的版本，断言三个 JSON 真的落盘、且没有被拒的写入。
+- `host-audit-lifecycle`：失败留档（阶段/归因/案例目录/notes）与"发起成功清空"。
+- 三条都用缺陷注入验过会红。
+
+## package · 0.0.33 · 2026-09-30 · fix · 非特权命令带**调用方会话的策略**（0.0.32 修错了地方）
+
+### fix · 同一个报错又出现了一次：这次定位到真机制
+
+0.0.32 之后真机**原样复现**同一条失败：
+
+```text
+创建快照目录失败：mkdir: <案例目录>/输入快照: Operation not permitted
+（操作 system.case-file.write · 来源 audit-tool · 解析为 workspace-write · 实际 workspace-write · 沙箱拒绝=是）
+```
+
+- **0.0.32 的修法是无效的**：它把"调用方的 `ctx`"传进 Broker。但 DSH 的执行器
+  **不持有会话**（`dsh-sandbox-policy` 原话：*executors and providers remain session-free*）——
+  换 `ctx` 只是换个地方 `ctx.get('shell')`，拿到的还是同一个执行器，请求里没带 `sandboxPolicy`
+  时它照样用**部署默认**（`workspace-write` + 配置兜底根 = 进程 cwd）。
+- **正解**：像 DSH 自带的 bash / fs 那样，**调用方把自己的会话策略算出来放进请求**。
+  - `BrokerShellOptions.session`（替换掉 0.0.32 的 `scope`）：**不是权限开关**，提权仍只由
+    `privileged` 决定；非特权操作由 Broker 用 `ctx.sandboxPolicy.resolve({ session })` 解析，
+    作为 `sandboxPolicy` 随请求下发；
+  - `runShell` / `startShell` 新增 `sandboxPolicy` 选项（`shell/run.ts`），请求模式照旧记进诊断
+    （`requested` 不再是空串）；
+  - 案例内的调用点（`crwu_audit_case_bootstrap` / `crwu_audit_knowledge_materialize`）传
+    `exec.agent.session`（新助手 `callerSession(exec)`）。
+- **替身也要按策略拦人**：新增 `tests/helpers/fs-sandbox-stub.mjs` —— 复刻"缺策略 → 部署默认 →
+  写被拒"，并只拦**写**（DSH 的可写根管的正是写，只读探测照常回话）。
+  以前那种"永远成功"的 shell 替身正是这两个缺陷在单测里全绿的原因。
+- 失败文案现在带**插件版本**（`… · 插件 pkg-0.0.33`）：真机排障第一件事是"装的是哪一份产物"，
+  而源码检出形态的客户端徽章只显示 `dev`。
+
+### test · 覆盖
+
+- 单元（`host-case-files.test.mjs`）与集成（`host-tools.test.mjs`，真调 `crwu_audit_case_bootstrap`）各一条：
+  不带会话 → 复现真机那句话（且**真的**被沙箱拦下）；带会话 → 请求里带对边界、快照三个 JSON 落盘。
+- 两条都用**缺陷注入**验过（去掉 Broker 的会话策略、去掉调用点的 `session`，各自立刻变红）。
+
+## package · 0.0.32 · 2026-09-30 · fix · 案例内的非特权命令按**调用者的会话作用域**执行（协议不变）
+
+### fix · 输入快照目录建不出来：`Operation not permitted（沙箱拒绝=是）`
+
+真机验收第一轮就抓到（案例目录本身已经建出来了 —— §一 的修复是生效的）：
+
+```text
+输入快照交接未完成，已终止本次审核（未创建子代理）：输入快照交接失败（infrastructure）：
+创建快照目录失败：mkdir: <案例目录>/输入快照: Operation not permitted
+（操作 system.case-file.write · 来源 audit-tool · 解析为 workspace-write · 实际 workspace-write · 沙箱拒绝=是）
+```
+
+- 根因：**Broker 自己持有的是插件级 `ctx`，它没有会话**。非特权命令（案例目录之内的建/删/探测）
+  不带 `sandboxPolicy`，沙箱边界由"执行它那个 ctx"解析出来的会话决定 —— 插件级 ctx 解析到的是
+  **部署默认**（`workspace-write` + 配置里的兜底根，即进程 cwd），而不是调用方那条会话的 cwd。
+  案例目录恰恰就是审核根会话的 cwd，于是"写自己所在的目录"被自家沙箱拒了。
+  这与我上一版写下的注释（"子会话的沙箱边界本来就是那个目录"）不符：那句话只在**命令真的跑在
+  子会话作用域里**时才成立，而经 Broker 执行时并没有。
+- 修法（保持"提权只由操作表决定"这条口径不变）：`BrokerShellOptions` 新增 `scope?: Context` ——
+  **不是权限开关**，提权仍由 `privileged` 决定、模型与客户端都碰不到它；它只回答"非特权命令落在
+  谁的沙箱解析里"，与 `tools/types.ts` 的 `toolContext()` 同一条口径。`ensureDirectory` /
+  `removeFileIfExists` / 案例内探测新增 `scope` 透传，`crwu_audit_case_bootstrap` 与
+  `crwu_audit_knowledge_materialize` 把**调用者 Agent 的 ctx** 传下来。
+- **协议不变（23）**：操作集、字段与语义都没变，变的是 Host 内部"这条命令按谁的作用域执行"。
+  版本号 +1 只为让你一眼看出装的是修好的那份产物。
+
+### test · 覆盖
+
+- 单元：两个 ctx（插件级 / 调用者作用域）各一个 shell，断言案例内命令**只**落在调用者作用域上。
+- 集成（`crwu_audit_case_bootstrap`）：③ 不带作用域 → 复现真机那句话（`创建快照目录失败` +
+  `system.case-file.write` + `沙箱拒绝=是`，且一个目录都不建）；④ 带作用域 → 快照三个 JSON 落盘。
+- 两条都用**缺陷注入**验过：把 `scope` 摘掉（Broker 侧与 bootstrap 侧各一次）立刻变红，还原即绿。
+
+## package · 0.0.31 · 2026-09-30 · feat · 报告讨论会话的受限材料范围（协议 23）
+
+### feat · 讨论会话也能取材料，但只取"登记那一刻的那批附件"
+
+- 现场：案例目录创建修好之后，**报告讨论会话**里调 `crwu_h3yun_file_get` 仍然一件材料都取不回来 ——
+  它是一条普通顶层会话，没有审核记录，而附件下载原先只认审核 scope（「调用者不在进行中的审核里」）。
+- 修法**不是**让它复用审核 scope（那是扩大边界：审核 scope 绑着一条正在跑的子会话），
+  而是给它一份**自己的、更窄的**范围：
+  - 新增 Host 操作 `discussion-material-open`（协议 23，操作清单 38 → 39）；
+  - 客户端在 `ensureDiscussion`（新建**或**恢复）之后、发 kickoff 之前调；只提交
+    `sessionId` / `seqNo` / `objectId`；
+  - Host 负责：拒绝子代理会话 → 用 `caseDirOf` 算出 `<已选工作空间>/<流水号>` →
+    **自己按 `objectId` 取一次记录并核对 `ObjectId`/`SeqNo`**（只看附件清单的话，
+    `seqNo=A, objectId=B` 会把 B 的白名单登记成 A 的案例目录）→ 重新取一次附件清单 →
+    把这一批 `fileId` 记进**进程内**白名单（12 小时 TTL、最多 32 条、`use()` 推最近使用时刻）；
+  - 回传 `caseDir` 与附件清单（`fileId` / `fileName` / `localName` / `fileSize` / `nameTotal`）。
+- 工具侧：`requireAuditScope` 之上新增 **`requireMaterialScope`** —— 先看审核子会话 scope
+  （有就以它为准，边界更窄），否则看讨论注册表（案例目录与白名单全部来自 Host 记录）。
+  `crwu_h3yun_file_get` 改用它；**普通顶层对话仍然拒绝**。
+- 讨论会话**不是氚云查询入口**：`crwu_h3yun_record_get` / `crwu_h3yun_files_list` 对
+  **已登记**的讨论会话一律拒绝（`crwu-h3yun-query` 技能依赖的"普通会话可按 objectId 查记录"
+  这条既有能力**保持不变** —— 收窄的只是讨论会话）。
+- 提示词：kickoff 里新增「本次登记的材料」一段（`fileId` ↔ 落盘名成对给出，同名附件标 `同名 N 件`），
+  取数规则改成"落盘名必须用这一段给出的名字"。报告讨论与审核结果分析共用这一段规则，
+  所以**两条会话都登记**（否则分析会话会读到"用下面给出的落盘名"却找不到"下面"）。
+- 登记失败时**不发 kickoff**、会话保留、给出可重试的明确文案；不降级去扫本机目录、也不自己查氚云。
+- **续聊也要重新登记**：范围只在 Host 内存里，插件重启或 12 小时后旧会话默认拿不到材料。
+  所以「继续上次聊天」这条路径也会先登记一次（不重新拉文件、不重新读 OSS、不重复注入 Prompt）；
+  登记失败**不拦着进会话**（用户要的是继续聊，历史都在），原因写进面板，会话里 Tool 也会给出
+  「请重新登记」的可执行文案。审核结果分析那条会话同样登记（两处共用同一段取数规则）。
+
+### fix · "查不出来"不再被说成"不存在"（错误分类的两处收紧）
+
+- 工作空间探测**本身失败**（shell 服务没起来 / 被沙箱拦下 / 输出不可识别）原先被折叠成
+  「所选工作空间不存在」—— 那会把一次宿主侧的拒绝说成"员工选错了目录"，让员工去重选一个
+  本来没错的目录（正是 §三 要消灭的误诊）。现在如实报「无法确认所选工作空间是否存在」，
+  并按结构化事实归因（沙箱拒绝 → `sandbox`，其余 → `infrastructure`）。
+- 建目录的结果里补齐**完整诊断事实**：`facts` 增加 `processStarted`（计划里那个 `ran` 布尔），
+  结果新增 `postcondition`（`directory` / `file` / `absent` / `unknown`）——
+  "命令跑过了"与"目标真的成了我们要的样子"从此是两个字段。
+
+### test · 覆盖
+
+- 注册表：TTL 到期即失效、重复登记刷新白名单与 TTL、`use` 推最近使用、超上限丢最久没用过的。
+- 解析器：已登记会话放行；未登记 / 过期 / 错误的 `caseDir`（工作空间根、兄弟案例、子目录）/
+  不一致的 `seqNo`·`objectId` 一律拒绝；同一 id 两边都命中时**以审核 scope 为准**。
+- 工具：讨论会话能下白名单附件、清单外 `fileId` 与未登记会话零命令拒绝、
+  `record_get` / `files_list` 对讨论会话拒绝。
+- 登记 RPC：成功登记（含"文件身份核对不通过就不去取附件"）、子代理会话拒绝且零命令、
+  参数不合法与没有工作空间时拒绝且不登记。
+- 客户端：新建与恢复都登记、失败不发 kickoff、抛错变人话、旧宿主（没有这个能力）行为不变。
+- **授权矩阵**逐格钉住（三种调用者 × 三个氚云 Tool）：允许的四格真的执行、拒绝的七格零命令。
+- 审核启动：建目录失败时**后续步骤一个都不许发生**（无记录 / 无占用 / 无快照交接 / 无子代理），
+  且错误里带得出操作名与工作空间；探测没结论时不许说成"工作空间不存在"。
+- **产物级**：`npm run smoke:built` 现在也从打包后的 `lib/index.js` 真调一次
+  `discussion-material-open`（空参数 → 结构化 `input` 失败、不回路径），证明这条新契约在**装上去的
+  产物**里可达 —— 只查源码"写了没有"证明不了这件事（用缺陷注入验过这条断言会红）。
+
+## package · 0.0.30 · 2026-09-30 · refactor · 配置入口收敛：iFinD 改回可选数据源、账号连接只读、插件不建工作空间
+
+### 目标
+
+一次收敛三件事，职责边界变成：**环境信息**判断基础条件 / **外部数据源**（配置列表里的一步，
+可选、不带必检星号）展示与配置 / **账号连接**只读取、检查已有凭据 / **工作空间**只选择已有目录。
+
+### refactor · 同花顺 iFinD 从「必需项」改回**可选数据源**
+
+- 清单 `ifind.required=false`：不进必需项分母（8 → 7），未就绪只让 `status` 落到 `degraded`
+  （与 `ready` 一样**放行**），只关掉 `capabilities.externalData` —— `global` / `auditCore` /
+  `delivery` 与报告审核都不受影响。
+- issue 从"双写 global + external-data 的阻塞项"收成**一条非阻塞**项（scope = `external-data`）：
+  归属仍按原因分派（未填 / 无效 → user；无权益 → admin；网络 → system），因为"谁来修"三类不同。
+- 环境页顶部改为「基础环境已就绪」，不再出现「还需完成 1 项 / 请完成同花顺 iFinD API-Key 验证」；
+  门禁文案回到通用模板（`hasIfindBlocker` 那条专门话术删除）。
+- 侧栏那枚环境灯的判据改成 `statusProceedable`：`degraded` 也是绿的，
+  否则会出现「红点 + 基础环境已就绪」的自相矛盾。
+- 外部数据源**和别的配置项并排**放在配置列表里，而且**排在最后一步**
+  （账号连接 → 阿里云 OSS → 工作空间 → 同花顺 iFinD）：那一步的正文就是 iFinD 卡片
+  （状态统一为 未配置 / 待验证 / 已配置并验证 / 验证失败 / 数据权限不足 / 暂时不可用）。
+  **未配置时直接显示「未配置」**：芯片一律琥珀（红 = "必须处理"），能力清单等已配置后再显示。
+- **基础必检项带红色星号**（`REQUIRED_SETUP_STEPS`：账号连接 / OSS / 工作空间；颜色用
+  `--dsw-alias-state-error-primary`），**外部数据源不带** —— 用户口径：必检项用星号表示"必须配置"，
+  外部数据不加，否则页面看起来很乱。可选项同时不进"还没做完"的统计（`pickStep` / `allStepsDone`
+  只统计必检项，且默认落点是**最后一个必检项**而不是末位的可选项）。
+- 形态上做过**三次**返工：① **独立的第四个侧栏模块**（被否：「不要单拆一个目录」）；
+  ② **页级区块**（被否：「也和其他放在一起…否则页面看起来很乱」）；③ 放在列表中间且"未配置"报红
+  （被否：「同花顺这里直接显示未配置就可以」+「把同花顺放到最后一个」）。最终就是**配置列表里的
+  最后一步**。
+
+### feat · Windows：提醒"以管理员身份运行"（2026-09-30）
+
+- 钉钉 CLI（`dws`）在 Windows 上要碰 `<HOME>\.dws`（先抢 `.data.lock`，再写操作系统凭据存储）：
+  进程权限不足时它以"锁被占用 / 拒绝访问"结束，**表现却是钉钉登录一直不成功**。
+- 所以环境页在 `env.platform` 命中 `win32` 前缀时给一条**非阻塞**提醒
+  （`features/environment/platform-note.ts` 的 `needsWindowsAdminReminder`）：
+  「请用「以管理员身份运行」启动 DeepSeek Harness」——挂在**账号连接**那一步。
+- 它**不参与任何门禁**（钉钉登录态是否有效仍由自检结论说了算）；非 Windows **一个字都不提**，
+  拿不到平台也不猜。
+
+### refactor · 账号连接只读取、检查已有凭据（协议 21 → 22）
+
+- **删除**氚云内置浏览器扫码登录（协议 20 的 `browser-session-bind` + 客户端浏览器视图 + Cookie 读取）
+  与钉钉设备码 / 两阶段登录（协议 21 的 `dws-login-start` / `dws-login-status` + 进度轮询）。
+  一并删除 `H3yunBrowserLogin.tsx` / `DwsLoginCard.tsx` / `login-browser.ts` / `open-url.ts`
+  （内置浏览器优先的打开器）、`crwuOperationOf` 的 `h3yun session bind` 映射、`dwsLogin` 的 `--device`。
+- 保留**兼容路径**：`relogin`（`crwu h3yun session login`）与 `dws-login`（`dws auth login`）——
+  本机 CLI 自己拉起**系统浏览器**；面板只触发 + 「重新检查」，不创建浏览器 Tab、不显示二维码 /
+  设备码、不读 Cookie、不轮询进度。CLI 的 `dws auth login --device` 在终端里仍然可用。
+- 冻结操作清单 41 → 38；`WORKBENCH_PROTOCOL` 22（旧界面调这三个操作会 404，必须被明确挡住）。
+
+### refactor · 插件不再为用户创建工作空间根目录
+
+- `ensureAuditRoot` 删掉 `ensureDirectory`（`mkdir` / `New-Item`）：路径为空 →
+  「尚未选定工作空间，请先选择一个已有目录」；路径不存在 / 是文件 →
+  「已选定的工作空间目录不存在，请重新选择一个已有目录」——两种情况都**拒绝启动**，
+  不静默切到父会话 cwd、也不静默换工作空间。
+- 目录存在但未登记 → **只登记**（`workspaceRegistry.create`，它要求目录已存在）。
+- 客户端 `UiWorkspaceService` 删除 `createDirectory`，`WorkspaceCard` 去掉「新建目录并用作工作空间」
+  与 `pick(true)`，把用户选中的路径原样登记；文案改为「选择已有目录作为工作空间」。
+- 允许自动创建的**只有** `<工作空间>/<流水号>` 这一级案例目录（审核启动的 shell 轨迹里
+  不许出现 `mkdir <工作空间根>`，有测试按真实 trace 断言）。
+
+### fix · 案例目录创建改走本机访问代理（`mkdir: Operation not permitted` 的根因）
+
+- 员工实测：发起审核后案例目录**没建出来**，子会话里案例内 Tool 全被拒（"调用者不在进行中的审核里"），
+  而 `/Users/<员工>/中瑞世联工作空间` 本身是可写的。根因不是 ACL，也不是授权收据：
+  `host/tools/case-files.ts` 的 `ensureDirectory` 直接调 `shell/run.ts` 的裸 `runShell`，
+  于是这条 `mkdir` 拿到的是**部署默认沙箱**（`workspace-write`，边界 = 员工打开面板的那个会话 cwd），
+  写案例目录被沙箱拒绝 —— 员工本人对那个目录其实是有写权限的。
+- 新增三条**具名**本机访问操作，提权归属从此写在操作表里（`host/access/operations.ts`）：
+  - `system.case-directory.write`：**特权**、来源 `audit-host` —— 只用于创建
+    `<员工选定工作空间>/<流水号>` 这一级案例目录，逐次声明
+    `danger-full-access` + `workspaceRoot = 已选工作空间`；
+  - `system.case-file.write` / `system.case-file.read`：**不提权**、来源 `audit-tool` ——
+    案例目录**之内**的建 / 删 / 只读探测（子会话的沙箱边界本来就是那个目录，能给最小权限就给最小）。
+- 新增来源 `audit-host`（插件自己的审核编排），与 `audit-tool`（审核子代理调 Tool）刻意分开：
+  两者的沙箱位置不同，合并会让"谁在什么沙箱下建目录"重新变成只能从调用点读出来的事实。
+- `ensureCaseDirectory` 的顺序固定：① 只读探测工作空间是否真的存在 → ② 经 Broker 执行 `mkdir`
+  → ③ 回读案例目录后置条件。**失败分三类给话**：沙箱未授权 / 被降级（带请求模式、实际模式、操作名、
+  工作空间）、操作系统 ACL 不足（不动权限、不建议 `chmod`）、工作空间不存在（让员工重选）。
+- 后置条件回读不再用 `ctx.fs.stat`，改用 Broker 上的只读路径探测
+  （`platform/shell.ts` 的 `pathProbeCommand`：`test -d` / `Test-Path -PathType`，
+  **永远以 0 退出、结论只在 stdout**）：这样"读不到"与"不存在"能分开 ——
+  前者按基础设施失败如实上报，不会被折叠成"没有这个目录"。
+- 新增静态门禁 B-01e（`host-access-migration.test.mjs`）：`case-files.ts` **不许**再出现裸 `runShell`
+  或值导入 `shell/run.ts`，`audit/ops.ts` 必须用 `ensureCaseDirectory`；配套一台
+  **真的会拦人**的沙箱替身做回归（`host-case-files.test.mjs`），把 2026-09-30 的现场固定下来。
+
+### fix · 同名附件不再互相覆盖（`广兴建筑v3.zip` ×2）
+
+- 一份报告里可以挂着两个**同名但不同**的附件（实测两个 `广兴建筑v3.zip`，`fileId` 不同）。
+  按文件名落盘时第二件会**静默覆盖**第一件 —— 审核只看到一份材料，也答不了"这是重复上传还是两个版本"。
+- 输入快照的 `附件清单.json` 每行新增三列：`localName`（`<主名>__<fileId 前 8 位><扩展名>`，
+  例如 `广兴建筑v3__c8ef13b8.zip`）、`nameIndex` / `nameTotal`（同名附件的序号与总数）。
+  名字**只由 `fileId` 决定**，与下载顺序无关；外部文件名先被收敛成单个路径段
+  （`host/h3yun/attachment-name.ts`，纯函数、可单测）。
+- `crwu_h3yun_file_get` 在任何进程之前校验目标名的最后一段**必须带上这件附件自己的标识**，
+  不带就回 `policy` 失败并给出正确的名字；`relativePath` 仍然由模型给，但它再也拼不出
+  两个不同附件落成同一个名字的形态。
+- 审核提示词同步：附件只按清单里的 `localName` 落盘；`nameTotal > 1` 的条目要当成**两件材料**
+  逐件核对，不许只留一件。
+
+### test · 覆盖
+
+- 工作空间：不渲染「新建」按钮、`createDirectory` 调用次数为 0、目录不存在 / 是文件 / 未选定时
+  审核启动被拒、存在但未登记时只登记、审核启动不建工作空间根、案例目录仍然创建。
+- 登录：相关模块文件已删 + 面板不存在内置浏览器登录 / 二维码 / 设备码入口与承诺、
+  阻塞文案改为"请在系统浏览器完成登录后重新检查"、有效凭据照常通过、CLI 兼容路径仍在。
+- iFinD：不在环境步骤与必需项分母里、未配置不阻塞环境与审核、区块展示数据源与验证状态、
+  未配置时不产生误导性告警。
+
+## package · 0.0.29 · 2026-09-29 · fix · 启动审核：「没问到运行时」不再拒绝启动（交给子会话解析）
+
+### fix · 案例目录建不出来 / 子会话没有 scope 的那条根因
+
+- 员工实测：发起审核后**案例目录没建**、子会话里案例内 Tool 全被拒（"不在进行中的审核里"），
+  而能力自检里二进制与 Tool 全 available —— 说明这轮审核根本没成立。
+- 根因：`audit-start` 在创建案例目录**之前**解析 DSH 自带运行时，而它在 `host-background` 里
+  没有会话作用域 → 工具调用必然报错 → 旧实现一律拒绝启动。
+- 现在按 `unresolved` 分开处置：**确实缺失**（载荷无 python / 路径不可用 / 缺必需包）仍然拒绝启动；
+  **没能问到**（工具调用失败/超时/报错）**放行**，并把提示词换成新增的
+  「由你在本会话里解析」那一段 —— 子会话有 agent 作用域，自己调一次
+  `load_workspace_dependencies` 就能拿到唯一允许的解释器绝对路径；仍然禁止任何查找与降级，
+  取不到就停下并汇报 capability gap。
+- 另记一条**独立阻塞**（不在插件侧、也不该由插件绕过）：该机器上 `workspace-write` 下 pwsh
+  每次以 `0xC0000142` 结束、零输出；而审核根/子会话按设计恒为 `workspace-write`，
+  材料准备与交付渲染都走 shell → 需 DSH 侧排查沙箱启动器。
+
+## package · 0.0.28 · 2026-09-29 · refactor · 把 DSH 自带运行时**从环境自检里挪走**
+
+### refactor · 运行时只在 `audit-start` 解析，不再进环境结论
+
+- 原因：`load_workspace_dependencies` **需要 agent 作用域**。会话里调它返回完整载荷
+  （`python` + `openpyxl` 等），而环境自检跑在 `host-background`、没有会话上下文 —— 调它就是工具报错。
+  两种补救都不成立：当"缺失"会伪造「系统故障」把审核入口关掉（0.0.26 之前）；
+  只显示「待复核」则那一行**永远解析不出来**（0.0.26/0.0.27 员工实测仍是「未设置」）。
+- 现在：环境自检**不再调用解析器、不再有这一行、不再进必需项分母（9 → 8）、不影响总状态**。
+- **能力没有放宽**：`audit-start` 仍用审核根 agent 解析运行时，拿不到就终止审核；失败文案区分
+  「没能问到」（可重试）与「确实缺失」（只能由部署方补运行时）。取 agent 的唯一实现是
+  `boundParentAgent`（`bind-session` 落盘的父会话），`audit-start` 与它共用。
+- 一并删除：`RuntimeView`、`env.runtime` 分区、`runtimeItem`、`runtime` issue、
+  客户端三行诊断与相关文案键（不留死代码）。解析器本身保留（`audit-start` 要用）。
+
+## package · 0.0.27 · 2026-09-29 · fix · 环境自检用面板绑定的父会话解析 DSH 运行时（真正修掉"未设置"）
+
+### fix · 运行时不再显示「未设置」：自检也带上 agent 作用域
+
+- 0.0.26 只把"没问到"说准（非阻塞 + 待复核），但运行时**仍然解析不出来** —— 因为根因是
+  **自检没有 agent 作用域**：`load_workspace_dependencies` 需要它，不带就是工具报错。
+- 现在自检在调 `pythonRuntime` 之前，用插件状态里 `bind-session` 落盘的 `parentSessionId`
+  取同一个 agent（新增唯一实现 `boundParentAgent`，`audit/spawn.ts`；审核启动用的也是它）。
+  取不到时退回不带 agent 的调用（只报「待复核」，不判缺失）。
+- 实测依据（员工 Windows）：同一个工具在会话里（带 agent）返回完整载荷
+  （`python` 路径 + `openpyxl 3.1.5` 等），自检上下文报错 —— 差别就是 agent 作用域。
+- 解析成功会进缓存，因此环境页那一行会变成「Python 3.12.x · DSH 自带」，总状态回到 `degraded`/`ready`。
+
+## package · 0.0.26 · 2026-09-29 · fix · 环境自检「没问到」不再伪造成系统故障（运行时待复核）
+
+### fix · `load_workspace_dependencies` 在自检上下文问不到时，不再把审核入口关掉
+
+- 员工 Windows 实测：环境页报「发现系统故障」，只有 `DSH Runtime: （未设置）` 一项；
+  而**同一个工具在会话里（带 agent）返回完整载荷**（`python` 路径 + `openpyxl` 等全部必需包）。
+  根因：环境自检跑在 `host-background`、**没有会话 agent**，而该工具需要 agent 作用域；
+  旧实现把"工具报错"一律说成"DSH 自带脚本运行时不可用"——一条系统归属的阻塞项。
+- 现在把两件事分开：`unresolved`（工具不可用 / 抛错 / 超时 / 工具报错 = **没问到**）与
+  **真·缺失**（工具成功但载荷没有 python、路径不存在或不是文件、缺必需包）。
+  前者**非阻塞**、页面显示「待复核」并说明"发起审核时会复核"；后者照旧阻塞。
+- 真正的门禁不变：`audit-start` 仍带**审核根 agent** 解析运行时，拿不到就终止审核；
+  解析成功会进缓存，所以发起过一次审核之后环境页那一行会变成"已就绪"。
+- 顺带：`SetupItemView` 新增状态词 `unresolved`（「待复核」），客户端按中性语气渲染。
+
 ## package · 0.0.25 · 2026-09-29 · refactor · 下掉"插件自指定目录"：配置与临时目录都用默认
 
 ### refactor · `DWS_CONFIG_DIR` 与 `TMPDIR/TEMP/TMP` 两条自指定通道整体移除

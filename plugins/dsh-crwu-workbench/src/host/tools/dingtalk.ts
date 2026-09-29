@@ -8,11 +8,13 @@ import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { DINGTALK_TARGET, DWS_MAX_PAGES } from '../dws/consts.ts'
 import { buildPublishPlan, nodeSize } from '../dws/plan.ts'
 import { requireInsideCase, fileSize } from './case-dir.ts'
+import { writeCaseText } from './case-files.ts'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { requireAuditScope } from '../audit/scope.ts'
 import { dwsJson, type DwsJsonOptions } from './dws-json.ts'
 import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
 import { failure, jsonObject, renderJson } from './outcome.ts'
-import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
+import { callerSession, credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
 
 /**
  * 钉钉回传 Tool：团队空间归档 + 把 HTML 发给自己并 DING。
@@ -523,7 +525,8 @@ export function dingtalkTools(deps: ToolDeps) {
           openDingId,
           sentAt: new Date().toISOString(),
         }
-        if (!await persistNotifyState(ctx, statePath, state)) steps.push('state-write-failed')
+        const notifyWrite = { session: callerSession(exec), ...(exec.signal === undefined ? {} : { signal: exec.signal }) }
+        if (!await persistNotifyState(ctx, statePath, state, notifyWrite)) steps.push('state-write-failed')
         return {
           ok: true, errorKind: '' as const, error: '', alreadySent: false,
           userId: selfInfo.userId, openDingTalkId,
@@ -643,15 +646,13 @@ export function locateMessage(payload: unknown, fileName: string): { conversatio
   return { conversationId: '', messageId: '' }
 }
 
-/** 写幂等状态文件（案例目录内）。 */
-async function persistNotifyState(ctx: Context, path: string, state: NotifyState): Promise<boolean> {
-  const fs = fileSystem(ctx)
-  if (fs === undefined) return false
-  try {
-    await fs.writeText(await resolveTarget(ctx, path), `${JSON.stringify(state, null, 2)}\n`)
-    return true
-  } catch (error) {
-    void error
-    return false
-  }
+/** 写幂等状态文件（案例目录内）—— 走带**调用方会话策略**的写入，否则会被自家沙箱拒（见 `writeCaseText`）。 */
+async function persistNotifyState(
+  ctx: Context,
+  path: string,
+  state: NotifyState,
+  options: { session?: Session; signal?: AbortSignal },
+): Promise<boolean> {
+  const written = await writeCaseText(ctx, path, `${JSON.stringify(state, null, 2)}\n`, options)
+  return written.ok
 }

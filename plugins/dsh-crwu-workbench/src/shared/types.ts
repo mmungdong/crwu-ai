@@ -166,6 +166,15 @@ export interface RuntimeView {
   missingPackages: string[]
   error: string
   source: string
+  /**
+   * 这次自检**没能问到**运行时的答案（工具调用失败/超时/报错），因此**不能**据此判"缺失"。
+   *
+   * 真实成因（2026-09-29 员工 Windows 实测）：环境自检不带会话 agent，而
+   * `load_workspace_dependencies` 需要 agent 作用域 —— 同一个工具在会话里调用返回完整载荷
+   * （`python` + 全部必需包），在自检上下文里却报错。把"我没问到"渲染成"系统故障"会
+   * 直接把审核入口关掉，所以这一支必须是**非阻塞**的，并在发起审核时由审核根会话复核。
+   */
+  unresolved: boolean
   /** 清单对该运行时的要求（版本约束 / 必需包），只用于展示与维护者对账。 */
   expect: string
   required: boolean
@@ -357,7 +366,6 @@ export interface EnvResultView {
   ok: boolean
   configSource: string
   packageIntegrity: PackageIntegrityView
-  runtime: RuntimeView
   /** ④ 只放登录/授权那两条（氚云 + 钉钉）；OSS 归 `delivery`。 */
   services: ServiceCheckView[]
   delivery: DeliveryView

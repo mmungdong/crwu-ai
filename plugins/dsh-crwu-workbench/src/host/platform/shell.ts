@@ -87,6 +87,46 @@ export function mkdirCommand(path: string, platform: string): string {
 }
 
 /**
+ * **只读**路径探测：这个路径是目录 / 普通文件 / 不存在？
+ *
+ * ## 为什么不让命令的退出码承载结论
+ *
+ * `test -d` 用退出码 1 表示"不是目录"，而退出码 1 在这条链路上还有别的含义（命令没跑起来、
+ * 沙箱拒绝、被信号杀掉）。把两者混在一起，"读不到"就会变成"不存在"，而这两句话在界面上
+ * 指向完全不同的动作（去重选路径 vs 去查文件权限）。所以这里让命令**永远以 0 退出**，
+ * 结论只走 stdout 上的一个词：`directory` / `file` / `absent`。
+ *
+ * 沙箱拒绝或命令不可用时，插件拿到的是**执行失败**（`ok:false`）——那对应"查不出来"，
+ * 调用方必须如实上报，不许折叠成 `absent`。
+ *
+ * PowerShell 用 `-LiteralPath`：路径来自员工，`[` `]` 这类字符在 `-Path` 下是通配符语法。
+ */
+export function pathProbeCommand(path: string, platform: string): string {
+  const quoted = shellQuote(path, platform)
+  return shellDialect(platform) === 'powershell'
+    ? `if (Test-Path -LiteralPath ${quoted} -PathType Container) { Write-Output 'directory' }`
+      + ` elseif (Test-Path -LiteralPath ${quoted} -PathType Leaf) { Write-Output 'file' }`
+      + ` else { Write-Output 'absent' }`
+    : `if [ -d ${quoted} ]; then printf %s directory; elif [ -f ${quoted} ]; then printf %s file; else printf %s absent; fi`
+}
+
+/** 路径探测的三态；`undefined` = 没有结论（命令没跑起来 / 输出不可识别）。 */
+export type PathProbeKind = 'directory' | 'file' | 'absent'
+
+/**
+ * 解析 {@link pathProbeCommand} 的输出。
+ *
+ * 判据只在**最后一行**上找：命令失败时 stderr 会把原文混进 stdout，随便扫全文就等于
+ * 让一句报错里恰好出现的 `absent` 决定结论。
+ */
+export function parsePathProbe(result: { ok?: boolean; stdout?: unknown } | undefined): PathProbeKind | undefined {
+  if (result === undefined || result.ok !== true) return undefined
+  const lines = text(result.stdout).split('\n').map((line) => line.trim()).filter((line) => line !== '')
+  const last = lines[lines.length - 1] ?? ''
+  return last === 'directory' || last === 'file' || last === 'absent' ? last : undefined
+}
+
+/**
  * 幂等删除一个普通文件。
  *
  * 「目标本来不存在」是幂等成功，其余失败（权限、占用、父目录错误）必须让退出码非 0：

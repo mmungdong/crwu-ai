@@ -328,10 +328,16 @@ test('ping and boot answer with the state the panel needs to render', async () =
   // 协议 19：**审核 scope 绑定**（案例目录/根会话 cwd 与沙箱边界从"工作空间"收紧到"本轮案例目录"，
   // 氚云记录查询移出审核子会话能力集）。两者都是跨进程契约，ping 与 boot 必须报同一代 ——
   // 否则「界面新、宿主旧」只能在用户操作到那一步时才暴露（旧宿主仍按工作空间级边界跑审核）。
-  // 协议 20：新增 `browser-session-bind`（内置浏览器扫码登录的凭据出口）；
-  // 协议 21：钉钉登录拆成 `dws-login-start` / `dws-login-status`。新操作同样是跨进程契约，
-  // 旧宿主没有它 —— 靠协议号拦在门外，才不会表现成「点一下 404」。
-  assert.equal(WORKBENCH_PROTOCOL, 21, '钉钉登录拆成两阶段后协议必须 +1')
+  // 协议 22：**下掉** `browser-session-bind` / `dws-login-start` / `dws-login-status`
+  // （氚云内置浏览器扫码 + 钉钉设备码 / 两阶段登录）。操作消失同样是跨进程契约变化：
+  // 旧界面调它们会 404，必须靠协议号拦在门外，才不会表现成「点一下没反应」。
+  // 协议 23：**新增** `discussion-material-open`（报告讨论会话的受限材料范围）。
+  // 新增操作同样是跨进程契约变化：旧宿主没有它（新界面 404）、旧界面不调它
+  // （于是在新宿主上讨论会话仍然取不到附件 —— 宿主替客户端登记不了"哪条会话是讨论"）。
+  // 协议 24：审核根的 cwd/沙箱边界改成**已选工作空间**（DSH 的边界 = 会话 cwd，
+  // 而挂到工作空间下要求 cwd 逐字等于工作空间路径 —— 否则审核会话永远落「未分组」）。
+  // 旧宿主按"案例目录"建根，两代的会话归类与沙箱事实都不同，必须靠协议号分开。
+  assert.equal(WORKBENCH_PROTOCOL, 24, '审核根绑定口径变化后协议必须 +1')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -343,47 +349,6 @@ test('ping and boot answer with the state the panel needs to render', async () =
     Object.keys(operations).filter((name) => name.startsWith('update-')).sort(),
     ['update-cancel', 'update-check', 'update-install', 'update-status'],
   )
-})
-
-test('env 操作的运行时分区来自 DSH Python 解析器（接线 + refresh 透传）', async () => {
-  // 环境页 ③ 层显示什么，取决于 `apply()` 把实例级解析器接进了 `env` 操作。
-  // 这一条钉的是**接线**：解析器被调用、`refresh` 原样透传、结果落在 `runtime` 分区里。
-  // （解析器自身的行为在 host-runtime-python.test.mjs；loadEnvironment 的分区在
-  //   host-environment-env.test.mjs。）
-  const calls = []
-  const python = {
-    cached: () => null,
-    async check(options) {
-      calls.push(options)
-      return {
-        ok: true, state: 'ok', path: '/dsh/runtime/python/bin/python3', versionText: '3.12.4',
-        distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stubDSH',
-      }
-    },
-  }
-  const resolved = resolveConfig({})
-  const state = createWorkbenchState(resolved)
-  const world = fakeWorld()
-  const stubShell = {
-    resolve: (request) => request,
-    async execute() {
-      return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }) }
-    },
-  }
-  const ctx = {
-    get: (name) => (name === 'shell' ? stubShell : undefined),
-    effect: (callback) => { const dispose = callback(); return () => { if (typeof dispose === 'function') dispose() } },
-  }
-  const form = { async ensure() { return { ok: true, code: 'F', name: '报告审核', error: '', escalated: false } } }
-  const operations = createCoreOperations(ctx, resolved, state, world, { form, python })
-
-  const plain = await operations.env({})
-  assert.equal(plain.runtime.ok, true, '接线后 runtime 分区应当是解析器的结论')
-  assert.equal(plain.runtime.path, '/dsh/runtime/python/bin/python3')
-  assert.deepEqual(calls.map((item) => item.refresh), [false], '默认不刷新（走缓存）')
-
-  await operations.env({ refresh: true })
-  assert.deepEqual(calls.map((item) => item.refresh), [false, true], '「重新自检」的 refresh 要透传到解析器')
 })
 
 test('the declared ported lists match which operations actually run', async () => {
@@ -424,11 +389,11 @@ test('the Host half still registers the frozen inventory of operations', async (
   // 而不是 404「未知 op」），所以它是 +2 而不是「替换」。
   // 35 → 36：`access-diagnostics`（协议 18 · B3 的本机访问诊断，只读、脱敏）。
   // 36 → 38：DWS 本机目录的只读体检 + 最小权限修复（协议 18 · 子项目 D）。
-  // 38 → 39：`browser-session-bind`（协议 20）——内置浏览器扫码后把 `h3_token` 经标准输入
-  // 交给 CLI 落 OS 凭据存储。
-  // 39 → 41：`dws-login-start` / `dws-login-status`（协议 21）——钉钉登录改成后台跑 + 两阶段，
-  // URL/设备码在 CLI 还在等回调时就能给界面。
-  assert.equal(FROZEN_OPERATION_COUNT, 41)
+  // 38 → 41：`browser-session-bind`（协议 20）+ `dws-login-start` / `dws-login-status`（协议 21）。
+  // 41 → 38（协议 22，2026-09-30）：这三个操作**整体删除** —— DSH 不再提供内置浏览器扫码登录与
+  // 钉钉设备码 / 两阶段登录，账号连接只读取、检查已有凭据。
+  // 38 → 39（协议 23，2026-09-30）：报告讨论会话的受限材料登记 `discussion-material-open`。
+  assert.equal(FROZEN_OPERATION_COUNT, 39)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {

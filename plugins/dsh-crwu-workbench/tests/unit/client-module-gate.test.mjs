@@ -41,7 +41,7 @@ const blocking = {
 
 // ── 模块元数据 ──────────────────────────────────────────────────────────────
 
-test('模块元数据里声明了"是否需要环境"，环境页自己永远不需要', () => {
+test('模块元数据里声明了"是否需要环境"：环境页自己永远不需要', () => {
   for (const id of MODULE_IDS) {
     assert.equal(typeof MODULE_META[id].requiresEnvironment, 'boolean', id)
     assert.ok(typeof MODULE_META[id].requirement === 'string', id)
@@ -123,26 +123,31 @@ test('成功进入目标页之后清掉 pending（不会过一会儿又跳一次
   assert.equal(store.get().active, 'audit')
 })
 
-test('iFinD 未通过（必检项）必须拦住导航，且提示指名 API-Key', () => {
-  // 2026-09-26 产品口径：iFinD 不再是可选能力 —— 旧用例「只有它缺失 → degraded 不拦」
-  // 已被覆盖，这里钉住新行为（blocking issue + 双 scope）。
-  const blocked = state({
-    status: 'action-required', proceed: false,
-    capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
+test('外部数据源（iFinD）未就绪**不拦**任何导航：基础环境已就绪就进报告审核', () => {
+  // 2026-09-30 口径（覆盖 2026-09-26 的「必检项」）：iFinD 是**可选数据源**。
+  // 它未配置只让 status 落到 degraded + externalData=false，**不阻塞**基础环境与报告审核。
+  const degraded = state({
+    status: 'degraded', proceed: true,
+    capabilities: { global: true, auditCore: true, delivery: true, externalData: false },
     issues: [
-      { id: 'ifind', owner: 'user', blocking: true, scope: 'global', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD API-Key 未通过验证：还没有填写 iFinD API-Key' },
-      { id: 'ifind-external', owner: 'user', blocking: true, scope: 'external-data', action: '填写 iFinD API-Key（向管理员获取）', message: 'iFinD 外部数据不可用：还没有填写 iFinD API-Key' },
+      {
+        id: 'ifind', owner: 'user', blocking: false, scope: 'external-data',
+        action: '配置外部数据源（同花顺 iFinD API-Key）',
+        message: '外部数据核查未就绪（同花顺 iFinD）：还没有配置外部数据源。不影响进入报告审核，涉及外部数据的项目会标记为「未检查」。',
+      },
     ],
   })
   const store = createModuleStore()
-  store.envChanged({ state: blocked })
-  assert.equal(store.get().active, 'env', '不通过就得停在环境页')
-  const verdict = store.navigate('audit', { state: blocked })
-  assert.equal(verdict.blocked, true)
-  assert.equal(verdict.pending, 'audit')
-  assert.match(verdict.reason, /iFinD API-Key 验证/, verdict.reason)
+  store.envChanged({ state: degraded })
+  assert.equal(store.get().active, 'audit', '基础环境已就绪 → 默认进报告审核')
+  const verdict = store.navigate('audit', { state: degraded })
+  assert.equal(verdict.blocked, false, '可选数据源未就绪不拦报告审核')
+  assert.equal(store.get().active, 'audit')
+  // 「外部数据核查」不是独立模块：它是环境信息页里的一个区块（用户口径 2026-09-30），
+  // 所以「去看 / 去配」就是进环境页 —— 而环境页永远进得去。
+  assert.equal(MODULE_IDS.includes('external'), false, '不许再有 external 这个模块')
+  assert.equal(store.navigate('env', { state: degraded }).blocked, false)
   assert.equal(store.get().active, 'env')
-  assert.equal(store.get().pendingTarget, 'audit', '要记下来，修好后恢复')
 })
 
 test('真正的可选能力缺失（非阻塞 issue）仍然是 degraded，不拦导航', () => {

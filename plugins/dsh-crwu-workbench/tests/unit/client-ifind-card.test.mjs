@@ -116,7 +116,11 @@ test('状态词与色调：只有**真的取到数据**才是绿的', () => {
   assert.equal(ifindStateTone('authenticated', false), 'busy')
   assert.equal(ifindStateTone('authenticated', true), 'ok')
   assert.equal(ifindStateTone('unverified', false), 'busy')
-  for (const bad of ['invalid', 'unreachable', 'unconfigured']) assert.equal(ifindStateTone(bad, false), 'bad', bad)
+  // 可选数据源**永远不报红**：没配好只是"还没证据 / 需要看一眼"，不拦报告审核。
+  for (const other of ['invalid', 'unreachable', 'unconfigured']) {
+    assert.equal(ifindStateTone(other, false), 'busy', other)
+    assert.equal(ifindStateTone(other, true), 'ok', `${other} 取到过数据就是绿的`)
+  }
 })
 
 test('三类失败给出三种不同的处置（不许把"不可达"说成"key 不对"）', () => {
@@ -282,13 +286,15 @@ test('已保存：显示脱敏摘要与「替换 API-Key」，输入框收起（
   const savedView = credential({ ok: true, state: 'authenticated', tokenLength: 24, reason: '', toolCount: 7 })
   const { tree } = render(IfindAuthCard, { credential: savedView, onSaved: () => {} })
   const text = textOf(tree)
-  assert.equal(text.includes(zhCN.envIfindStateAuthenticated), true, '要显示「已认证」')
+  // 2026-09-30 口径：**认证通过但没真的取到数** → 「待验证」，不许显示成「已认证」（会让人以为能取数）。
+  assert.equal(text.includes(zhCN.envIfindStateUnverified), true, '认证过但没取到数据要显示「待验证」')
+  assert.equal(text.includes(zhCN.envIfindStateVerified), false, '没取到数据就不许显示「已配置并验证」')
   // 脱敏摘要只有长度 + 「不回显」的明说，没有 key 本体。
   assert.equal(text.includes(`${zhCN.ifindConfigured}24${zhCN.ifindNoEcho}`), true, '要显示脱敏摘要')
   assert.equal(text.includes('abcdefghij'), false, '任何视图里都不出现 key 本体')
   // 凭据文件路径是插件状态文件（不是秘密），保留在卡片脚注里便于对照开发者诊断。
   assert.equal(text.includes(`${zhCN.envIfindPath} ${savedView.path}`), true, '要显示凭据文件路径')
-  assert.equal(inputs(tree).length, 0, '已认证时不展开输入框')
+  assert.equal(inputs(tree).length, 0, '已保存时不展开输入框')
   assert.ok(buttonLike(tree, zhCN.envIfindReplace), '要能替换 API-Key')
   assert.ok(buttonLike(tree, zhCN.envIfindClear), '要能清除已保存的 API-Key')
   // 替换入口点开后才出现输入框。

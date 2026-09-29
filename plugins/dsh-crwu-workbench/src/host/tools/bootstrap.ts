@@ -6,8 +6,9 @@ import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { H3YUN_FIELDS, RECORDS_STDOUT_MAX } from '../h3yun/consts.ts'
 import { labelOf, pick } from '../h3yun/fields.ts'
+import { attachmentsOf, type AttachmentRow } from '../h3yun/attachments.ts'
 import { requireBundledCommand } from '../platform/command.ts'
-import { fileSystem, resolveTarget } from '../fs/paths.ts'
+import { resolveTarget } from '../fs/paths.ts'
 import { ensureDirectory } from './case-files.ts'
 import { allowedCaseRootOf, requireCaseDir } from './case-dir.ts'
 import { callerIdentity, callerParentSessionId, isAuditChild } from '../audit/scope.ts'
@@ -15,7 +16,10 @@ import { caseDirOf } from '../../shared/utils/case-dir.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from './outcome.ts'
 import { canonicalJson, digestOf, digestOnly } from './snapshot.ts'
-import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
+import { callerSession, credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
+import { writeCaseText } from './case-files.ts'
+import { PLUGIN_REV } from '../consts.ts'
+import type { Session } from '@deepseek-ai/dsh-session'
 
 /**
  * `crwu_audit_case_bootstrap`：**报告定位与一次取数的唯一交接点**。
@@ -44,13 +48,6 @@ export const SNAPSHOT_METADATA_FILE = '快照元数据.json'
 /** 记住最近几次快照摘要的条数上限（按 attemptId 去重，避免无界增长）。 */
 const CACHE_LIMIT = 8
 
-interface AttachmentRow {
-  field: string
-  fileId: string
-  fileName: string
-  fileSize: string
-  contentType: string
-}
 
 /** 给审核路由用的事实（字段固定，和工具 output schema 一一对应）。 */
 export interface RoutingFacts {
@@ -103,21 +100,6 @@ function recordOf(payload: unknown): Record<string, JsonValue> | null {
   return data as Record<string, JsonValue>
 }
 
-/** 附件元数据（**丢掉** `downloadUrl`：它带会话鉴权，不进快照、不进模型上下文）。 */
-function attachmentsOf(payload: unknown): AttachmentRow[] | null {
-  const doc = jsonObject(payload)
-  if (doc === null || !Array.isArray(doc.data)) return null
-  return (doc.data as unknown[]).map((row) => {
-    const item = row !== null && typeof row === 'object' ? row as Record<string, unknown> : {}
-    return {
-      field: text(item.field),
-      fileId: text(item.fileId),
-      fileName: text(item.fileName),
-      fileSize: text(item.fileSize),
-      contentType: text(item.contentType),
-    }
-  }).filter((item) => item.fileId !== '')
-}
 
 /**
  * 给审核路由用的少量事实。
@@ -141,15 +123,23 @@ function routingFactsOf(record: Record<string, JsonValue>, seqNo: string, formNa
   }
 }
 
-async function writeJson(ctx: Context, path: string, payload: unknown): Promise<{ ok: boolean; error: string }> {
-  const fs = fileSystem(ctx)
-  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用' }
-  try {
-    await fs.writeText(await resolveTarget(ctx, path), canonicalJson(payload))
-    return { ok: true, error: '' }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
+/**
+ * 写一个快照 JSON —— **必须带调用方会话的策略**（`writeCaseText` 的第 5 个参数那件事）。
+ *
+ * 2026-09-30 真机第三次故障就在这一行：`mkdir 输入快照` 已经成功，三个 JSON 却写不进去
+ * （`FS_SANDBOX_DENIED: cannot write "…": file access denied under workspace-write mode`），
+ * 审核于是停在「未创建子代理」。归因与判据见 `writeCaseText`。
+ */
+async function writeJson(
+  ctx: Context,
+  path: string,
+  payload: unknown,
+  options: { session?: Session; signal?: AbortSignal },
+): Promise<{ ok: boolean; error: string }> {
+  const written = await writeCaseText(ctx, path, canonicalJson(payload), options)
+  if (written.ok) return { ok: true, error: '' }
+  const kind = written.errorKind === '' ? 'infrastructure' : written.errorKind
+  return { ok: false, error: `${written.error}（写入 ${path} · 归因 ${kind} · 后置条件 ${written.postcondition} · 插件 ${PLUGIN_REV}）` }
 }
 
 export function bootstrapTools(deps: ToolDeps) {
@@ -326,7 +316,13 @@ export function bootstrapTools(deps: ToolDeps) {
       // 分隔符随案例目录风格走（Windows 上是 `\`）：这条路径既进提示词与 Tool 返回值，
       // 也是后续 `ctx.fs` / shell 的目标。
       const snapshotDir = joinLocalPath(caseCheck.path, SNAPSHOT_DIR)
-      const made = await ensureDirectory(ctx, snapshotDir, { workdir: caseCheck.path, platform, ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
+      // ⚠️ `session` 不能少：快照目录在案例目录里，而案例目录是**审核根会话的 cwd**。
+      // 不把它传下去，这条非特权命令就只会拿到执行器的**部署默认**（进程 cwd）→
+      // `mkdir ... Operation not permitted`（2026-09-30 真机两次现场）。
+      const made = await ensureDirectory(deps.access, snapshotDir, {
+        workdir: caseCheck.path, platform, session: callerSession(exec),
+        ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+      })
       if (!made.ok) return { ...failure('infrastructure', `创建快照目录失败：${made.error}`), ...empty }
 
       const fetchedAt = new Date().toISOString()
@@ -362,8 +358,12 @@ export function bootstrapTools(deps: ToolDeps) {
         recordFile: summary.snapshotPath,
         attachmentsFile: summary.attachmentsPath,
       }
+      const writeOptions = {
+        session: callerSession(exec),
+        ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+      }
       const writes = [
-        await writeJson(ctx, summary.snapshotPath, record),
+        await writeJson(ctx, summary.snapshotPath, record, writeOptions),
         await writeJson(ctx, summary.attachmentsPath, {
           schema: 'crwu.audit-attachments.v1',
           objectId,
@@ -371,8 +371,8 @@ export function bootstrapTools(deps: ToolDeps) {
           fetchedAt,
           count: attachments.length,
           files: attachments,
-        }),
-        await writeJson(ctx, summary.metadataPath, metadata),
+        }, writeOptions),
+        await writeJson(ctx, summary.metadataPath, metadata, writeOptions),
       ]
       const failedWrite = writes.find((item) => !item.ok)
       if (failedWrite !== undefined) {

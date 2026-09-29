@@ -41,7 +41,8 @@ export const PERMISSION_SCHEMA_VERSION = LOCAL_ACCESS_SCHEMA_VERSION
  * - `dws-profile`：`%USERPROFILE%\.dws`（钉钉登录态与 DWS 状态目录）；
  * - `oss-config`：`%USERPROFILE%\.ossutilconfig`（交付件回传的 AK/SK）；
  * - `ifind-credential`：`.dsh/crwu-workbench` 下的 iFinD API-Key 与工作台状态；
- * - `system-integration`：打开系统浏览器（登录）、写系统剪贴板、在文件管理器里定位案例目录。
+ * - `system-integration`：打开系统浏览器（登录）、写系统剪贴板、在文件管理器里定位案例目录、
+ *   在**员工选定的工作空间**里创建本轮案例目录（`<工作空间>/<流水号>`，插件唯一自动创建的一级目录）。
  */
 export const LOCAL_ACCESS_CAPABILITIES = [
   'h3yun-credential-store',

@@ -29,7 +29,7 @@ export const FROZEN_REQUIRED_AUDIT_TOOLS = [...REQUIRED_AUDIT_TOOLS]
 export const FROZEN_AUDIT_TOOL_COUNT = FROZEN_AUDIT_TOOLS.length
 
 /**
- * 宿主操作表：旧动态形态的 24 个 handler + 包形态新增/调整后的合计 38 个。
+ * 宿主操作表：旧动态形态的 24 个 handler + 包形态新增/调整后的合计 39 个。
  * 顺序按「加入时间」排，便于后来者看出哪一批是哪次改造加的。
  *
  * `install-prompt` 已**删除**（2026-09-26）：那套「复制安装提示词发给 Agent」在二进制随包发布、
@@ -54,12 +54,12 @@ export const FROZEN_OPERATIONS = [
   // 第 37~38 个：DWS 本机目录的只读体检与最小权限修复（协议 18 · 子项目 D）。
   'dws-local-doctor',
   'dws-local-permission-repair',
-  // 第 39 个：内置浏览器扫码登录的凭据出口（协议 20）。客户端从内嵌浏览器页面里读到
-  // `h3_token` 后经它交给 Host，Host 再走 `crwu h3yun session bind --token-stdin`。
-  'browser-session-bind',
-  // 第 40~41 个：钉钉登录的两阶段（协议 21）。`dws auth login` 要在等人扫码时就把
-  // 授权 URL / 设备码交出来，所以拆成 start（起后台进程）与 status（轮询快照）。
-  'dws-login-start', 'dws-login-status',
+  // 第 39 个：报告讨论会话的**受限材料登记**（协议 23）。讨论不是审核 —— 它没有审核记录，
+  // 所以 Host 在登记时自己重新取一次附件清单，只把那一批 `fileId` 写进内存白名单。
+  'discussion-material-open',
+  // ⚠️ 协议 22（2026-09-30）**删掉**了 `browser-session-bind`（氚云内置浏览器扫码，协议 20）
+  // 与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录，协议 21）：
+  // DSH 只读取、检查已有凭据，登录由本机 CLI 打开系统浏览器完成。
 ]
 
 /** 宿主操作的条数。 */

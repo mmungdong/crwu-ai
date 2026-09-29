@@ -1,8 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { text } from '../../shared/utils/value.ts'
-import { mkdirCommand, shellDialect } from '../platform/shell.ts'
-import { runShell } from '../shell/run.ts'
+import { shellDialect } from '../platform/shell.ts'
+import { isDir } from '../fs/paths.ts'
 import { agentRegistry } from './spawn.ts'
 import { auditToolsVisible } from './preflight.ts'
 import { applyAuditRootPolicy, inspectAuditRootPolicy, type AuditPolicyView } from './policy.ts'
@@ -109,6 +109,16 @@ interface LiveAgent {
   whenIdle?: () => Promise<void>
 }
 
+/**
+ * 审核会话的沙箱边界 = 已选工作空间。
+ *
+ * 与 `audit/ops.ts` 里算案例目录用的是**同一个工作空间表达式**（`workspacePath || caseRoot`）：
+ * 工作空间没选时退到配置里的案例根，两者必须同源，否则"根建在哪儿"与"边界是什么"会分叉。
+ */
+export function auditBoundaryOf(state: WorkbenchState): string {
+  return text(state.workspacePath) || text(state.caseRoot)
+}
+
 /** 取活的 Agent（`agents` 注册表里的就是运行时面，带 followup/whenIdle）。 */
 function liveAgent(ctx: Context, sessionId: string): LiveAgent | undefined {
   return agentRegistry(ctx)?.get(sessionId as never) as LiveAgent | undefined
@@ -120,15 +130,29 @@ export interface RootUsability {
 }
 
 /**
- * 现有的根还能用吗。
+ * 审核根会话的**沙箱边界 = 会话 cwd = 已选工作空间**（2026-09-30 口径，协议 24）。
  *
- * 判据缺一不可：Agent 还活着（`subagents.start` 要的是活对象，不是 id）、**本轮案例目录没变**、
- * 会话的 cwd 就是该案例目录、它不是子代理、策略仍然收敛在"`workspace-write` + 边界=案例目录"。
+ * 为什么必须是工作空间而不是案例目录 —— DSH 的两条硬规则把它钉死了：
  *
- * ⚠️ `casePath === ''`（老状态文件里的**工作空间级根**）一律判过期，**绝不复用**：
- * 那种根的子会话继承到的工作区边界是整个工作空间，通用 shell / fs 能改同工作空间的其他案例。
+ * 1. `SandboxPolicyService.resolve()`：*"**A session cwd is its workspace-write boundary**"* ——
+ *    边界**就是**会话 cwd，没有第二个旋钮；
+ * 2. `Workspace.attachSession()`：`if (cwd !== this.record.path) throw …` —— 会话要挂到工作空间下，
+ *    它的 cwd 必须**逐字等于**工作空间路径。
+ *
+ * 两者合起来只有一种活法：**cwd = 工作空间**，于是边界也是工作空间。
+ * 这正是 DSH 自己创建"工作空间下的新会话"的做法（`session-controller` 的 `create()`：
+ * `cwd = workspace.path` → `ensureSession` → `attachSession`），也是本插件"与 DeepSeek 讨论"
+ * 那条链路一直在用的做法（客户端 `sessions.create({ workspaceId })`）。
+ * 之前我们自己用 `agents.create({ meta: { cwd: 案例目录 } })` 建根，cwd 与工作空间路径不等，
+ * `attachSession` 必然抛错，于是审核根只能落在「未分组」——那就是 2026-09-30 用户报的 bug。
+ *
+ * ⚠️ **案例目录的门禁不靠这个边界**，靠的是 `requireAuditScope`：审核子会话发起的每一个案例内
+ * Tool 都要求 `caseDir` 与本轮记录的 `casePath` **规范解析后精确相等**（工作空间根、兄弟案例、
+ * 案例子目录一律拒绝）。也就是说：**会话边界回答"这个进程能写哪儿"，案例 scope 回答
+ * "这次审核被允许碰哪个案例"** —— 后者才是跨案例的隔离判据，而且它不随 cwd 变化。
  */
 export function auditRootUsability(ctx: Context, state: WorkbenchState, casePath: string): RootUsability {
+  const boundaryPath = auditBoundaryOf(state)
   const sessionId = state.auditRoot.sessionId
   if (sessionId === '') return { ok: false, reason: '还没有审核根会话' }
   if (casePath === '') return { ok: false, reason: '缺少案例目录：无法确认审核根的边界' }
@@ -148,32 +172,25 @@ export function auditRootUsability(ctx: Context, state: WorkbenchState, casePath
   if (header !== undefined) {
     if (text(header.origin) === 'subagent') return { ok: false, reason: '审核根会话本身是子代理' }
     const cwd = text(header.cwd)
-    if (cwd !== '' && !samePathText(cwd, casePath)) {
-      return { ok: false, reason: `审核根会话的 cwd（${cwd}）不是本轮的案例目录 ${casePath}` }
+    if (cwd !== '' && !samePathText(cwd, boundaryPath)) {
+      return { ok: false, reason: `审核根会话的 cwd（${cwd}）不是已选工作空间 ${boundaryPath}` }
     }
   }
   // **策略也是可用性的一部分**（协议 18 · C-02）：带着 `auto` / `danger-full-access`
   // permission preset 的会话、或者策略被别人改漂了的会话，一律不复用 ——
   // 「先复用再纠正」会让子代理继承到错的边界，而那正是这一层要防的事。
-  const policy = inspectAuditRootPolicy(ctx, agent, casePath)
+  const policy = inspectAuditRootPolicy(ctx, agent, boundaryPath)
   if (!policy.ok) return { ok: false, reason: `策略不符合要求：${policy.error}` }
   return { ok: true, reason: '' }
 }
 
 /**
- * 目录不存在就建（`workspaceRegistry.create` 要求目录已存在）。
- *
- * 命令由 `platform/shell.ts` 按平台生成：POSIX 是 `mkdir -p`，Windows 是 PowerShell 的
- * `New-Item -ItemType Directory -Force`（`cmd` 的 `mkdir` 既不认 `-p`，引号解析也是第二套规则）。
- */
-async function ensureDirectory(ctx: Context, path: string, workspace: string, platform: string): Promise<string> {
-  const result = await runShell(ctx, mkdirCommand(path, platform), { timeoutMs: 20_000, workdir: workspace })
-  return result.ok ? '' : (result.error === '' ? `创建目录失败：${path}` : `创建目录失败：${result.error}`)
-}
-
-/**
- * 拿到一个可用的审核根会话：能用就用，不能用就新建（建目录 → 登记工作空间 → 建会话 →
+ * 拿到一个可用的审核根会话：能用就用，不能用就新建（登记已有工作空间 → 建会话 →
  * 命名 → hello 预检 → 落钩子）。
+ *
+ * ⚠️ **本函数不创建任何目录**（2026-09-30 口径）：工作空间根目录必须由用户先选好、且**真实存在**；
+ * 案例目录由调用方（`audit/ops.ts`）在**进入本函数之前**创建。这里连 `mkdir` 都不再拼 ——
+ * 「工作空间不存在就建一个」正是这条口径要消灭的行为。
  */
 export async function ensureAuditRoot(
   deps: AuditRootDeps,
@@ -187,7 +204,7 @@ export async function ensureAuditRoot(
     ok: false, error, sessionId: '', created: false, notes: [],
     policy: policy ?? { ok: false, error, sandboxMode: '', workspaceRoot: '', approvalPolicy: '', permissionPreset: '' },
   })
-  if (workspacePath === '') return fail('尚未选定工作空间：审核根会话需要一个明确的工作空间。')
+  if (workspacePath === '') return fail('尚未选定工作空间，请先选择一个已有目录。')
   if (casePath === '') return fail('缺少案例目录：审核根会话的边界就是本轮案例目录（不许用整个工作空间）。')
   // 平台事实只探一次：目录创建、预检指令与"当前目录"的写法都要用它。
   const platform = await deps.world.platform()
@@ -195,7 +212,7 @@ export async function ensureAuditRoot(
   const usable = auditRootUsability(ctx, state, casePath)
   if (usable.ok) {
     // 复用已有的根：策略事实同样要如实带回去（它是**检查过**的，不是"假定还行"）。
-    const policy = inspectAuditRootPolicy(ctx, agentRegistry(ctx)?.get(state.auditRoot.sessionId as never), casePath)
+    const policy = inspectAuditRootPolicy(ctx, agentRegistry(ctx)?.get(state.auditRoot.sessionId as never), workspacePath)
     return { ok: true, error: '', sessionId: state.auditRoot.sessionId, created: false, notes: [], policy }
   }
 
@@ -209,14 +226,21 @@ export async function ensureAuditRoot(
     return fail(`Host agents 服务不可用，无法创建审核根会话（上一个根不可用的原因：${usable.reason}）`)
   }
 
-  // ① 工作空间：先解析，解析不到就建目录再登记。
+  // ① 工作空间：用户选定的目录必须**已经存在**。
+  //
+  // 三种情况分开处置（口径 2026-09-30：插件不为用户创建工作空间根目录）：
+  // - 已登记 → 直接用；
+  // - 目录存在但没登记 → **只登记**（`workspaceRegistry.create` 不建目录）；
+  // - 目录不存在 / 是个文件 / 探测不到 → **拒绝启动**，让用户重新选一个已有目录。
+  //   ⚠️ 这里以前是 `mkdir` 补建，那会让「路径写错了」变成「悄悄多了一个目录」。
   let workspace = await resolveWorkspaceEntity(ctx, workspacePath)
   if (workspace === undefined) {
-    const mkdirError = await ensureDirectory(ctx, workspacePath, await deps.world.workdir(), platform)
-    if (mkdirError !== '') return fail(mkdirError)
+    if (!await isDir(ctx, workspacePath)) {
+      return fail(`已选定的工作空间目录不存在，请重新选择一个已有目录：${workspacePath}`)
+    }
     workspace = await createWorkspace(ctx, workspacePath, state.workspaceTitle || workspacePath)
     if (workspace === undefined) return fail(`工作空间登记失败：${workspacePath}`)
-    notes.push(`已把目录登记成工作空间：${workspacePath}`)
+    notes.push(`已把已有目录登记成工作空间：${workspacePath}`)
   }
 
   // ② 新建一个真正的顶层会话（不带 parentAgent = 不是子代理）。
@@ -227,9 +251,10 @@ export async function ensureAuditRoot(
   try {
     created = await agents.create({
       sessionId,
-      // **cwd = 本轮的案例目录**：子会话只能继承父会话的 cwd，而沙箱边界这一版也钉在案例目录上。
-      // 两者必须一致 —— 只对边界不对 cwd 时，通用 fs 的默认落点仍指向工作空间。
-      meta: { cwd: casePath, ...(presetId === '' ? {} : { agentPreset: presetId }) },
+      // **cwd = 已选工作空间**（协议 24）：DSH 的沙箱边界**就是**会话 cwd，而 `attachSession` 要求
+      // cwd 逐字等于工作空间路径 —— 不这么建，根就挂不到工作空间下（只能落「未分组」，用户报的 bug）。
+      // 跨案例的隔离由 `requireAuditScope`（按本轮 casePath 精确相等）把守，不靠这个边界。
+      meta: { cwd: workspacePath, ...(presetId === '' ? {} : { agentPreset: presetId }) },
       agentOptions: model,
       setup: async (agentCtx: Context, agent: unknown) => {
         const presets = ctx.get('agentPresets') as { mount?: (agentCtx: Context, id: string) => Promise<unknown> } | undefined
@@ -257,7 +282,7 @@ export async function ensureAuditRoot(
   // ③.5 **策略收敛**（协议 18 · 子项目 C）：写 `workspace-write` + `never`，回读确认，
   // 并按 DSH 的委派捕获口径确认"子会话将要继承到什么"。**必须在 hello 预检之前** ——
   // 预检本身会驱动一次模型回合，而那一轮就该已经跑在正确的沙箱与审批之下。
-  const policy = applyAuditRootPolicy(ctx, created.agent, casePath)
+  const policy = applyAuditRootPolicy(ctx, created.agent, workspacePath)
   if (!policy.ok) return fail(`审核根会话的沙箱/审批策略没有收敛：${policy.error}`, policy)
   notes.push(`策略已收敛：沙箱 ${policy.sandboxMode} · 边界 ${policy.workspaceRoot} · 审批 ${policy.approvalPolicy}`)
 
@@ -404,7 +429,7 @@ export function auditRootView(ctx: Context, state: WorkbenchState): AuditRootVie
   // 也是员工/维护者判断"审核为什么写不进案例目录"的第一手事实。
   const policy = state.auditRoot.sessionId === ''
     ? undefined
-    : inspectAuditRootPolicy(ctx, agentRegistry(ctx)?.get(state.auditRoot.sessionId as never), casePath)
+    : inspectAuditRootPolicy(ctx, agentRegistry(ctx)?.get(state.auditRoot.sessionId as never), auditBoundaryOf(state))
   return {
     sessionId: state.auditRoot.sessionId,
     title: state.auditRoot.title,

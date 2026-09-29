@@ -241,3 +241,17 @@ test('缺少 workspace 时不编造案例目录', () => {
   assert.equal(text.includes('crwu_audit_oss_publish({'), false, '没有案例目录就没有可执行的交付调用')
   assert.equal(text.includes('## 本链路只允许使用 CRWU 结构化 Tool（硬约束）'), true, '工具约束与案例目录无关，必须还在')
 })
+
+test('宿主没问到运行时：提示词换成「由你在子会话里解析」，且仍不许出现查找命令', () => {
+  // 2026-09-29：宿主侧（启动/自检）拿不到 agent 作用域 → 工具报错；
+  // 子会话有作用域，所以由它自己调用那个工具取绝对路径。**不是**放宽成"去找解释器"。
+  const text = auditPrompt(task({ python: null }))
+  assert.equal(text.includes('## 脚本运行时：由你在本会话里解析 DSH 自带 Python'), true)
+  assert.equal(text.includes('load_workspace_dependencies'), true, '必须点名唯一允许的来源工具')
+  assert.equal(text.includes('这不等于运行时缺失'), true, '不许把"没问到"说成"缺失"')
+  assert.equal(text.includes('capability gap：DSH Python 不可用'), true, '取不到时要停下来')
+  // 与另一支一样的文本守卫：不许出现可照抄的查找手段或裸解释器调用。
+  assert.equal(/\b(which|find)\b/.test(text), false)
+  assert.equal(text.includes('command -v'), false)
+  assert.equal(text.includes('## 脚本运行时：只用 DSH 自带的 Python'), false, '这一支不该再给具体路径')
+})

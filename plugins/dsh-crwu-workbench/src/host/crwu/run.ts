@@ -67,7 +67,9 @@ export function crwuOperationOf(argv: readonly string[]): LocalAccessOperation |
   if (sub === 'session') {
     const action = text(argv[3])
     // `refresh` 也是会话管理动作：面板打开时的主动续期走它（CLI 侧的自动续期不覆盖 status）。
-    if (action === 'status' || action === 'login' || action === 'bind' || action === 'refresh') return `h3yun.session.${action}`
+    // ⚠️ `bind` **不在**这张表里（2026-09-30）：内置浏览器扫码登录整条链路已下掉，
+    // 面板不再有把网页令牌交给 CLI 的通道；员工要在终端绑定时自己跑 CLI（不走插件通道）。
+    if (action === 'status' || action === 'login' || action === 'refresh') return `h3yun.session.${action}`
     return null
   }
   return CRWU_OPERATION_BY_SUBCOMMAND[sub] ?? null

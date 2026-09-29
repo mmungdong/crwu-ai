@@ -15,8 +15,14 @@ import { workbenchApi } from '../report-audit/api.ts'
  * 所以清单偏好没命中、也没有上次选择时，用户必须有办法**自己选一个目录**，
  * 否则这个插件在那种部署下完全用不了。
  *
- * 选目录走浏览器侧的 `uiWorkspace.pickDirectory()`，再把目录注册成工作空间
- * （`workspaces.create`），最后通知 Host 记下来（`workbench:workspace` 会落盘）。
+ * ⚠️ **只选已有目录，插件不建目录**（2026-09-30 口径）：卡片只提供「选择已有目录」，
+ * 没有「新建目录并用作工作空间」，也**不调用** `uiWorkspace.createDirectory`。
+ * 目录选择器回什么就用什么（`workspaces.create` 只是把它**登记**成工作空间，不建文件系统目录）；
+ * 路径不存在 / 不是目录时由 Host 在审核启动时拒绝，界面只负责说清「请重新选一个已有目录」。
+ * 允许自动创建的只有**案例子目录**（`<工作空间>/<流水号>`，由 Host 在审核启动时创建）。
+ *
+ * 选目录走浏览器侧的 `uiWorkspace.pickDirectory()`，再登记（`workspaces.create`），
+ * 最后通知 Host 记下来（`workbench:workspace` 会落盘）。
  * 缺 `uiWorkspace` / `workspaces` 时只提示「服务不可用」，不抛错。
  */
 
@@ -33,8 +39,8 @@ export interface WorkspaceCardProps {
    * 已就绪时**压缩成一行摘要**（需求口径：「自动识别成功时压缩成摘要，只有缺失、失效或用户
    * 要更换时才展开」）。缺省 false = 老样子（完整卡片），环境页传 true。
    *
-   * 为什么不是直接删掉那几行：用户要**更换**工作空间时仍然需要完整的操作集合（选目录 / 新建 /
-   * 恢复自动识别 / 在案例根目录里打开），所以收起只是默认视图，不是删功能。
+   * 为什么不是直接删掉那几行：用户要**更换**工作空间时仍然需要完整的操作集合（选已有目录 /
+   * 恢复自动识别），所以收起只是默认视图，不是删功能。
    */
   collapsed?: boolean
 }
@@ -46,13 +52,15 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const summaryOnly = props.collapsed === true && status.chosen && !status.missing && !expanded
 
-  /** 把「一个有绝对路径的目录」登记为工作空间并通知 Host。 */
-  const adopt = React.useCallback(async (path: string, created: boolean): Promise<void> => {
+  /** 把「一个用户选中的已有目录」登记为工作空间并通知 Host。 */
+  const adopt = React.useCallback(async (path: string): Promise<void> => {
     const workspaces = props.services.workspaces
     if (workspaces?.create === undefined) {
       props.onMessage(zhCN.wsServiceUnavailable)
       return
     }
+    // `workspaces.create` 在这里的语义是**登记已有目录**（DSH 的注册表要求目录已存在）；
+    // 本卡片不建目录，所以没有"新建"分支，也没有 created 标志。
     const view = await workspaces.create({ path })
     const workspaceId = String(view.workspaceId ?? '')
     const applied = await workbenchApi.workspace({
@@ -63,7 +71,7 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
     if (applied.persistError !== undefined && String(applied.persistError) !== '') {
       props.onMessage(String(applied.persistError))
     } else {
-      props.onMessage(created ? `${zhCN.wsCreated}${path}` : `${zhCN.wsPicked}${path}${zhCN.wsRemembered}`)
+      props.onMessage(`${zhCN.wsPicked}${path}${zhCN.wsRemembered}`)
     }
     // 在案例根目录的会话里打开工作台，审核子会话的 cwd 才会跟它一致。
     if (workspaceId !== '' && props.services.uiWorkspace?.openWorkspace !== undefined) {
@@ -72,7 +80,7 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
     props.onRefresh()
   }, [props])
 
-  const pick = (createNew: boolean): void => {
+  const pick = (): void => {
     const uiWorkspace = props.services.uiWorkspace
     if (uiWorkspace?.pickDirectory === undefined) {
       props.onMessage(zhCN.wsServiceUnavailable)
@@ -86,10 +94,8 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
           props.onMessage(zhCN.wsCancelled)
           return
         }
-        const path = createNew && uiWorkspace.createDirectory !== undefined
-          ? await uiWorkspace.createDirectory(picked, 'crwu-workspace')
-          : picked
-        await adopt(path, createNew)
+        // 用户选中的路径**原样**使用：这里既不再拼子目录，也不调用 createDirectory。
+        await adopt(picked)
       })
       .catch((cause: unknown) => {
         props.onMessage(`${zhCN.wsFailed}${cause instanceof Error ? cause.message : String(cause)}`)
@@ -145,8 +151,7 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
             <div className={C.muted}>{zhCN.wsMissingDirHint}</div>
           </Notice>
           <div className={C.row}>
-            <Button label={zhCN.wsPick} tone="primary" small disabled={props.busy || !servicesReady} onClick={() => pick(false)} />
-            <Button label={zhCN.wsCreate} small disabled={props.busy || !servicesReady} onClick={() => pick(true)} />
+            <Button label={zhCN.wsPick} tone="primary" small disabled={props.busy || !servicesReady} onClick={pick} />
             <Button label={zhCN.wsAuto} small disabled={props.busy} onClick={auto} />
           </div>
           {servicesReady ? null : <div className={C.muted}>{zhCN.wsServiceUnavailable}</div>}
@@ -156,15 +161,14 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
             <div className={C.mono} style={{ fontWeight: 600 }}>{status.path}</div>
             <div className={C.muted}>{artifactHint(status.path)}</div>
             <div className={C.row} style={{ marginTop: '6px' }}>
-              <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={() => pick(false)} />
+              <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={pick} />
               {status.canAuto ? <Button label={zhCN.wsAuto} small disabled={props.busy} onClick={auto} /> : null}
             </div>
           </>
         : <>
             <Notice tone="warn">{zhCN.wsMissing}</Notice>
             <div className={C.row}>
-              <Button label={zhCN.wsPick} tone="primary" small disabled={props.busy || !servicesReady} onClick={() => pick(false)} />
-              <Button label={zhCN.wsCreate} small disabled={props.busy || !servicesReady} onClick={() => pick(true)} />
+              <Button label={zhCN.wsPick} tone="primary" small disabled={props.busy || !servicesReady} onClick={pick} />
             </div>
             {servicesReady ? null : <div className={C.muted}>{zhCN.wsServiceUnavailable}</div>}
           </>)}

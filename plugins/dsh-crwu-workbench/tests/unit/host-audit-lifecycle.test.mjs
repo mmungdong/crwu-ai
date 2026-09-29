@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyShellEffect } from '../helpers/shell-effects.mjs'
+import { applyShellEffect, probeAnswer, probeKey } from '../helpers/shell-effects.mjs'
 
 const ROOT = new URL('../../', import.meta.url)
 const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
@@ -71,14 +71,16 @@ function agentsServingChild({ absent = [], childOptions = {} } = {}) {
       if (id === 'parent-1') return rootAgentOf()
       if (absent.includes(id)) return undefined
       return makeAuditAgent(
-        makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' }),
+        makeAuditSession({ cwd: '/cases/space', mode: 'workspace-write', policy: 'never' }),
         { id, status: 'running', ...childOptions },
       )
     },
   }
 }
 
-function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [], patch = {}, trace = [], preset } = {}) {
+// `dirs` 缺省包含工作空间本身：审核启动会先只读探测它（`system.workspace-directory.read`），
+// 不存在就不建案例目录 —— 替身必须如实回答，否则每个用例都会撞在"工作空间不存在"上。
+function makeCtx({ sessions, agents, subagents, dirs = ['/cases/space'], files = {}, entries = [], patch = {}, trace = [], preset } = {}) {
   const directories = new Set(dirs)
   const policyServices = auditPolicyServices({ ...(preset === undefined ? {} : { preset }) })
   // 审核启动现在要求 provider **声明支持 `toolFilter`**（真边界：deny 的工具既不进 prompt、也拒绝执行）。
@@ -87,7 +89,7 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
   // 且 cwd/策略都是本轮案例目录的正确值 —— 这正是真实 in-process provider 兑现时的形态。
   // 用例要测"读不到 child Agent"时显式传自己的 agents 替身。
   const defaultChildAgent = () => makeAuditAgent(
-    makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' }),
+    makeAuditSession({ cwd: '/cases/space', mode: 'workspace-write', policy: 'never' }),
     { id: 'child-1', status: 'running' },
   )
   const agentsService = agents ?? {
@@ -119,13 +121,25 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
           async execute(request) {
             const command = String(request?.command ?? '')
             trace.push({ kind: 'shell', command })
-            const exitCode = patch.shellFails === true ? 1 : 0
+            // `shellFails`：所有命令都失败（探测也失败 → 必须报"无法确认"，不是"不存在"）。
+            // `mkdirFails`：只让建目录那一条失败（探针正常）—— 验的是写失败那条路。
+            const exitCode = patch.shellFails === true
+              ? 1
+              : (patch.mkdirFails === true && command.startsWith('mkdir') ? 1 : 0)
             // 让成功的建/删命令在 fs 替身上真的生效：实现会回读后置条件（见 helpers/shell-effects.mjs）。
             applyShellEffect(command, exitCode, {
               addDir: (path) => directories.add(path),
               removeFile: (path) => { delete files[path] },
             })
-            return { result: async () => ({ exitCode, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: exitCode === 0 ? '' : 'stub', truncated: false } }) }
+            // 只读路径探测：替身按内存 fs 如实回答（实现用它回读后置条件 / 探测工作空间）。
+            const probe = exitCode === 0
+              ? probeAnswer(command, {
+                hasDir: (path) => directories.has(probeKey(path)),
+                hasFile: (path) => files[path] !== undefined || files[probeKey(path)] !== undefined,
+              })
+              : undefined
+            const stdout = probe ?? ''
+            return { result: async () => ({ exitCode, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: stdout, truncated: false }, stderr: { text: exitCode === 0 ? '' : 'stub', truncated: false } }) }
           },
         }
       }
@@ -208,7 +222,7 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
  */
 // 审核根的 cwd **就是本轮的案例目录**（协议 19 起）：子会话继承它，沙箱边界也钉在它上面。
 // 夹具里默认 seqNo 是 S1，所以案例目录是 `/cases/space/S1`。
-const rootAgentOf = (extra = {}) => makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id: 'parent-1', status: 'running', ...extra })
+const rootAgentOf = (extra = {}) => makeAuditAgent(makeAuditSession({ cwd: '/cases/space' }), { id: 'parent-1', status: 'running', ...extra })
 
 function makeState(patch = {}) {
   return { ...createWorkbenchState(CONFIG), ...patch }
@@ -487,6 +501,9 @@ function startDeps(patch = {}) {
     ...(patch.state ?? {}),
   })
   const ctx = patch.ctx ?? makeCtx({
+    // 工作空间**真实存在**：审核启动会先只读探测它（`system.workspace-directory.read`），
+    // 不存在就不建案例目录。替身必须如实回答，否则每个用例都会撞在"工作空间不存在"上。
+    dirs: ['/cases/space'],
     // 健康部署的默认面：根 Agent 就绪，子 Agent 也可读（正确 cwd/策略）—— 审核子会话的
     // 沙箱/审批/工具可见性复查现在**必须**读到它（读不到就 fail closed，2026-09-29 第三轮复查的 P1）。
     // 要测"读不到"的用例显式传自己的 agents 替身。
@@ -565,9 +582,15 @@ test('formCode 已缓存时，启动审核不再去发现表单', async () => {
   // 列表早就定位过表单（`state.formCode` 非空）→ 启动这一步必须是零成本复用，
   // 而不是再搜一次（实测搜一次要十几到六十秒）。
   const spy = formSpy()
-  const { deps } = startDeps({ form: spy.resolver, state: { parentSessionId: 'parent-1', formCode: 'FORM-1', formName: '报告审核' } })
+  const { deps, state } = startDeps({ form: spy.resolver, state: { parentSessionId: 'parent-1', formCode: 'FORM-1', formName: '报告审核' } })
+  // 上一轮失败留下的记录：发起成功必须把它清掉（它只描述"最近一次失败"）。
+  state.lastAuditFailure = {
+    at: '2026-09-30T00:00:00.000Z', reason: '上一轮的失败', stage: '输入快照', errorKind: 'sandbox',
+    seqNo: 'S1', objectId: 'o1', caseDir: '/cases/space/S1', attemptId: '', notes: [],
+  }
   const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
   assert.equal(result.ok, true)
+  assert.equal(state.lastAuditFailure, undefined, '发起成功要清掉上一次的失败记录')
   // 缓存的判断在解析器内部（同一份实现），所以这里断言的是「解析器真的被问到、且它只回缓存」——
   // 真正的「不再 discoverForm」由 host-h3yun-pending.test.mjs 用真实 resolver 钉住。
   assert.deepEqual(spy.calls, ['ensure'])
@@ -625,11 +648,27 @@ test('启动审核先由 Host 建出案例目录，再交接快照，最后才�
   assert.notEqual(bootstrapAt, -1, '输入快照交接必须发生')
   assert.equal(mkdirAt < bootstrapAt, true, '快照要落进案例目录，必须先有目录')
   assert.equal(bootstrapAt < startAt, true, '交接失败必须在创建子代理之前终止')
+
+  // §8-8（2026-09-30 口径）：审核启动**不得**创建工作空间根目录 —— 只允许建本轮案例目录。
+  // 判据是真实 shell 轨迹：没有一条命令的目标恰好是工作空间根。
+  const shellCommands = trace.filter((event) => event.kind === 'shell').map((event) => String(event.command))
+  assert.equal(
+    shellCommands.some((command) => /mkdir[^\n]*\/cases\/space(?![\w/-])/.test(command)),
+    false,
+    `审核启动不许 mkdir 工作空间根目录，实际跑了：${shellCommands.join(' | ')}`,
+  )
+  assert.equal(
+    shellCommands.some((command) => command.includes('/cases/space/S1')),
+    true,
+    '案例目录仍然由 Host 建（这是允许创建的那一级）',
+  )
 })
 
-test('案例目录建不出来时在创建子代理之前终止', async () => {
+test('案例目录建不出来时在创建子代理之前终止（不许留下"审核已启动"的假状态）', async () => {
+  const trace = []
   const ctx = makeCtx({
-    patch: { shellFails: true },
+    trace,
+    patch: { mkdirFails: true },
     agents: agentsServingChild(),
     subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
   })
@@ -639,6 +678,52 @@ test('案例目录建不出来时在创建子代理之前终止', async () => {
   assert.match(result.error, /创建案例目录失败/)
   assert.match(result.error, /\/cases\/space\/S1/)
   assert.equal(state.activeChildId, '', '目录都没建出来就不许占用门禁')
+  assert.equal(state.activeKey, '')
+  assert.equal(state.audits.k, undefined, '不许留下"在跑"的记录')
+  // 失败原因要**能归因**：带上操作名与工作空间，而不是一句裸的 `mkdir: ...`（§三 的要求）。
+  assert.match(result.error, /system\.case-directory\.write/)
+  assert.match(result.error, /\/cases\/space/)
+  // **失败必须留档**（2026-09-30 加）：界面上只有一句话，进程一重启就没了 ——
+  // 真机连挂三次都是靠"复现 + 读代码"倒推。这里把全部结构化事实钉在 `state.lastAuditFailure` 上。
+  const recorded = state.lastAuditFailure
+  assert.notEqual(recorded, undefined, '失败必须落一条记录')
+  assert.equal(recorded.stage, '案例目录', '卡在哪一步要由代码说，不从文案里猜')
+  // 归因是**照抄**工具回报的结构化 `errorKind`，不是在这里按文案猜：
+  // 这个夹具让 mkdir 直接失败、不带沙箱事实，所以正确答案是 infrastructure
+  //（带沙箱事实的那一支见 `host-case-files.test.mjs` 与 `host-tools.test.mjs`：那里是 sandbox）。
+  assert.equal(recorded.errorKind, 'infrastructure')
+  assert.equal(recorded.seqNo, 'S1')
+  assert.equal(recorded.objectId, 'o1')
+  assert.match(recorded.reason, /创建案例目录失败/)
+  assert.match(recorded.caseDir, /\/cases\/space\/S1/)
+  assert.equal(typeof recorded.at, 'string')
+  // §8.2 的严格顺序：失败这一步之后，**一个后续步骤都不许发生**。
+  assert.equal(trace.some((event) => event.kind === 'tool'), false, '不许交接输入快照')
+  assert.equal(trace.some((event) => event.kind === 'start'), false, '不许创建子代理')
+  assert.equal(trace.some((event) => event.kind === 'shell' && event.command.includes('files list')), false,
+    '目录都不存在，更不该去取数')
+})
+
+test('工作空间探测**没有结论**时如实说"无法确认"，不许说成"工作空间不存在"', async () => {
+  // 这一条是 2026-09-30 复查抓到的：探测命令自己失败（shell 服务没起来 / 被沙箱拦下）时，
+  // 折叠成"所选工作空间不存在"会把一次宿主侧的拒绝说成"员工选错了目录"，
+  // 让员工去重选一个本来没错的目录 —— 正是错误分类要消灭的那种误诊。
+  const trace = []
+  const ctx = makeCtx({
+    trace,
+    patch: { shellFails: true },
+    agents: agentsServingChild(),
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /无法确认所选工作空间是否存在/)
+  assert.equal(/所选工作空间不存在/.test(result.error), false, '不许把"查不出来"说成"不存在"')
+  // 归因要带上探测那条操作（而不是一句裸报错）。
+  assert.match(result.error, /system\.workspace-directory\.read/)
+  assert.equal(state.audits.k, undefined)
+  assert.equal(trace.some((event) => event.kind === 'start'), false)
 })
 
 test('DSH Python 不可用时在创建子代理之前终止（不许退回系统 python3）', async () => {
@@ -658,6 +743,25 @@ test('DSH Python 不可用时在创建子代理之前终止（不许退回系统
   assert.match(result.error, /DSH 脚本运行时不可用/)
   assert.match(result.error, /openpyxl/)
   assert.equal(state.activeChildId, '')
+})
+
+test('宿主**没问到**运行时（unresolved）不再拒绝启动：交给子会话自己解析', async () => {
+  // 2026-09-29 员工实测：宿主（启动/自检）没有会话作用域 → 那个工具必报错。
+  // 「没问到」不等于「缺失」：子会话有作用域，能在那里解析出来，所以不该卡在启动。
+  const { deps, state } = startDeps({
+    state: { parentSessionId: 'parent-1' },
+    python: {
+      cached: () => null,
+      check: async () => ({
+        ok: false, state: 'capability-gap', unresolved: true, path: '', versionText: '',
+        distributions: {}, missingPackages: [],
+        error: '调用 load_workspace_dependencies 失败：agent scope required', source: 'stub',
+      }),
+    },
+  })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  // 关键：错误**不是**"DSH 脚本运行时不可用"那一条（那条只在确实缺失时出现）。
+  if (result.ok === false) assert.doesNotMatch(result.error, /DSH 脚本运行时不可用/, result.error)
 })
 
 test('启动审核：bootstrap 只调一次、agent scope 传的是审核根 Agent、attemptId 每轮都新', async () => {
@@ -725,7 +829,7 @@ test('C-03 正向：**可见**且策略正确的子会话必须正常启动（�
   // 而协议 19 之后子会话的边界/cwd 是**案例目录** —— 于是每一个正常可见的子会话都会被稳定判错并停掉。
   // 旧夹具的 `agents.get()` 只返回根 Agent，整段复查被跳过，所以这条永远绿；这里**真的返回 child**。
   const disposed = []
-  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' })
+  const childSession = makeAuditSession({ cwd: '/cases/space', mode: 'workspace-write', policy: 'never' })
   const ctx = makeCtx({
     agents: {
       get: (id) => {
@@ -741,7 +845,7 @@ test('C-03 正向：**可见**且策略正确的子会话必须正常启动（�
         return { id: 'child-1', provider: 'spawn', dispose: async () => { disposed.push('child-1') }, request }
       },
     },
-    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space/S1', delegationDepth: 0 } } : undefined) },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space', delegationDepth: 0 } } : undefined) },
   })
   const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
   const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
@@ -954,7 +1058,7 @@ test('audit-start creates the first attempt and takes the occupancy lock', async
 test('a second start for the same report becomes a timestamped restart', async () => {
   const labels = []
   const ctx = makeCtx({
-    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space/S1' } } : undefined) },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space' } } : undefined) },
     agents: agentsServingChild({ childOptions: { status: 'idle' } }),
     subagents: {
       list: () => ['spawn'],
@@ -988,7 +1092,7 @@ test('重启中止：旧子会话**仍在运行**（dispose 不收敛）时不�
       get: (id) => {
         if (id === 'parent-1') return rootAgentOf()
         // 旧子会话仍显示 running（它没停下来）
-        if (id === 'gone') return makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id, status: 'running' })
+        if (id === 'gone') return makeAuditAgent(makeAuditSession({ cwd: '/cases/space' }), { id, status: 'running' })
         return undefined
       },
     },
@@ -1147,7 +1251,7 @@ test('手动停止：**没确认停下来**时必须报失败，并保留记录�
       get: (id) => {
         if (id === 'parent-1') return rootAgentOf()
         // 旧子会话仍显示 running，且 dispose 永不收敛
-        if (id === 'child-1') return makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id, status: 'running' })
+        if (id === 'child-1') return makeAuditAgent(makeAuditSession({ cwd: '/cases/space' }), { id, status: 'running' })
         return undefined
       },
     },
@@ -1184,7 +1288,7 @@ test('手动停止：**没确认停下来**时必须报失败，并保留记录�
 test('audit-stop 透传**真实**停止结果（不许写死 aborted/disposed）', async () => {
   // 用户第三轮复查的 P2：`auditStop` 曾固定返回 aborted:true + disposed/interrupted/agentCancelled:false，
   // 于是"dispose 成功"、"只是 Agent 已结束"、"超时未静默"三种情况在界面上长得一模一样。
-  const childAgent = makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id: 'child-1', status: 'running' })
+  const childAgent = makeAuditAgent(makeAuditSession({ cwd: '/cases/space' }), { id: 'child-1', status: 'running' })
   const ctx = makeCtx({
     agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : (id === 'child-1' ? childAgent : undefined)) },
     subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
@@ -1269,7 +1373,7 @@ test('停止 / 释放：状态文件写不进去时**不能**报成功（P2）',
 
   // ① 停止：子会话已经确认停下来，但状态没落盘 → ok:false + 说清后果
   const ctx = makeCtx({
-    agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : (id === 'child-1' ? makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id, status: 'idle' }) : undefined)) },
+    agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : (id === 'child-1' ? makeAuditAgent(makeAuditSession({ cwd: '/cases/space' }), { id, status: 'idle' }) : undefined)) },
     subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
   })
   const { deps, state } = startDeps({
@@ -1302,7 +1406,7 @@ test('真实 toolFilter 生效（deny 工具对子会话不可见）时，子会
   // 用户第三轮复查要求的组合：`tools.get()` 对三条 denied 工具返回 undefined，其余可见；
   // 子会话必须**启动成功**（bootstrap 不该被算成"子会话缺必需工具"），
   // 而那三条对子会话必须**不可见**（可见性这一半；可执行性那一半在 host-tools.test.mjs）。
-  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' })
+  const childSession = makeAuditSession({ cwd: '/cases/space', mode: 'workspace-write', policy: 'never' })
   const childAgent = makeAuditAgent(childSession, { id: 'child-1', status: 'running' })
   const ctx = makeCtx({
     agents: {
@@ -1334,7 +1438,7 @@ test('真实 toolFilter 生效（deny 工具对子会话不可见）时，子会
 test('启动后复查失败 + dispose 不收敛：**保留**身份 / 句柄 / 占用（不许抹掉仍在跑的子会话）', async () => {
   // 用户第三轮复查的 P1：这三条失败分支调用 stopChild 后直接 rollbackRecord ——
   // 若 dispose 超时且 Agent 仍 running，旧子会话还在写案例目录，而 Host 已经删掉它的身份与 scope。
-  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'danger-full-access' })
+  const childSession = makeAuditSession({ cwd: '/cases/space', mode: 'danger-full-access' })
   const ctx = makeCtx({
     agents: {
       get: (id) => {
@@ -1377,7 +1481,7 @@ test('启动后复查失败 + dispose 不收敛：**保留**身份 / 句柄 / �
 
 test('启动后复查失败且**确认**停下来：才允许回滚记录与占用', async () => {
   // 反面：确认静默之后必须干净回滚（否则会留下一条永远"在跑"的假记录）。
-  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'danger-full-access' })
+  const childSession = makeAuditSession({ cwd: '/cases/space', mode: 'danger-full-access' })
   const ctx = makeCtx({
     agents: {
       get: (id) => {
@@ -1430,7 +1534,7 @@ test('读不到子会话的 Agent（远程 provider / 注册表查不到）：**
 test('`localAgent` 优先于注册表：注册表查不到它也能完成复查（真实 in-process provider 的形态）', async () => {
   // 反向：provider 在 start 兑现时给出了本进程子 Agent —— 那就不该因为 agents.get 查不到而失败。
   const localChild = makeAuditAgent(
-    makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' }),
+    makeAuditSession({ cwd: '/cases/space', mode: 'workspace-write', policy: 'never' }),
     { id: 'child-local', status: 'running' },
   )
   const ctx = makeCtx({
@@ -1683,7 +1787,7 @@ function gateDeps(tools) {
   })
   const ctx = makeCtx({
     agents: agentsServingChild(),
-    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space/S1' } } : undefined) },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space' } } : undefined) },
     subagents: {
       list: () => ['spawn'],
       async listChildren() { return [] },
@@ -1693,7 +1797,8 @@ function gateDeps(tools) {
   // `tools` 由这两个用例注入；其它服务走 makeCtx 的默认面。
   const original = ctx.get
   ctx.get = (name) => (name === 'tools' ? tools : original(name))
-  return { deps: { ctx, config: CONFIG, state, world: fakeWorld() }, state, spawned }
+  // `access` 是审核启动的硬依赖：建本轮案例目录要走 `system.case-directory.write`。
+  return { deps: { ctx, config: CONFIG, state, world: fakeWorld(), access: makeTestAccess(ctx).access }, state, spawned }
 }
 
 test('audit-start refuses before spawning when a required tool is invisible', async () => {

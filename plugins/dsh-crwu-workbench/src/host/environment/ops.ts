@@ -16,14 +16,14 @@ import {
 } from '../environment/probe.ts'
 import { ifindEnvCheck } from '../ifind/env.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
-import { buildEnvironmentState, checkErrorOf, PACKAGE_BLOCKER, RUNTIME_BLOCKER } from './state.ts'
+import { buildEnvironmentState, checkErrorOf, PACKAGE_BLOCKER } from './state.ts'
 // 兼容再导出：`blocked` 的这两条文案以前从这里导出，宿主测试与诊断脚本仍按这个名字引用。
-export { PACKAGE_BLOCKER, RUNTIME_BLOCKER }
+export { PACKAGE_BLOCKER }
 import { runShell, shellUnavailable } from '../shell/run.ts'
 import { ossConfigPath, readOssCred, type OssCredView } from '../oss/cred.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { EnvironmentStateView } from '../../shared/environment/model.ts'
-import type { OssConfigView, RuntimeView, WorkspaceView } from '../../shared/types.ts'
+import type { OssConfigView, WorkspaceView } from '../../shared/types.ts'
 import {
   LOCAL_ACCESS_REQUIRED_REASON,
   type LocalAccessConsentView,
@@ -54,18 +54,6 @@ import { bundledBinaryPath } from '../platform/bin-dir.ts'
  */
 
 /** 主 agent 提供的 DSH 自带 Python 运行时解析结果；本模块只消费它。 */
-export interface PythonRuntimeResult {
-  ok: boolean
-  /** 'ok' | 'capability-gap' | 'missing-package' | 'failed' */
-  state: string
-  path: string
-  versionText: string
-  distributions: Record<string, string>
-  missingPackages: string[]
-  error: string
-  source: string
-}
-
 export interface EnvResult {
   ok: boolean
   /** 部署配置的来源 YAML 路径（清单只有内置一份，故障对账时看的是这份配置）。 */
@@ -73,7 +61,6 @@ export interface EnvResult {
   /** ② 插件内置组件（crwu / dws / ossutil）：只按包内文件与包内清单核对。 */
   packageIntegrity: PackageIntegrityCheck
   /** ③ DSH 自带脚本运行时（Python）：不是系统 Python，也不是 PATH 命令。 */
-  runtime: RuntimeView
   /** ④ 登录与凭据授权：氚云 + 钉钉（**不含 oss**）。 */
   services: ServiceCheck[]
   /** ⑤ OSS 交付配置：配置视图 + 凭据脱敏视图 + 一次真实连通性探测。 */
@@ -167,13 +154,6 @@ export interface EnvDeps {
    */
   identity?: () => Promise<WhoamiResult>
   /**
-   * DSH 自带 Python 运行时的解析（**主 agent 接线**）。
-   *
-   * 可选是刻意的：宿主还没接线时必须如实报 **capability gap**，而不是退回去看系统 `python3` ——
-   * 本插件的技能脚本用的是 DSH 自带运行时，系统那一份不是依赖。缺这个函数 = 能力缺口，不是「没装」。
-   */
-  pythonRuntime?: (options: { refresh: boolean }) => Promise<PythonRuntimeResult>
-  /**
    * 必需 Tool 是否对当前 Agent 可见（`missingAuditTools`）。
    *
    * 可选：没有这个来源时 `toolRegistry` 是「未验证」而不是「故障」—— 自检页不该因为
@@ -182,70 +162,6 @@ export interface EnvDeps {
   auditTools?: (options: { refresh: boolean }) => Promise<{ missing: string[]; checked: boolean }>
   /** 保留给旧调用方的测试替身；环境自检不会使用它，也不会访问 iFinD。 */
   ifindTransport?: IfindTransport
-}
-
-/**
- * 组装 ③ 层：DSH 自带 Python 运行时。
- *
- * 三件事必须分清（否则界面会说错处置）：
- * - 宿主没接线 / 运行时本身缺失 → `capability-gap`：**不是**员工要装 Python；
- * - 运行时在、缺少必需包 → `missing-package`：要点名缺哪个包；
- * - 解析过程抛错 → `failed`：如实报错，不假装就绪。
- */
-async function probePythonRuntime(
-  deps: EnvDeps,
-  manifest: EnvManifest,
-  refresh: boolean,
-): Promise<RuntimeView> {
-  const spec = manifest.runtime.python
-  const base = {
-    expect: spec.expect,
-    required: spec.required,
-    requiredPackages: [...spec.requiredPackages],
-    note: spec.note,
-  }
-  const fail = (state: string, error: string): RuntimeView => ({
-    ...base,
-    ok: false,
-    state,
-    path: '',
-    versionText: '',
-    distributions: {},
-    missingPackages: [],
-    error,
-    source: DSH_RUNTIME_SOURCE,
-  })
-
-  if (deps.pythonRuntime === undefined) {
-    return fail('capability-gap',
-      '宿主没有接线 DSH 自带脚本运行时的解析：本次自检拿不到运行时事实。'
-      + '这不是系统 Python 的问题 —— 本插件只使用 DSH 自带运行时，不需要员工安装或配置 PATH；'
-      + '请重启 profile，或联系维护者确认宿主侧已接线。')
-  }
-
-  let result: PythonRuntimeResult
-  try {
-    result = await deps.pythonRuntime({ refresh })
-  } catch (error) {
-    return fail('failed', `运行时解析抛错：${error instanceof Error ? error.message : String(error)}`)
-  }
-
-  const state = text(result.state) || (result.ok === true ? 'ok' : 'failed')
-  const missingPackages = Array.isArray(result.missingPackages) ? result.missingPackages.map((item) => text(item)).filter((item) => item !== '') : []
-  const error = text(result.error) || (state === 'missing-package' && missingPackages.length > 0
-    ? `DSH 自带运行时缺少必需包：${missingPackages.join('、')}`
-    : '')
-  return {
-    ...base,
-    ok: result.ok === true && state === 'ok',
-    state,
-    path: text(result.path),
-    versionText: text(result.versionText),
-    distributions: result.distributions !== null && typeof result.distributions === 'object' ? { ...result.distributions } : {},
-    missingPackages,
-    error,
-    source: text(result.source) || DSH_RUNTIME_SOURCE,
-  }
 }
 
 export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknown>): Promise<EnvResult> {
@@ -271,8 +187,6 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
 
   // ② 插件内置组件：只 stat 包内文件 + 比对包内清单的字节数，**一次 shell 都不跑**。
   const packageIntegrity = await probePackageIntegrity(ctx, manifest, platform)
-  // ③ DSH 自带运行时：`refresh` 由界面「重新自检」传 true（刷新运行时缓存）。
-  const runtime = await probePythonRuntime(deps, manifest, args.refresh === true)
   // ⑥ 外部数据：凭据在插件状态目录（五态）。环境自检只读取最近一次用户主动验证的脱敏结论，
   // 普通检查、refresh、切换模块都不主动访问 iFinD。
   // 未授权时仍不读凭据文件；授权后仅做本地读取，不会触发远程探测。
@@ -446,8 +360,6 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     h3yun: services[0] ?? { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: false, state: '', detail: '' },
     dingtalk: services[1] ?? { id: 'dingtalk', label: '钉钉认证', required: true, ok: false, state: '', detail: '' },
     packageIntegrity,
-    runtime,
-    runtimeRequired: manifest.runtime.python.required,
     oss: {
       configured: oss.bucket !== '' && oss.enabled,
       probe: { ...ossProbe, required: serviceRequired(manifest, 'oss', true) },
@@ -474,7 +386,6 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     ok: true,
     configSource: config.configSource,
     packageIntegrity,
-    runtime,
     services,
     delivery,
     external,

@@ -2,7 +2,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
 import { joinLocalPath } from '../../shared/utils/local-path.ts'
-import { fileSystem, resolveTarget } from '../fs/paths.ts'
+import { fileSystem } from '../fs/paths.ts'
+import { writeCaseText } from './case-files.ts'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { KNOWLEDGE_DEFAULT_SPACE_NAME } from '../dws/consts.ts'
 import {
   buildPathIndex,
@@ -21,7 +23,7 @@ import { fileSize } from './case-dir.ts'
 import { requireAuditScope } from '../audit/scope.ts'
 import { dwsJson } from './dws-json.ts'
 import { failure, renderJson } from './outcome.ts'
-import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
+import { callerSession, credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
 import type { LocalAccessBroker } from '../access/broker.ts'
 import type { LocalAccessSource } from '../access/operations.ts'
 
@@ -259,8 +261,8 @@ export function knowledgeTools(deps: ToolDeps) {
       const knowledgeDir = joinLocalPath(caseDir, CASE_KNOWLEDGE_DIR)
       const base = { ...empty, caseDir, knowledgeDir }
 
-      const prepared = await ensureDirectory(ctx, knowledgeDir, {
-        workdir: caseDir, platform, signal: exec.signal,
+      const prepared = await ensureDirectory(deps.access, knowledgeDir, {
+        workdir: caseDir, platform, session: callerSession(exec), signal: exec.signal,
       })
       if (!prepared.ok) return { ...failure('infrastructure', prepared.error), ...base }
 
@@ -327,8 +329,9 @@ export function knowledgeTools(deps: ToolDeps) {
             continue
           }
           const local = joinLocalPath(knowledgeDir, relative)
-          const cleared = await removeFileIfExists(ctx, local, {
-            workdir: caseDir, platform, ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+          const cleared = await removeFileIfExists(deps.access, local, {
+            workdir: caseDir, platform, session: callerSession(exec),
+            ...(exec.signal === undefined ? {} : { signal: exec.signal }),
           })
           if (!cleared.ok) {
             manifest.push({ ...entry, status: 'failed', reason: cleared.error })
@@ -372,7 +375,7 @@ export function knowledgeTools(deps: ToolDeps) {
         complete,
         entries: manifest,
         failures,
-      })
+      }, { session: callerSession(exec), ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
       if (!written.ok) failures.push({ requested: '', step: 'manifest', error: written.error })
 
       const counts = {
@@ -420,13 +423,10 @@ async function writeManifest(
   ctx: Context,
   path: string,
   payload: Record<string, unknown>,
+  options: { session?: Session; signal?: AbortSignal },
 ): Promise<{ ok: boolean; error: string }> {
-  const fs = fileSystem(ctx)
-  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用' }
-  try {
-    await fs.writeText(await resolveTarget(ctx, path), `${JSON.stringify(payload, null, 2)}\n`)
-    return { ok: true, error: '' }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
+  const written = await writeCaseText(ctx, path, `${JSON.stringify(payload, null, 2)}\n`, options)
+  if (written.ok) return { ok: true, error: '' }
+  const kind = written.errorKind === '' ? 'infrastructure' : written.errorKind
+  return { ok: false, error: `${written.error}（写入 ${path} · 归因 ${kind}）` }
 }

@@ -37,8 +37,8 @@ function view(patch = {}) {
       h3yun: item('ok'),
       dingtalk: item('ok'),
       aliyunOss: item('ok'),
-      // iFinD 自 2026-09-26 起是必需项（旧口径"恒为可选 → degraded"已被产品要求覆盖）。
-      ifind: item('authenticated'),
+      // iFinD 自 2026-09-30 起是**可选数据源**：它不进必需项分母，未配置只让 externalData 为 false。
+      ifind: item('authenticated', { required: false }),
     },
     systemHealth: {
       packageIntegrity: item('ok'),
@@ -61,13 +61,14 @@ const issue = (id, patch = {}) => ({
   id, owner: 'user', blocking: true, scope: 'global', action: '做点什么', message: `${id} 不行`, ...patch,
 })
 
-test('只有 iFinD 缺失 → degraded（不是阻塞），也不拦任何能力', () => {
+test('只有外部数据源（iFinD）未就绪 → degraded（不是阻塞），只关掉 externalData', () => {
   const issues = [issue('ifind', { owner: 'user', blocking: false, scope: 'external-data' })]
   const status = overallStatusOf(issues, true)
   assert.equal(status, 'degraded')
   assert.equal(statusProceedable(status), true)
   const caps = capabilitiesOf(issues)
-  assert.deepEqual(caps, { global: true, auditCore: true, delivery: true, externalData: true })
+  // 关键口径（2026-09-30）：**基础环境与报告审核都不受影响**，只有外部数据这一项能力被关掉。
+  assert.deepEqual(caps, { global: true, auditCore: true, delivery: true, externalData: false })
 })
 
 test('氚云 / 钉钉 / OSS / 工作空间缺失 = 阻塞（action-required）', () => {
@@ -106,35 +107,38 @@ test('还没检查 = unknown；自检没跑完 = check-failed（不是"某一项
   assert.match(gate.reason, /主目录探测失败/)
 })
 
-test('通过率只统计必需项：就绪时 passed === total，「8/9」那种矛盾不会出现', () => {
+test('通过率只统计必需项：就绪时 passed === total，「7/8」那种矛盾不会出现', () => {
   const ready = view()
   const tally = requiredTallyOf({ systemHealth: ready.systemHealth, userSetup: ready.userSetup })
-  assert.equal(tally.total, 9, '包 / 运行时 / 平台 / 工作空间 / 授权 / 氚云 / 钉钉 / OSS / iFinD')
+  // 7 项必需项：包 / 平台 / 工作空间 / 授权 / 氚云 / 钉钉 / OSS。
+  // 运行时自 2026-09-29 起不在环境自检里（只在 audit-start 解析）；
+  // **iFinD 自 2026-09-30 起是可选数据源**，同样不进分母。
+  assert.equal(tally.total, 7, '包 / 平台 / 工作空间 / 授权 / 氚云 / 钉钉 / OSS')
   assert.equal(tally.passed, tally.total)
   assert.equal(tally.ratio, 1)
 
-  // iFinD **在分母里**：它没过时通过率必须跟着掉（不能再出现"环境就绪 + 8/9"的自相矛盾）。
+  // iFinD **不在分母里**：未配置时通过率照旧是满的 —— 它不该让「基础环境已就绪」变成「6/7」。
   const missingIfind = view({
-    userSetup: { ...ready.userSetup, ifind: item('unconfigured', { required: true }) },
+    userSetup: { ...ready.userSetup, ifind: item('unconfigured', { required: false }) },
     systemHealth: { ...ready.systemHealth, toolRegistry: item('unverified', { required: false }) },
   })
   const tally2 = requiredTallyOf({ systemHealth: missingIfind.systemHealth, userSetup: missingIfind.userSetup })
-  assert.equal(tally2.total, 9)
-  assert.equal(tally2.passed, 8, 'iFinD 未通过 → 少一项')
+  assert.equal(tally2.total, 7)
+  assert.equal(tally2.passed, 7, 'iFinD 是可选数据源，未配置不扣必需项')
   // 未验证的 Tool 注册表仍然不进分母。
-  assert.equal(tally2.total, 9)
+  assert.equal(tally2.total, 7)
 })
 
 test('阻塞项 / 降级项分得开，且阻塞项顺序稳定', () => {
-  // iFinD 现在是**阻塞**项（双 scope）；degraded 只留给将来真正的可选能力。
+  // 外部数据源（iFinD）是**非阻塞**项：它只出现在降级清单里，绝不进阻塞清单。
   const issues = [
     issue('workspace'),
-    issue('ifind', { scope: 'global' }),
+    issue('ifind', { blocking: false, scope: 'external-data' }),
     issue('optional-thing', { blocking: false, scope: 'external-data' }),
     issue('h3yun'),
   ]
-  assert.deepEqual(blockerMessages(view({ issues })), ['workspace 不行', 'ifind 不行', 'h3yun 不行'])
-  assert.deepEqual(degradedMessages(view({ issues })), ['optional-thing 不行'])
+  assert.deepEqual(blockerMessages(view({ issues })), ['workspace 不行', 'h3yun 不行'])
+  assert.deepEqual(degradedMessages(view({ issues })), ['ifind 不行', 'optional-thing 不行'])
 })
 
 // ── 门禁 ────────────────────────────────────────────────────────────────────
@@ -161,34 +165,41 @@ test('environmentGate：ready / degraded 放行；其余一律拦住并带上原
 })
 
 test('environmentGate：旧宿主没有 state（null）时**全部**失败关闭（含外部数据）', () => {
-  // iFinD 自 2026-09-26 起是必检项，所以 external-data 也必须在拿不到结论时失败关闭
-  // （旧口径「条件能力永不拦」已经作废）。
+  // 拿不到结论时一律失败关闭：外部数据页也**不**例外 ——
+  // 「不认识的状态」与「外部数据可选」是两件事，前者不能当成后者。
   for (const requirement of ['global', 'audit', 'delivery', 'external-data']) {
     assert.equal(environmentGate(null, requirement, LABELS).allowed, false, requirement)
   }
 })
 
-test('environmentGate：iFinD 未通过时 external-data 也拦，而且提示指名 API-Key', () => {
-  const blocked = view({
+test('environmentGate：外部数据源未就绪**不拦** external-data（那一页本身就是配置入口）', () => {
+  // 基础环境已就绪、只有外部数据未就绪 → status=degraded + externalData=false。
+  const degraded = view({
+    status: 'degraded',
+    capabilities: { global: true, auditCore: true, delivery: true, externalData: false },
+    issues: [issue('ifind', { owner: 'user', blocking: false, scope: 'external-data', message: '外部数据核查未就绪（同花顺 iFinD）' })],
+  })
+  assert.equal(environmentGate(degraded, 'external-data', LABELS).allowed, true)
+  // 基础环境没过时照样拦（理由来自基础必检项，不再指名 iFinD）。
+  const broken = view({
     status: 'action-required', proceed: false,
     capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
-    issues: [issue('ifind', { owner: 'user', scope: 'global', message: 'iFinD API-Key 未通过验证：还没有填写 iFinD API-Key' })],
+    issues: [issue('workspace', { message: '还没有选定工作空间' })],
   })
-  const verdict = environmentGate(blocked, 'external-data', LABELS)
+  const verdict = environmentGate(broken, 'external-data', LABELS)
   assert.equal(verdict.allowed, false)
-  assert.match(verdict.reason, /iFinD API-Key 验证/)
-  // 必需项全过时照旧放行。
-  const free = environmentGate(view(), 'external-data', LABELS)
-  assert.equal(free.allowed, true)
+  assert.match(verdict.reason, /还没有选定工作空间/)
 })
 
-test('environmentGate：iFinD 未通过时 audit 的提示指名 iFinD API-Key', () => {
+test('environmentGate：基础必检项未过时用通用模板，不再指名 iFinD API-Key', () => {
   const blocked = view({
     status: 'action-required', proceed: false,
     capabilities: { global: false, auditCore: false, delivery: false, externalData: false },
-    issues: [issue('ifind', { owner: 'user', scope: 'global', message: 'iFinD API-Key 未通过验证：还没有填写 iFinD API-Key' })],
+    issues: [issue('workspace', { message: '还没有选定工作空间' })],
   })
-  assert.match(environmentGate(blocked, 'audit', LABELS).reason, /进入【报告审核】前，请先完成同花顺 iFinD API-Key 验证/)
+  const reason = environmentGate(blocked, 'audit', LABELS).reason
+  assert.match(reason, /进入【报告审核】前，请先完成环境配置/)
+  assert.equal(/iFinD/.test(reason), false, '基础门禁文案里不许再出现 iFinD')
 })
 
 test('navigateModuleIn：被拦时落到 env，并带上目标页名', () => {
@@ -212,7 +223,7 @@ test('navigateModuleIn：环境页永远进得去；不需要环境的页面也�
   assert.equal(navigateModuleIn(broken, { target: 'eval', requires: false }, () => '报告评估').blocked, false)
 })
 
-test('navigateModuleIn：真正的可选能力缺失（非阻塞）仍然放行', () => {
+test('navigateModuleIn：可选数据源缺失（非阻塞）仍然放行', () => {
   const degraded = view({
     status: 'degraded',
     issues: [issue('ifind', { blocking: false, scope: 'external-data' })],

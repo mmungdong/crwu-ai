@@ -171,6 +171,18 @@ export async function smokeHost() {
   assert.deepEqual(diagPayload.entries, [], '本次运行还没有任何本机访问')
   assert.equal(typeof diagPayload.consent?.state, 'string', '诊断要带上授权收据状态')
 
+  // 协议 23 新增的操作同样必须在**产物**里可达：`discussion-material-open` 的参数收窄
+  // 排在一切副作用之前，所以空参数调用会回一个干净的结构化失败（不是 404、也不是 500）。
+  // 这条证明的是"装上去之后这条新契约真的在那儿"，而不是"源码里写了"。
+  const materialBadArgs = fakeExchange({ op: 'discussion-material-open', args: {} })
+  await routes[0].handler(materialBadArgs.req, materialBadArgs.res)
+  assert.equal(materialBadArgs.response.statusCode, 200, 'discussion-material-open 应当可达')
+  const materialPayload = JSON.parse(materialBadArgs.response.body)
+  assert.equal(materialPayload.ok, false, '缺 sessionId 必须被拒')
+  assert.equal(materialPayload.errorKind, 'input')
+  assert.match(String(materialPayload.error), /sessionId/)
+  assert.equal(materialPayload.caseDir, '', '被拒时不回任何路径')
+
   // 「允许」在**没有文件服务**的环境里必然落盘失败 —— 这正是"写盘失败不许放行"的现场。
   // 从真实产物驱动一次，确认回的是关闭态（`persist-failed`）而不是磁盘上的旧授权。
   const grant = fakeExchange({

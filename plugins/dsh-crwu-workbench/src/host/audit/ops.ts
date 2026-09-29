@@ -3,19 +3,19 @@ import { text } from '../../shared/utils/value.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { normalizeOss } from '../environment/manifest.ts'
 import { persistAudits, ensureRegistry } from '../state/registry.ts'
-import type { AuditRecord, WorkbenchState } from '../state/types.ts'
+import type { AuditFailureRecord, AuditRecord, WorkbenchState } from '../state/types.ts'
 import type { AuditStopPhase, AuditStopView } from '../../shared/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import type { LocalAccessBroker } from '../access/broker.ts'
 import { auditLabel, seqNoFromLabel } from './consts.ts'
 import { REQUIRED_AUDIT_CHILD_TOOLS } from '../tools/consts.ts'
 import { auditPrompt } from './prompt.ts'
-import { agentRegistry, startChild, stopChild } from './spawn.ts'
+import { agentRegistry, boundParentAgent, startChild, stopChild } from './spawn.ts'
 import { inspectAuditRootPolicy } from './policy.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { ensureAuditRoot } from './root.ts'
 import { auditToolsVisible, bootstrapInputSnapshot, capabilityPreflight } from './preflight.ts'
-import { ensureDirectory } from '../tools/case-files.ts'
+import { ensureCaseDirectory } from '../tools/case-files.ts'
 import type { H3yunFormResolver } from '../h3yun/form.ts'
 import type { PythonRuntimeResolver } from '../runtime/python.ts'
 import { caseDirOf } from '../../shared/utils/case-dir.ts'
@@ -138,11 +138,45 @@ export interface AuditStartResult {
 
 export async function auditStart(deps: AuditDeps, args: Record<string, unknown>): Promise<AuditStartResult> {
   const { ctx, config, state } = deps
-  const failed = (error: string): AuditStartResult => ({
-    ok: false, error, childId: '', provider: '', parentSessionId: state.auditRoot.sessionId,
-    mode: 'one-shot', isRetry: false, replaced: '', replacedCount: 0, startedAt: '', attempt: 0,
-  })
 
+  /**
+   * 当前阶段：**每个失败都要留档**，而"卡在哪一步"要由代码说，不能事后从文案里猜。
+   * 所以这里是一个显式游标，通过在阶段边界赋值推进（见每一处 `stage = …`）。
+   */
+  let stage = '准备'
+  /** Host 自己算出来的案例目录：失败记录里要留**这个**（模型提交的 `caseDir` 只是主张，Host 不采信）。 */
+  let resolvedCaseDir = ''
+  /** 被降级吞掉的事实（如"会话已建，但没能挂到工作空间"）—— 它们最容易被丢掉，必须跟失败一起留档。 */
+  let notes: string[] = []
+
+  /**
+   * 构造失败结果，并把**这一次失败的全部信息**落盘（记忆 `state.lastAuditFailure`）后返回。
+   *
+   * 为什么在这里而不是 RPC 层：`auditStart` 的每一条失败路径都走这个闭包 —— 放在这里就**漏不掉**；
+   * 放 RPC 层还得再判断一次"哪些算失败"。留档内容见 `AuditFailureRecord`（脱敏，不含命令原文与凭据）。
+   */
+  const failed = (error: string, extra: { errorKind?: string; notes?: string[] } = {}): AuditStartResult => {
+    const record: AuditFailureRecord = {
+      at: new Date().toISOString(),
+      reason: error,
+      stage,
+      errorKind: extra.errorKind ?? '',
+      seqNo: text(args.seqNo),
+      objectId: text(args.objectId),
+      caseDir: resolvedCaseDir,
+      attemptId: state.startingKey,
+      notes: [...notes, ...(extra.notes ?? [])],
+    }
+    state.lastAuditFailure = record
+    // 也给宿主日志一份（界面上只有一句话，结构化事实在这里）。
+    ctx.logger?.error?.('crwu-workbench: 审核发起失败 %o', record)
+    return {
+      ok: false, error, childId: '', provider: '', parentSessionId: state.auditRoot.sessionId,
+      mode: 'one-shot', isRetry: false, replaced: '', replacedCount: 0, startedAt: '', attempt: 0,
+    }
+  }
+
+  stage = '工作空间'
   await ensureRegistry({ ctx, home: await deps.world.home(), state, access: deps.access })
 
   const key = auditKeyOf(args)
@@ -177,21 +211,35 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     //
     // 顺序是硬要求（2026-09-29 用户复查 P1 的第 4 条）：审核根的 cwd 与沙箱边界**都是案例目录**，
     // 所以案例目录必须先存在；"先建根、再算案例目录"会让根在那个瞬间没有合法边界。
-    const caseDir = caseDirOf(state.workspacePath || state.caseRoot, seqNo)
+    //
+    // ⚠️ 这一级目录是插件**唯一**允许自动创建的目录，而它在会话 cwd 之外 —— 所以它必须经
+    // Broker 的 `system.case-directory.write`（特权、来源 `audit-host`、边界 = 已选工作空间）。
+    // 2026-09-30 的现场就是这里绕过 Broker 直接调裸 `runShell` 的结果：命令拿到部署默认的
+    // `workspace-write` 沙箱，`mkdir` 回 `Operation not permitted`，而员工本人对那个目录是有写权限的。
+    const workspace = state.workspacePath || state.caseRoot
+    const caseDir = caseDirOf(workspace, seqNo)
+    resolvedCaseDir = caseDir
     if (caseDir === '') return failed('缺少案例目录：请先在第 ① 步选定工作空间，并确认任务带有流水号。')
-    const madeCase = await ensureDirectory(ctx, caseDir, {
-      workdir: state.workspacePath || state.caseRoot,
+    stage = '案例目录'
+    const madeCase = await ensureCaseDirectory(deps.access, caseDir, {
+      workspace,
+      // 只读探测的 cwd 用一个确定存在的目录（会话 cwd）：拿工作空间自己当 cwd 时，
+      // "目录不存在"与"沙箱没放行"会塌成同一个结论。
+      probeWorkdir: await deps.world.workdir(),
       platform: await deps.world.platform(),
     })
-    if (!madeCase.ok) return failed(`创建案例目录失败：${caseDir}（${madeCase.error}）`)
+    if (!madeCase.ok) {
+      return failed(`创建案例目录失败：${caseDir}（${madeCase.error}）`, { errorKind: madeCase.errorKind })
+    }
 
     // 硬门禁一：审核必须挂在**审核根会话**下 —— 一个 cwd 就是本轮案例目录的干净顶层会话。
     //
     // 这里原来是「哪个会话头最后挂载就用谁当父级」，于是你从工作空间 A 的会话点开面板，
     // 审核就挂到 A 下，从别处点开又挂到别处（用户报的「创建新会话时挂错了」）。
     // 根会话还顺带解决了 cwd：子会话只能继承父会话的 cwd，而根的 cwd 就是案例根目录。
+    stage = '审核根会话'
     const root = await ensureAuditRoot(deps, { presetHint: presetHintOf(ctx, state), casePath: caseDir })
-    if (!root.ok) return failed(root.error)
+    if (!root.ok) return failed(root.error, { notes: root.notes })
     const parentSessionId = root.sessionId
 
     // 硬门禁三：**结构化 Tool 链路必须在创建子代理之前证明可用**。
@@ -203,7 +251,8 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     //    证明注册表、参数校验、pre/guard/post 链路与输出 schema 都对得上。
     // 重建根时会查一次，但**复用的根不会重新预检**，所以这里每次发起都必须再查。
     // 放在占用门禁之后：并发冲突是更早、更便宜的拒绝理由，不该被能力检查的耗时挡在后面。
-    const rootAgent = agentRegistry(ctx)?.get(parentSessionId as SessionId)
+    // 取法只有一处实现（`boundParentAgent`）：空 id 回 undefined，与"没绑定会话"是同一支。
+    const rootAgent = boundParentAgent(ctx, parentSessionId)
     const gate = await capabilityPreflight(ctx, rootAgent)
     if (!gate.ok) return failed(`审核能力预检未通过：${gate.error}`)
 
@@ -221,7 +270,14 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     // DSH 自带 Python 是审核脚本的运行时。解析不出来就**不要**起子代理 ——
     // 否则子代理会退回系统 `python3`（缺 openpyxl，结果不可信）。
     const python = await deps.python.check({ agent: rootAgent })
-    if (!python.ok) return failed(`DSH 脚本运行时不可用，已终止本次审核：${python.error || python.state}`)
+    if (!python.ok && python.unresolved !== true) {
+      // **确实缺失**（载荷没有 python / 路径不可用 / 缺必需包）→ 拒绝启动：
+      // 子代理否则会退回系统解释器（缺 openpyxl，结果不可信）。
+      return failed(`DSH 脚本运行时不可用，已终止本次审核：${python.error || python.state}`)
+    }
+    // `unresolved`（宿主这次**没问到**：工具调用失败/超时/报错，常见于宿主没有会话作用域）
+    // **不再拒绝启动** —— 子会话本身有 agent 作用域，能在那里把运行时解析出来；
+    // 提示词会相应换成「由你在子会话里解析」那一段（唯一来源仍是那个工具的返回）。
 
     // **没确认静默之前不许启动下一条审核**（F1）。两条判据：
     // ① 还有停止流程在跑（内存事实）；② 上一条留下 stopPhase=timeout/failed 且 quiesced=false
@@ -259,6 +315,7 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     // attemptId 每轮都新：重审必须得到**新的**快照，而不是复用上一轮的输入。
     const attemptId = `${key}-a${String((previous?.attempt ?? 0) + 1)}-${stamp.getTime().toString(36)}`
     // 重审（或任何带旧记录的情形）强制刷新快照：上一轮的记录可能已经过期。
+    stage = '输入快照'
     const boot = await bootstrapInputSnapshot(ctx, rootAgent, {
       objectId,
       seqNo,
@@ -267,7 +324,8 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       refresh: isRetry || previous !== undefined,
     })
     if (!boot.ok || boot.snapshot === null) {
-      return failed(`输入快照交接未完成，已终止本次审核（未创建子代理）：${boot.error}`)
+      return failed(`输入快照交接未完成，已终止本次审核（未创建子代理）：${boot.error}`,
+        { errorKind: boot.errorKind === '' ? 'infrastructure' : boot.errorKind })
     }
     const snapshot = boot.snapshot
 
@@ -334,7 +392,8 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
         oss: normalizeOss(manifest.oss, manifest.oss),
         isRetry,
         attemptId,
-        python: { path: python.path, versionText: python.versionText, distributions: python.distributions },
+        // 没问到就交空值 → 提示词换成「由子会话自己解析」那一段（不许去找系统解释器）。
+        python: python.ok ? { path: python.path, versionText: python.versionText, distributions: python.distributions } : null,
         snapshot: {
           attemptId: text(snapshot.attemptId) || attemptId,
           dir: text(snapshot.snapshotDir),
@@ -477,10 +536,11 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     // 发布之后再读一次是为了**证伪**那一步 —— 真读到不对就是契约被破坏了，
     // 这时唯一安全的动作是停掉它并如实报出来，而不是让它带着错的边界跑完。
     if (childAgent !== undefined) {
-      // 期望值是**本轮的案例目录**（协议 19：子会话继承父会话的 cwd，而根 cwd = 案例目录）。
-      // 这里曾写 `state.workspacePath || state.caseRoot` —— 协议 19 之后那是一定对不上的值，
-      // 于是**每一个正常可见的子会话都会被稳定判错并停掉**（2026-09-29 用户复查的 P1）。
-      const childPolicy = inspectAuditRootPolicy(ctx, childAgent, caseDir)
+      // 期望值是**已选工作空间**（协议 24：子会话继承父会话的 cwd，而根的 cwd = 工作空间路径 ——
+      // DSH 的沙箱边界就是 cwd，且 cwd 必须等于工作空间路径才挂得上工作空间）。
+      // ⚠️ 这一条与案例内的 scope 是**两件事**：这里问"沙箱会拦到哪儿"，
+      // `requireAuditScope` 问"这次审核被允许碰哪个案例"（按本轮 casePath 精确相等）。
+      const childPolicy = inspectAuditRootPolicy(ctx, childAgent, workspace)
       if (!childPolicy.ok) {
         const stopped = await stopChild(ctx, started.childId, '审核子代理的沙箱/审批策略不符合要求，停止这条审核', {
           handle: started.handle,
@@ -502,6 +562,8 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     }
 
     state.audits[key] = record
+    // 发起成功：清掉上一次的失败记录（它只描述"最近一次失败"）。
+    state.lastAuditFailure = undefined
     state.activeKey = key
     state.activeChildId = started.childId
     state.activeSince = stamp.getTime()

@@ -309,6 +309,10 @@ export const WORKBENCH_CLASSES = {
   stepIndexDone: 'crwu-audit-step-index-done',
   stepText: 'crwu-audit-step-text',
   stepTitle: 'crwu-audit-step-title',
+  /** 基础必检项标题后面的**红色星号**（可选的外部数据源不带它）。 */
+  stepRequired: 'crwu-audit-step-required',
+  /** 星号含义那行图例（只在步骤导航里出现一次）。 */
+  stepLegend: 'crwu-audit-step-legend',
   stepState: 'crwu-audit-step-state',
   stepPanel: 'crwu-audit-step-panel',
   stepPanelHead: 'crwu-audit-step-panel-head',
@@ -453,14 +457,8 @@ export const WORKBENCH_CLASSES = {
   kv: 'crwu-audit-kv',
   kvKey: 'crwu-audit-kv-key',
   kvValue: 'crwu-audit-kv-value',
-  /**
-   * 氚云「内置浏览器扫码登录」的访客区（真正承载 `<webview>` 的容器）。
-   *
-   * 未开始时高度为 0（不在页面上留一块空白）；`-on` 才给尺寸与描边 —— 尺寸必须写死，
-   * 否则 webview 会在每次状态变化时跟着容器抖动。
-   */
-  loginStage: 'crwu-audit-login-stage',
-  loginStageOn: 'crwu-audit-login-stage-on',
+  // ⚠️ 这里**没有** `loginStage` / `loginStageOn` 了（2026-09-30）：氚云内置浏览器扫码登录
+  // （访客区 / `<webview>`）整体下掉，容器类名与它的样式一并删除，不留死代码。
 } as const
 
 /** 版本 / dev 小标签的语义类：tone → 类名（侧栏入口与面板头部共用同一套）。 */
@@ -1045,6 +1043,12 @@ export const WORKBENCH_STYLE_TEXT = `
 }
 .crwu-audit-step-text { min-width: 0; display: flex; flex-direction: column; }
 .crwu-audit-step-title { font-size: 13px; line-height: 18px; }
+/* 基础必检项的红色星号：颜色用主题的错误语义色，不用硬编码红色。 */
+.crwu-audit-step-required { margin-left: 3px; color: var(--dsw-alias-state-error-primary); font-weight: 600; }
+.crwu-audit-step-legend {
+  padding: 8px 10px 2px; font-size: 11px; line-height: 16px; color: var(--crwu-text-tertiary);
+  border-top: 1px solid var(--crwu-border);
+}
 .crwu-audit-step-state { font-size: 11px; line-height: 16px; color: var(--crwu-text-tertiary); font-weight: 400; }
 .crwu-audit-step-panel { min-width: 0; padding: 16px 18px; }
 .crwu-audit-step-panel-head {
@@ -2224,19 +2228,7 @@ body[data-ds-dark-theme] .crwu-audit-root {
   .crwu-audit-update-dialog-backdrop, .crwu-audit-update-dialog { animation: none; }
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   22. 氚云内置浏览器登录（访客区）
-   ────────────────────────────────────────────────────────────────────
-   真正承载宿主 webview 元素的容器。两条硬规则：
-   - 未开始时高度为 0：卡片不该在环境页上永远留一块空白；
-   - 展开后尺寸写死：webview 的布局由宿主渲染，容器一抖它就跟着抖。
-   样式只能落在容器与 visitor 元素上 —— 访客内部的页面不属于我们。
-   ════════════════════════════════════════════════════════════════════ */
-.crwu-audit-login-stage { height: 0; overflow: hidden; }
-.crwu-audit-login-stage-on {
-  height: 460px; margin-top: var(--crwu-space-3);
-  border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-md);
-  overflow: hidden; background: var(--crwu-surface);
-}
-.crwu-audit-login-stage-on webview { width: 100%; height: 100%; }
+/* ⚠️ 第 22 节「氚云内置浏览器登录（访客区）」的 crwu-audit-login-stage 规则已删除
+   （2026-09-30）：内置浏览器登录整体下掉，样式与类名常量同批移除，不留死代码。
+   —— 样式文本是模板字符串，注释里**不许出现反引号**（踩过两次，第一次就是在这里）。 */
 `

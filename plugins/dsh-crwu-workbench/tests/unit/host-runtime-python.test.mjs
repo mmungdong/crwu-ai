@@ -178,3 +178,22 @@ test('解析器源码里没有硬编码的 DSH 安装路径，也不改 PATH', a
   assert.equal(/(^|[^A-Za-z_])PATH\s*=/.test(code), false, '不许改 PATH')
   assert.equal(code.includes('execPath'), false, '不许拿 Node 自己的可执行文件去猜运行时')
 })
+
+test('工具报错 = 没问到答案（unresolved），不等于运行时缺失', async () => {
+  // 2026-09-29 员工 Windows 实测：同一个工具在会话里返回完整载荷（python + openpyxl 都在），
+  // 而环境自检不带 agent 调它时报错。把"没问到"当成"缺失"会直接关掉审核入口。
+  const errored = makeHarness({ isError: true, error: { code: 'agent/required', message: 'agent scope required' } })
+  const view = await errored.resolver.check()
+  assert.equal(view.ok, false)
+  assert.equal(view.unresolved, true, '没问到 ≠ 缺失')
+
+  // 工具**成功返回**但载荷里没有 python：这是真·缺失，必须保持 unresolved=false（不许一并放宽）。
+  const missing = await makeHarness({ value: { pythonDistributions: {} } }).resolver.check()
+  assert.equal(missing.unresolved, false)
+  assert.match(missing.error, /没有返回 python 路径/)
+
+  // 成功解析时当然是 false。
+  const ok = await makeHarness().resolver.check()
+  assert.equal(ok.ok, true)
+  assert.equal(ok.unresolved, false)
+})

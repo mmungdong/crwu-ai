@@ -155,6 +155,28 @@ test('B-01b · OSS 的**每一次** `ossutil` 都必须经 Broker（2026-09-29 �
   assert.equal(/oss\.remote\.(read|write)/.test(executor), true, '执行器要能表达读/写两类操作')
 })
 
+test('B-01e · 案例目录的本地文件操作只走 Broker（不许再出现裸 `runShell`）', () => {
+  // 2026-09-30 的真实故障：`case-files.ts` 直接调 `shell/run.ts` 的裸 `runShell`，于是建本轮
+  // 案例目录时拿到的是**部署默认沙箱**（边界 = 会话 cwd），`mkdir <员工选定工作空间>/<流水号>`
+  // 回 `Operation not permitted` —— 员工本人对那个目录其实是有写权限的。
+  // 判据与 OSS 那条一样，从"出现过一次"改成"**不许出现**"：这个文件里每一次命令都必须带着
+  // 「操作 + 来源」交给 Broker，提权归属由操作表决定。
+  const code = stripComments(readFileSync(join(SRC, 'host/tools/case-files.ts'), 'utf8'))
+  const withoutBrokerCalls = code.replace(/access\.runShell\s*\(/g, '')
+  assert.equal(/\brunShell\s*\(/.test(withoutBrokerCalls), false,
+    'host/tools/case-files.ts 不许出现裸 runShell')
+  assert.equal(/^\s*import\s+(?!type\b)[^\n]*from '\.\.\/shell\/run\.ts'/m.test(code), false,
+    'host/tools/case-files.ts 不许**值导入** shell/run.ts（那会绕开逐次策略声明）；只允许 `import type`')
+  // 反过来：三个操作名必须真的在这里被用（登记了没人用 = 边界没接上）。
+  for (const operation of ['system.case-directory.write', 'system.case-file.write', 'system.case-file.read']) {
+    assert.equal(code.includes(`'${operation}'`), true, `case-files.ts 没有用 ${operation}`)
+  }
+  // 审核启动链路（`audit/ops.ts`）也必须走这一条，而不是自己拼 mkdir。
+  const auditOps = stripComments(readFileSync(join(SRC, 'host/audit/ops.ts'), 'utf8'))
+  assert.equal(auditOps.includes('ensureCaseDirectory('), true, 'audit/ops.ts 必须用 ensureCaseDirectory 建案例目录')
+  assert.equal(auditOps.includes('ensureDirectory('), false, 'audit/ops.ts 不许用案例内版本建本轮案例目录')
+})
+
 test('B-01c · 每个"凭据类"操作都必须**真的有调用点**（登记了没人用 = 边界没接上）', () => {
   // 用户复查的原话：「`oss.config.read` 和 `ifind.credential.read` 虽然登记在操作表中，
   // 但生产代码没有任何调用点」—— 操作表里有名字，读路径却绕过它，于是"撤销之后还能读"。

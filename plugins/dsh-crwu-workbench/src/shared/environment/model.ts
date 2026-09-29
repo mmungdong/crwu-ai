@@ -4,7 +4,7 @@
  * 为什么单独立一份、而且放在 `shared/`：这三件事以前分散在三处 ——
  * Host 的 `env.blocked[]` 字符串数组、Client 的 `envTally()` 计数、以及 `WorkbenchPanel`
  * 里 `env.allOk` 的临时判断。结果是同一时刻能出现两个互相矛盾的结论：
- * 「环境就绪」（allOk，因为 iFinD 可选）与「7/8 通过、还差 1 项」（tally 把可选项也算进去了），
+ * 「环境就绪」（allOk，因为可选数据源没配置）与「7/8 通过、还差 1 项」（tally 把可选项也算进去了），
  * 而侧栏子项、报告页门禁、环境页各按自己的口径判断该不该拦人。
  *
  * 现在只有一个模型：
@@ -13,8 +13,9 @@
  * 2. **`issues[]` 是唯一的"哪里不对"清单**，每项带 `owner`（谁该处理）、`blocking`（拦不拦）、
  *    `scope`（拦哪一块能力）；
  * 3. **总状态由 issues 推出来**（`overallStatusOf`），不再由布尔量拼接；
- * 4. **通过率只统计必需项**（`requiredTallyOf`），所以「环境就绪」与「8/8 通过」永远同时成立，
- *    而只有"非必需的完成项"缺失时才可能是 `degraded`；
+ * 4. **通过率只统计必需项**（`requiredTallyOf`），所以「基础环境已就绪」与「8/8 通过」永远同时成立，
+ *    而只有"非必需项"（**外部数据源**：iFinD 未配置 / 未通过）缺失时才落到 `degraded` ——
+ *    `degraded` 与 `ready` 一样放行，只是界面上多一条说明；
  * 5. **导航门禁只有一条规则**（`environmentGate` + `navigateModuleIn`），所有入口共用。
  *
  * 本文件不许 import 任何 Host / Client 专有模块（它是两边共用的纯函数）。
@@ -44,27 +45,37 @@ export interface SetupItemView {
   value: string
   /** 不通过的原因（Host 原文优先）；通过时为空串。 */
   reason: string
-  /** 这一项是不是当前必需（由环境清单的 `required` 声明，iFinD 自 2026-09-26 起为 true）。 */
+  /** 这一项是不是当前必需（由环境清单的 `required` 声明；iFinD 自 2026-09-30 起为 false）。 */
   required: boolean
 }
 
-/** 插件包 / 运行时 / 平台 / Tool 注册表这类**员工修不了**的东西。 */
+/**
+ * 插件包 / 平台 / Tool 注册表这类**员工修不了**的东西。
+ *
+ * 2026-09-29 起**不再包含 DSH 自带运行时**：那条只能由带 agent 作用域的会话拿到
+ * （环境自检没有会话上下文），把它放进自检既不准确、又会伪造成「系统故障」把审核入口关掉。
+ * 运行时只在**发起审核时**由审核根会话解析（`audit-start`），那条失败即终止审核。
+ */
 export interface SystemHealthView {
   packageIntegrity: SetupItemView
-  dshRuntime: SetupItemView
   platform: SetupItemView
   toolRegistry: SetupItemView
 }
 
-/** 环境支撑起来的**能力**：门禁按能力判，不按具体检查项判。 */
+/**
+ * 环境支撑起来的**能力**：门禁按能力判，不按具体检查项判。
+ */
 export interface EnvironmentCapabilities {
   /** 全局导航（除环境页外的一切）。 */
   global: boolean
-  /** 报告审核（工作空间 + 授权 + 氚云 + 钉钉 + 包 + 运行时 + 必需 Tool）。 */
+  /** 报告审核（工作空间 + 授权 + 氚云 + 钉钉 + 包 + 必需 Tool）。 */
   auditCore: boolean
   /** 交付件回传（OSS AK）。 */
   delivery: boolean
-  /** 外部数据取数（iFinD）；**自 2026-09-26 起是必需项**，未通过即关闭。 */
+  /**
+   * 外部数据取数（iFinD）。**自 2026-09-30 起是可选数据源**：未配置只关这一项，
+   * `global` / `auditCore` 都不受影响（报告照常审核，涉及外部数据的项目记「未检查」）。
+   */
   externalData: boolean
 }
 
@@ -92,15 +103,12 @@ export type EnvironmentStatus =
  * 门禁严格度。
  *
  * `global` = 除环境页外的一切页面；`audit` = 报告审核；`delivery` = 交付回传；
- * `external-data` = 外部数据。
+ * `external-data` = 只看外部数据（`env` 页里的「外部数据核查」区块 / 未来的诊断入口）。
  *
- * 交付与外部数据这两个档位目前没有独立入口（交付在审核链路里、外部数据在审核装配里），
- * 但判据立在这里：以后加"交付管理"页时不必再改一次门禁语义。
- * **iFinD 改为必需项后它已经由 `global` 覆盖** —— 缺 API-Key 时连工作台都进不去，
- * 所以 `external-data` 这一档现在只用于"只看外部数据"的诊断路径。
- *
- * 交付与外部数据这两个档位目前没有独立入口（交付在审核链路里，外部数据在审核装配里），
- * 但判据先立在这里：以后加"交付管理"页时不必再改一次门禁语义。
+ * **iFinD 自 2026-09-30 起是可选数据源**：它不再由 `global` 覆盖，未配置只让
+ * `capabilities.externalData` 为 false，环境页照常「基础环境已就绪」、报告审核照常放行。
+ * `external-data` 这一档留给"只看外部数据"的诊断 / 未来入口：可选数据源未就绪时它照旧放行
+ * （环境信息页里的那个区块就是配置入口）。
  */
 export type EnvironmentRequirement = 'global' | 'audit' | 'delivery' | 'external-data'
 
@@ -162,31 +170,34 @@ export function overallStatusOf(issues: readonly EnvironmentIssueView[], checked
 }
 
 /**
- * 有阻塞 issue 的能力一律 false。
+ * 有阻塞 issue 的能力一律 false；**外部数据这一项例外**。
  *
- * **iFinD 的阻塞 issue 在 `global` 与 `external-data` 两个 scope 上**（2026-09-26 起它是必需项）：
- * `global` 让统一导航把它拦回环境页，`external-data` 让 `auditCore` 一起关掉 ——
- * 光关外部数据而放行审核是自相矛盾的（审核装配里就要取外部数据）。
+ * 外部数据源（iFinD）自 2026-09-30 起是**可选**的：它的 issue `blocking: false`，
+ * 所以 `global` / `auditCore` / `delivery` 都不受影响；只有 `externalData` 单独关掉 ——
+ * 判据是「有没有 `external-data` 作用域的问题」，不是"它阻不阻塞"。
+ * 这样界面能同时说清两件事：「基础环境已就绪、可以进报告审核」+「外部数据核查未就绪」。
  */
 export function capabilitiesOf(issues: readonly EnvironmentIssueView[]): EnvironmentCapabilities {
   const blockingScopes = new Set(
     issues.filter((issue) => issue.blocking === true).map((issue) => issue.scope),
   )
   const auditCore = !blockingScopes.has('global') && !blockingScopes.has('audit')
+  const externalDataIssue = issues.some((issue) => issue.scope === 'external-data')
   return {
     global: !blockingScopes.has('global'),
     auditCore,
     delivery: auditCore && !blockingScopes.has('delivery'),
-    externalData: auditCore && !blockingScopes.has('external-data'),
+    externalData: auditCore && !blockingScopes.has('external-data') && !externalDataIssue,
   }
 }
 
 /**
  * 通过率。
  *
- * `context` 里的包完整性 / 运行时 / 平台是**三个独立的系统事实**，只在必需时计入分母；
- * 服务、交付与外部数据按各自的 `required` 计入 —— iFinD 自 2026-09-26 起是必需项，
- * 所以它**在分母里**：未通过时 `passed/total` 与 `status` 仍然是同一件事。
+ * `context` 里的包完整性 / 平台是**独立的系统事实**，只在必需时计入分母；
+ * 服务、交付与外部数据按各自的 `required` 计入 —— **iFinD 自 2026-09-30 起是可选数据源**
+ * （`required: false`），所以它**不在分母里**：未配置时 `passed/total` 仍然是满的，
+ * 「基础环境已就绪」与 `N/N 通过` 永远同时成立。
  */
 export function requiredTallyOf(view: {
   systemHealth: SystemHealthView
@@ -194,7 +205,6 @@ export function requiredTallyOf(view: {
 }): EnvironmentTally {
   const items: SetupItemView[] = [
     view.systemHealth.packageIntegrity,
-    view.systemHealth.dshRuntime,
     view.systemHealth.platform,
     view.userSetup.workspace,
     view.userSetup.credentialsConsent,
@@ -268,8 +278,9 @@ export function environmentGate(
   if (view === null || view === undefined) {
     return { allowed: false, reason: labels.runCheck, status }
   }
-  // `external-data` 走 `capabilities.externalData`：iFinD 是必需项之后，
-  // 「只看外部数据」的入口同样要在它没过时被拦住（旧口径是永久放行）。
+  // `external-data` 走 `capabilities.externalData`。iFinD 是**可选数据源**（2026-09-30）：
+  // 未配置时它不阻塞任何东西，而配置入口就在环境信息页里 ——
+  // 所以这里**只在基础环境已经不可放行时**才拦人，理由用通用模板（不再指名 API-Key）。
   if (requirement === 'external-data') {
     const caps = (view as { capabilities?: { externalData?: unknown } }).capabilities
     if (caps?.externalData === true) return { allowed: true, reason: '', status }
@@ -277,7 +288,7 @@ export function environmentGate(
     const blockers = blockerMessages(view)
     return {
       allowed: false,
-      reason: `${labels.target}前，请先完成同花顺 iFinD API-Key 验证。${blockers.length === 0 ? '' : `（${blockers.join('；')}）`}`,
+      reason: `${labels.target}前，请先完成环境配置。${blockers.length === 0 ? '' : `（${blockers.join('；')}）`}`,
       status,
     }
   }
@@ -300,32 +311,30 @@ export function environmentGate(
     audit: '进入【报告审核】',
     delivery: '使用【交付回传】',
   }
-  // iFinD 未通过时把话说具体（用户原话：「进入【报告审核】前，请先完成 iFinD API-Key 验证」）：
-  // 只说"请先完成环境配置"会让员工在一长串检查项里找不着该修哪一个。
-  // **整句就是它**，不再套一层通用模板 —— 套起来会变成"请先完成环境配置。（…iFinD API-Key 验证。）"，
-  // 员工第一眼看到的仍然是一句笼统的话，而那正是这条要消灭的东西。
-  if (hasIfindBlocker(view)) {
-    const shown = blockers.slice(0, 2).join('；')
-    return {
-      allowed: false,
-      reason: `${names[requirement]}前，请先完成同花顺 iFinD API-Key 验证。${shown === '' ? '' : `（${shown}）`}`,
-      status,
-    }
-  }
+  // 阻断项一律是**基础环境**的必需项（iFinD 已不在其中，所以这里不再为它写专门话术）：
+  // 员工看到的是「哪一步没过 + 该做什么」，不再有"请先完成 iFinD API-Key 验证"这种整句。
   return { allowed: false, reason: `${names[requirement]}前，请先完成环境配置${detail}。`, status }
 }
 
-/** 环境里有没有"iFinD 这一项没过"这条阻塞（用来把门禁文案说得具体）。 */
-export function hasIfindBlocker(view: EnvironmentStateView | null | undefined): boolean {
+/**
+ * 环境里有没有"iFinD 这一项没过"这条 issue（**非阻塞**）。
+ *
+ * 保留成公开判据是给界面用的：环境页据此在「外部数据核查」区块里说明"未配置不影响进入报告审核"
+ * —— **不再**参与任何门禁判断。
+ */
+export function hasIfindIssue(view: EnvironmentStateView | null | undefined): boolean {
   const issues = (view as { issues?: unknown } | null | undefined)?.issues
   if (!Array.isArray(issues)) return false
   return issues.some((issue) => {
-    const row = issue as { id?: unknown; blocking?: unknown }
-    return row.id === 'ifind' && row.blocking === true
+    const row = issue as { id?: unknown; scope?: unknown }
+    return row.id === 'ifind' || row.scope === 'external-data'
   })
 }
 
-/** 目标页面需要的环境严格度。**`env` 永远不被门槛拦**（它自己就是修复入口）。 */
+/**
+ * 导航目标页。**`env` 永远不被门槛拦**：它是基础环境的修复入口，
+ * 「外部数据核查」区块也在这一页里（可选数据源不该单开一个模块，用户口径 2026-09-30）。
+ */
 export type NavigateTarget = 'env' | 'eval' | 'audit'
 
 export interface NavigateInput {
@@ -372,9 +381,9 @@ export function navigateModuleIn(
     module: 'env',
     blocked: true,
     pending: input.target,
-    // `environmentGate` 已经把整句话算好了（iFinD 未通过时它会指名 API-Key，用词比通用模板准确）；
+    // `environmentGate` 已经把整句话算好了（含**基础环境**里没过的那几项）；
     // 这里**只做兜底**：门禁没给理由时才套通用模板。以前无脑套一层，结果是
-    // 「请先完成环境配置。（…请先完成 iFinD API-Key 验证。）」—— 第一眼仍然是一句笼统的话。
+    // 「请先完成环境配置。（…请先完成 X。）」—— 第一眼仍然是一句笼统的话。
     reason: gate.reason === ''
       ? `进入【${labelOf(input.target)}】前，请先完成环境配置。`
       : gate.reason,

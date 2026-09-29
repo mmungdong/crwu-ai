@@ -175,20 +175,23 @@ export async function bootstrapInputSnapshot(
   ctx: Context,
   agent: unknown,
   args: { objectId: string; seqNo: string; caseDir: string; attemptId: string; refresh: boolean },
-): Promise<{ ok: boolean; error: string; snapshot: Record<string, unknown> | null }> {
+): Promise<{ ok: boolean; error: string; errorKind: string; snapshot: Record<string, unknown> | null }> {
   const called = await executeToolForAgent(ctx, agent, TOOL_NAMES.auditCaseBootstrap, { ...args }, {
     // 取数要跑两条 CLI（各 90 秒预算），这里给足；超时按失败处理，不创建子代理。
     timeoutMs: BOOTSTRAP_TIMEOUT_MS,
     label: '输入快照交接',
   })
-  if (!called.ok) return { ok: false, error: called.error, snapshot: null }
+  if (!called.ok) return { ok: false, error: called.error, errorKind: 'infrastructure', snapshot: null }
   const doc = called.value ?? {}
   if (doc.ok !== true) {
+    // 归因**照抄工具回报的结构化 `errorKind`**（sandbox / permission / infrastructure …），不在这里猜。
+    const kind = text(doc.errorKind) || 'unknown'
     return {
       ok: false,
-      error: `输入快照交接失败（${text(doc.errorKind) || 'unknown'}）：${text(doc.error) || 'bootstrap 报告 ok=false'}`,
+      errorKind: kind,
+      error: `输入快照交接失败（${kind}）：${text(doc.error) || 'bootstrap 报告 ok=false'}`,
       snapshot: null,
     }
   }
-  return { ok: true, error: '', snapshot: doc }
+  return { ok: true, error: '', errorKind: '', snapshot: doc }
 }

@@ -18,7 +18,17 @@ import { consentGranted } from './local-access.ts'
  *
  * 1. **默认停在第一项未完成的步骤**（全部完成时停在最后一项，页面给一句完成摘要）；
  * 2. **用户手动选过之后，后台刷新不得把他切回去** —— 由 `pickStep` 的 `manual` 入参保证：
- *    只要用户选过（`manual !== null`）就无条件用他的选择，哪怕那一步刚刚变成"已完成"。
+ *   只要用户选过（`manual !== null`）就无条件用他的选择，哪怕那一步刚刚变成"已完成"。
+ *
+ * ## 步骤清单 = **基础环境**的必需项（2026-09-30 起）
+ *
+ * 四步：账号连接 / 阿里云 OSS / 工作空间 / 同花顺 iFinD —— **外部数据源和别的配置项放在一起**
+ * （用户口径 2026-09-30：不要为它单开一块/一页，那样页面很乱），并且**排在最后一步**
+ * （它是可选能力，不该挤在必检项中间）。
+ *
+ * 区别只在**必检与否**：账号连接 / OSS / 工作空间是基础配置（`required`），界面上带一枚
+ * **红色星号**；同花顺 iFinD 是**可选外部数据源**，**不带星号**、未配置不影响通过率、
+ * 也不拦报告审核（`pickStep` / `allStepsDone` 都跳过它）。
  */
 
 export type SetupStepKind = 'accounts' | 'oss' | 'ifind' | 'workspace'
@@ -34,14 +44,28 @@ export interface SetupStepView {
   state: SetupStepState
   /** 给状态标签用的短词（已完成 / 待处理 / 进行中）。 */
   stateText: string
-  /** 是不是必需项（自 2026-09-26 起四项都是必需项；保留字段是为了以后加可选步骤）。 */
+  /** 是不是**基础必检项**（界面上带红色星号）；iFinD 是可选外部数据源 → `false`。 */
   required: boolean
 }
 
 /** 固定顺序 = 用户的操作顺序，**不按状态重排**（导航位置一变，用户就要重新找）。 */
-export const SETUP_STEP_IDS: readonly SetupStepKind[] = ['accounts', 'oss', 'ifind', 'workspace']
+export const SETUP_STEP_IDS: readonly SetupStepKind[] = ['accounts', 'oss', 'workspace', 'ifind']
 
-/** 四项必需项的 `SetupItemView`（从统一环境模型里取；缺 state 时给空视图）。 */
+/**
+ * 哪几步是**基础必检项**（红色星号）。
+ *
+ * 判据只有这一份：账号连接 / 阿里云 OSS / 工作空间必须完成（否则报告审核不可用）；
+ * 同花顺 iFinD 是**可选**外部数据源 —— 它照样占一个步骤（和别的配置项并排，页面才整齐），
+ * 但既不带星号，也不进"还没做完"的统计。
+ */
+export const REQUIRED_SETUP_STEPS: readonly SetupStepKind[] = ['accounts', 'oss', 'workspace']
+
+/** 这一步是不是基础必检项。 */
+export function isRequiredStep(id: SetupStepKind): boolean {
+  return REQUIRED_SETUP_STEPS.includes(id)
+}
+
+/** 各步的 `SetupItemView`（从统一环境模型里取；缺 state 时给空视图）。 */
 export interface SetupStepInput {
   authorized: boolean
   h3yun: SetupItemView
@@ -53,7 +77,7 @@ export interface SetupStepInput {
 
 const MISSING: SetupItemView = { state: 'unknown', value: '', reason: '', required: true }
 
-/** 从 `EnvResult` 里取出四项必需项；旧宿主没有 `state` 时给空视图（页面另有旧宿主提示）。 */
+/** 从 `EnvResult` 里取出各项；旧宿主没有 `state` 时给空视图（页面另有旧宿主提示）。 */
 export function setupStepInput(env: EnvResult, authorized: boolean | undefined): SetupStepInput {
   const setup = env.state?.userSetup
   return {
@@ -113,7 +137,7 @@ export function setupSteps(input: SetupStepInput, active: SetupStepKind | null =
       hint: hintOf(id),
       state,
       stateText,
-      required: true,
+      required: isRequiredStep(id),
     }
   })
 }
@@ -121,19 +145,30 @@ export function setupSteps(input: SetupStepInput, active: SetupStepKind | null =
 /**
  * 当前该显示哪一步。
  *
- * 优先级：**用户选过就用他选的**（`manual` 不为 null）→ 第一项未完成 → 最后一项。
- * 第二步是本次改造的核心交互要求：后台刷新不许把用户从他看的步骤上抢走。
+ * 优先级：**用户选过就用他选的**（`manual` 不为 null）→ 第一项未完成的**基础必检项** →
+ * 最后一项。第二条刻意跳过可选的 iFinD：它是可选数据源，默认落点不该是"你还有个可选项没配"
+ * （那会读成必做项）；用户想配它随时点左边那一步。
+ * 第三步交互要求不变：后台刷新不许把用户从他看的步骤上抢走。
  */
 export function pickStep(steps: readonly SetupStepView[], manual: SetupStepKind | null): SetupStepKind {
   if (manual !== null && steps.some((step) => step.id === manual)) return manual
-  const firstTodo = steps.find((step) => step.state !== 'done')
+  const firstTodo = steps.find((step) => step.required && step.state !== 'done')
   if (firstTodo !== undefined) return firstTodo.id
-  return steps.length === 0 ? 'accounts' : steps[steps.length - 1].id
+  // 必检项都做完 → 停在**最后一个必检项**（不是最后一步）：末位是可选的 iFinD，
+  // 默认落点若是它，就等于替用户把它当成"还差这一步"。
+  const required = steps.filter((step) => step.required)
+  const fallback = required.length > 0 ? required[required.length - 1] : steps[steps.length - 1]
+  return fallback === undefined ? 'accounts' : fallback.id
 }
 
-/** 全部完成？页面据此显示一句完成摘要而不是"还需完成 0 项"。 */
+/**
+ * 基础配置都做完了？页面据此显示一句完成摘要而不是"还需完成 0 项"。
+ *
+ * **只看必检项**：iFinD 是可选外部数据源，没配也不该让页面永远停在"还没做完"。
+ */
 export function allStepsDone(steps: readonly SetupStepView[]): boolean {
-  return steps.length > 0 && steps.every((step) => step.state === 'done')
+  const required = steps.filter((step) => step.required)
+  return required.length > 0 && required.every((step) => step.state === 'done')
 }
 
 /**

@@ -13,7 +13,6 @@ import { createCoreOperations } from './ops/core.ts'
 import { createUpdateOperations } from './update/ops.ts'
 import { createWorldFacts } from './platform/world.ts'
 import { localAccessGranted } from './access/consent.ts'
-import { createDwsLoginRegistry } from './system/ops.ts'
 import { createWorkbenchState } from './state/store.ts'
 import { createLocalAccessBroker } from './access/broker.ts'
 import { workbenchConfigPath } from './state/persist.ts'
@@ -23,6 +22,7 @@ import { WORKBENCH_PROTOCOL } from '../shared/consts.ts'
 import { H3yunFormResolver } from './h3yun/form.ts'
 import { createPythonRuntimeResolver } from './runtime/python.ts'
 import { registerCrwuTools } from './tools/register.ts'
+import { createDiscussionScopeRegistry } from './audit/discussion-scope.ts'
 
 /** 装配 DSH 工作台 Host 插件。 */
 export function apply(ctx: Context, pluginConfig: PluginConfig): void {
@@ -67,9 +67,15 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     workdir: () => world.workdir(),
   })
   const python = createPythonRuntimeResolver({ ctx, world })
+  /**
+   * **讨论会话的受限材料范围**（协议 23）。进程内、不落盘、随插件生命周期释放 ——
+   * 报告讨论要能取材料，但它拿到的只该是"登记那一刻从氚云取到的那批附件"，
+   * 所以这份白名单必须挂在实例上（模块级会跨插件实例串味，落盘会引出新的暴露面）。
+   */
+  const discussionScopes = createDiscussionScopeRegistry()
   // 自研审核链路的全部业务能力都以结构化 Tool 交付（`crwu_*`）。注册进 DSH 的注册表，
   // schema 自动进 system prompt，并走同一条审批/沙箱/取消 pipeline。
-  ctx.effect(() => registerCrwuTools(ctx, { ctx, config, state, world, form, access }), 'crwu-workbench: tools')
+  ctx.effect(() => registerCrwuTools(ctx, { ctx, config, state, world, form, access, discussionScopes }), 'crwu-workbench: tools')
   // 自助更新（Task 4）：每个插件实例一套检查器 / 持久化 / 安装服务。
   // 这里只装配 —— 恢复与后台自动检查都在它内部启动，**不 await**（registry 故障、
   // Plugin Manager 缺失或检查挂起都不得挡住插件激活或下面的路由注册）。
@@ -83,15 +89,13 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   })
   // 钉钉登录会话（协议 21）：它握着后台进程与定时器，必须按插件实例持有并在卸载时收尾 ——
   // 残留就是「看不见的进程还占着 ~/.dws 的登录态锁」，下一次登录会莫名其妙失败。
-  const dwsLogins = createDwsLoginRegistry()
-  ctx.effect(() => () => { void dwsLogins.dispose() }, 'crwu-workbench: dws login sessions')
   const operations = createCoreOperations(
     ctx,
     config,
     state,
     world,
-    { form, python, access },
-    { update: update.operations, dwsLogins },
+    { form, python, access, discussionScopes },
+    { update: update.operations },
   )
   ctx.effect(() => registerRpcRoute(ctx, operations), 'crwu-workbench: rpc route')
   ctx.logger?.info?.('中瑞世联工作台 Host 半（包形态骨架）已装配 %o', {

@@ -87,10 +87,11 @@ test('清单 v4：三件随包发布的组件只声明「叫什么、干什么�
   assert.equal(DEFAULT_MANIFEST.packaged.find((entry) => entry.name === 'dws').expectedVersion, '>=0.2.14')
 })
 
-test('iFinD 声明是必需项：required=true，且给出官方获取入口', () => {
-  // 2026-09-26 产品口径覆盖了旧的 OPT-006-R1 · F-008：iFinD 不再是条件能力。
+test('iFinD 声明是**可选数据源**：required=false，且给出官方获取入口', () => {
+  // 2026-09-30 口径（覆盖 2026-09-26 的「必需项」）：iFinD 是外部数据源，
+  // 未配置不阻塞基础环境与报告审核，只让外部数据能力关闭、相关项目记「未检查」。
   const ifind = DEFAULT_MANIFEST.ifind
-  assert.equal(ifind.required, true, 'iFinD 未通过必须阻塞')
+  assert.equal(ifind.required, false, 'iFinD 是可选数据源，不得阻塞')
   assert.equal(ifind.field, 'auth_token')
   assert.match(ifind.applyUrl, /^https:\/\/mcp\.51ifind\.com/)
   assert.ok(ifind.label.length > 0)
