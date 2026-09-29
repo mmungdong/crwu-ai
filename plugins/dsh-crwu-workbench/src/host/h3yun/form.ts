@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { discoverForm } from './discover.ts'
@@ -31,7 +32,8 @@ export interface FormResolverDeps {
   config: WorkbenchConfig
   state: WorkbenchState
   /** 当前是否已授权读本机凭据（授权可以在启动后才给，所以用 thunk 现读）。 */
-  trusted: () => boolean
+  /** Broker（协议 18）：表单定位属于 `h3yun.forms.read`，提权由操作身份决定。 */
+  access: LocalAccessBroker
   /** 执行世界平台；探测是异步且只做一次，所以也走 thunk。 */
   platform: () => Promise<string>
   /** 提权执行必须绑定的工作目录。 */
@@ -71,7 +73,7 @@ export class H3yunFormResolver {
   private async discover(): Promise<FormResolveResult> {
     const workdir = await this.deps.workdir()
     const found = await discoverForm(this.deps.ctx, this.deps.config.formName, {
-      trusted: this.deps.trusted(),
+      access: this.deps.access,
       platform: await this.deps.platform(),
       ...(workdir === '' ? {} : { workdir }),
     })

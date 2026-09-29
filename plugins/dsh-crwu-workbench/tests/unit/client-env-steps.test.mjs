@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { grantedConsent, missingConsent } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
 const { SETUP_STEP_IDS, setupSteps, pickStep, allStepsDone, setupStepInput, lastVerifiedAt } = await import(
   new URL('src/client/features/environment/steps.ts', ROOT).href)
 const { zhCN } = await import(new URL('src/client/locales/zh-CN.ts', ROOT).href)
@@ -38,7 +39,8 @@ function setupInput(patch = {}) {
 
 /** 最小 `EnvResult` 假体：只给被测函数真的会读的字段。 */
 function fakeEnv(patch = {}) {
-  return { trust: { credentials: true }, external: { checkedAt: '' }, state: undefined, ...patch }
+  // 协议 18：授权判据是整条收据（`localAccess`），不再是 `trust.credentials` 布尔。
+  return { localAccess: grantedConsent(), external: { checkedAt: '' }, state: undefined, ...patch }
 }
 
 /** 只取「步骤 id → state」的投影，断言比整棵树短。 */
@@ -136,12 +138,15 @@ test('allStepsDone：全部完成才为真；空清单不算"全部完成"', () 
 
 // ── 从 EnvResult 取输入 ──────────────────────────────────────────────────────
 
-test('setupStepInput：授权缺省值取自 trust.credentials；旧宿主（没有 state）给 unknown 空视图', () => {
-  // 调用方没给 authorized 时，回落到"本机凭据授权"这条事实。
+test('setupStepInput：授权缺省值取自 localAccess 收据；旧宿主（没有 state）给 unknown 空视图', () => {
+  // 调用方没给 authorized 时，回落到 Host 回的本机访问收据（协议 18 取代了布尔值）。
   assert.equal(setupStepInput(fakeEnv(), undefined).authorized, true)
-  assert.equal(setupStepInput(fakeEnv({ trust: { credentials: false } }), undefined).authorized, false)
+  assert.equal(setupStepInput(fakeEnv({ localAccess: missingConsent() }), undefined).authorized, false)
+  // `outdated` / `revoked` 都不是授权：范围变过或员工撤销过，都要重新允许。
+  assert.equal(setupStepInput(fakeEnv({ localAccess: { ...grantedConsent(), state: 'outdated' } }), undefined).authorized, false)
+  assert.equal(setupStepInput(fakeEnv({ localAccess: { ...grantedConsent(), state: 'revoked' } }), undefined).authorized, false)
   // 显式给的值（包括 false）优先，不被回落覆盖。
-  assert.equal(setupStepInput(fakeEnv({ trust: { credentials: false } }), true).authorized, true)
+  assert.equal(setupStepInput(fakeEnv({ localAccess: missingConsent() }), true).authorized, true)
   assert.equal(setupStepInput(fakeEnv(), false).authorized, false)
 
   // 旧宿主没有统一环境模型：五项都给 unknown 空视图，页面据此走"旧构建"提示而不是假装通过。

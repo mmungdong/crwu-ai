@@ -163,3 +163,288 @@ export function readFileModeCommand(path: string, platform: string): string {
 export function privateFileMechanism(platform: string): 'posix-0600' | 'windows-acl' {
   return shellDialect(platform) === 'powershell' ? 'windows-acl' : 'posix-0600'
 }
+
+// ── 本机目录诊断与最小权限修复（协议 18 · 子项目 D） ──────────────────────────
+//
+// 这一组命令有三个硬约束，写在生成处而不是调用处：
+// 1. **路径由插件内部推导**（`<home>/.dws`），任何模型输入都进不来；
+// 2. **只读探测与写入修复分开**：`dws*Probe*` 只读事实，`chmod*` / `grant*` 才改权限；
+// 3. **绝不 `chown` / `takeown` / `sudo`**：所有权不对时只能报给管理员人工处理（设计 §D3）。
+
+/**
+ * 读一个路径的**所有者 uid 与模式位**（POSIX）。
+ *
+ * 为什么要一条命令同时取这两项：`ctx.fs.stat` 不给模式与所有者，而分成两条命令会让
+ * "这两个值来自同一次观察"这个前提消失（诊断里的"所有者匹配但模式不对"必须自洽）。
+ */
+/**
+ * **锁占用**正向探测（协议 18 · D）：谁正在持有这个文件？
+ *
+ * `lockExists` 不是 `lockHeld` —— 一个残留的锁文件与"真有进程握着它"看着完全一样，
+ * 而处置完全不同（前者可以直接删锁，后者要先停掉那个进程）。
+ *
+ * - POSIX：`lsof -t -- <path>` 列出持有者 PID；退出码 1 = **没有**人持有（这是"确认为假"的
+ *   正向结论，不是"探测失败"）。
+ * - Windows：没有既可靠又只读的原生手段（`openfiles` 需要管理员且只覆盖共享打开）。
+ *   这里如实返回空串 = **无法确认**，调用方必须把结论留成 `unknown`，
+ *   **不许**因为"文件在"就判 `file-lock`。
+ */
+/**
+ * **锁占用**正向探测（协议 18 · D）：谁正在持有这个文件？
+ *
+ * `lockExists` 不是 `lockHeld` —— 一个残留的锁文件与"真有进程握着它"看着完全一样，
+ * 而处置完全不同（前者可以直接删锁，后者要先停掉那个进程）。
+ *
+ * ## POSIX
+ *
+ * `lsof -t -- <path>` 列出持有者 PID；退出码 1 且无输出 = **没有**人持有
+ *（这是"确认为假"的正向结论，不是"探测失败"）。
+ *
+ * ## Windows
+ *
+ * 尝试以 `FileShare.None`（独占、只读、**不写内容**）打开现有锁文件：
+ *
+ * - 打开成功 → 没有别人持有 → `False`；
+ * - 失败且 HRESULT 低 16 位是 32（`ERROR_SHARING_VIOLATION`）或 33（`ERROR_LOCK_VIOLATION`）
+ *   → **有人持有** → `True`；
+ * - 失败原因是 `UnauthorizedAccessException`（ACL 不让读）→ `Unknown`：
+ *   那是**权限**问题，交给 ACL 判决，**不许**混成"锁被占用"。
+ *
+ * 句柄在 `finally` 里关掉，全程不写入任何字节 —— 体检是只读的。
+ */
+export function lockProbeCommand(path: string, platform: string): string {
+  if (path === '') return ''
+  if (!isWindowsPlatform(platform)) return `lsof -t -- ${shellQuote(path, platform)}`
+  const quoted = shellQuote(path, platform)
+  // ⚠️ 这里是**整段脚本**，不要退回去用 `['a', 'b'].join('; ')` 拼：join 的分号会落在
+  // `try {` 这类左花括号后面，拼出 `try {;` 这种空语句。本机没有 pwsh，
+  // 结构错误只会在 Windows 上表现为"探测拿不到结论"，所以由用例做结构自检（配平 + 空语句）。
+  return [
+    `$p = ${quoted}`,
+    'try {',
+    "  $fs = [IO.File]::Open($p, 'Open', 'Read', 'None')",
+    '  $fs.Close()',
+    "  Write-Output 'locked=False'",
+    '} catch {',
+    // ⚠️ **必须沿 `InnerException` 解包到根异常**：PowerShell 调用 .NET 方法时抛出的异常
+    // 会被包成 `MethodInvocationException`，真正的 `IOException`（带 32/33 这两个共享冲突码）
+    // 在 `InnerException` 里。直接读 `$_.Exception.HResult` 拿到的是**外层包装**的 HRESULT，
+    // 于是"真的有进程持锁"也会被判成 `Unknown` —— W-05 依旧归不了 `file-lock`（用户复查的 P1）。
+    '  $e = $_.Exception',
+    '  $denied = $false',
+    '  $depth = 0',
+    '  while ($depth -lt 8) {',
+    '    if ($e -is [System.UnauthorizedAccessException]) { $denied = $true }',
+    '    if ($null -eq $e.InnerException) { break }',
+    '    $e = $e.InnerException',
+    '    $depth = $depth + 1',
+    '  }',
+    // 根异常的 HRESULT 低 16 位：32 = ERROR_SHARING_VIOLATION、33 = ERROR_LOCK_VIOLATION。
+    '  $hr = $e.HResult -band 0xFFFF',
+    // ACL 不让读（链上出现过 UnauthorizedAccess）是**权限**问题，交给 ACL 判决 —— 不许混成"锁被占用"。
+    '  if ($denied) {',
+    "    Write-Output 'locked=Unknown'",
+    '  } elseif ($hr -eq 32 -or $hr -eq 33) {',
+    "    Write-Output 'locked=True'",
+    '  } else {',
+    "    Write-Output 'locked=Unknown'",
+    '  }',
+    '}',
+  ].join('\n')
+}
+
+/**
+ * 锁探测的结论：`true` 有人持有 / `false` 没有 / `undefined` 拿不到结论。
+ *
+ * 两种平台形态都收在这里：Windows 读脚本自己打的 `locked=` 行；
+ * POSIX 按 `lsof` 的退出码语义（1 + 空输出 = 没被占用）。
+ */
+export function parseLockProbe(result: { exitCode?: number | null; stdout?: unknown; error?: unknown } | undefined): boolean | undefined {
+  if (result === undefined) return undefined
+  // 命令根本没跑起来（沙箱拦下 / 没有 lsof / 没有 pwsh）→ 不知道。
+  if (typeof result.error === 'string' && result.error !== '') return undefined
+  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
+  // Windows 形态：脚本自己给出三态结论。
+  const windowsLine = /^locked=(True|False|Unknown)$/im.exec(stdout)
+  if (windowsLine !== null) {
+    const value = windowsLine[1]?.toLowerCase()
+    if (value === 'true') return true
+    if (value === 'false') return false
+    return undefined
+  }
+  // POSIX 形态：`lsof` 的退出码。
+  const exitCode = typeof result.exitCode === 'number' ? result.exitCode : null
+  if (exitCode === null) return undefined
+  if (exitCode === 1 && stdout.trim() === '') return false
+  if (exitCode === 0) return stdout.trim() !== ''
+  // 其它退出码（例如 127 找不到 lsof）→ 不知道。
+  return undefined
+}
+
+export function statOwnerModeCommand(path: string, platform: string): string {
+  if (shellDialect(platform) === 'powershell') return ''
+  const quoted = shellQuote(path, platform)
+  // ⚠️ **格式串必须是一个参数**：BSD 的 `stat -f` 只吃紧跟其后的那**一个** token，
+  // 写成 `stat -f %u %Lp <path>` 会把 `%Lp` 当成文件操作数 →
+  // `stat: %Lp: stat: No such file or directory`（2026-09-29 由
+  // `tests/windows/powershell-contract.test.mjs` 的真 shell 用例抓到）。
+  const format = shellQuote(text(platform).startsWith('darwin') ? '%u %Lp' : '%u %a', platform)
+  const flag = text(platform).startsWith('darwin') ? '-f' : '-c'
+  return `stat ${flag} ${format} ${quoted}`
+}
+
+/** 当前进程的 uid（POSIX）。和 `statOwnerModeCommand` 的第一个字段比对。 */
+export function currentUidCommand(platform: string): string {
+  return shellDialect(platform) === 'powershell' ? '' : 'id -u'
+}
+
+/**
+ * 「当前账户能不能改这个路径」的**真实**探测（POSIX）。
+ *
+ * 用 `test -w` 而不是读模式位自己算：ACL、只读挂载、immutable 标志、以及"模式看起来能写
+ * 但实际写不进去"都会让自算的结果骗人。这条命令的退出码就是答案。
+ */
+export function pathWritableCommand(path: string, platform: string): string {
+  if (shellDialect(platform) === 'powershell') return ''
+  return `test -w ${shellQuote(path, platform)}`
+}
+
+/**
+ * Windows：用 PowerShell 就地评估 ACL，**只输出两个布尔**。
+ *
+ * 设计明确禁止把 ACL 条目、账户名、SID、原始输出带回客户端（§D2）—— 所以脚本自己算完
+ * `owner=` / `modify=` 两行就结束，名字与 SID 一步都不出这台机器。
+ */
+/**
+ * Windows ACL → 一条**只读**的、可判定的判决（协议 18 · D）。
+ *
+ * ## 为什么不能"找当前 SID 的 Allow ACE"
+ *
+ * 旧实现只查"当前用户 SID 有没有 Allow+Modify ACE"。它错在三处（用户复查 P1）：
+ * 1. **忽略用户所属组**拿到的权限 —— 域里最常见的授权方式就是给组；
+ * 2. **忽略 Deny 优先级** —— 显式 Deny 永远压过 Allow，旧实现看不见；
+ * 3. 于是"修的其实没生效"（Deny 还在）也会被报成 `modify=true`，修复验证形同虚设。
+ *
+ * ## 现在怎么算
+ *
+ * 把当前**访问令牌**里的 SID（自己的 + 所属组）都算作"我方"，逐条扫描继承与非继承的
+ * ACE，按 Windows 的规则算有效权限：**我方有 Deny（且覆盖 Modify/写/完全控制）就否**，
+ * 否则我方有 Allow 覆盖 Modify 就算有。
+ *
+ * ## 为什么输出的是标签而不是 SID
+ *
+ * 判决在 PowerShell 里做（它才拿得到 SID），但**输出的每一行都不含 SID、账户名或域名** ——
+ * 只有 `self` / `group` / `other` 三种角色标签与权限标志。返回体因此可以安全地进诊断与界面
+ * （§D2 明确禁止回显 SID 与账户名）。插件侧再用纯函数 `parseAclVerdict` 复算一遍，
+ * 这样"Deny 优先"这条规则有可单测的实现，而不是埋在没人能测的 PowerShell 里。
+ */
+/**
+ * Windows ACL → 一条**只读**的、可判定的判决（协议 18 · D）。
+ *
+ * ## 为什么不能"找当前 SID 的 Allow ACE"
+ *
+ * 旧实现只查"当前用户 SID 有没有 Allow+Modify ACE"。它错在三处：
+ * 1. **忽略用户所属组**拿到的权限 —— 域里最常见的授权方式就是给组；
+ * 2. **忽略 Deny 优先级** —— 显式 Deny 永远压过 Allow；
+ * 3. **忽略部分 Deny**：只 Deny `WriteData` / `Delete`（或 `(W)`）同样会让人写不进去，
+ *    而旧版把这种 ACE 标成 `partial` 后在插件侧被整个忽略 —— 于是"可改"被判成真，
+ *    修复入口也不出现（2026-09-29 复查的 P2）。
+ *
+ * ## 现在输出什么
+ *
+ * 判决的核心算术放在**插件侧**（可单测的纯函数）：脚本只给出原始事实 ——
+ *
+ * ```
+ * crwu-acl/2
+ * owner=True
+ * modify-mask=197055           ← 这个平台上 "Modify" 的权限位（由 .NET 枚举给出；FullControl 是 2032127）
+ * ace=allow:self:197055        ← 我方（本人 SID）的 ACE 与**权限位掩码**
+ * ace=deny:group:1179785
+ * ```
+ *
+ * 插件侧算 `effective = (∪allow) & ~(∪deny)`，再判它是否完整覆盖 `modify-mask`。
+ * 这样"Deny 优先"与"部分 Deny 也算数"两条规则都有可单测的实现，
+ * 而不是埋在没人能测的 PowerShell 里。
+ *
+ * ## 为什么不回 SID / 账户名
+ *
+ * 脚本在出口处就把每条 ACE 标成 `self` / `group` / `other` 三种角色，
+ * **SID、账户名、域名一律不出机器**（§D2）。权限位掩码是数字，不是身份。
+ */
+export function windowsAclVerdictCommand(path: string, platform: string): string {
+  if (shellDialect(platform) !== 'powershell') return ''
+  const quoted = shellQuote(path, platform)
+  // ⚠️ 同 `lockProbeCommand`：整段脚本，不要用 `join('; ')`（会在 `foreach (...) {` 后面留下空语句）。
+  return [
+    `$p = ${quoted}`,
+    '$id = [System.Security.Principal.WindowsIdentity]::GetCurrent()',
+    '$mine = @{}',
+    '$mine[$id.User.Value] = "self"',
+    'foreach ($g in $id.Groups) {',
+    '  if (-not $mine.ContainsKey($g.Value)) { $mine[$g.Value] = "group" }',
+    '}',
+    '$acl = Get-Acl -LiteralPath $p',
+    '$owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value',
+    "Write-Output 'crwu-acl/2'",
+    "Write-Output ('owner=' + [bool]($owner -eq $id.User.Value))",
+    // "Modify" 的定义交给 .NET 自己的枚举 —— 插件侧不硬编码权限位。
+    'Write-Output ("modify-mask=" + [int][System.Security.AccessControl.FileSystemRights]::Modify)',
+    // 继承与非继承都要看：域策略下"能不能改"常常由继承决定。
+    '$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])',
+    'foreach ($r in $rules) {',
+    '  $key = $r.IdentityReference.Value',
+    '  $role = if ($mine.ContainsKey($key)) { $mine[$key] } else { "other" }',
+    '  $kind = if ($r.AccessControlType -eq "Allow") { "allow" } else { "deny" }',
+    // 权限位掩码：整数，不含任何身份信息。
+    '  Write-Output ("ace=" + $kind + ":" + $role + ":" + [int]$r.FileSystemRights)',
+    '}',
+  ].join('\n')
+}
+
+/**
+ * 权限收紧之后，**真的去写一下**（只在修复的读回里用）。
+ *
+ * ACE 算出来的"有效权限"仍然是推断；这里让 Windows 自己回答"我现在能不能写"。
+ * 目录用建一个临时文件再删掉，文件用 `OpenWrite` 打开。
+ *
+ * 它**只**能出现在修复路径上：体检是只读的，不许往员工的本机目录里写任何东西。
+ */
+export function windowsModifyProbeCommand(target: string, kind: 'directory' | 'file', platform: string): string {
+  if (shellDialect(platform) !== 'powershell') return ''
+  const quoted = shellQuote(target, platform)
+  const body = kind === 'directory'
+    ? [
+        `$probe = Join-Path ${quoted} ('.crwu-write-probe-' + [Guid]::NewGuid().ToString('N'))`,
+        'try { [IO.File]::WriteAllText($probe, ""); Remove-Item -LiteralPath $probe -Force; Write-Output "modify=True" }',
+        'catch { Write-Output "modify=False" }',
+      ]
+    : [
+        `try { $f = [IO.File]::Open(${quoted}, 'Open', 'Write', 'None'); $f.Close(); Write-Output "modify=True" }`,
+        'catch { Write-Output "modify=False" }',
+      ]
+  return body.join('; ')
+}
+
+/**
+ * Windows：给**当前账户**补一条最小 Modify 授权。
+ *
+ * `icacls /grant` 是**追加**一条 ACE，不动 SYSTEM / Administrators / 继承来的条目（设计 §D3）。
+ * 用 SID 而不是账户名：账户名要按当前的显示语言改写，SID 不会。
+ * 目录加 `(OI)(CI)` 继承标记（新建/改名/删除都要），锁文件不加。
+ */
+export function grantModifyAclCommand(path: string, platform: string, options: { inherit: boolean }): string {
+  if (shellDialect(platform) !== 'powershell') return ''
+  const quoted = shellQuote(path, platform)
+  const rights = options.inherit ? ':(OI)(CI)M' : ':M'
+  return '$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; '
+    + `icacls ${quoted} /grant ('*' + $sid + '${rights}')`
+}
+
+/** POSIX：把路径设成给定模式（八进制）。**只允许** `700` / `600` 两个值。 */
+export function chmodCommand(mode: string, path: string, platform: string): string {
+  if (shellDialect(platform) === 'powershell') return ''
+  if (mode !== '700' && mode !== '600') {
+    throw new Error(`chmodCommand 只接受 700 / 600（收到 ${mode}）`)
+  }
+  return `chmod ${mode} ${shellQuote(path, platform)}`
+}

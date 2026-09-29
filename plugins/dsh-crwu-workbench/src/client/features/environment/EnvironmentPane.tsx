@@ -4,10 +4,14 @@ import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../components/
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { headlineOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import type { AccessDiagnosticView, DwsLocalDoctorView, DwsLocalRepairView } from '../../../shared/types.ts'
 import type { SetupItemView } from '../../../shared/environment/model.ts'
 import { WorkspaceCard } from '../workbench/WorkspaceCard.tsx'
 import type { ClientServices } from '../workbench/services.ts'
 import { IfindAuthCard } from './IfindAuthCard.tsx'
+import { DwsLocalCard } from './DwsLocalCard.tsx'
+import { LocalAccessConsentCard } from './LocalAccessConsentCard.tsx'
+import { consentGranted, consentOf } from './local-access.ts'
 import { OssCredCard } from './OssCredCard.tsx'
 import type { BuildSnapshot } from '../workbench/build-store.ts'
 import { DEVELOPER_CONTACT_URL } from '../../../shared/consts.ts'
@@ -80,13 +84,31 @@ export interface EnvironmentPaneProps {
   wsMessage: string
   onWsBusy: (busy: boolean) => void
   onWsMessage: (message: string) => void
-  /** 授权（一次性、长期有效）。 */
+  /** 最近的本机访问诊断（协议 18 · B3）；展开开发者诊断时由面板取一次。 */
+  accessDiagnostics?: AccessDiagnosticView[]
+  /** DWS 本机目录的只读体检（协议 18 · D）：`null` = 还没查过。 */
+  dwsLocal?: DwsLocalDoctorView | null
+  dwsLocalRepair?: DwsLocalRepairView | null
+  dwsLocalBusy?: boolean
+  dwsLocalError?: string
+  dwsLocalConfirming?: boolean
+  onDwsLocalCheck?: () => void
+  onDwsLocalAskRepair?: () => void
+  onDwsLocalCancelRepair?: () => void
+  onDwsLocalConfirmRepair?: () => void
+  /** 授权（一次性、长期有效）。缺省时由 `env.localAccess` 推出（Host 是唯一判据）。 */
   authorized?: boolean
   authBusy?: boolean
   authError?: string
   authDeclined?: boolean
+  /** 客户端与宿主的权限说明版本不一致（旧宿主）：授权与账号操作全部禁用。 */
+  authSchemaMismatch?: boolean
   onGrantCredentials?: () => void
   onRegrant?: () => void
+  /** 「暂不允许」：不产生任何 Host 变更，只是本地收起同意按钮。 */
+  onDeclineCredentials?: () => void
+  /** 撤销授权（写一个空能力集合的墓碑）。 */
+  onRevokeCredentials?: () => void
 }
 
 /**
@@ -143,7 +165,12 @@ function buildVersionText(build: BuildSnapshot): string {
  * 开发者诊断的单一事实源：页面与复制文本都从这些行生成，避免二者遗漏不同字段。
  * 这里只接收 Host 已脱敏的视图，绝不放入 API-Key / AccessKey 明文。
  */
-function diagnosticRows(env: EnvResult, checkedAt: string, build: BuildSnapshot): DiagnosticRow[] {
+function diagnosticRows(
+  env: EnvResult,
+  checkedAt: string,
+  build: BuildSnapshot,
+  access: AccessDiagnosticView[] = [],
+): DiagnosticRow[] {
   const health = env.state?.systemHealth
   const integrity = env.packageIntegrity
   const runtime = env.runtime
@@ -168,6 +195,10 @@ function diagnosticRows(env: EnvResult, checkedAt: string, build: BuildSnapshot)
         root.title || root.sessionId,
         `${shortSessionId(root.sessionId)}…`,
         root.workspacePath,
+        // 沙箱与审批策略也显示出来（协议 18 · C3）：验收要求"根与子会话都显示
+        // workspace-write / never"。只写进提示词不算数 —— 得看得见。
+        root.sandboxMode === '' ? '' : `${zhCN.envAuditRootSandbox}${root.sandboxMode}`,
+        root.approvalPolicy === '' ? '' : `${zhCN.envAuditRootApproval}${root.approvalPolicy}`,
         root.usable ? '' : `${zhCN.envAuditRootStale}${root.reason === '' ? '' : `（${root.reason}）`}`,
       ].filter((item) => item !== '').join(' · ')
 
@@ -229,7 +260,36 @@ function diagnosticRows(env: EnvResult, checkedAt: string, build: BuildSnapshot)
       label: zhCN.envProbe,
       value: env.delivery.probe.state === '' ? (env.delivery.probe.ok ? zhCN.envPass : zhCN.envFail) : env.delivery.probe.state,
     },
+    // 最近的本机访问（协议 18 · B3）：**这是验收 §11 要求的那几项事实的唯一出口**。
+    // 只列最近几条：开发者诊断是排障视图，不是审计日志（完整环形缓冲在 Host 内存里）。
+    {
+      label: zhCN.envDiagAccess,
+      value: access.length === 0 ? zhCN.envDiagAccessNone : `${String(access.length)} ${zhCN.envDiagAccessCount}`,
+      details: access.slice(0, 8).map(accessDiagnosticLine),
+    },
   ]
+}
+
+/**
+ * 一条本机访问诊断 → **一行**可抄进验收记录的脱敏事实。
+ *
+ * 字段顺序就是设计 §11 要求的证据顺序（操作名 / 来源 / 三个模式 / 两个布尔 / 归因 /
+ * 进程是否起过 / 时刻）。**不**包含命令原文、路径与任何凭据 —— 那些在诊断里根本不存在。
+ */
+export function accessDiagnosticLine(entry: AccessDiagnosticView): string {
+  const verdict = entry.errorClass === '' ? zhCN.envDiagAccessOk : entry.errorClass
+  return [
+    entry.operation,
+    entry.source,
+    `req=${entry.requestedMode === '' ? zhCN.envUnset : entry.requestedMode}`,
+    `res=${entry.resolvedMode === '' ? zhCN.envUnset : entry.resolvedMode}`,
+    `ran=${entry.ranMode === '' ? zhCN.envUnset : entry.ranMode}`,
+    `denied=${String(entry.sandboxDenied)}`,
+    `runnerFailed=${String(entry.runnerFailed)}`,
+    `started=${String(entry.processStarted)}`,
+    verdict,
+    localTime(entry.at),
+  ].join(' · ')
 }
 
 function diagnosticText(rows: DiagnosticRow[]): string {
@@ -411,54 +471,68 @@ function StepPanel(props: {
 }
 
 /** 账号连接步骤：一次性授权 + 氚云 + 钉钉。 */
-function AccountsStep(props: EnvironmentPaneProps & { env: EnvResult; authorized: boolean }): React.ReactElement {
+function AccountsStep(props: EnvironmentPaneProps & {
+  env: EnvResult
+  authorized: boolean
+  /** Host 给的"现在能不能体检"（`undefined` = 还没问到）；界面**不自己推断**。 */
+  canDiagnoseDws?: boolean
+}): React.ReactElement {
   const authorized = props.authorized
+  /** 「暂不允许」之后点「重新允许一次」只是把本地状态翻回去，真正的同意仍是同一次提交。 */
+  const grant = (): void => {
+    props.onRegrant?.()
+    props.onGrantCredentials?.()
+  }
   return <>
     <p className={C.stepLead}>{zhCN.envStepHintAccounts}</p>
-    {/* 一次性本机凭据授权**就放在配置流程里**（旧版是一层遮住整页的模态框）。 */}
-    <div className={C.item} data-crwu-env-item="consent">
-      <StatusDot tone={authorized ? 'ok' : 'bad'} />
-      <div className={C.itemMain}>
-        <div className={C.itemHead}>
-          <span className={C.itemName}>{zhCN.envConsentTitle}</span>
-          <Chip text={authorized ? zhCN.envItemOk : zhCN.envItemMissing} tone={authorized ? 'ok' : 'bad'} />
-        </div>
-        <div className={C.itemNote}>{zhCN.envConsentWhy}</div>
-        {props.authError === undefined || props.authError === '' ? null
-          : <Notice tone="warn">{props.authError}</Notice>}
-        {!authorized && props.authDeclined === true ? <Notice tone="warn">{zhCN.envConsentDeclined}</Notice> : null}
-        <div className={C.row}>
-          {authorized
-            ? <span className={C.authGranted}>{zhCN.envConsentDone}</span>
-            : (props.authDeclined === true
-              ? <Button label={zhCN.envConsentRegrant} small disabled={props.authBusy === true}
-                  onClick={() => { props.onRegrant?.() }} />
-              : <Button label={zhCN.envConsentAgree} tone="primary" disabled={props.authBusy === true}
-                  onClick={() => { props.onGrantCredentials?.() }} />)}
-        </div>
-      </div>
-    </div>
+    {/* 本机访问授权**就放在配置流程里**（旧版是一层遮住整页的模态框）：逐条列出固定能力清单。 */}
+    <LocalAccessConsentCard
+      consent={consentOf(props.env)}
+      busy={props.authBusy === true}
+      error={props.authError ?? ''}
+      declined={props.authDeclined === true}
+      {...(props.authSchemaMismatch === true ? { schemaMismatch: true } : {})}
+      onGrant={grant}
+      onDecline={() => { props.onDeclineCredentials?.() }}
+      onRevoke={() => { props.onRevokeCredentials?.() }}
+    />
     <SetupRow
       id={props.env.services.find((service) => service.id === 'h3yun')?.label ?? '氚云（H3Yun）员工会话'}
       item={props.env.state?.userSetup.h3yun ?? { state: 'unknown', value: '', reason: '', required: true }}
       extra={<div className={C.layerActions}>
-        <Button label={zhCN.envLoginH3yun} small onClick={props.onRelogin} />
+        {/* 未允许本机访问时登录按钮**禁用**：这时点下去必然失败，失败原因还会被误读成"没登录"。 */}
+        <Button label={zhCN.envLoginH3yun} small disabled={!authorized} onClick={props.onRelogin} />
       </div>}
     />
     <SetupRow
       id={props.env.services.find((service) => service.id === 'dingtalk')?.label ?? '钉钉认证'}
       item={props.env.state?.userSetup.dingtalk ?? { state: 'unknown', value: '', reason: '', required: true }}
       extra={<div className={C.layerActions}>
-        <Button label={zhCN.dwsLogin} small onClick={props.onDwsLogin} />
+        <Button label={zhCN.dwsLogin} small disabled={!authorized} onClick={props.onDwsLogin} />
         {/* 默认那条会开浏览器等回调；浏览器起不来时设备码是唯一走得通的路。 */}
         {props.onDwsLoginDevice === undefined
           ? null
-          : <Button label={zhCN.dwsLoginDevice} small onClick={props.onDwsLoginDevice} />}
+          : <Button label={zhCN.dwsLoginDevice} small disabled={!authorized} onClick={props.onDwsLoginDevice} />}
       </div>}
     />
     {props.loginMessage === undefined || props.loginMessage === ''
       ? null
       : <div className={C.itemFix} style={{ whiteSpace: 'pre-wrap' }}>{props.loginMessage}</div>}
+    {/* 钉钉本机目录：能不能体检由 **Host** 给的事实决定（没有可归因失败时按钮禁用）；
+        「修复权限」**只在确诊本机文件权限问题时**才渲染
+        （见 DwsLocalCard 的 repairOffered —— 沙箱/钥匙串/锁/所有者不对都不渲染）。 */}
+    <DwsLocalCard
+      doctor={props.dwsLocal ?? null}
+      canDiagnose={props.canDiagnoseDws}
+      repair={props.dwsLocalRepair ?? null}
+      busy={props.dwsLocalBusy === true}
+      confirming={props.dwsLocalConfirming === true}
+      error={props.dwsLocalError ?? ''}
+      onCheck={() => { props.onDwsLocalCheck?.() }}
+      onAskRepair={() => { props.onDwsLocalAskRepair?.() }}
+      onCancelRepair={() => { props.onDwsLocalCancelRepair?.() }}
+      onConfirmRepair={() => { props.onDwsLocalConfirmRepair?.() }}
+    />
   </>
 }
 
@@ -473,11 +547,13 @@ function DeveloperDiagnostics(props: {
   build?: BuildSnapshot
   checkedAt: string
   open: boolean
+  access: AccessDiagnosticView[]
   onToggle: () => void
 }): React.ReactElement {
   const rows = diagnosticRows(props.env, props.checkedAt, props.build ?? {
-    ok: false, error: '', rev: '', version: '', buildKind: '', builtAt: '', protocol: null, parentSessionId: '',
-  })
+    ok: false, error: '', rev: '', version: '', buildKind: '', builtAt: '', protocol: null,
+    permissionSchemaVersion: null, parentSessionId: '',
+  }, props.access)
   const [copied, setCopied] = React.useState(false)
   const [copyError, setCopyError] = React.useState('')
 
@@ -542,6 +618,31 @@ function DeveloperDiagnostics(props: {
 export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement {
   const { env } = props
   const [developerDiagnosticsOpen, setDeveloperDiagnosticsOpen] = React.useState(false)
+  // 最近的本机访问诊断：**展开时才取**（它是排障视图，没人看就不该产生请求；
+  // 而且它只读、零副作用，所以随取随用，不进任何缓存）。
+  const [accessDiagnostics, setAccessDiagnostics] = React.useState<AccessDiagnosticView[]>([])
+  /**
+   * 「检查本机目录」能不能点 —— **由 Host 给的**事实（`dwsDiagnosable`）。
+   *
+   * 挂载时问一次：它是一次零副作用的只读 RPC（同一份环形缓冲），但决定了按钮可不可点，
+   * 所以不能等用户点下去才知道。`undefined` = 还没问到 → 保持可点（Host 会是那道真门禁）。
+   */
+  const [canDiagnoseDws, setCanDiagnoseDws] = React.useState<boolean | undefined>(undefined)
+  React.useEffect(() => {
+    let alive = true
+    void workbenchApi.accessDiagnostics()
+      .then((result) => { if (alive) setCanDiagnoseDws(result.ok ? result.dwsDiagnosable : undefined) })
+      .catch(() => { if (alive) setCanDiagnoseDws(undefined) })
+    return () => { alive = false }
+  }, [])
+  const toggleDiagnostics = (): void => {
+    const next = !developerDiagnosticsOpen
+    setDeveloperDiagnosticsOpen(next)
+    if (!next) return
+    void workbenchApi.accessDiagnostics()
+      .then((result) => { setAccessDiagnostics(result.ok ? result.entries : []) })
+      .catch(() => { setAccessDiagnostics([]) })
+  }
   /**
    * 用户手动选过的步骤。
    *
@@ -569,7 +670,7 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
 
   const gate = props.gate ?? 'idle'
   const setup = env.state?.userSetup
-  const authorized = props.authorized ?? env.trust.credentials
+  const authorized = props.authorized ?? consentGranted(env)
   const activeStep = pickStep(setupSteps(setupStepInput(env, authorized), manualStep), manualStep)
 
   return <div>
@@ -594,6 +695,7 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
             {...props}
             env={env}
             authorized={authorized}
+            canDiagnoseDws={canDiagnoseDws}
             activeStep={activeStep}
             onPick={setManualStep}
           />}
@@ -603,7 +705,8 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
         build={props.build}
         checkedAt={props.checkedAt ?? ''}
         open={developerDiagnosticsOpen}
-        onToggle={() => { setDeveloperDiagnosticsOpen(!developerDiagnosticsOpen) }}
+        access={accessDiagnostics}
+        onToggle={toggleDiagnostics}
       />
     </div>
   </div>
@@ -611,6 +714,8 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
 
 /** 配置工作区：左侧步骤导航 + 右侧当前步骤。 */
 function SetupWorkspace(props: EnvironmentPaneProps & {
+  /** Host 给的"现在能不能体检"（`undefined` = 还没问到）。 */
+  canDiagnoseDws?: boolean
   env: EnvResult
   authorized: boolean
   activeStep: SetupStepKind
@@ -630,7 +735,12 @@ function SetupWorkspace(props: EnvironmentPaneProps & {
         ? <p className={C.stepLead} data-crwu-env-alldone="1">{zhCN.envStepDoneSummary}</p>
         : null}
       {active === 'accounts'
-        ? <AccountsStep {...props} env={env} authorized={props.authorized} />
+        ? <AccountsStep
+            {...props}
+            env={env}
+            authorized={props.authorized}
+            canDiagnoseDws={props.canDiagnoseDws}
+          />
         : null}
       {active === 'oss'
         ? <OssCredCard delivery={env.delivery} onSaved={props.onRefresh} />

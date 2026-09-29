@@ -16,6 +16,7 @@ const ROOT = new URL('../../', import.meta.url)
 const { createUploadWatch } = await import(new URL('src/host/oss/watch.ts', ROOT).href)
 const { normalizeAudit } = await import(new URL('src/host/state/registry.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const SEQ = '2026-301705-LX10170'
 
@@ -71,6 +72,9 @@ function depsOf(ctx, state) {
   return {
     ctx,
     state,
+    access: makeTestAccess(ctx, { home: '/Users/x' }).access,
+    // 自动上传由审核事件触发，不是面板点的 —— 来源如实标 `audit-tool`。
+    source: 'audit-tool',
     manifest: manifestFixture({ oss: { enabled: true, bucket: 'bkt', prefix: 'crwu/audit', autoUpload: true } }),
     platform: 'darwin-arm64',
     home: '/Users/x',

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { clipboard, openPath, dwsLogin, relogin, sessionStatus, ossCred } = await import(
   new URL('src/host/system/ops.ts', ROOT).href
@@ -69,7 +70,7 @@ function makeCtx({ shell, inside = () => true, files = {}, dirs = [] } = {}) {
 
 function depsOf(ctx, patch = {}) {
   const state = { ...createWorkbenchState(CONFIG), workspacePath: '/cases', caseRoot: '/cases', workspaceChosen: true, ...patch.state }
-  return { ctx, state, platform: patch.platform ?? 'darwin-arm64', workdir: async () => patch.workdir ?? '/cases/session' }
+  return { ctx, state, access: makeTestAccess(ctx).access, platform: patch.platform ?? 'darwin-arm64', workdir: async () => patch.workdir ?? '/cases/session' }
 }
 
 // ── 会话解析 ────────────────────────────────────────────────────────────────
@@ -143,6 +144,40 @@ test('openPath refuses a file outside the case root', async () => {
   const result = await openPath(depsOf(ctx), { path: '/etc/passwd' })
   assert.equal(result.ok, false)
   assert.match(result.error, /只允许打开案例根目录内的文件/)
+  assert.equal(ctx.commands.some((command) => command.startsWith('open')), false, '被拒时不得执行打开命令')
+})
+
+test('openPath：案例根未知时**必须 fail closed**（不许退化成"任意路径都能打开"）', async () => {
+  // 2026-09-29 复查：`openPath` 的注释写着「只允许打开案例根目录内的文件」，但实现是
+  // `if (root !== '') { …包含检查… }` —— 案例根拿不到时**整段检查被跳过**，
+  // 于是"没有工作空间"这件事反而让边界消失：面板仍能用系统默认程序打开任意文件
+  //（macOS 上 `open` 一个 app 就等于启动它）。正确行为是拒绝。
+  const touched = []
+  const ctx = makeCtx({
+    shell: () => ({ stdout: '' }),
+    inside: () => { throw new Error('案例根未知时不该走到包含检查') },
+    files: { '/etc/passwd': { type: 'file' } },
+  })
+  // 记录对**目标**做过的 fs 探测：这是本用例可证伪的那一半 ——
+  // 当前实现里"案例根未知"这层判断排在 `resolve`/`stat` **之前**，
+  // 把判断挪到后面（或删掉显式拒绝、让 Broker 兜底）都会在这里留下痕迹。
+  const raw = ctx.get
+  ctx.get = (name) => {
+    const fs = raw(name)
+    if (name !== 'fs') return fs
+    return {
+      ...fs,
+      async resolve(path, opts) { touched.push(`resolve:${String(path)}`); return fs.resolve(path, opts) },
+      async stat(target) { touched.push(`stat:${target.targetKey}`); return fs.stat(target) },
+    }
+  }
+  // state 里没有工作空间、也没有案例根 → `defaultCaseRoot` 只剩 session 根兜底，
+  // 这里把 session 根也置空，模拟"还没选定工作空间"的现场。
+  const deps = depsOf(ctx, { state: { workspacePath: '', caseRoot: '', workspaceChosen: false }, workdir: '' })
+  const result = await openPath(deps, { path: '/etc/passwd' })
+  assert.equal(result.ok, false, '案例根未知时必须拒绝')
+  assert.match(result.error, /工作空间|案例根|范围未确定/)
+  assert.deepEqual(touched, [], '案例根未知时**不许对目标做任何 fs 探测**（判据必须在最前面）')
   assert.equal(ctx.commands.some((command) => command.startsWith('open')), false, '被拒时不得执行打开命令')
 })
 

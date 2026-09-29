@@ -1,6 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { runDws, type DwsRunResult } from '../dws/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 import { DWS_STDOUT_MAX, DWS_TIMEOUT_MS } from '../dws/consts.ts'
 import { jsonObject, failure, type ToolEnvelope } from './outcome.ts'
 
@@ -21,9 +23,11 @@ export type DwsJsonResult = DwsJsonOk | ({ ok: false } & ToolEnvelope & { run?: 
 
 export interface DwsJsonOptions {
   workdir: string
-  trusted: boolean
+  /** Broker（协议 18）：唯一执行入口。 */
+  access: LocalAccessBroker
+  /** 这次调用是谁发起的（审核 Tool = `audit-tool`，面板 = `panel`）。 */
+  source: LocalAccessSource
   signal?: AbortSignal
-  credentialOperation?: boolean
   timeoutMs?: number
   stdoutMaxBytes?: number
 }
@@ -36,8 +40,8 @@ export async function dwsJson(
 ): Promise<DwsJsonResult> {
   const run = await runDws(ctx, platform, argv, {
     workdir: options.workdir,
-    trusted: options.trusted,
-    credentialOperation: options.credentialOperation !== false,
+    access: options.access,
+    source: options.source,
     timeoutMs: options.timeoutMs ?? DWS_TIMEOUT_MS,
     stdoutMaxBytes: options.stdoutMaxBytes ?? DWS_STDOUT_MAX,
     ...(options.signal === undefined ? {} : { signal: options.signal }),

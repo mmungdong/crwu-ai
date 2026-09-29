@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { REQUIRED_AUDIT_TOOLS } from '../src/host/tools/consts.ts'
+import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from '../src/host/tools/consts.ts'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -58,7 +58,11 @@ function fakeHostContext() {
   const tools = {
     register(definition) {
       registeredTools.push(definition.name)
-      return () => {}
+      // 忠实替身：DSH 的 `tools.register` 返回 disposer，卸载时必须真的把工具摘掉。
+      return () => {
+        const index = registeredTools.indexOf(definition.name)
+        if (index >= 0) registeredTools.splice(index, 1)
+      }
     },
   }
   const ctx = {
@@ -79,7 +83,11 @@ function fakeHostContext() {
     webServer: {
       register(route) {
         routes.push(route)
-        return () => {}
+        // 同上：返回真的注销函数，否则"卸载有没有把路由摘掉"根本观察不到。
+        return () => {
+          const index = routes.indexOf(route)
+          if (index >= 0) routes.splice(index, 1)
+        }
       },
     },
   }
@@ -119,17 +127,18 @@ export async function smokeHost() {
   // DSH 以**位置参数**传 config（对照 dsh-tool-bash 的 `function apply(ctx, config = {})`）。
   assert.equal(module.apply.length >= 2, true, 'apply 必须接受 (ctx, config) 两个位置参数')
 
-  const { ctx, routes, listeners, registeredTools } = fakeHostContext()
+  const { ctx, routes, effects, listeners, registeredTools } = fakeHostContext()
   const config = module.Config({})
   module.apply(ctx, config)
+  const routeCountAfterApply = routes.length
   assert.equal(routes.length, 1, '应当注册恰好一个同源路由')
   assert.equal(routes[0].path, module.ROUTE)
   // 没有这个订阅，ended / endReason 永远是空 → 「已中断」不出现、自动上传不触发。
   assert.equal(listeners.has('subagent/end'), true, 'apply() 必须订阅 subagent/end')
   assert.deepEqual(
     [...registeredTools].sort(),
-    [...REQUIRED_AUDIT_TOOLS].sort(),
-    'apply() 注册的 CRWU 工具必须与 REQUIRED_AUDIT_TOOLS 逐字一致',
+    [...CRWU_BUSINESS_TOOLS].sort(),
+    'apply() 注册的 CRWU 工具必须与 CRWU_BUSINESS_TOOLS 逐字一致（注册面 ≠ 审核子会话能力集）',
   )
 
   // 走一遍真实的 HTTP 处理器：这是「装上去之后 RPC 到底通不通」的最小证据。
@@ -150,7 +159,53 @@ export async function smokeHost() {
   cross.req.headers.origin = 'http://evil.invalid'
   await routes[0].handler(cross.req, cross.res)
   assert.equal(cross.response.statusCode, 403)
-  return { routes: routes.length }
+
+  // 协议 18 新增的操作必须在**产物**里真的可达（不只是源码里有）。
+  // `access-diagnostics` 是唯一零副作用、零外部依赖的新操作，适合放进 smoke：
+  // 它证明路由表、参数收窄与返回体形状在打包之后都对。
+  const diagnostics = fakeExchange({ op: 'access-diagnostics', args: {} })
+  await routes[0].handler(diagnostics.req, diagnostics.res)
+  assert.equal(diagnostics.response.statusCode, 200, 'access-diagnostics 应当可达')
+  const diagPayload = JSON.parse(diagnostics.response.body)
+  assert.equal(diagPayload.ok, true)
+  assert.deepEqual(diagPayload.entries, [], '本次运行还没有任何本机访问')
+  assert.equal(typeof diagPayload.consent?.state, 'string', '诊断要带上授权收据状态')
+
+  // 「允许」在**没有文件服务**的环境里必然落盘失败 —— 这正是"写盘失败不许放行"的现场。
+  // 从真实产物驱动一次，确认回的是关闭态（`persist-failed`）而不是磁盘上的旧授权。
+  const grant = fakeExchange({
+    op: 'local-access-grant',
+    args: { schemaVersion: 1, capabilities: [
+      'h3yun-credential-store', 'dws-profile', 'oss-config', 'ifind-credential', 'system-integration',
+    ] },
+  })
+  await routes[0].handler(grant.req, grant.res)
+  const grantPayload = JSON.parse(grant.response.body)
+  assert.equal(grantPayload.ok, false, '没有文件服务时落盘必然失败')
+  assert.notEqual(grantPayload.consent?.state, 'granted', '写盘失败绝不许回 granted')
+  assert.equal(grantPayload.consent?.state, 'persist-failed')
+  assert.deepEqual(grantPayload.consent?.capabilities, [])
+
+  // 授权与体检两个操作也必须在产物里（这里只证明"登记了、参数被收窄"，不真跑它们：
+  // 前者会写状态文件、后者要 shell 服务，都不是零副作用）。
+  const doctorBadArgs = fakeExchange({ op: 'dws-local-permission-repair', args: { confirm: 'yes' } })
+  await routes[0].handler(doctorBadArgs.req, doctorBadArgs.res)
+  const repairPayload = JSON.parse(doctorBadArgs.response.body)
+  assert.equal(repairPayload.ok, false, '形状不对的修复请求必须被拒')
+  assert.match(String(repairPayload.error), /confirm/, '拒绝理由要说清是确认形状不对')
+
+  // ── 卸载：把 `apply()` 里每个 `ctx.effect` 的 disposer 都跑一遍 ─────────────
+  //
+  // 为什么必须在这里做：**没有任何用例跑过插件的卸载路径** —— `smoke:built` 收集了 effects
+  // 却从不调用，于是"忘了 `return` disposer"这类回归（Cordis 的经典坑）在本地完全看不见，
+  // 表现为插件卸载后路由还在、看门狗还在轮询。这里跑一遍并断言**真的释放了**。
+  assert.equal(effects.length > 0, true, 'apply() 应当至少注册一个 effect（路由 / 工具 / 看门狗）')
+  for (const dispose of [...effects].reverse()) {
+    if (typeof dispose === 'function') dispose()
+  }
+  assert.equal(routes.length, 0, '卸载后同源路由必须被摘掉（effect 的 disposer 必须真的注销）')
+  assert.deepEqual([...registeredTools], [], '卸载后 CRWU 工具必须被逐个注销')
+  return { routes: routeCountAfterApply }
 }
 
 export async function smokeClient() {

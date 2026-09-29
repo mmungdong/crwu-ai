@@ -2,7 +2,10 @@ import { rpc } from '../../api/client.ts'
 import { createUpdateApi, UPDATE_METHOD_OPERATION, type UpdateApi } from '../update/api.ts'
 import type { AuditView, CloudItem, CredentialPermission, TaskRow } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
-import type { AuditRootView, EnvResultView } from '../../../shared/types.ts'
+import type {
+  AccessDiagnosticsView, AuditRootView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
+} from '../../../shared/types.ts'
+import type { LocalAccessConsentView } from '../../../shared/access/types.ts'
 import {
   blockerMessages, degradedMessages, primaryUserIssue, requiredTallyOf, statusProceedable,
   type EnvironmentIssueView, type EnvironmentTally, type EnvironmentStateView,
@@ -53,6 +56,13 @@ export interface BootResult {
    */
   version?: string
   buildKind?: 'dev' | 'installed'
+  /**
+   * 宿主实际执行的**权限说明版本**（协议 18）；缺这个字段 = 旧宿主，
+   * 界面必须按「不一致」处理（旧宿主的授权语义是布尔值，执行不了新范围）。
+   */
+  permissionSchemaVersion?: number
+  /** 宿主当前的授权收据视图（协议 18）；旧宿主没有这个字段。 */
+  localAccess?: LocalAccessConsentView
   caseRoot: string
   home: string
   formName: string
@@ -95,6 +105,13 @@ export interface AuditStatusResult {
   audits: AuditView[]
   parentSessionId: string
   active: { key: string; childId: string; since: number }
+  /**
+   * 现在能不能启动下一条审核（F4，**Host 权威**）。
+   *
+   * 缺字段 = 未知：客户端**不许**用 `status !== 'running'` 之类的本地事实推断，
+   * 也不许把未知当成"可以启动"去发新的审核请求。
+   */
+  canStartNext?: boolean
 }
 
 export interface OssIndexResult {
@@ -178,7 +195,7 @@ export interface WorkbenchApi extends UpdateApi {
   boot: () => Promise<BootResult>
   /** `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存。 */
   env: (args?: { refresh?: boolean }) => Promise<EnvResult>
-  pending: (args: { query?: string; page?: number; size?: number; escalate?: boolean }) => Promise<PendingResult>
+  pending: (args: { query?: string; page?: number; size?: number }) => Promise<PendingResult>
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
   auditStop: (args?: { childId?: string }) => Promise<StopResult>
@@ -193,13 +210,42 @@ export interface WorkbenchApi extends UpdateApi {
   workspace: (args: { path: string; title?: string; id?: string }) => Promise<Record<string, unknown>>
   workspaceAuto: () => Promise<Record<string, unknown>>
   bindSession: (args: { sessionId: string }) => Promise<Record<string, unknown>>
-  trust: (args: { credentials: boolean }) => Promise<Record<string, unknown>>
+  /**
+   * 允许工作台访问本机账号和配置（协议 18）。
+   *
+   * 提交的是**当前版本的规范能力清单**（由 `consentRequestCapabilities()` 生成），不是布尔值：
+   * Host 会逐字核对清单，被改过的客户端无法提交一个与界面不同的范围。
+   */
+  localAccessGrant: (args: { schemaVersion: number; capabilities: string[] }) => Promise<LocalAccessResult>
+  /** 撤销本机访问（写一个空能力集合的墓碑）。 */
+  localAccessRevoke: () => Promise<LocalAccessResult>
   session: () => Promise<{ ok: boolean; error: string; session: { userId: string; expiresAt: string; expiresIn: string } | null }>
+  /**
+   * 最近的本机访问诊断（协议 18 · B3）。**只读、零副作用、脱敏**。
+   *
+   * 给「开发者诊断」：验收要求每一行失败都能给出"操作名 / 来源 / 请求·解析·实际模式 /
+   * 被拒与否 / runner 是否挂 / 归因类别 / 失败发生在进程创建之前还是之后"——
+   * 这些事实只有这里拿得到。
+   */
+  accessDiagnostics: () => Promise<AccessDiagnosticsView>
+  /**
+   * DWS 本机目录只读体检（协议 18 · D2）。**不接受路径** —— 目录由 Host 推导。
+   *
+   * 返回的是脱敏事实（模式位 / 两个布尔 / 凭据存储状态 / 归因类别），
+   * 没有 ACL 条目、账户名、钥匙串条目名或原始 `dws doctor` 输出。
+   */
+  dwsLocalDoctor: () => Promise<DwsLocalDoctorView>
+  /**
+   * 最小权限修复（协议 18 · D3）：**必须带 `confirm: true`**，且只在面板上二次确认后调用。
+   *
+   * 服务端还会再判一次：结论必须是"本机文件权限问题"，且所有者是当前账户。
+   */
+  dwsLocalPermissionRepair: (args: { confirm: true }) => Promise<DwsLocalRepairView>
   relogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
   dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
   clipboard: (args: { text: string }) => Promise<SimpleResult>
   openPath: (args: { path: string }) => Promise<SimpleResult & { path: string }>
-  crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number; escalate?: boolean }) => Promise<Record<string, unknown>>
+  crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number }) => Promise<Record<string, unknown>>
   /** iFinD 凭据的脱敏状态（**没有明文**）。 */
   ifindStatus: () => Promise<IfindStatusResult>
   /** 保存 SK：Host 校验 → 写盘（0600）→ 收紧权限 → **立刻真实探测**。 */
@@ -232,6 +278,19 @@ export interface IfindProbeResult {
   /** 取数结果的**脱敏**短摘要（最多 300 字符）。 */
   dataSample: string
   path?: string
+}
+
+/**
+ * 授权/撤销的应答。
+ *
+ * `consent` 是**落盘回读后**的收据视图（不是"我们打算写什么"）：写盘失败时它仍是旧状态，
+ * 界面据此显示「没有获得权限」而不是一句成功提示。
+ */
+export interface LocalAccessResult {
+  ok: boolean
+  error: string
+  consent: LocalAccessConsentView
+  permissionSchemaVersion?: number
 }
 
 export interface IfindStatusResult extends IfindProbeResult {
@@ -273,8 +332,12 @@ export const workbenchApi: WorkbenchApi = {
   workspace: (args) => call('workspace', args),
   workspaceAuto: () => call('workspace-auto'),
   bindSession: (args) => call('bind-session', args),
-  trust: (args) => call('trust', args),
+  localAccessGrant: (args) => call('local-access-grant', args),
+  localAccessRevoke: () => call('local-access-revoke', {}),
   session: () => call('session'),
+  accessDiagnostics: () => call('access-diagnostics'),
+  dwsLocalDoctor: () => call('dws-local-doctor'),
+  dwsLocalPermissionRepair: (args) => call('dws-local-permission-repair', args),
   relogin: () => call('relogin'),
   dwsLogin: (args) => call('dws-login', args),
   clipboard: (args) => call('clipboard', args),
@@ -311,8 +374,12 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   workspace: 'workspace',
   workspaceAuto: 'workspace-auto',
   bindSession: 'bind-session',
-  trust: 'trust',
+  localAccessGrant: 'local-access-grant',
+  localAccessRevoke: 'local-access-revoke',
   session: 'session',
+  accessDiagnostics: 'access-diagnostics',
+  dwsLocalDoctor: 'dws-local-doctor',
+  dwsLocalPermissionRepair: 'dws-local-permission-repair',
   relogin: 'relogin',
   dwsLogin: 'dws-login',
   clipboard: 'clipboard',

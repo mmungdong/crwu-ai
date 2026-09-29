@@ -1,8 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
+import { redactPaths } from './redact.ts'
 import type { CredentialPermission } from '../../shared/types.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessOperation, LocalAccessSource } from '../access/operations.ts'
 import { privateFileCommand, privateFileMechanism, readFileModeCommand } from './shell.ts'
-import { runShell, type ShellResult } from '../shell/run.ts'
+import type { ShellResult } from '../shell/run.ts'
 
 /**
  * 凭据文件的**权限收紧与如实报告**（协议 17）。
@@ -33,12 +36,19 @@ import { runShell, type ShellResult } from '../shell/run.ts'
 /** 期望的模式位（八进制字符串）。 */
 const EXPECTED_MODE = '600'
 
-export async function enforceCredentialPermission(
-  ctx: Context,
-  path: string,
-  platform: string,
-  options: { workdir: string; escalate?: boolean },
-): Promise<CredentialPermission> {
+export interface CredentialPermissionDeps {
+  /** Broker（协议 18）：`chmod` / 回读都是跨边界的 shell 调用，提权由操作身份决定。 */
+  access: LocalAccessBroker
+  /** 这次权限收紧属于哪个操作（iFinD 凭据 / OSS 配置各一个）。 */
+  operation: LocalAccessOperation
+  path: string
+  platform: string
+  workdir: string
+  source?: LocalAccessSource
+}
+
+export async function enforceCredentialPermission(deps: CredentialPermissionDeps): Promise<CredentialPermission> {
+  const { path, platform } = deps
   const mechanism = privateFileMechanism(platform)
   if (mechanism === 'windows-acl') {
     return {
@@ -54,12 +64,9 @@ export async function enforceCredentialPermission(
     return { status: 'failed', mechanism, message: `无法为该平台生成权限收紧命令（platform=${platform || '未知'}）` }
   }
 
-  const shellOptions = {
-    workdir: options.workdir,
-    timeoutMs: 15_000,
-    ...(options.escalate === true ? { escalate: true } : {}),
-  }
-  const run = await runShell(ctx, command, shellOptions)
+  const call = { operation: deps.operation, source: deps.source ?? 'panel' as const, workdir: deps.workdir }
+  const shellOptions = { workdir: deps.workdir, timeoutMs: 15_000, summary: `${deps.operation}（收紧）` }
+  const run = await deps.access.runShell(call, command, shellOptions)
   if (!run.ok) return { status: 'failed', mechanism, message: permissionFailureMessage(run) }
 
   // ② 回读：chmod 在某些文件系统上会静默无效，`verified` 必须由**观察到的模式位**支撑。
@@ -67,7 +74,7 @@ export async function enforceCredentialPermission(
   if (readCommand === '') {
     return { status: 'failed', mechanism, message: '无法为该平台生成权限回读命令（平台事实自相矛盾）' }
   }
-  const read = await runShell(ctx, readCommand, shellOptions)
+  const read = await deps.access.runShell(call, readCommand, { ...shellOptions, summary: `${deps.operation}（回读）` })
   if (!read.ok) {
     return { status: 'failed', mechanism, message: `权限回读失败：${permissionFailureMessage(read)}` }
   }
@@ -102,10 +109,28 @@ export function parseFileMode(raw: unknown): string {
 /** 失败原因：命令没跑起来（沙箱/审批）与跑完报错要能分辨。 */
 function permissionFailureMessage(run: ShellResult): string {
   const raw = text(run.stderr) || text(run.error) || text(run.stdout)
-  return (raw.trim() || '权限收紧命令没有成功').slice(0, 200)
+  // 这条消息会出现在**员工界面**的凭据卡片上，而 `chmod` 的 stderr 自带路径
+  // （`chmod: /Users/x/.ossutilconfig: Operation not permitted`）—— 按 §4.6 第 3 条，
+  // 凭据路径属于维护者信息（只在开发者诊断里展开），所以这里脱敏。
+  return (redactPaths(raw.trim()) || '权限收紧命令没有成功').slice(0, 200)
 }
 
 /** Host 凭据服务（`credentials`）托管时的权限结论：不由我们管，也不宣称已验证。 */
+/**
+ * 权限后置条件**成立吗**（协议 18 · P-08/P-09/M-04 的判据）。
+ *
+ * 三种结局里只有 `failed` 是"我们说好要收紧、但它没成立"：
+ * - `verified`：POSIX 上真的回读到了 `0600`；
+ * - `inherited`：该平台没有 POSIX 模式位这件事（Windows 账户 ACL / DSH 凭据服务），按设计成立；
+ * - `failed`：收紧命令失败、或**回读对不上**（有的文件系统会静默忽略 `chmod`）。
+ *
+ * 保存凭据的**顶层** `ok` 必须由它决定：把"命令跑过了"说成"保存成功"，
+ * 就是设计文档 §2 那张表点名的"把结果报得比事实好"（2026-09-29 复查抓到的 P1）。
+ */
+export function credentialPermissionSatisfied(permission: CredentialPermission): boolean {
+  return permission.status !== 'failed'
+}
+
 export function hostStorePermission(): CredentialPermission {
   return {
     status: 'inherited',

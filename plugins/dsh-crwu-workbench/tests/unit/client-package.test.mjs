@@ -17,6 +17,9 @@ import { fakeReact, registerTsxLoader } from '../helpers/tsx-loader.mjs'
 registerTsxLoader()
 
 const ROOT = new URL('../../', import.meta.url)
+const { grantedConsent, missingConsent } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
+const { PERMISSION_SCHEMA_VERSION, LOCAL_ACCESS_CAPABILITIES } = await import(new URL('src/shared/access/types.ts', ROOT).href)
+const { capabilityLabel } = await import(new URL('src/client/features/environment/LocalAccessConsentCard.tsx', ROOT).href)
 
 const { DEVELOPER_CONTACT_URL, WORKBENCH_ROUTE } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { WORKBENCH_CLASSES, WORKBENCH_STYLE_ID, WORKBENCH_STYLE_TEXT } = await import(
@@ -74,7 +77,7 @@ const { WorkbenchPanel } = await import(new URL('src/client/features/workbench/W
 const { WorkbenchSidebarEntry } = await import(new URL('src/client/features/workbench/WorkbenchSidebarEntry.tsx', ROOT).href)
 const { environmentStateOf } = await import(new URL('src/client/features/report-audit/api.ts', ROOT).href)
 const { BrandMark } = await import(new URL('src/client/components/BrandMark.tsx', ROOT).href)
-const { buildTagOf, createBuildStore } = await import(
+const { buildTagOf, createBuildStore, hostIsStale, hostPermissionSchemaStale } = await import(
   new URL('src/client/features/workbench/build-store.ts', ROOT).href
 )
 
@@ -82,7 +85,8 @@ const { buildTagOf, createBuildStore } = await import(
 function fakeBuildStore(patch = {}) {
   const snapshot = {
     ok: true, error: '', rev: 'pkg-9.9.9', version: '9.9.9', buildKind: 'installed',
-    builtAt: '', protocol: WORKBENCH_PROTOCOL, parentSessionId: '', ...patch,
+    builtAt: '', protocol: WORKBENCH_PROTOCOL, permissionSchemaVersion: PERMISSION_SCHEMA_VERSION,
+    parentSessionId: '', ...patch,
   }
   return { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot }
 }
@@ -784,7 +788,7 @@ test('after boot and env the shell renders the self-check result', async () => {
         runtime: runtimeOk(),
         external: externalOk(),
         services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
-        blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+        blocked: [], allOk: true, home: '/Users/x', localAccess: grantedConsent(),
         delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
@@ -833,7 +837,7 @@ test('a blocked environment names the first thing still missing instead of a sec
         runtime: runtimeOk({ ok: false, state: 'capability-gap', error: '宿主没有接线 DSH 自带 Python 运行时的解析' }),
         external: externalOk({ path: '/cfg', ok: false, state: 'unconfigured', dataVerified: false, dataTool: '', dataSample: '', reason: '还没有保存 iFinD API-Key', tokenLength: 0 }),
         services: [], blocked: ['未找到工作空间「中瑞世联工作空间」，请手动选择', '运行平台未识别'],
-        allOk: false, home: '/Users/x', trust: { credentials: true },
+        allOk: false, home: '/Users/x', localAccess: grantedConsent(),
         delivery: deliveryOk(),
         workspace: { chosen: false, path: '', title: '', id: '', source: '', missing: false },
         sessionWorkspace: { parentSessionId: '', sessionCwd: '', workspaceId: '', workspacePath: '', workspaceTitle: '' },
@@ -1426,16 +1430,16 @@ function collectInputs(node, found = []) {
 
 // ── 氚云授权开关与免沙箱重试（Host 的提权链路要有人能开）──────────────────────
 
-test('未授权时不再用模态遮罩，而是「账号连接」里的第一行：同意 → 落盘并重检', async () => {
-  // 口径（2026-09-26 改）：授权**仍然**是插件级硬前置（Host 侧未授权一律拒绝），
-  // 但界面上不再用一个模态层遮住整个环境页 —— 员工口径是「不要让一个模态层遮住整个环境页」。
-  // 现在它是「账号连接」分组里的第一行，一步就能点完。
+test('未授权时不遮整页：授权卡在「账号连接」里，逐条列出范围；允许 → 落盘并重检', async () => {
+  // 口径（2026-09-26 起沿用，协议 18）：授权是插件级硬前置（Host 侧未授权一律拒绝），
+  // 但界面上**不**用一个模态层遮住整个环境页 —— 员工口径是「不要让一个模态层遮住整个环境页」。
+  // 协议 18 起它还要**逐条列出**这次允许覆盖的固定功能（旧文案只说"信任本插件读取本机凭据"）。
   const posts = []
   let granted = false
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body)
     posts.push(body)
-    const envBody = { ...okEnvBody(), trust: { credentials: granted },
+    const envBody = { ...okEnvBody(), localAccess: granted ? grantedConsent() : missingConsent(),
       state: stateBody({
         status: granted ? 'ready' : 'action-required',
         proceed: granted,
@@ -1445,16 +1449,16 @@ test('未授权时不再用模态遮罩，而是「账号连接」里的第一�
           ...stateBody().userSetup,
           credentialsConsent: granted
             ? { state: 'ok', value: '', reason: '', required: true }
-            : { state: 'unconfigured', value: '', reason: '还没有授权读取本机凭据', required: true },
+            : { state: 'unconfigured', value: '', reason: zhCN.envConsentIntro, required: true },
         },
-        issues: granted ? [] : [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '授权读取本机凭据', message: '授权读取本机凭据（氚云 / 钉钉）' }],
-        blocked: granted ? [] : ['授权读取本机凭据（氚云 / 钉钉）'],
+        issues: granted ? [] : [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '允许工作台访问本机账号和配置', message: '还没有允许工作台访问本机账号和配置' }],
+        blocked: granted ? [] : ['还没有允许工作台访问本机账号和配置'],
       }) }
     return {
       ok: true,
       status: 200,
       async json() {
-        if (body.op === 'trust') { granted = true; return { ok: true, trust: { credentials: true } } }
+        if (body.op === 'local-access-grant') { granted = true; return { ok: true, error: '', consent: grantedConsent(), permissionSchemaVersion: PERMISSION_SCHEMA_VERSION } }
         // `boot` 必须回当前协议号：否则客户端会按「宿主是旧构建」拦下一切发起类操作，
         // 断言就会落在"请重启 profile"那一屏上（这正是协议号存在的意义）。
         if (body.op === 'boot') return bootOk()
@@ -1467,35 +1471,47 @@ test('未授权时不再用模态遮罩，而是「账号连接」里的第一�
   const before = textOf(tree)
   // 未授权时**不进入**报告审核（Host 侧也会拒绝），停在环境页并说清为什么。
   assert.equal(before.includes(zhCN.tabPending), false, '未授权不该进报告审核')
-  assert.equal(before.includes(zhCN.envConsentTitle), true, '授权必须是「账号连接」里可见的一行')
-  assert.equal(before.includes(zhCN.envConsentWhy), true, '要讲清为什么需要授权')
-  assert.equal(before.includes(zhCN.envConsentAgree), true, '要有「同意并继续」')
+  assert.equal(before.includes(zhCN.envConsentTitle), true, '授权卡必须在「账号连接」里可见')
+  assert.equal(before.includes(zhCN.envConsentIntro), true, '要讲清"这不是授予所有权限"，范围就是清单')
+  assert.equal(before.includes(zhCN.envConsentAgree), true, '要有「允许并继续」')
+  assert.equal(before.includes(zhCN.envConsentDecline), true, '要有「暂不允许」')
+  // 五项固定能力逐条可读 —— 这是本次改造的核心：员工要知道自己同意了写 .ossutilconfig 这类事。
+  for (const capability of LOCAL_ACCESS_CAPABILITIES) {
+    assert.equal(before.includes(capabilityLabel(capability)), true, `能力清单缺一项：${capability}`)
+  }
+  // 「未授权」不许显示成「未登录」：那一行只说"需要先允许"。
+  assert.equal(before.includes(zhCN.envConsentBoundary), true, '要说清边界：不给 Agent 凭据、不给任意命令')
 
   const agree = findButtonLike(tree, zhCN.envConsentAgree)
-  assert.ok(agree, '授权行要有「同意并继续」')
+  assert.ok(agree, '授权卡要有「允许并继续」')
   agree.props.onClick()
   await new Promise((resolve) => { setTimeout(resolve, 0) })
-  const trustPost = posts.find((post) => post.op === 'trust')
-  assert.ok(trustPost, '同意要真的发 trust 操作')
-  assert.deepEqual(trustPost.args, { credentials: true })
+  const grantPost = posts.find((post) => post.op === 'local-access-grant')
+  assert.ok(grantPost, '允许要真的发 local-access-grant 操作')
+  // 提交的是**版本 + 规范能力清单**，不是布尔值：被改过的客户端提交不出与界面不同的范围。
+  assert.deepEqual(grantPost.args, {
+    schemaVersion: PERMISSION_SCHEMA_VERSION,
+    capabilities: [...LOCAL_ACCESS_CAPABILITIES],
+  })
+  assert.equal(posts.some((post) => post.op === 'trust'), false, '协议 18 不再走旧 trust 入口')
   // 授权成功会再跑一次自检；替身不会按依赖重跑 effect，所以这里显式再跑一轮
   // （真实 React 里由 store 通知 + 依赖变化自己触发）。
   await flushEffects(globalThis.__crwuTestInstance)
   const after = textOf(rerender(WorkbenchPanel, { services }))
-  assert.equal(after.includes(zhCN.envConsentAgree), false, '授权后不再显示「同意并继续」')
-  // 授权后环境转为就绪；「恢复被拦下来的目标」这条行为由
-  // `client-module-gate.test.mjs` 的「重新检查通过后只恢复最近一次被拦的目标」逐条钉住
-  // （替身 React 不按依赖重跑 effect，这里断言的是环境结论本身已经翻过来了）。
-  assert.equal(after.includes(zhCN.envStatusReady), true, '授权后环境结论要翻成「已就绪」')
-  // 「已授权」那一句在**账号连接**步骤里；四项都完成时页面默认停在最后一步，
+  assert.equal(after.includes(zhCN.envConsentAgree), false, '允许之后不再显示「允许并继续」')
+  // 允许后环境转为就绪；「恢复被拦下来的目标」这条行为由
+  // `client-module-gate.test.mjs` 的「重新检查通过后只恢复最近一次被拦的目标」逐条钉住。
+  assert.equal(after.includes(zhCN.envStatusReady), true, '允许后环境结论要翻成「已就绪」')
+  // 「已允许」那一句在**账号连接**步骤里；四项都完成时页面默认停在最后一步，
   // 所以直接渲染环境页并切到那一步再断言（一次只渲染当前步骤的正文）。
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
-  const paneProps = envPaneProps({ ...okEnvBody(), trust: { credentials: true } })
+  const paneProps = envPaneProps({ ...okEnvBody(), localAccess: grantedConsent() })
   const paneTree = render(EnvironmentPane, paneProps).tree
   findStep(paneTree, 'accounts').props.onClick()
   const paneText = textOf(rerender(EnvironmentPane, paneProps))
-  assert.equal(paneText.includes(zhCN.envConsentAgree), false, '授权后不再显示「同意并继续」')
-  assert.equal(paneText.includes(zhCN.envConsentDone), true, '要显示已授权')
+  assert.equal(paneText.includes(zhCN.envConsentAgree), false, '已允许后不再显示「允许并继续」')
+  assert.equal(paneText.includes(zhCN.envConsentDone), true, '要显示已允许')
+  assert.equal(paneText.includes(zhCN.envConsentRevoke), true, '已允许时要有撤销入口（同意必须可撤销）')
 })
 
 test('已授权的部署不再显示授权入口，直接按环境结论进面板', async () => {
@@ -1507,36 +1523,45 @@ test('已授权的部署不再显示授权入口，直接按环境结论进面�
   assert.equal(shown.includes(zhCN.tabPending), true, '已授权就直接按环境结论进面板')
 })
 
-test('授权被拒绝：说明 + 「重新授权」，且拒绝不落盘', async () => {
+test('暂不允许：不改动任何 Host 状态，界面如实说明功能禁用', async () => {
   let posts = 0
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body)
-    if (body.op === 'trust') posts += 1
+    if (body.op === 'local-access-grant' || body.op === 'trust') posts += 1
     return { ok: true, status: 200, async json() {
       if (body.op === 'boot') return bootOk()
-      // 未授权：模型必须**如实**说需要员工先授权（Host 侧也会拒绝发起审核）。
-      return { ...okEnvBody(), trust: { credentials: false }, state: stateBody({
+      // 未授权：模型必须**如实**说需要员工先允许本机访问（Host 侧也会拒绝发起审核）。
+      return { ...okEnvBody(), localAccess: missingConsent(), state: stateBody({
         status: 'action-required', proceed: false, allOk: false, passed: 7, total: 9,
-        userSetup: { ...stateBody().userSetup, credentialsConsent: { state: 'unconfigured', value: '', reason: '还没有授权读取本机凭据', required: true } },
-        issues: [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '授权读取本机凭据', message: '授权读取本机凭据（氚云 / 钉钉）' }],
-        blocked: ['授权读取本机凭据（氚云 / 钉钉）'],
+        userSetup: { ...stateBody().userSetup, credentialsConsent: { state: 'unconfigured', value: '', reason: zhCN.envConsentIntro, required: true } },
+        issues: [{ id: 'consent', owner: 'user', blocking: true, scope: 'global', action: '允许工作台访问本机账号和配置', message: '还没有允许工作台访问本机账号和配置' }],
+        blocked: ['还没有允许工作台访问本机账号和配置'],
       }) }
     } }
   }
   const services = fakeServices()
   const { tree } = await mountChecked(services)
   const consent = find(tree, (node) => node.props?.['data-crwu-env-item'] === 'consent')
-  assert.ok(consent, '未授权要有那一行（账号连接里的一行，不是模态层）')
-  // 未授权时进不去报告审核（Host 侧也会拒绝）。
-  assert.equal(textOf(tree).includes(zhCN.tabPending), false)
-  assert.equal(posts, 0, '没点同意就不该发 trust')
+  assert.ok(consent, '未授权要有那张卡（账号连接里的一张卡，不是模态层）')
+  assert.equal(textOf(tree).includes(zhCN.tabPending), false, '未授权时进不去报告审核（Host 侧也会拒绝）')
+
+  // 点「暂不允许」：**不发任何 Host 操作**，只在本地收起同意按钮并给一句说明。
+  const decline = findButtonLike(tree, zhCN.envConsentDecline)
+  assert.ok(decline, '未授权时要有「暂不允许」')
+  decline.props.onClick()
+  await new Promise((resolve) => { setTimeout(resolve, 0) })
+  assert.equal(posts, 0, '「暂不允许」不许产生任何 Host 变更')
+  const declined = textOf(rerender(WorkbenchPanel, { services }))
+  assert.equal(declined.includes(zhCN.envConsentDeclined), true, '拒绝后要说清账号 / 审核 / 交付保持禁用')
+  // 拒绝之后按钮换成「重新允许一次」：不要再用同一句话问他一遍。
+  assert.equal(declined.includes(zhCN.envConsentRegrant), true)
 })
 
 test('⑧ 里说清审核根会话挂在哪个工作空间（用户报的就是「没挂到我的工作空间里」）', async () => {
   const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
   const baseEnv = {
     ok: true, platform: 'darwin-arm64', services: [],
-    blocked: [], allOk: true, home: '/Users/mungdong', trust: { credentials: true },
+    blocked: [], allOk: true, home: '/Users/mungdong', localAccess: grantedConsent(),
     packageIntegrity: packagesOk(),
     runtime: runtimeOk(),
     external: externalOk({ path: 'p', tokenLength: 1 }),
@@ -1653,7 +1678,9 @@ test('占用提示里只剩「停止这条审核」，不再有「只释放占�
     handoffCopied: false, onHandoffCopied: () => {},
   })
   const text = textOf(tree)
-  assert.equal(text.includes(zhCN.activePrefix), true, '有占用时要显示这条提示')
+  // 2026-09-29 起这里是「当前审核」摘要卡（F3）：流水号、状态、停止阶段都在这一张卡上。
+  assert.equal(text.includes(zhCN.currentAuditTitle), true, '有占用时要显示「当前审核」摘要卡')
+  assert.equal(text.includes('2026-301705-LX10170'), true, '摘要卡必须显示流水号')
   assert.equal(text.includes(zhCN.stopAudit), true, '「停止这条审核」必须还在')
   assert.equal(text.includes('只释放占用'), false, '「只释放占用（不停子会话）」按钮不该再出现')
   assert.equal(text.includes('只是状态没更新时用这个'), false, '连它那句说明也不该再出现')
@@ -2045,7 +2072,7 @@ test('the iFinD card never echoes the token and points at the source when missin
   }
   const envBase = {
     ok: true, platform: 'darwin-arm64', services: [], blocked: [], allOk: true,
-    home: '/Users/x', trust: { credentials: true },
+    home: '/Users/x', localAccess: grantedConsent(),
     packageIntegrity: packagesOk(),
     runtime: runtimeOk(),
     external: externalOk({
@@ -2258,7 +2285,7 @@ function okEnvBody(patch = {}) {
     runtime: runtimeOk(),
     external: externalOk(),
     services: [{ id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: true, state: '正常', detail: 'userId u1' }],
-    blocked: [], allOk: true, home: '/Users/x', trust: { credentials: true },
+    blocked: [], allOk: true, home: '/Users/x', localAccess: grantedConsent(),
     delivery: deliveryOk(),
     workspace: { chosen: true, path: '/cases/a', title: 'A', id: 'w1', source: 'manual', missing: false },
     sessionWorkspace: { parentSessionId: 'p1', sessionCwd: '/cases/a', workspaceId: 'w1', workspacePath: '/cases/a', workspaceTitle: 'A' },
@@ -3802,6 +3829,96 @@ test('分页支持首页 / 上一页 / 下一页 / 末页与跳页', async () =>
   assert.ok(findByClass(pager, WORKBENCH_CLASSES.pagerJumpWrap), '要有跳至指定页')
   // 总数已经在页签上，分页条不再重复「共 N 条」。
   assert.equal(textOf(pager).includes('共'), false)
+
+  // ⚠️ 只断言"渲染出来了"是一半：还得证明**按钮真的接到了回调**。
+  // 早先这条用例收集了 `goto` 却从没触发过它 —— 把 `onClick` 接错（或接不上）照样通过，
+  // 而"点了页码没反应"正是这种一半断言放过去的东西（AGENTS §6 点名的"只断言一半"）。
+  const clickByLabel = (label) => {
+    const button = find(pager, (node) => node.type === 'button' && node.props?.['aria-label'] === label)
+    assert.ok(button, `找不到「${label}」按钮`)
+    button.props.onClick()
+  }
+  clickByLabel(zhCN.paginationFirst)
+  clickByLabel(zhCN.paginationPrev)
+  clickByLabel(zhCN.paginationNext)
+  clickByLabel(zhCN.paginationLast)
+  assert.deepEqual(goto, [1, 124, 126, 433], `首页/上页/下页/末页必须各自回调正确的页码：${JSON.stringify(goto)}`)
+
+  // 点具体页码也要回调（页码窗口里的 "126"）。
+  const pageButton = findAll(pager, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.pagerPage))
+    .find((node) => textOf(node) === '126')
+  assert.ok(pageButton, '页码窗口里应当有 126')
+  pageButton.props.onClick()
+  assert.deepEqual(goto.slice(4), [126], '点页码要回调该页码')
+})
+
+test('D2 · 「检查本机目录」按 Host 给的事实禁用（不让员工点一个必然被拒的按钮）', async () => {
+  // 用户 2026-09-29 的决定：能不能体检由 **Host** 给事实（`dwsDiagnosable` → 卡片 `canDiagnose`），
+  // 客户端不自己推断（它看不到诊断里的结构化事实，猜出来的一定与 Host 不一致）。
+  const { DwsLocalCard } = await import(new URL('src/client/features/environment/DwsLocalCard.tsx', ROOT).href)
+  const base = {
+    doctor: null, repair: null, busy: false, confirming: false, error: '',
+    onCheck: () => {}, onAskRepair: () => {}, onCancelRepair: () => {}, onConfirmRepair: () => {},
+  }
+  const checkButton = (tree) => {
+    const button = find(tree, (node) => node.type === 'button'
+      && String(node.props?.children ?? '').includes(zhCN.dwsLocalCheck))
+    assert.ok(button, '卡片上要有「检查本机目录」')
+    return button
+  }
+
+  // ① Host 明确说不可以 → 禁用 + 说明"先复现一次"。
+  const disabled = render(DwsLocalCard, { ...base, canDiagnose: false })
+  assert.equal(checkButton(disabled.tree).props.disabled, true, 'Host 说不能体检时必须禁用')
+  const note = find(disabled.tree, (node) => node.props?.['data-crwu-dws-local-note'] === '1')
+  assert.ok(note, '要说明"先复现一次"')
+  assert.equal(note.props['data-crwu-dws-local-disabled'], '1')
+
+  // ② 还没问到（`undefined`）→ 保持可点：Host 仍是那道真门禁，界面不抢先猜。
+  assert.equal(checkButton(render(DwsLocalCard, { ...base }).tree).props.disabled, false)
+  // ③ Host 说可以 → 可点。
+  assert.equal(checkButton(render(DwsLocalCard, { ...base, canDiagnose: true }).tree).props.disabled, false)
+})
+
+test('两个版本判据的 null 语义**刻意不对称**：协议 null 不算旧，权限说明 null 算不一致', () => {
+  const snapshot = (patch) => ({ ...fakeBuildStore(patch).get() })
+
+  // 协议：`null` = 宿主还没答（或答失败）—— 不能因为"没答"就断言"是旧构建"。
+  assert.equal(hostIsStale(snapshot({ protocol: WORKBENCH_PROTOCOL })), false)
+  assert.equal(hostIsStale(snapshot({ protocol: WORKBENCH_PROTOCOL - 1 })), true, '不同代必须拦住')
+  assert.equal(hostIsStale(snapshot({ protocol: null })), false, '还没答 ≠ 旧构建')
+
+  // 权限说明版本：`null` = **旧宿主根本没给这个字段**（那时授权语义还是布尔值，执行不了新范围）
+  // → 按不一致处理。两条判据的 null 语义相反是刻意的，别"顺手统一"。
+  assert.equal(hostPermissionSchemaStale(snapshot({ permissionSchemaVersion: PERMISSION_SCHEMA_VERSION })), false)
+  assert.equal(hostPermissionSchemaStale(snapshot({ permissionSchemaVersion: PERMISSION_SCHEMA_VERSION + 1 })), true)
+  assert.equal(hostPermissionSchemaStale(snapshot({ permissionSchemaVersion: null })), true, '旧宿主没给字段 = 不一致')
+})
+
+test('权限说明版本不一致：环境页把卡片**禁用**（接线：环境页 → 卡片）', async () => {
+  // 卡片自己的 `schemaMismatch` 分支有零件级用例（`client-local-access`），但"环境页收到
+  // `authSchemaMismatch` 之后真的把它传下去、并因此禁用「允许」"这一步没有证据 ——
+  // 也就是"零件对、接线没证据"。协议号**相同**、只有权限说明版本不同（或旧宿主没给字段）时，
+  // 该停的是凭据类动作，而**不是**换成"宿主是旧构建"整屏。
+  const { EnvironmentPane } = await import(new URL('src/client/features/environment/EnvironmentPane.tsx', ROOT).href)
+  const env = { ...okEnvBody(), localAccess: missingConsent() }
+  const paneProps = envPaneProps(env, { authSchemaMismatch: true })
+  const tree = render(EnvironmentPane, paneProps).tree
+  findStep(tree, 'accounts').props.onClick()
+  const text = textOf(rerender(EnvironmentPane, paneProps))
+  assert.equal(text.includes(zhCN.envConsentSchemaMismatch), true, '权限说明不一致要明说')
+  assert.equal(text.includes(zhCN.hostStaleTitle), false, '协议相同就不该说"宿主是旧构建"')
+  const agree = findButtonLike(rerender(EnvironmentPane, paneProps), zhCN.envConsentAgree)
+  assert.ok(agree, '授权按钮还在（只是禁用）')
+  assert.equal(agree.props.disabled, true, '权限说明不一致时必须禁用「允许」')
+
+  // 最后一段跳线（面板 → 环境页）在 JSX 里只有一处，静态钉住它：
+  // 面板必须用 `hostPermissionSchemaStale(build)` 的结果，而不是自己算或恒为 false。
+  const source = await readFile(new URL('src/client/features/workbench/WorkbenchPanel.tsx', ROOT), 'utf8')
+  assert.equal(source.includes('const permissionStale = hostPermissionSchemaStale(build)'), true,
+    '面板要用 hostPermissionSchemaStale(build) 判权限说明版本')
+  assert.equal(source.includes('authSchemaMismatch={permissionStale}'), true,
+    '面板要把这个结论原样传给环境页（不许在中间改写）')
 })
 
 test('次级控件共用同一套中性底：刷新 / 小鲸鱼 / ••• 三者底色一致，主操作是唯一实心', () => {

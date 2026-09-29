@@ -58,8 +58,13 @@ interface ToolsRuntimeLike {
 }
 
 /** 只查可见性（不执行任何东西）。 */
-export function auditToolsVisible(ctx: Context, agent: unknown): string[] {
-  return missingAuditTools(ctx, agent as Parameters<typeof missingAuditTools>[1])
+export function auditToolsVisible(
+  ctx: Context,
+  agent: unknown,
+  required?: readonly string[],
+): string[] {
+  const scope = agent as Parameters<typeof missingAuditTools>[1]
+  return required === undefined ? missingAuditTools(ctx, scope) : missingAuditTools(ctx, scope, required)
 }
 
 /** 可见性 + 真实调用一次能力自检。 */

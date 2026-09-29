@@ -9,6 +9,10 @@ import type {
 import { capabilitiesOf, overallStatusOf, requiredTallyOf } from '../../shared/environment/model.ts'
 import type { PackageIntegrityCheck, ServiceCheck } from './probe.ts'
 import type { RuntimeView, WorkspaceView } from '../../shared/types.ts'
+import {
+  LOCAL_ACCESS_REQUIRED_REASON,
+  type LocalAccessConsentView,
+} from '../../shared/access/types.ts'
 
 /**
  * 环境事实 → **统一环境模型**（协议 13）。
@@ -59,7 +63,8 @@ export interface EnvironmentInput {
   workspace: WorkspaceView
   /** 清单里的工作空间偏好名（未识别到时用于提示"没找到某某工作空间"）。 */
   preferWorkspaceTitle: string
-  trustCredentials: boolean
+  /** 本机访问授权收据：凭据类事实的**总闸**（不是 `granted` 时它们一律不可信）。 */
+  localAccess: LocalAccessConsentView
   h3yun: ServiceCheck
   dingtalk: ServiceCheck
   packageIntegrity: PackageIntegrityCheck
@@ -216,6 +221,66 @@ function toolRegistryItem(facts: ToolRegistryFacts): SetupItemView {
 }
 
 /**
+ * 授权项本身（`userSetup.credentialsConsent`）。
+ *
+ * 只有一个状态算通过：`granted`。`missing` / `outdated` / `revoked` 都是**员工点一下就能修**的，
+ * 所以都归 `unconfigured`（不是 `invalid` —— 员工没做错什么），原因逐态分开。
+ */
+function consentItem(consent: LocalAccessConsentView): SetupItemView {
+  if (consent.state === 'granted') return item('ok', '', '')
+  if (consent.state === 'missing') {
+    return item('unconfigured', '', '还没有允许工作台访问本机账号和配置')
+  }
+  return item('unconfigured', '', consent.reason || '需要重新允许一次')
+}
+
+/**
+ * 凭据类检查项在**未授权**时的统一占位。
+ *
+ * 判据不来自各探测结果（它们根本没跑），而是「总闸没开」这一个事实：状态一律 `unconfigured`、
+ * 原因一律 `LOCAL_ACCESS_REQUIRED_REASON`。这样即使上游实现被改坏、真去探了一遍并带回
+ * 「未登录 / 密钥错误 / 未找到」，界面上也不可能出现那些**假结论**。
+ */
+function consentBlockedItem(required: boolean): SetupItemView {
+  return item('unconfigured', '', LOCAL_ACCESS_REQUIRED_REASON, required)
+}
+
+/** 未授权时唯一的那条 issue：员工要做的事只有一件 —— 允许一次。 */
+function consentIssue(consent: LocalAccessConsentView): {
+  id: string
+  action: string
+  message: string
+} {
+  if (consent.state === 'missing') {
+    return {
+      id: 'consent',
+      action: '允许工作台访问本机账号和配置',
+      message: '还没有允许工作台访问本机账号和配置：允许之后才能读氚云会话、钉钉登录态、'
+        + 'OSS 配置与 iFinD API-Key。没允许时读到的「未登录」不可信，所以插件不做猜测。',
+    }
+  }
+  if (consent.state === 'revoked') {
+    return {
+      id: 'consent-revoked',
+      action: '重新允许工作台访问本机账号和配置',
+      message: '已撤销对本机账号和配置的访问：需要时在「账号连接」里重新允许一次。',
+    }
+  }
+  if (consent.state === 'persist-failed') {
+    return {
+      id: 'consent-persist-failed',
+      action: '重新允许一次',
+      message: consent.reason || '撤消失败：本机访问已关闭，但需要再撤销一次才能写入磁盘。',
+    }
+  }
+  return {
+    id: 'consent-outdated',
+    action: '按新的范围重新允许一次',
+    message: consent.reason || '授权范围已更新：请按新的范围重新允许一次。',
+  }
+}
+
+/**
  * issues 的固定顺序 = 处置优先级。
  *
  * 工作空间排最前（没有它审核产物没有落地目录），然后是授权、包、运行时、平台、Tool、服务、交付、
@@ -241,9 +306,11 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
     const named = input.preferWorkspaceTitle === '' ? '' : `「${input.preferWorkspaceTitle}」`
     push('workspace', 'user', true, 'global', '选择案例根目录', `未找到工作空间${named}，请手动选择`)
   }
-  if (!input.trustCredentials) {
-    push('consent', 'user', true, 'global', '授权读取本机凭据',
-      '授权读取本机凭据（氚云 / 钉钉）：还没授权时读到的「未登录」不可信，所以插件不做猜测，也不谎报')
+  // 本机访问授权是**第一道闸**：没开闸时不报凭据类故障（它们根本没被探过）。
+  const granted = input.localAccess.state === 'granted'
+  if (!granted) {
+    const issue = consentIssue(input.localAccess)
+    push(issue.id, 'user', true, 'global', issue.action, issue.message)
   }
   if (input.packageIntegrity.ok !== true) {
     push('package', 'system', true, 'global', '重新安装插件或联系管理员',
@@ -263,24 +330,29 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
     push('tool-registry', 'system', true, 'audit', '重启 profile 或联系维护者',
       `审核需要的 Tool 对当前 Agent 不可见：${input.toolRegistry.missing.join('、')}`)
   }
-  if (input.h3yun.required === true && input.h3yun.ok !== true) {
+  if (granted && input.h3yun.required === true && input.h3yun.ok !== true) {
     push('h3yun', 'user', true, 'audit', '扫码登录氚云',
       `${input.h3yun.label || '氚云（H3Yun）员工会话'}：${input.h3yun.state}${input.h3yun.detail === '' ? '' : `（${input.h3yun.detail}）`}`)
   }
-  if (input.dingtalk.required === true && input.dingtalk.ok !== true) {
+  if (granted && input.dingtalk.required === true && input.dingtalk.ok !== true) {
     push('dingtalk', 'user', true, 'audit', '登录钉钉（浏览器或设备码）',
       `${input.dingtalk.label || '钉钉认证'}：${input.dingtalk.state}${input.dingtalk.detail === '' ? '' : `（${input.dingtalk.detail}）`}`)
   }
   // 交付回传（OSS）。**阻塞范围是 global**：交付件回传是工作台的核心能力之一，
   // 缺 AK 时在环境页就拦住并告诉员工"向管理员获取后自己填"，比让他跑完一次审核、
   // 到最后卡在上传更省事（本地交付件仍会留着，不会丢）。
-  if (!input.oss.configured) {
+  //
+  // **整条链都在 `granted` 之内**（不是只包第一个分支）：未授权时 OSS 的凭据视图与探测结果
+  // 根本没产生（见 `environment/ops.ts`），拿占位值去派活会出现「还没有填写 AccessKey」这种
+  // 与真实原因无关的任务。`else if` 挂在被拒绝的 `if` 上会继续往下走 —— 这正是 2026-09-29
+  // A-03 测试抓到的那次漏检。
+  if (granted && !input.oss.configured) {
     push('oss-config', 'admin', true, 'global',
       '联系管理员配置 OSS Bucket / Endpoint', '部署配置里还没有 OSS Bucket / Endpoint')
-  } else if (!input.oss.cred.exists || !input.oss.cred.hasSecret) {
+  } else if (granted && (!input.oss.cred.exists || !input.oss.cred.hasSecret)) {
     push('oss-cred', 'user', true, 'global', '填写阿里云 AccessKey（向管理员获取）',
       '还没有填写阿里云 AccessKey，交付件无法回传')
-  } else if (input.oss.probe.ok !== true) {
+  } else if (granted && input.oss.probe.ok !== true) {
     // 四类分开派活（2026-09-26 收紧）：
     // - 凭据无效 → 员工自己重填 AK；
     // - 有凭据但没权限 → 找管理员开 Bucket / 前缀权限；
@@ -305,7 +377,7 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
   // - 没填 / API-Key 无效或过期 → owner=user（员工自己能修）；
   // - 账号没有数据权益 → owner=admin（要管理员开通）；
   // - 网络 / 超时 / 协议 / 上游不可达 → owner=system（员工和管理员都修不了，稍后重试）。
-  if (input.ifind.ok !== true || input.ifind.dataVerified !== true) {
+  if (granted && (input.ifind.ok !== true || input.ifind.dataVerified !== true)) {
     const kind = input.ifind.errorKind
     const unconfigured = input.ifind.tokenLength === 0
     const infrastructure = kind === 'infrastructure' || input.ifind.state === 'unreachable'
@@ -328,17 +400,16 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
 
 /** 组装统一环境模型。 */
 export function buildEnvironmentState(input: EnvironmentInput): EnvironmentStateView {
+  const granted = input.localAccess.state === 'granted'
   const userSetup = {
     workspace: workspaceItem(input.workspace, input.preferWorkspaceTitle),
-    credentialsConsent: item(
-      input.trustCredentials ? 'ok' : 'unconfigured',
-      '',
-      input.trustCredentials ? '' : '还没有授权读取本机凭据',
-    ),
-    h3yun: serviceItem(input.h3yun),
-    dingtalk: serviceItem(input.dingtalk),
-    aliyunOss: ossItem(input),
-    ifind: ifindItem(input),
+    credentialsConsent: consentItem(input.localAccess),
+    // 四项凭据类事实在未授权时**一律**是「需要先允许」：上面那些探测根本没发生，
+    // 拿它们的结果（或"没有结果"）当结论都会指向错误的处置。
+    h3yun: granted ? serviceItem(input.h3yun) : consentBlockedItem(input.h3yun.required === true),
+    dingtalk: granted ? serviceItem(input.dingtalk) : consentBlockedItem(input.dingtalk.required === true),
+    aliyunOss: granted ? ossItem(input) : consentBlockedItem(input.oss.probe.required === true),
+    ifind: granted ? ifindItem(input) : consentBlockedItem(input.ifind.required === true),
   }
   const systemHealth = {
     packageIntegrity: packageItem(input.packageIntegrity),

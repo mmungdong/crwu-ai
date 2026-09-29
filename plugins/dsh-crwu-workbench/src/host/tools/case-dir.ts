@@ -11,11 +11,27 @@ import { failure, type ToolFailure } from './outcome.ts'
  * 1. **所有产物都落在案例目录内**：`crwu_h3yun_file_get` 的下载目标、OSS 上传的源文件
  *    都必须通过 `contains()` 证明在案例目录之下。没有这一条，Tool 就成了
  *    「让宿主往任意路径写文件 / 把任意文件传到 OSS」的入口。
- * 2. **案例目录本身必须在插件选定的工作空间之下**（父级由 Host 判定，不由模型提交）。
+ * 2. **案例目录本身必须在插件选定的工作空间之下**（信任域由 Host 判定，不由模型提交）。
+ *    ⚠️ 2026-09-29 复查前，第 2 条只写在注释里、**代码里并没有做**：`caseDir` 是模型参数，
+ *    只校验了「绝对 + 存在 + 是目录 + 没有 `..`」。后果不是理论上的：
+ *    `crwu_audit_oss_publish` 会把**任意可读目录里**的文件传到 OSS（读不受沙箱限制 → 数据外泄），
+ *    `crwu_h3yun_record_get` 更是把模型给的字符串**原样当特权命令的 cwd** 用。
+ *    现在 `allowedRoot` 是**必填**参数，由调用方从 Host 状态取（`allowedCaseRootOf`），
+ *    编译器保证没有调用点能"忘了传"。
  *
  * 判据用 `fs.contains()`（后端自己 realpath 之后比较），不做字符串前缀匹配 ——
  * `..`、符号链接和 Windows 的盘符大小写都会让字符串比较失效。
  */
+
+/**
+ * 允许的案例根：**审核链路的信任域** = 选定工作空间（没选就退回案例根）。
+ *
+ * 与 `ensureAuditRoot` 里 `state.workspacePath || state.caseRoot` 是**同一个表达式** ——
+ * 审核根的沙箱边界就是它，所以"案例目录必须落在它之下"与"沙箱只允许在它里面写"是同一条线。
+ */
+export function allowedCaseRootOf(state: { workspacePath: string; caseRoot: string }): string {
+  return text(state.workspacePath) || text(state.caseRoot)
+}
 
 export interface CaseResolution {
   ok: true
@@ -25,8 +41,17 @@ export interface CaseResolution {
 
 export type CaseCheck = CaseResolution | ToolFailure
 
-/** 把模型给的案例目录解析成绝对 displayPath；空串/相对路径一律拒绝。 */
-export async function requireCaseDir(ctx: Context, raw: unknown): Promise<CaseCheck> {
+/**
+ * 把模型给的案例目录解析成绝对 displayPath，并证明它落在 `allowedRoot` 之下。
+ *
+ * `allowedRoot` **必填**（可以是空串 = Host 还没选工作空间，此时一律拒绝）：
+ * 把它做成可选参数就等于给"以后新增的调用点忘了传"留一个静默后门。
+ */
+export async function requireCaseDir(
+  ctx: Context,
+  raw: unknown,
+  options: { allowedRoot: string },
+): Promise<CaseCheck> {
   const value = text(raw).trim()
   if (value === '') return { ...failure('input', '缺少案例目录（caseDir 必须是绝对路径）') }
   // 盘符绝对路径与 UNC 都算绝对路径（`isAbsoluteLocalPath` 同时认 POSIX 的 `/…`）。
@@ -43,6 +68,17 @@ export async function requireCaseDir(ctx: Context, raw: unknown): Promise<CaseCh
   if (fs === undefined) return { ...failure('infrastructure', 'Host 文件服务不可用') }
   try {
     const target = await resolveTarget(ctx, value)
+    // **信任域**：模型给的路径必须在 Host 选定的工作空间之下。
+    // 不报路径细节（工作空间由员工自己选，但报错里不必再散一份绝对路径）。
+    // 运行时的兜底：TS 调用方必须传，但 JS/旧调用点漏传时**fail closed**（不是抛异常，也不是放行）。
+    const allowedRoot = text(options?.allowedRoot).trim()
+    if (allowedRoot === '') {
+      return { ...failure('policy', '还没有选定工作空间：拒绝在未确定信任域的情况下使用案例目录') }
+    }
+    const allowedTarget = await resolveTarget(ctx, allowedRoot)
+    if (fs.contains(allowedTarget, target) !== true) {
+      return { ...failure('policy', '案例目录必须落在当前工作空间之下（案例目录由 Host 判定，不由调用方指定）') }
+    }
     const info = await fs.stat(target)
     if (info?.type !== 'directory') {
       return { ...failure('input', `案例目录不存在或不是目录：${value}`) }

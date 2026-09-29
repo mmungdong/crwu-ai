@@ -8,6 +8,7 @@ import test from 'node:test'
  * 跳过之后只能报 `true`，字段名读起来是「chmod 成功了」。这一份钉住三种结局各自的说法与动作。
  */
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 const { enforceCredentialPermission, hostStorePermission, parseFileMode } = await import(
   new URL('src/host/platform/credential-permission.ts', ROOT).href)
 const { readFileModeCommand } = await import(new URL('src/host/platform/shell.ts', ROOT).href)
@@ -44,8 +45,8 @@ function makeCtx(result = { exitCode: 0, stdout: '600' }) {
 
 test('POSIX：chmod 成功**且回读到 600** → verified / posix-0600', async () => {
   const ctx = makeCtx({ exitCode: 0, stdout: '600' })
-  const permission = await enforceCredentialPermission(ctx, '/Users/x/.dsh/cred.json', 'darwin-arm64', {
-    workdir: '/Users/x', escalate: true,
+  const permission = await enforceCredentialPermission({ access: makeTestAccess(ctx).access, operation: 'ifind.credential.permission', path: '/Users/x/.dsh/cred.json', platform: 'darwin-arm64',
+    workdir: '/Users/x',
   })
   assert.deepEqual(permission, { status: 'verified', mechanism: 'posix-0600', message: '' })
   assert.equal(ctx.commands.length, 2, '收紧之后必须回读，不能只信退出码')
@@ -57,7 +58,7 @@ test('POSIX：chmod 成功**且回读到 600** → verified / posix-0600', async
 
 test('POSIX：chmod 退出码 0 但**回读不是 600** → failed（文件系统静默忽略 chmod）', async () => {
   const ctx = makeCtx((spec) => (spec.command.startsWith('chmod') ? { exitCode: 0 } : { exitCode: 0, stdout: '644' }))
-  const permission = await enforceCredentialPermission(ctx, '/Users/x/.dsh/cred.json', 'linux-x64', { workdir: '/Users/x' })
+  const permission = await enforceCredentialPermission({ access: makeTestAccess(ctx).access, operation: 'ifind.credential.permission', path: '/Users/x/.dsh/cred.json', platform: 'linux-x64', workdir: '/Users/x' })
   assert.equal(permission.status, 'failed', '命令跑过了不等于权限生效了')
   assert.equal(permission.mechanism, 'posix-0600')
   assert.match(permission.message, /回读到的模式是 644/)
@@ -68,7 +69,7 @@ test('POSIX：chmod 退出码 0 但**回读不是 600** → failed（文件系�
 
 test('POSIX：回读命令跑不起来 → failed，不退回「只看 chmod 退出码」', async () => {
   const ctx = makeCtx((spec) => (spec.command.startsWith('chmod') ? { exitCode: 0 } : { exitCode: 1, stderr: 'stat: not found' }))
-  const permission = await enforceCredentialPermission(ctx, '/Users/x/cred.json', 'darwin-arm64', { workdir: '/Users/x' })
+  const permission = await enforceCredentialPermission({ access: makeTestAccess(ctx).access, operation: 'ifind.credential.permission', path: '/Users/x/cred.json', platform: 'darwin-arm64', workdir: '/Users/x' })
   assert.equal(permission.status, 'failed')
   assert.match(permission.message, /权限回读失败/)
   assert.match(permission.message, /stat: not found/)
@@ -87,7 +88,7 @@ test('parseFileMode 只认末尾的八进制串，并归一四位前导 0', () =
 
 test('POSIX：chmod 失败 → failed / posix-0600，原因逐字带出（且不再回读）', async () => {
   const ctx = makeCtx({ exitCode: 1, stderr: 'chmod: Operation not permitted' })
-  const permission = await enforceCredentialPermission(ctx, '/Users/x/.dsh/cred.json', 'linux-x64', { workdir: '/Users/x' })
+  const permission = await enforceCredentialPermission({ access: makeTestAccess(ctx).access, operation: 'ifind.credential.permission', path: '/Users/x/.dsh/cred.json', platform: 'linux-x64', workdir: '/Users/x' })
   assert.equal(permission.status, 'failed')
   assert.equal(permission.mechanism, 'posix-0600')
   assert.match(permission.message, /Operation not permitted/)
@@ -104,13 +105,13 @@ test('POSIX：命令根本没跑起来（沙箱/审批）也算 failed，不伪�
       async execute() { throw new Error('no sandbox backend') },
     }
   }
-  const permission = await enforceCredentialPermission(ctx, '/Users/x/cred.json', 'darwin-arm64', { workdir: '/Users/x' })
+  const permission = await enforceCredentialPermission({ access: makeTestAccess(ctx).access, operation: 'ifind.credential.permission', path: '/Users/x/cred.json', platform: 'darwin-arm64', workdir: '/Users/x' })
   assert.equal(permission.status, 'failed')
 })
 
 test('Windows：不执行任何命令，如实报 inherited / windows-acl', async () => {
   const ctx = makeCtx({ exitCode: 0 })
-  const permission = await enforceCredentialPermission(ctx, 'C:\\Users\\x\\cred.json', 'win32-x64', {
+  const permission = await enforceCredentialPermission({ access: makeTestAccess(ctx).access, operation: 'ifind.credential.permission', path: 'C:\\Users\\x\\cred.json', platform: 'win32-x64',
     workdir: 'C:\\Users\\x', escalate: true,
   })
   assert.deepEqual(permission, {

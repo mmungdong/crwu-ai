@@ -2,6 +2,7 @@ import * as React from 'react'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { workbenchApi } from '../report-audit/api.ts'
 import { WORKBENCH_PROTOCOL } from '../../../shared/consts.ts'
+import { PERMISSION_SCHEMA_VERSION } from '../../../shared/access/types.ts'
 
 /**
  * 「现在跑的是哪一份插件」的共享状态。
@@ -34,6 +35,11 @@ export interface BuildSnapshot {
   builtAt: string
   /** 宿主报回来的协议代数；null = 还没答（或答失败）。 */
   protocol: number | null
+  /**
+   * 宿主执行的**权限说明版本**（`boot.permissionSchemaVersion`，协议 18）。
+   * `null` = 旧宿主没给这个字段 —— 按不一致处理（旧宿主的授权语义是布尔值，执行不了新范围）。
+   */
+  permissionSchemaVersion: number | null
   /** 宿主登记的「当前会话」（子会话的父级候选）；空串 = 还没登记。 */
   parentSessionId: string
 }
@@ -50,7 +56,8 @@ function describe(cause: unknown): string {
 }
 
 const EMPTY: BuildSnapshot = {
-  ok: false, error: '', rev: '', version: '', buildKind: '', builtAt: '', protocol: null, parentSessionId: '',
+  ok: false, error: '', rev: '', version: '', buildKind: '', builtAt: '', protocol: null,
+  permissionSchemaVersion: null, parentSessionId: '',
 }
 
 export function createBuildStore(): BuildStore {
@@ -88,6 +95,9 @@ export function createBuildStore(): BuildStore {
             buildKind: result.buildKind === 'dev' || result.buildKind === 'installed' ? result.buildKind : '',
             builtAt: typeof result.builtAt === 'string' ? result.builtAt : '',
             protocol: typeof result.protocol === 'number' ? result.protocol : null,
+            permissionSchemaVersion: typeof result.permissionSchemaVersion === 'number'
+              ? result.permissionSchemaVersion
+              : null,
             parentSessionId: typeof result.parentSessionId === 'string' ? result.parentSessionId : '',
           })
           return snapshot
@@ -115,6 +125,18 @@ export function useBuild(store: BuildStore): BuildSnapshot {
 /** 宿主与客户端是不是同一代（不同代时**必须**拦住发起审核，见 AGENTS.md §7.12）。 */
 export function hostIsStale(snapshot: BuildSnapshot): boolean {
   return snapshot.protocol !== null && snapshot.protocol !== WORKBENCH_PROTOCOL
+}
+
+/**
+ * 宿主执行的权限说明版本与客户端是否一致（协议 18）。
+ *
+ * 与 `hostIsStale` 分开判是刻意的：协议号回答「是不是同一代」，这一条回答
+ * 「我这份界面上写的授权范围，和宿主实际执行的判据是不是同一版」。
+ * 版本不同（含旧宿主根本没给这个字段）时，**任何本机凭据操作都必须停住** ——
+ * 让一个执行旧范围的宿主看起来授权成功，比拦住更危险。
+ */
+export function hostPermissionSchemaStale(snapshot: BuildSnapshot): boolean {
+  return snapshot.permissionSchemaVersion !== PERMISSION_SCHEMA_VERSION
 }
 
 /**

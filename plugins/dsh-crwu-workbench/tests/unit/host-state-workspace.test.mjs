@@ -20,6 +20,22 @@ const { trimSlash, registryList, resolveAuditWorkspace, ensureWorkspace, session
   new URL('src/host/workspace/resolve.ts', ROOT).href
 )
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+
+/**
+ * `writeWorkbenchConfig` 的依赖：真 Broker（策略走真实代码）+ 测试的 ctx。
+ *
+ * 状态文件是 `host-owned-state`（不属于员工授予的能力），所以未授权也能落盘 —— 这正是
+ * 「允许一次」这个动作本身能写盘的原因。
+ */
+function writeDeps(ctx) {
+  return { ctx, home: '/Users/x', access: makeTestAccess(ctx).access }
+}
+
+/** `ensureRegistry` / `persistAudits` / `persistAuditRoot` 的依赖（同一份 Broker）。 */
+function regDeps(ctx, state) {
+  return { ctx, home: '/Users/x', state, access: makeTestAccess(ctx).access }
+}
 
 /** 内存文件系统替身：记录写入，stat 按已有文件回答。 */
 function memoryFs(initial = {}, dirs = []) {
@@ -64,6 +80,19 @@ test('workbenchConfigPath lives under the execution-world home', () => {
   assert.equal(workbenchConfigPath(''), '~/.dsh/crwu-workbench.json')
 })
 
+test('P2 · Windows 上的收据路径不能出现混合分隔符（授权状态就落在这个文件里）', () => {
+  // `C:\Users\x` + 手拼 `/` = `C:\Users\x/.dsh/crwu-workbench.json`。Windows 通常能吃下去，
+  // 但这个文件承载授权收据与撤销状态，不该依赖"通常能吃下去"。
+  const win = workbenchConfigPath('C:\\Users\\张 三')
+  assert.equal(win.includes('/'), false, `Windows 路径出现正斜杠：${win}`)
+  assert.equal(win.endsWith('\\.dsh\\crwu-workbench.json'), true, win)
+  // 盘符根 + 尾分隔符 + 非 ASCII 都要稳。
+  assert.equal(workbenchConfigPath('C:\\'), 'C:\\.dsh\\crwu-workbench.json', '盘符根后面只接一个分隔符')
+  // POSIX 侧不变。
+  assert.equal(workbenchConfigPath('/Users/x'), '/Users/x/.dsh/crwu-workbench.json')
+  assert.equal(workbenchConfigPath('/Users/x/'), '/Users/x/.dsh/crwu-workbench.json')
+})
+
 test('readWorkbenchConfig tolerates missing file, bad JSON and missing fs', async () => {
   const missing = memoryFs()
   assert.deepEqual(await readWorkbenchConfig(missing.ctx, '/Users/x'), {})
@@ -77,7 +106,7 @@ test('readWorkbenchConfig tolerates missing file, bad JSON and missing fs', asyn
 
 test('writeWorkbenchConfig merges instead of overwriting', async () => {
   const fs = memoryFs({ '/Users/x/.dsh/crwu-workbench.json': '{"workspacePath":"/cases/a"}' })
-  const ok = await writeWorkbenchConfig(fs.ctx, '/Users/x', { activeKey: 'k1' })
+  const ok = await writeWorkbenchConfig(writeDeps(fs.ctx), { activeKey: 'k1' })
   assert.equal(ok, true)
   const written = JSON.parse(fs.writes[0].content)
   assert.equal(written.workspacePath, '/cases/a', '已有的 workspacePath 不能被抹掉')
@@ -97,12 +126,12 @@ test('writeWorkbenchConfig refuses to write when the config cannot be read', asy
       async writeText(target, content) { writes.push({ target, content }) },
     }),
   }
-  assert.equal(await writeWorkbenchConfig(ctx, '/Users/x', { activeKey: 'k1' }), false, '读不到就别写')
+  assert.equal(await writeWorkbenchConfig(writeDeps(ctx), { activeKey: 'k1' }), false, '读不到就别写')
   assert.deepEqual(writes, [], '一次写入都不该发生')
 })
 
 test('writeWorkbenchConfig reports failure without throwing when fs is unavailable', async () => {
-  assert.equal(await writeWorkbenchConfig({ get: () => undefined }, '/Users/x', { a: 1 }), false)
+  assert.equal(await writeWorkbenchConfig(writeDeps({ get: () => undefined }), { a: 1 }), false)
 })
 
 // ── 审核记录与占用锁 ────────────────────────────────────────────────────────
@@ -141,7 +170,7 @@ test('ensureRegistry restores records AND the occupancy lock', async () => {
     }),
   })
   const state = makeState()
-  await ensureRegistry(fs.ctx, '/Users/x', state)
+  await ensureRegistry(regDeps(fs.ctx, state))
 
   assert.equal(state.audits['a:1'].childId, 'child-1')
   assert.equal(state.audits['a:1'].attempt, 2)
@@ -163,12 +192,12 @@ test('ensureRegistry never overwrites a live record and only reads once', async 
   state.audits.k = { ...normalizeAudit('k', { childId: 'live' }) }
   state.activeChildId = 'live-child'
 
-  await ensureRegistry(fs.ctx, '/Users/x', state)
+  await ensureRegistry(regDeps(fs.ctx, state))
   assert.equal(state.audits.k.childId, 'live', '本进程的记录比磁盘上的新')
   assert.equal(state.activeChildId, 'live-child', '已有占用时不接受磁盘上的锁')
 
   fs.files['/Users/x/.dsh/crwu-workbench.json'] = JSON.stringify({ audits: { other: { childId: 'x' } } })
-  await ensureRegistry(fs.ctx, '/Users/x', state)
+  await ensureRegistry(regDeps(fs.ctx, state))
   assert.equal(state.audits.other, undefined, '第二次调用不应再读盘')
 })
 
@@ -178,7 +207,7 @@ test('persistAudits writes records plus the occupancy lock', async () => {
   state.audits['a:1'] = { ...normalizeAudit('a:1', { childId: 'c1' }) }
   state.activeKey = 'a:1'
   state.activeChildId = 'c1'
-  assert.equal(await persistAudits(fs.ctx, '/Users/x', state), true)
+  assert.equal(await persistAudits(regDeps(fs.ctx, state)), true)
   const written = JSON.parse(fs.writes[0].content)
   assert.equal(written.activeKey, 'a:1')
   assert.equal(written.activeChildId, 'c1')
@@ -187,12 +216,15 @@ test('persistAudits writes records plus the occupancy lock', async () => {
 
 // ── 审核根会话的跨重启钩子 ──────────────────────────────────────────────────
 
-const SAVED_ROOT = { workspacePath: '/cases/space', sessionId: 'session-9', title: '审核子代理根节点 · 09-20 10:00', assignedAt: '2026-09-20T02:00:00.000Z' }
+const SAVED_ROOT = {
+  // 根的标识是**案例目录**（协议 19 起）：它必须跟着一起恢复，否则重启后会判过期、
+  // 每次都新建一个根（侧栏里散成一堆「审核子代理根节点」）。
+  casePath: '/cases/space/S1', workspacePath: '/cases/space', sessionId: 'session-9', title: '审核子代理根节点 · 09-20 10:00', assignedAt: '2026-09-20T02:00:00.000Z' }
 
 test('persistAuditRoot writes the hook and leaves the other fields alone', async () => {
   const fs = memoryFs({ '/Users/x/.dsh/crwu-workbench.json': '{"workspacePath":"/cases/a","audits":{"k1":{"childId":"c1"}}}' })
   const state = makeState({ auditRoot: { ...SAVED_ROOT } })
-  assert.equal(await persistAuditRoot(fs.ctx, '/Users/x', state), true)
+  assert.equal(await persistAuditRoot(regDeps(fs.ctx, state)), true)
 
   const written = JSON.parse(fs.writes[0].content)
   assert.deepEqual(written.auditRoot, SAVED_ROOT, '四个字段原样落盘')
@@ -205,7 +237,7 @@ test('ensureRegistry restores the persisted root so a restart reuses the same tr
   // 以为自己挂的还是原来那棵树（「挂的有问题」里最容易发生的一种）。
   const fs = memoryFs({ '/Users/x/.dsh/crwu-workbench.json': JSON.stringify({ auditRoot: SAVED_ROOT }) })
   const state = makeState()
-  await ensureRegistry(fs.ctx, '/Users/x', state)
+  await ensureRegistry(regDeps(fs.ctx, state))
   assert.deepEqual(state.auditRoot, SAVED_ROOT)
 })
 
@@ -213,13 +245,13 @@ test('ensureRegistry narrows a missing or garbage root to "no root"', async () =
   // 老状态文件没有 auditRoot；被人手改成对象/数字时也不能把非字符串塞进 state
   // （那会一路显示到界面上，还会被写回磁盘）。
   const absent = makeState()
-  await ensureRegistry(memoryFs({ '/Users/x/.dsh/crwu-workbench.json': '{"workspacePath":"/cases/a"}' }).ctx, '/Users/x', absent)
-  assert.deepEqual(absent.auditRoot, { workspacePath: '', sessionId: '', title: '', assignedAt: '' })
+  await ensureRegistry(regDeps(memoryFs({ '/Users/x/.dsh/crwu-workbench.json': '{"workspacePath":"/cases/a"}' }).ctx, absent))
+  assert.deepEqual(absent.auditRoot, { workspacePath: '', casePath: '', sessionId: '', title: '', assignedAt: '' })
 
   const garbage = makeState()
   const file = JSON.stringify({ auditRoot: { sessionId: { nested: true }, title: 42, assignedAt: ['x'] } })
-  await ensureRegistry(memoryFs({ '/Users/x/.dsh/crwu-workbench.json': file }).ctx, '/Users/x', garbage)
-  assert.deepEqual(garbage.auditRoot, { workspacePath: '', sessionId: '', title: '', assignedAt: '' })
+  await ensureRegistry(regDeps(memoryFs({ '/Users/x/.dsh/crwu-workbench.json': file }).ctx, garbage))
+  assert.deepEqual(garbage.auditRoot, { workspacePath: '', casePath: '', sessionId: '', title: '', assignedAt: '' })
 })
 
 // ── 工作空间解析 ────────────────────────────────────────────────────────────
@@ -459,4 +491,30 @@ test('sessionWorkspaceInfo stays empty without a parent session or cwd', () => {
   const info = sessionWorkspaceInfo({ get: () => ({}) }, noCwd)
   assert.equal(info.sessionCwd, '')
   assert.equal(info.workspaceId, '')
+})
+
+test('重启时不恢复"没落地过 childId"的 pending：退役它，也不恢复指向空 childId 的占用锁', async () => {
+  // 用户第三轮复查的 P2：创建子会话失败且**回滚写盘也失败**时，磁盘上会留下 pending: true 的记录。
+  // 重启时若原样恢复，它既没有可停的对象、又可能被当成"正在跑"。
+  const fs = memoryFs({
+    '/Users/x/.dsh/crwu-workbench.json': JSON.stringify({
+      audits: {
+        orphan: {
+          key: 'orphan', childId: '', seqNo: 'S1', objectId: 'o1', parentSessionId: 'parent-1',
+          casePath: '/cases/space/S1', attemptId: 'S1-a1-x', pending: true, status: 'running',
+          ended: false, stopped: false,
+        },
+      },
+      activeKey: 'orphan',
+      activeChildId: '',
+    }),
+  })
+  const state = makeState()
+  await ensureRegistry(regDeps(fs.ctx, state))
+  const record = state.audits.orphan
+  assert.notEqual(record, undefined, '记录本身保留（万一那个孩子还活着，面板类 Tool 仍要拒绝它）')
+  assert.equal(record.retired, true, '退役：不发放任何 scope')
+  assert.equal(record.status, 'unknown')
+  assert.equal(state.activeChildId, '', '不许把指向空 childId 的锁恢复回来')
+  assert.equal(state.activeKey, '')
 })

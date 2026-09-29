@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { subscribeAuditEvents } = await import(new URL('src/host/audit/events.ts', ROOT).href)
 const { auditStatus } = await import(new URL('src/host/audit/ops.ts', ROOT).href)
@@ -204,6 +205,7 @@ test('audit-status triggers an upload for a delivered result even without the en
     config: CONFIG,
     state,
     world: fakeWorld(),
+    access: makeTestAccess(ctx).access,
     autoUpload: async (record) => { uploaded.push(record.key) },
   }, {})
 
@@ -227,7 +229,7 @@ test('audit-status does not upload while the child is still alive', async () => 
     audits: { [SEQ]: { ...normalizeAudit('k', {}), key: SEQ, seqNo: SEQ, childId: 'c1', casePath: `/cases/${SEQ}` } },
   })
   // agents.get 返回 running → 判定为运行中 → 不该触发上传。
-  await auditStatus({ ctx, config: CONFIG, state, world: fakeWorld(), autoUpload: async (record) => { uploaded.push(record.key) } }, {})
+  await auditStatus({ ctx, config: CONFIG, state, world: fakeWorld(), access: makeTestAccess(ctx).access, autoUpload: async (record) => { uploaded.push(record.key) } }, {})
   assert.deepEqual(uploaded, [], '还在跑就不上传')
 })
 
@@ -249,14 +251,14 @@ test('an already uploaded record is never uploaded twice', async () => {
       },
     },
   })
-  await auditStatus({ ctx, config: CONFIG, state, world: fakeWorld(), autoUpload: async (record) => { uploaded.push(record.key) } }, {})
+  await auditStatus({ ctx, config: CONFIG, state, world: fakeWorld(), access: makeTestAccess(ctx).access, autoUpload: async (record) => { uploaded.push(record.key) } }, {})
   assert.deepEqual(uploaded, [], '传过了就不能再传')
 })
 
 test('audit-status works without the optional upload hook', async () => {
   const ctx = makeCtx()
   const state = stateOf({ parentSessionId: 'p1', audits: { k: { ...normalizeAudit('k', {}), key: 'k', childId: 'c1', ended: true } } })
-  const result = await auditStatus({ ctx, config: CONFIG, state, world: fakeWorld() }, {})
+  const result = await auditStatus({ ctx, config: CONFIG, state, world: fakeWorld(), access: makeTestAccess(ctx).access }, {})
   assert.equal(result.ok, true)
 })
 

@@ -7,7 +7,8 @@ import { fileSystem, readTextIfExists, resolveTarget } from '../fs/paths.ts'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { DINGTALK_TARGET, DWS_MAX_PAGES } from '../dws/consts.ts'
 import { buildPublishPlan, nodeSize } from '../dws/plan.ts'
-import { requireCaseDir, requireInsideCase, fileSize } from './case-dir.ts'
+import { requireInsideCase, fileSize } from './case-dir.ts'
+import { requireAuditScope } from '../audit/scope.ts'
 import { dwsJson, type DwsJsonOptions } from './dws-json.ts'
 import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
 import { failure, jsonObject, renderJson } from './outcome.ts'
@@ -171,13 +172,15 @@ export function dingtalkTools(deps: ToolDeps) {
         remotePath: '', remoteName: '', nodeId: '', sizeBytes: 0, exitCode: null as number | null, steps,
       }
       const ctx = toolContext(deps.ctx, exec)
-      const caseCheck = await requireCaseDir(ctx, args.caseDir)
+      const caseCheck = await requireAuditScope(ctx, deps.state, exec, {
+        caseDir: args.caseDir, seqNo: args.seqNo,
+      })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
       const seqNo = text(args.seqNo).trim()
       const requested = text(args.fileName).trim() || `审核结果.${seqNo}.json`
-      const inside = await requireInsideCase(ctx, caseCheck.path, requested)
+      const inside = await requireInsideCase(ctx, caseCheck.casePath, requested)
       if (!inside.ok) return { ...inside, ...empty }
-      const caseDir = caseCheck.path
+      const caseDir = caseCheck.casePath
 
       const loaded = await readCaseJson(ctx, inside.path)
       if (loaded.ok === false) return { ...failure('input', loaded.error), ...empty }
@@ -187,7 +190,8 @@ export function dingtalkTools(deps: ToolDeps) {
       const platform = await deps.world.platform()
       const options: DwsJsonOptions = {
         workdir: caseDir,
-        trusted: credentialsTrusted(deps),
+        access: deps.access,
+        source: 'audit-tool',
         ...(exec.signal === undefined ? {} : { signal: exec.signal }),
       }
       const withProfile = (profile: string, argv: readonly string[]): string[] => ['--profile', profile, ...argv]
@@ -399,11 +403,13 @@ export function dingtalkTools(deps: ToolDeps) {
       const empty = {
         alreadySent: false, userId: '', openDingTalkId: '', conversationId: '', messageId: '', openDingId: '', steps,
       }
-      const caseCheck = await requireCaseDir(ctx, args.caseDir)
+      const caseCheck = await requireAuditScope(ctx, deps.state, exec, {
+        caseDir: args.caseDir, seqNo: args.seqNo,
+      })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
       const seqNo = text(args.seqNo).trim()
       if (seqNo === '') return { ...failure('input', 'seqNo 不能为空'), ...empty }
-      const caseDir = caseCheck.path
+      const caseDir = caseCheck.casePath
 
       const send = async (): Promise<NotifyResult> => {
         const statePath = joinLocalPath(caseDir, NOTIFY_STATE_FILE)
@@ -432,7 +438,8 @@ export function dingtalkTools(deps: ToolDeps) {
         const platform = await deps.world.platform()
         const options: DwsJsonOptions = {
           workdir: caseDir,
-          trusted: credentialsTrusted(deps),
+          access: deps.access,
+        source: 'audit-tool',
           ...(exec.signal === undefined ? {} : { signal: exec.signal }),
         }
         const withProfile = (profile: string, argv: readonly string[]): string[] => ['--profile', profile, ...argv]

@@ -7,6 +7,226 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.15 · 2026-09-28
+
+**协议 18：本机访问从「调用方声明提权」改成「具名操作 + 版本化授权收据」，
+审核会话固定收敛到 `workspace-write` + `approval=never`。**
+
+这是**跨进程契约的语义破坏**，不只是加字段：旧的 `trust` 布尔不再被接受（协议不匹配直接失败，
+不会被当成"已授权"），`crwu` 直通 RPC 不再接受 `escalate` 参数，提权改由**操作身份**决定。
+装上升级后需要**完整退出并重启** DSH（客户端与宿主是两个进程，只刷新页面会留下旧宿主）。
+
+### 为什么要换形态（员工实测的三段报错）
+
+| 员工看到的 | 真正的原因 | 旧形态为什么分辨不出 |
+| --- | --- | --- |
+| 写 `%USERPROFILE%\.ossutilconfig` 报 `file access denied under workspace-write mode` | DSH 沙箱拒绝 | `escalate: true` 只是一个布尔，看不出"这一步到底放行了什么" |
+| 氚云报 `secret not found in keyring` | 受限沙箱读不到钥匙串，**不是**没登录 | 未授权时会先探一次凭据，把假结论当真相 |
+| DWS 报 `.data.lock: Access is denied` | 沙箱写不了 / 真 NTFS ACL / 锁被占用（三种） | 三者文本一样，只能靠猜 |
+
+三段表象不同、原因相同；而同**一句** `Access is denied` 又可能是三种完全不同的原因。
+所以这一版把"提权"变成一个**具名操作的属性**，把"为什么失败"变成**结构化事实的推理**。
+
+### A · 版本化同意 + 安全的环境引导（协议 18）
+
+- 授权收据带 `schemaVersion` + `grantedAt` + **固定的五项能力**；旧的 `trustCredentials: true`
+  一律判为 `outdated`（**永远不是**一次授权）。
+- **未授权时一个凭据进程都不起、一个凭据字节都不读**（原来会先探一次，于是"未登录/密钥错误"
+  这种假结论会被写进交付件）。未授权在环境自检里是**阻塞项**，不是"未登录"。
+- 授权入口在环境 workflow 的「账号连接」里（不是遮住整页的模态框），并带一次明确的「暂不允许」。
+
+### B · 本机访问代理（Local Access Broker）
+
+- `src/host/access/{operations,diagnostics,broker}.ts`：**封闭的操作表**（27 个操作，
+  每个固定 capability / 通道 / 是否提权 / 允许的来源）+ 唯一能声明 `danger-full-access` 的地方。
+- `runShell` **没有** `escalate` 参数；调用方只能选一个操作名，不能提交命令、二进制路径、
+  沙箱模式或提权开关。文件写入还要求"目标种类 + 绝对路径"逐字对上。
+- 全量迁移：状态文件、iFinD 凭据、OSS 配置与**每一次** `ossutil`、氚云全部子命令、
+  `dws` 全部白名单前缀、浏览器/剪贴板/案例目录、13 处审核 Tool 调用点。
+- **归因只看结构化事实**：`requested` / `resolved` / `ran` / `denied` / `runnerFailed`。
+  `ran` 也要看 —— 请求活过了 `resolve()` 却在执行时被降级是最难发现的一种。
+- 迁移守卫（`host-access-migration.test.mjs`）：业务 CLI 只能在登记的执行器里拼命令、
+  且必须经 Broker；这条守卫在开发中真的抓到两处自己拼 `dws` 命令的调用点。
+
+### C · 审核会话收敛
+
+- 审核根与审核子会话**永远** `workspace-write` + `approval=never`：用 DSH 自己的
+  `setSandboxMode` / `setApprovalPolicy` 写入，再**回读**，并按 DSH 的委派捕获口径确认
+  "子代理将要继承到什么"。**不依赖部署默认**（默认可能是 `danger-full-access`）。
+- 带 `auto` / `danger-full-access` preset 的根**不可复用**；创建子代理前还有一道环境就绪门禁；
+  子会话发布后按它自己的 scope 复查策略与工具可见性，不对就**停掉它**。
+- 登录类操作（`h3yun.session.login` / `dws.auth.login`）的 `allowedSources` **只有面板**：
+  审核链路连登录这个动作都拿不到。提示词里明令"未登录就停下、要员工回工作台"。
+
+### D · 桌面归因与修复指引
+
+- `src/host/access/classify.ts`：九档优先级的**纯函数**分类器，把三段表象分开成
+  `os-credential-store` / `file-lock` / `os-filesystem-permission` / `sandbox-denied` /
+  `sandbox-downgraded` / `infrastructure` / `cli`。
+  `sandbox-exec: sandbox_apply: Operation not permitted` **永远**是基础设施故障，
+  不会被翻译成"命令缺失 / 没登录 / 凭据无效"；锁必须有**正向探测**才定性。
+- 新 Host 操作 `dws-local-doctor`（只读、零参数、目录由 `<home>/.dws` 推导）与
+  `dws-local-permission-repair`（**只给面板**、必须 `{ confirm: true }`、要求体检**正向确诊**
+  "本机文件权限问题"）。修复只动 `.dws`（700）与 `.data.lock`（600）：不 `chown` / `takeown` /
+  `sudo`、不删锁、不碰父目录、拒符号链接，修完**重新体检**。
+- 界面：修复按钮**只在确诊本机文件权限问题时渲染**，并且要**二次确认**（改权限 ≠ 允许读本机凭据）。
+  沙箱拒绝 / 降级 / 钥匙串 / 认证失败 / 所有者不对 / 文件锁都不渲染。
+- `@deepseek-ai/dsh-sandbox-policy` 与 `@deepseek-ai/dsh-user-approval` 加入 peer + dev
+  （与其余 7 个 peer 同口径；宿主产物会 `import` 它们，接收方由 DSH 运行时提供）。
+
+### 操作清单：33 → 38
+
+新增 `local-access-grant` / `local-access-revoke`（A）、`access-diagnostics`（B，只读）、
+`dws-local-doctor` / `dws-local-permission-repair`（D）。`crwu` 直通入口的 `escalate` 参数已删除。
+冻结清单在 `tests/helpers/frozen-inventory.mjs`，漏登记会直接红。
+
+### 复查期间加固（2026-09-29，用户复查逐条点出后修）
+
+下面这些**都在本版里**（0.0.15 未发布，所以按最终形态记），每一条都能被具名用例证伪：
+
+- **授权/撤销的状态迁移只由 `host/access/consent.ts` 负责**：调用方不得把返回的收据写回活状态 ——
+  写盘失败时那份视图可能来自**磁盘上的旧授权**，照抄等于一次失败的「重新允许」把权限重新打开。
+- **案例目录必须落在选定工作空间的信任域内**：此前这条要求只写在注释里。`caseDir` 是模型参数，
+  只校验"绝对 + 存在 + 是目录 + 没有 `..`"等于没校验 —— `crwu_audit_oss_publish` 会把**任意可读文件**
+  传到 OSS（读不受沙箱限制），`crwu_h3yun_record_get` / `files_list` 更把它**原样当特权命令的 cwd**。
+  现在 `allowedRoot` 是**必填参数**（编译器保证没有调用点能漏传），运行时漏传 fail closed。
+- **信任域未知一律拒绝，不许"跳过检查继续做"**：`openPath` 曾经是后者，那天唯一挡住它的是
+  "提权必须有 workdir"与案例根兜底**恰好相等**；判据现在落在任何 fs 探测之前。
+- **锁归因要两个条件**（原始失败与锁有关 **且** 正向探测证明有人持有）；Windows 的锁探测必须沿
+  `InnerException` 解包到根异常再读 HResult（旧写法让"真有进程持锁"也落 `Unknown`，W-05 在代码上不可达）。
+- **目录与 `.data.lock` 分别探权限**：只探目录会让"目录正常、锁文件不可写"退化成 `cli`、修复入口永不出现；
+  修复只动被证明有问题的对象，回读也只核对修过的那些。
+- **Windows ACL 算有效权限**：`Modify = 197055` / `FullControl = 2032127`（夹具曾把后者标成 Modify）；
+  判据是"所需**写**权限"是否被完整覆盖，**部分 Deny**（`(W)`、Delete）同样算不可写 —— 旧实现整个忽略。
+- **脱敏声明要有端到端证据**：取数摘要的净化此前只在失败路径被喂过 token，成功路径只试过 `{"v":1}`；
+  现在按"零件级 + 接线级"两条分别取证（对象路径的密钥字段整条丢 ≠ 文本的值级净化）。
+- **卸载路径此前从未被执行过**：`smoke:built` 现在调用每个 `ctx.effect` 的 disposer，断言同源路由被摘、
+  工具被逐个注销（忘 `return` disposer 是 Cordis 的经典坑，本地以前完全看不见）。
+
+### 复查第二轮：**审核 scope 绑定**（协议 19）
+
+第一轮修的是"案例目录必须在工作空间之下"。用户第二轮复查指出：这**不够** ——
+一个工作空间里通常有很多案例目录，于是 S1 的子会话可以传 `<工作空间>/S2`、
+或传工作空间根再读 `S2/文件`（把别的案例读出来传上 OSS、或往别的案例里写）；
+氚云的 `objectId` / `fileId` 也是模型提交的，Host 没有把任何东西绑到**本轮**审核上。
+
+- **Host 权威 scope 落盘**：创建记录时写死 `casePath`（= `<工作空间>/<流水号>`）、`attemptId`
+  与 `allowedAttachmentIds`（来自**可信输入快照**），跨重启保留。认领来的旧记录 scope 不完整 →
+  案例内 Tool 一律拒绝（不拿工作空间兜底）。
+- **统一门禁 `requireAuditScope`**：按 `exec.agent.id → childId → 记录` 找本轮 scope，
+  `caseDir` 必须与 `casePath` **规范解析后精确相等**（工作空间根、兄弟案例、案例目录的子目录一律拒绝；
+  Windows 盘符/UNC 按风格大小写不敏感，POSIX 大小写敏感），`seqNo` / `objectId` 必须一致，
+  无身份 / 未知 childId / 已结束 / scope 不完整一律 fail closed。通过时**返回 Host 的路径**，
+  调用方不再使用模型给的字符串。
+- **氚云边界收紧**：`crwu_h3yun_record_get` / `files_list` 移出审核子会话的必需集
+  （注册面与审核能力集拆成 `CRWU_BUSINESS_TOOLS` / `REQUIRED_AUDIT_TOOLS`），
+  审核子会话调用它们直接拒绝且**零进程**；`crwu_h3yun_file_get` 只接受快照里登记的 `fileId`，
+  表外 id 在起进程之前拒绝。`case_bootstrap` 也要求 `caseDir` 精确等于 Host 约定算出的那一个。
+- **真正的写边界是案例目录**：审核根的 `cwd` 与 `workspace-write.workspaceRoot` **都**改成
+  本轮案例目录（回读核对），一条根只服务一个案例，工作空间级旧根（`casePath` 为空）判**过期**不复用；
+  占用门禁提前到"建目录 / 建根"之前，所以被拒的发起**零副作用**（不建空目录、不起根会话）。
+  于是通用 shell / fs 也只能写自己的案例目录 —— 这一条与设计文档"只能写自己的案例目录"终于一致。
+- **协议 18 → 19**：这是跨进程权限语义变化，旧宿主仍按工作空间级边界跑审核，
+  必须靠协议号把"界面新、宿主旧"拦下来（客户端会要求完整重启）。
+### F 段：可观察的停止状态机 + 当前审核会话入口（2026-09-29）
+
+- **两阶段停止协议**：`audit-stop` 立刻把阶段写成 `requested` 并落盘后返回"已接受"，
+  abort → dispose → 静默复查在后台继续，阶段逐段落盘；`audit-status` 每条记录带
+  `stop`（`phase` / `requestedAt` / `elapsedMs` / `quiesced` / `aborted` / `disposed` /
+  `error` / `notes` / `canStartNext`），并加一个顶层 `canStartNext`。
+  重复点停止**幂等**（`alreadyStopping`，不启动第二条流程、不重复 abort）。
+- **阶段枚举**：`idle` / `requested` / `aborting` / `waiting-quiescence` / `quiesced` / `timeout` / `failed`。
+  `canStartNext` **只由 Host 判定**：没确认静默（timeout / failed / 进行中）一律 false，
+  且**不依赖占用锁在不在**（重启后锁可能没恢复，"没确认停下"仍然成立）。客户端缺字段按未知处理。
+- **启动门禁**：停止流程在跑、或上一条留下 timeout / failed 时，`audit-start` 直接拒绝；
+  界面同时把行上的「AI 审核 / 重新审核」置灰（与 Host 的 `canStartNext` 取交）。
+- **界面（F2/F3）**：顶部「当前审核」摘要卡（流水号 / 项目 / 状态 / attempt / 开始时间 /
+  childId 脱敏尾部 / 停止阶段 / 观察），**在表格之外**，所以当前审核不在当前分页或筛选结果里时
+  依然可见；阶段文案用 `aria-live="polite"` 播报、等待期间显示"已等待 N 秒 · 最多等待约 8 秒"、
+  停止按钮禁用；timeout 给「继续等待 / 再次停止 / 复制诊断」，failed 给「打开当前会话 / 复制诊断」
+  并显示真实错误与"当前审核仍被保留，未释放占用"。
+- **「打开审核会话」**：用**被点那一行**的 `childId` / `parentSessionId`（`openSessionTarget` 是唯一解析点），
+  `childId` 为空时按钮显示「会话正在建立」并禁用；它与「AI 审核结果分析（`audit_analysis`）」
+  是两个入口、两个目标会话（文案与目标都有断言）。
+- **客户端停止口径是纯函数**（`features/report-audit/stop-view.ts`）：阶段文案 / 语气 / 可用动作 /
+  `canStartNext` 都能被单测穷举（7 条），组件只负责渲染。
+- **协议号仍是 19**：新增的 `stop` / `canStartNext` 都是**可选**字段 —— 旧客户端忽略它们照常工作，
+  新客户端在旧宿主上把它们当"未知"（不显示"已停止"、也不放行下一条）。没有破坏性契约变化。
+
+### 第三轮复查：4 个 P1 + 2 个 P2（全部已修，逐条有用例与缺陷注入）
+
+- **子会话必需集与 deny 集重叠（P1）**：`crwu_audit_case_bootstrap` 既是"根必需"又是"子会话 deny"，
+  而子会话复查用的是根必需集 —— 真实 `toolFilter` 生效后**每条正常子会话都会被判成缺工具并停掉**。
+  现在拆成 `REQUIRED_AUDIT_TOOLS`（根必需）与 `REQUIRED_AUDIT_CHILD_TOOLS`（子会话必需 = 根必需 − deny），
+  并有一条门禁断言两个集合**不相交**；子会话复查专用后者。
+- **pending scope 按父会话认领会允许 sibling 冒领（P1）**：父会话 id 只能证明"属于同一个 root"，
+  证明不了"就是本次 `start()` 创建的那一个"。one-shot `start()` 没有预留 child id 的参数、
+  拿不到不可伪造的 launch token，所以窗口内**案例内 Tool 一律 fail closed**（
+  `auditScopeFor` 只认与记录逐字相等的 childId）；父会话判据只保留在**拒绝方向**（`isAuditChild`）。
+- **失败分支忽略 `quiesced`（P1）**：子会话可见性/策略复查失败、最终落盘失败这三条路径此前直接
+  回滚记录与句柄；dispose 超时且 Agent 仍 running 时，会形成"旧子会话继续写案例目录、Host 已抹掉身份"。
+  现在检查 `quiesced`：没确认静默就写成**退役记录**（`retired: true`，只拒绝不放行）、
+  **保留** run 句柄与占用，并提示去工作台重试停止。
+- **读不到 child Agent 仍继续审核（P1）**：`SubagentRun.localAgent` 对远程 provider 是 `undefined`，
+  而边界复查全靠它。现在保留并优先使用 `localAgent`，**读不到就停掉并失败**（不再只记 warning）；
+  `pickProvider` 也**不再回退到"第一个注册的"**，只接受本地可验证的 provider（`spawn` / `fork`）。
+- **orphan pending 跨重启可冒领（P2）**：创建失败且回滚写盘也失败时，磁盘会留下 `pending: true` 的记录。
+  恢复时把它**退役**（不发放 scope），并且**不恢复指向空 childId 的占用锁**。
+- **`auditStop` 返回写死的停止结果（P2）**：现在透传真实的 `StopOutcome`
+  （`aborted` / `disposed` / `quiesced` / `interrupted` / `agentCancelled` / `notes`）。
+
+### 第二轮复查：5 个 P1 + 2 个 P2（全部已修，逐条有用例与缺陷注入）
+
+- **子会话策略复查用了错的边界**（P1）：协议 19 已把子会话的边界/cwd 收紧到案例目录，
+  但复查仍拿整个工作空间当期望值 —— **正常可见的子会话会被稳定判错并停掉**。
+  现在传 `caseDir`，并新增"真实可见 child + 正确案例目录能正常启动"的**正向**用例
+  （旧夹具的 `agents.get()` 只返回根 Agent，整段复查被跳过，所以这条一直没被抓到）。
+- **发布后的子会话没有被真正限制工具**（P1）：`record_get` / `files_list` / `case_bootstrap`
+  仍可见可执行 —— "必需集名单"只是预检名单，不是边界。现在按 provider 的
+  `capabilities.toolFilter` 显式传 `toolFilter.deny`（DSH 在子会话创建窗口里做 scoped
+  `tools.restrict()`：**既不进 prompt、也拒绝执行**），**不支持过滤的 provider 在创建子会话之前拒绝**。
+- **子会话发布早于 scope 建立**（P1）：`subagents.start()` 返回前子会话已在跑，那段窗口里
+  身份拒绝失效、案例内 Tool 随机失败。现在**两阶段握手**：创建子会话**之前**先落一条
+  pending 记录（父会话 = 审核根），窗口内按父会话认领本轮 scope；`start()` 返回后写真正 childId；
+  创建失败 / 子会话复查失败一律回滚 pending。
+  窗口内的"父会话"有**两条来源**：会话头的 `meta.parentSession`，读不到就问 `subagents.listChildren`
+  （会话存储驱动，Host 权威）"审核根的孩子里有没有这个调用者" —— 两条都拿不到才 fail closed。
+  这样一来该判据不再依赖另一个组件是否写了元数据。
+- **dispose 超时被当成停止成功**（P1）：计时器是**正常 resolve** 的，旧实现在超时时
+  `disposed=false` 但 `errors=[]`，上层据此继续重启。现在区分"谁赢了"，并以**静默判据**
+  `quiesced`（dispose 完成 **或** Agent 已不在 running；问不到状态 = fail closed）为准：
+  没确认停下来就**不覆盖旧记录、不启动下一条**，句柄与占用一并保留。等待也改成**有界**
+  （没有 timer 服务时退化成全局定时器，绝不无界 await）。
+- **返回记录的身份没有核对**（P1）：`records get --id B` 取回一条记录 ≠ 取回的是 B。
+  现在**在请求附件与任何写盘之前**核对返回记录的 `ObjectId` / `SeqNo`：缺字段或与请求不一致
+  一律 fail closed（不再用调用方提交的值兜底）。
+- **把不透明的 `targetKey` 当路径解析**（P2）：`FsTarget.targetKey` 是 `Branded<'FsTargetKey'>`，
+  合同只允许等值比较；旧实现做分隔符/大小写归一化，形似 Windows 路径但区分大小写的后端会被错误放行。
+  现在只做 `===`（`displayPath` 不再当身份用）；我们自己产生的路径字符串另有 `samePathText`。
+- **审核记录持久化失败仍返回成功**（P2）：启动/停止/释放三条路径都处理 `persistAudits=false` ——
+  启动失败会停掉刚起的子会话并回滚内存锁；停止/释放如实返回失败（内存放开了，但磁盘上可能还留着）。
+
+（实现方在交付前自己找的，均已用缺陷注入证伪）：
+  ① `record_get` / `files_list` 的拒绝条件一度写成"这轮 scope 是否可用" —— 一轮审核
+  `ended: true` 之后 scope 变为不可用，那个还活着的子会话就能以"没有可用 scope"为由绕过拒绝、
+  去读**任意** `objectId`；判据已改成**调用者身份**（`isAuditChild`，不要求 scope 可用）。
+  ② `crwu_audit_case_bootstrap` 的 `caseDir` 虽被钉在本轮案例目录，但 `objectId` 仍是提交进来的 ——
+  子会话可以用**别的** objectId 把别人的记录取进自己的案例目录；现在审核子会话调用它一律拒绝。
+
+### 测试
+
+新增/扩写的测试文件：`host-access-consent` / `host-access-broker` / `host-access-classify` /
+`host-access-migration` / `host-access-rpc-gate` / `host-audit-policy` / `host-dws-local` /
+`client-dws-local` / `host-case-dir-gate` / `host-design-traceability`（**共 1242 条**，
+本机 `1242 / 1238 pass / 1 skip`；两条 posix 子用例只在"用 DSH 自带二进制当 `node`"时红，
+机制见 `docs/review-0.0.15.md` §5）。
+
+每一条新断言都用**缺陷注入**证伪过（注入 → 变红 → `cp` 还原 → 转绿）；
+开发与复查过程中被抓到的真实缺陷包括：OSS 未授权仍然报「还没有填写 AccessKey」、
+环境自检与身份查询自己拼 `dws` 命令绕开白名单、审核根的诊断被体检自己挤掉、
+"没确认"的修复调用照样跑了一串探测、撤销写盘失败反而把权限重新打开、
+案例目录可以指到工作空间之外、Windows 锁探测读错异常层。
+
 ## package · 0.0.14 · 2026-09-28
 
 **兼容 DSH `0.2.0-rc.1`：peer 区间从「一条线」改成「两条线并列」。**

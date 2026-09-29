@@ -5,7 +5,8 @@ import { text } from '../../shared/utils/value.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { RECORDS_STDOUT_MAX } from '../h3yun/consts.ts'
 import { requireBundledCommand } from '../platform/command.ts'
-import { requireCaseDir, requireInsideCase, isRegularFile, fileSize } from './case-dir.ts'
+import { allowedCaseRootOf, requireCaseDir, requireInsideCase, isRegularFile, fileSize } from './case-dir.ts'
+import { callerIdentity, callerParentSessionId, isAuditChild, requireAuditScope } from '../audit/scope.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from './outcome.ts'
 import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
@@ -89,6 +90,15 @@ export function h3yunTools(deps: ToolDeps) {
       const objectId = text(args.objectId).trim()
       const base = { objectId, fieldCount: 0, record: {} as Record<string, JsonValue> }
       if (objectId === '') return { ...failure('input', 'objectId 不能为空'), ...base }
+      // ⚠️ 这两条 Tool 的 `objectId` 是**模型提交**的，Host 无法把它绑定到本轮审核
+      //（审核只需要本轮那一条记录，而它已经由 `crwu_audit_case_bootstrap` 取进快照）。
+      // 所以它们**不属于审核子会话的能力集**：调用方一旦是进行中的审核子会话，直接拒绝，
+      // 而且要在任何 fs / shell 之前拒绝（"先试一下再看"等于把别人的记录读进来）。
+      // 判据是**身份**，不是"这轮 scope 是否可用"：`ended: true` 之后 scope 会变成不可用，
+      // 但那个子会话可能还活着 —— 用 scope 判就会在那时放它去读任意 objectId。
+      if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
+        return { ...failure('policy', '审核子会话不能直接查询氚云记录：本轮记录与附件清单已在输入快照里'), ...base }
+      }
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
       if (gap !== null) return { ...gap, ...base }
@@ -98,12 +108,21 @@ export function h3yunTools(deps: ToolDeps) {
         const kind = form.error.startsWith('未在氚云定位到表单') ? 'not-found' as const : 'cli' as const
         return { ...failure(kind, form.error), ...base }
       }
+      // `caseDir` 只作为本次特权命令的 cwd。它同样是**模型提交**的值，所以要走同一道门禁：
+      // 绝对 / 存在 / 不含 `..` / **在当前工作空间之下**。旧实现把它原样交给 `runCrwu`，
+      // 等于让模型指定特权命令的工作目录（2026-09-29 复查）。
       const requested = text(args.caseDir).trim()
-      const workdir = requested === '' ? await deps.world.workdir() : requested
+      let workdir = await deps.world.workdir()
+      if (requested !== '') {
+        const caseCheck = await requireCaseDir(ctx, requested, { allowedRoot: allowedCaseRootOf(deps.state) })
+        if (!caseCheck.ok) return { ...caseCheck, ...base }
+        workdir = caseCheck.path
+      }
       const run = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'get', '--schema', form.code, '--id', objectId], {
         workdir,
         timeoutMs: 90_000,
-        trusted: credentialsTrusted(deps),
+        access: deps.access,
+        source: 'audit-tool',
         platform,
         stdoutMaxBytes: RECORDS_STDOUT_MAX,
         signal: exec.signal,
@@ -173,6 +192,9 @@ export function h3yunTools(deps: ToolDeps) {
       const ctx = toolContext(deps.ctx, exec)
       const objectId = text(args.objectId).trim()
       if (objectId === '') return { ...failure('input', 'objectId 不能为空'), count: 0, files: [] }
+      if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
+        return { ...failure('policy', '审核子会话不能直接查询氚云记录：本轮记录与附件清单已在输入快照里'), count: 0, files: [] }
+      }
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
       if (gap !== null) return { ...gap, count: 0, files: [] }
@@ -181,12 +203,21 @@ export function h3yunTools(deps: ToolDeps) {
         const kind = form.error.startsWith('未在氚云定位到表单') ? 'not-found' as const : 'cli' as const
         return { ...failure(kind, form.error), count: 0, files: [] }
       }
+      // `caseDir` 只作为本次特权命令的 cwd。它同样是**模型提交**的值，所以要走同一道门禁：
+      // 绝对 / 存在 / 不含 `..` / **在当前工作空间之下**。旧实现把它原样交给 `runCrwu`，
+      // 等于让模型指定特权命令的工作目录（2026-09-29 复查）。
       const requested = text(args.caseDir).trim()
-      const workdir = requested === '' ? await deps.world.workdir() : requested
+      let workdir = await deps.world.workdir()
+      if (requested !== '') {
+        const caseCheck = await requireCaseDir(ctx, requested, { allowedRoot: allowedCaseRootOf(deps.state) })
+        if (!caseCheck.ok) return { ...caseCheck, count: 0, files: [] }
+        workdir = caseCheck.path
+      }
       const run = await runCrwu(ctx, ['crwu', 'h3yun', 'files', 'list', '--schema', form.code, '--id', objectId], {
         workdir,
         timeoutMs: 90_000,
-        trusted: credentialsTrusted(deps),
+        access: deps.access,
+        source: 'audit-tool',
         platform,
         stdoutMaxBytes: RECORDS_STDOUT_MAX,
         signal: exec.signal,
@@ -217,12 +248,13 @@ export function h3yunTools(deps: ToolDeps) {
   const fileGet = defineTool({
     name: TOOL_NAMES.h3yunFileGet,
     description: [
-      '按 fileId **单附件定向下载**氚云记录附件到案例目录内的相对路径。',
+      '按 fileId **单附件定向下载**氚云记录附件到**本轮案例目录**内的相对路径。',
+      '只接受本轮输入快照（附件清单）里登记过的 fileId；不在清单里的附件在起进程之前就被拒绝。',
       '目标必须落在给定案例目录之下（越界直接拒绝）。',
       '本工具没有「整单下载」路径：一次只取一个附件，失败就是失败，不会退化成批量下载。',
     ].join(' '),
     parameters: {
-      fileId: { type: 'string', required: true, description: '附件 fileId（来自 crwu_h3yun_files_list）' },
+      fileId: { type: 'string', required: true, description: '附件 fileId（只接受本轮输入快照登记过的附件）' },
       caseDir: { type: 'string', required: true, description: '案例目录绝对路径（下载目标必须落在它之下）' },
       relativePath: { type: 'string', required: true, description: '案例目录内的相对目标路径，例如 材料-源/估值报告.pdf' },
     },
@@ -243,19 +275,29 @@ export function h3yunTools(deps: ToolDeps) {
     async execute(args, exec) {
       const ctx = toolContext(deps.ctx, exec)
       const fileId = text(args.fileId).trim()
-      const caseCheck = await requireCaseDir(ctx, args.caseDir)
+      // **先证身份、再证案例、最后证附件**：三者都成立之前不起任何进程。
+      const caseCheck = await requireAuditScope(ctx, deps.state, exec, { caseDir: args.caseDir })
       if (!caseCheck.ok) return { ...caseCheck, fileId, path: '', sizeBytes: 0 }
-      const target = await requireInsideCase(ctx, caseCheck.path, args.relativePath)
-      if (!target.ok) return { ...target, fileId, path: '', sizeBytes: 0 }
       if (fileId === '') return { ...failure('input', 'fileId 不能为空'), fileId, path: '', sizeBytes: 0 }
+      // ⚠️ `fileId` 也是**模型提交**的：此前只要进程能跑，子会话就能把任意附件下到自己的案例目录。
+      // 只认本轮**可信输入快照**里登记过的附件 —— 空白名单意味着"一个都不允许"。
+      if (!caseCheck.scope.allowedAttachmentIds.includes(fileId)) {
+        return {
+          ...failure('policy', '这个附件不在本轮审核的输入快照里：只允许下载本次登记的附件'),
+          fileId, path: '', sizeBytes: 0,
+        }
+      }
+      const target = await requireInsideCase(ctx, caseCheck.casePath, args.relativePath)
+      if (!target.ok) return { ...target, fileId, path: '', sizeBytes: 0 }
 
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
       if (gap !== null) return { ...gap, fileId, path: '', sizeBytes: 0 }
       const run = await runCrwu(ctx, ['crwu', 'h3yun', 'file', 'get', '--id', fileId, '--out', target.path], {
-        workdir: caseCheck.path,
+        workdir: caseCheck.casePath,
         timeoutMs: 180_000,
-        trusted: credentialsTrusted(deps),
+        access: deps.access,
+        source: 'audit-tool',
         platform,
         signal: exec.signal,
       })

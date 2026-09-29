@@ -17,10 +17,13 @@ import {
 } from '../dws/knowledge-tree.ts'
 import { CASE_KNOWLEDGE_DIR, KB_MANIFEST_FILE } from './consts.ts'
 import { ensureDirectory, removeFileIfExists } from './case-files.ts'
-import { requireCaseDir, fileSize } from './case-dir.ts'
+import { fileSize } from './case-dir.ts'
+import { requireAuditScope } from '../audit/scope.ts'
 import { dwsJson } from './dws-json.ts'
 import { failure, renderJson } from './outcome.ts'
 import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 
 /**
  * 知识库取数 Tool：把自研 `crwu-dws` 的 M2（按清单实时下载）整套编排收进 Host。
@@ -79,7 +82,7 @@ interface FolderTask {
 async function readTree(
   ctx: Context,
   platform: string,
-  options: { workdir: string; trusted: boolean; signal?: AbortSignal },
+  options: { workdir: string; access: LocalAccessBroker; source: LocalAccessSource; signal?: AbortSignal },
   workspaceId: string,
 ): Promise<{ roots: DwsNode[]; failures: Array<{ step: string; error: string }>; truncated: boolean }> {
   const failures: Array<{ step: string; error: string }> = []
@@ -94,7 +97,8 @@ async function readTree(
     if (task.folderId !== '') argv.push('--folder', task.folderId)
     const listed = await dwsJson(ctx, platform, argv, {
       workdir: options.workdir,
-      trusted: options.trusted,
+      access: options.access,
+      source: options.source,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     if (!listed.ok) {
@@ -247,12 +251,11 @@ export function knowledgeTools(deps: ToolDeps) {
       }
       const requested = (Array.isArray(args.paths) ? args.paths : []).map((item) => text(item)).filter((item) => item !== '')
       if (requested.length === 0) return { ...failure('input', 'paths 不能为空'), ...empty }
-      const caseCheck = await requireCaseDir(ctx, args.caseDir)
+      const caseCheck = await requireAuditScope(ctx, deps.state, exec, { caseDir: args.caseDir })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
 
       const platform = await deps.world.platform()
-      const trusted = credentialsTrusted(deps)
-      const caseDir = caseCheck.path
+      const caseDir = caseCheck.casePath
       const knowledgeDir = joinLocalPath(caseDir, CASE_KNOWLEDGE_DIR)
       const base = { ...empty, caseDir, knowledgeDir }
 
@@ -267,7 +270,7 @@ export function knowledgeTools(deps: ToolDeps) {
       for (const type of SPACE_TYPES) {
         const listed = await dwsJson(ctx, platform, [
           'wiki', '+space-list', '--type', type, '--limit', '50', '--page-all', '--format', 'json',
-        ], { workdir: caseDir, trusted, ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
+        ], { workdir: caseDir, access: deps.access, source: 'audit-tool', ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
         if (!listed.ok) {
           failures.push({ requested: '', step: `space-list(${type})`, error: listed.error })
           continue
@@ -294,7 +297,7 @@ export function knowledgeTools(deps: ToolDeps) {
 
       for (const space of spaces) {
         const tree = await readTree(ctx, platform, {
-          workdir: caseDir, trusted, ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+          workdir: caseDir, access: deps.access, source: 'audit-tool', ...(exec.signal === undefined ? {} : { signal: exec.signal }),
         }, space.workspaceId)
         nodes += treeStats(tree.roots).total
         complete = complete && tree.failures.length === 0 && !tree.truncated
@@ -335,7 +338,7 @@ export function knowledgeTools(deps: ToolDeps) {
             ? ['doc', '+export', '--node', hit.node.nodeId, '--export-format', 'markdown', '--output', relative, '--format', 'json']
             : ['drive', '+download', '--node', hit.node.nodeId, '--output', relative, '--format', 'json']
           const run = await dwsJson(ctx, platform, argv, {
-            workdir: knowledgeDir, trusted, ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+            workdir: knowledgeDir, access: deps.access, source: 'audit-tool', ...(exec.signal === undefined ? {} : { signal: exec.signal }),
           })
           if (!run.ok) {
             manifest.push({ ...entry, status: 'failed', reason: run.error })

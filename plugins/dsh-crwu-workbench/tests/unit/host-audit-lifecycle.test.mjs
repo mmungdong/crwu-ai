@@ -11,8 +11,13 @@ import test from 'node:test'
 import { applyShellEffect } from '../helpers/shell-effects.mjs'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+const { makeAuditAgent, makeAuditSession, auditPolicyServices, subagentProviderStub } = await import(
+  new URL('tests/helpers/audit-policy-fixture.mjs', ROOT).href)
 
 const { auditStart, auditStop, auditStatus, auditRelease } = await import(new URL('src/host/audit/ops.ts', ROOT).href)
+const { AUDIT_CHILD_DENIED_TOOLS, REQUIRED_AUDIT_CHILD_TOOLS } = await import(new URL('src/host/tools/consts.ts', ROOT).href)
+const { auditToolsVisible } = await import(new URL('src/host/audit/preflight.ts', ROOT).href)
 const { assessAudit, applyAssessment, reclaimActive, releaseActive, collectChildren, makeAgentStatusOf } = await import(
   new URL('src/host/audit/state.ts', ROOT).href
 )
@@ -43,8 +48,66 @@ function fakeWorld(patch = {}) {
  * 顺序 —— 「先建案例目录，再交接快照，最后建子代理」这种次序只能靠它证明。
  * shell 默认成功（`patch.shellFails: true` 才模拟命令跑失败）。
  */
-function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [], patch = {}, trace = [] } = {}) {
+/**
+ * 一个"健康部署"的 agents 替身：根 + **任意**子 id 都能读到正确 cwd/策略的 child Agent。
+ *
+ * `absent` 列出的 id 返回 `undefined`（模拟"注册表里查不到、已结束"），
+ * `childOptions` 用来改状态（例如 `{ status: 'idle' }` 让停止判定直接确认静默）。
+ */
+/**
+ * 等到这条审核的停止流程收敛。
+ *
+ * F1 起 `audit-stop` 是**两阶段**的：RPC 只接受请求（立刻返回 phase=requested），
+ * abort → dispose → 静默复查在后台跑，阶段逐段落盘。测试要断言最终结论就必须等它。
+ */
+async function settleStop(deps, childId) {
+  const task = deps.state.stopInFlight?.[childId]
+  if (task !== undefined) await task
+}
+
+function agentsServingChild({ absent = [], childOptions = {} } = {}) {
+  return {
+    get: (id) => {
+      if (id === 'parent-1') return rootAgentOf()
+      if (absent.includes(id)) return undefined
+      return makeAuditAgent(
+        makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' }),
+        { id, status: 'running', ...childOptions },
+      )
+    },
+  }
+}
+
+function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries = [], patch = {}, trace = [], preset } = {}) {
   const directories = new Set(dirs)
+  const policyServices = auditPolicyServices({ ...(preset === undefined ? {} : { preset }) })
+  // 审核启动现在要求 provider **声明支持 `toolFilter`**（真边界：deny 的工具既不进 prompt、也拒绝执行）。
+  // 夹具在这里统一补上，用例自己的 `getProvider` 优先。
+  // 默认的 agents 替身：根 Agent 就绪，**并且**任何未知 id 都当成"那个已发布的子会话"，
+  // 且 cwd/策略都是本轮案例目录的正确值 —— 这正是真实 in-process provider 兑现时的形态。
+  // 用例要测"读不到 child Agent"时显式传自己的 agents 替身。
+  const defaultChildAgent = () => makeAuditAgent(
+    makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' }),
+    { id: 'child-1', status: 'running' },
+  )
+  const agentsService = agents ?? {
+    get: (id) => (id === 'parent-1' ? rootAgentOf() : defaultChildAgent()),
+  }
+  const base = subagents === undefined
+    ? undefined
+    : Object.assign({ getProvider: () => subagentProviderStub() }, subagents)
+  // `start()` 的兑现要带上 `localAgent`（真实 in-process provider 就是这么给的）；
+  // 夹具统一补，避免每条用例各写一遍 —— 也避免"忘了写"导致整条审核被 fail closed 拦掉。
+  const subagentsService = base === undefined ? undefined : {
+    ...base,
+    async start(provider, request) {
+      const started = await base.start(provider, request)
+      if (started === null || typeof started !== 'object') return started
+      if (started.localAgent !== undefined) return started
+      const child = agentsService?.get?.(started.id)
+      return child === undefined ? started : { ...started, localAgent: child }
+    },
+  }
   const listDirs = { ...entries }
   /** 工具调用流水（用例据此断言各只调一次、agent scope 传对了）。 */
   const toolCalls = []
@@ -80,14 +143,26 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
         }
       }
       if (name === 'sessions') return sessions
-      if (name === 'agents') return agents
-      if (name === 'subagents') return subagents
+      if (name === 'agents') return agentsService
+      if (name === 'subagents') return subagentsService
+      // 协议 18 · C：审核根与子代理的沙箱/审批策略事实由 DSH 的三个服务回答。
+      if (name === 'sandboxPolicy') return policyServices.sandboxPolicy
+      if (name === 'approval') return policyServices.approval
+      if (name === 'permissionPresets') return policyServices.permissionPresets
       if (name === 'tools') {
         // 审核发起前要真走一遍 registry：`get` 回答可见性，`execute` 依次真调
         // `crwu_audit_capabilities`（能力预检）与 `crwu_audit_case_bootstrap`（输入快照交接）。
         // 替身必须同时提供这两个面，并且**记下调用**，用例才能断言「各只调一次」。
         return {
-          get: () => ({ name: 'crwu_audit_capabilities' }),
+          // ⚠️ 必须**真的模拟 `toolFilter`**：子会话看不到被 deny 的三条（bootstrap 是其中一条）。
+          // 夹具若对任何 agent 都回答"可见"，那"子会话复查用错必需集"这类缺陷永远不会红
+          //（2026-09-29 第三轮复查的 P1 就是这么漏掉的）。
+          get: (name, agent) => {
+            const scopeId = agent?.id
+            if (scopeId !== undefined && scopeId !== 'parent-1'
+              && AUDIT_CHILD_DENIED_TOOLS.includes(name)) return undefined
+            return { name: 'crwu_audit_capabilities' }
+          },
           async execute(input) {
             toolCalls.push({ name: input.name, arguments: input.arguments, agent: input.agent })
             trace.push({ kind: 'tool', name: input.name })
@@ -124,6 +199,16 @@ function makeCtx({ sessions, agents, subagents, dirs = [], files = {}, entries =
   // 保持原契约：`makeCtx()` 返回的就是 ctx（用例直接当 ctx 用），工具调用流水挂在它上面。
   return Object.assign(ctx, { toolCalls, trace })
 }
+
+/**
+ * 一个**策略已收敛**的可用审核根（协议 18 · C）。
+ *
+ * 根不可用的后果是"去建一个新的" —— 那会走 `agents.create`，多数用例并不覆盖那条路。
+ * 所以这里的根必须同时满足：Agent 活着、cwd 是工作空间、**沙箱 workspace-write + 审批 never**。
+ */
+// 审核根的 cwd **就是本轮的案例目录**（协议 19 起）：子会话继承它，沙箱边界也钉在它上面。
+// 夹具里默认 seqNo 是 S1，所以案例目录是 `/cases/space/S1`。
+const rootAgentOf = (extra = {}) => makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id: 'parent-1', status: 'running', ...extra })
 
 function makeState(patch = {}) {
   return { ...createWorkbenchState(CONFIG), ...patch }
@@ -396,11 +481,15 @@ function startDeps(patch = {}) {
   const state = makeState({
     workspaceChosen: true,
     workspacePath: '/cases/space',
-    auditRoot: { workspacePath: '/cases/space', sessionId: 'parent-1', title: '审核子代理根节点 · 01-01 00:00', assignedAt: '' },
+    // ⚠️ 根的 `casePath` 必须与用例的 seqNo 一致（默认 S1）：它是复用判据的锚，
+    // 空串会被当成"工作空间级旧根"→ 过期 → 代码会去新建一个根。
+    auditRoot: { workspacePath: '/cases/space', casePath: '/cases/space/S1', sessionId: 'parent-1', title: '审核子代理根节点 · 01-01 00:00', assignedAt: '' },
     ...(patch.state ?? {}),
   })
   const ctx = patch.ctx ?? makeCtx({
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    // 健康部署的默认面：根 Agent 就绪，子 Agent 也可读（正确 cwd/策略）—— 审核子会话的
+    // 沙箱/审批/工具可见性复查现在**必须**读到它（读不到就 fail closed，2026-09-29 第三轮复查的 P1）。
+    // 要测"读不到"的用例显式传自己的 agents 替身。
     subagents: {
       list: () => ['spawn'],
       async listChildren() { return [] },
@@ -419,7 +508,7 @@ function startDeps(patch = {}) {
       distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '', source: 'stub',
     }),
   }
-  return { deps: { ctx, config: CONFIG, state, world: fakeWorld(), form, python }, state }
+  return { deps: { ctx, config: CONFIG, state, world: fakeWorld(), access: makeTestAccess(ctx).access, form, python }, state }
 }
 
 test('audit-start refuses without a chosen workspace', async () => {
@@ -497,7 +586,7 @@ test('定位表单失败时在创建子代理之前终止', async () => {
 test('输入快照交接失败时在创建子代理之前终止', async () => {
   const ctx = makeCtx({
     patch: { bootstrapFails: true },
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    agents: agentsServingChild(),
     subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
   })
   const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
@@ -516,7 +605,7 @@ test('启动审核先由 Host 建出案例目录，再交接快照，最后才�
   const trace = []
   const ctx = makeCtx({
     trace,
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    agents: agentsServingChild(),
     subagents: {
       list: () => ['spawn'],
       async listChildren() { return [] },
@@ -541,7 +630,7 @@ test('启动审核先由 Host 建出案例目录，再交接快照，最后才�
 test('案例目录建不出来时在创建子代理之前终止', async () => {
   const ctx = makeCtx({
     patch: { shellFails: true },
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    agents: agentsServingChild(),
     subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
   })
   const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
@@ -573,7 +662,8 @@ test('DSH Python 不可用时在创建子代理之前终止（不许退回系统
 
 test('启动审核：bootstrap 只调一次、agent scope 传的是审核根 Agent、attemptId 每轮都新', async () => {
   const ctx = makeCtx({
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running', ctx: { scoped: 'parent-1' } } : undefined) },
+    // 根 Agent 要带 `ctx`（scope）：输入快照那一步断言的是「传给 Tool 的 agent 就是审核根」。
+    agents: agentsServingChild(),
     subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start(_p, request) { return { id: `child-${Math.random().toString(36).slice(2, 8)}`, provider: 'spawn', dispose: async () => {}, request } } },
   })
   const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
@@ -601,7 +691,7 @@ test('启动审核：bootstrap 只调一次、agent scope 传的是审核根 Age
 test('审核启动把快照路径与 DSH Python 一起写进子代理指令', async () => {
   let prompt = ''
   const ctx = makeCtx({
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    agents: agentsServingChild(),
     subagents: {
       list: () => ['spawn'],
       async listChildren() { return [] },
@@ -630,6 +720,215 @@ test('审核启动把快照路径与 DSH Python 一起写进子代理指令', as
 
 // ── audit-status / audit-stop / audit-release ───────────────────────────────
 
+test('C-03 正向：**可见**且策略正确的子会话必须正常启动（不许被判错停掉）', async () => {
+  // 2026-09-29 用户复查的 P1：child policy 复查一度拿 `workspacePath` 当期望值，
+  // 而协议 19 之后子会话的边界/cwd 是**案例目录** —— 于是每一个正常可见的子会话都会被稳定判错并停掉。
+  // 旧夹具的 `agents.get()` 只返回根 Agent，整段复查被跳过，所以这条永远绿；这里**真的返回 child**。
+  const disposed = []
+  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' })
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        if (id === 'child-1') return makeAuditAgent(childSession, { id, status: 'running' })
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        return { id: 'child-1', provider: 'spawn', dispose: async () => { disposed.push('child-1') }, request }
+      },
+    },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space/S1', delegationDepth: 0 } } : undefined) },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true, result.error)
+  assert.equal(disposed.length, 0, '策略正确的子会话不许被停掉')
+  assert.equal(state.activeChildId, 'child-1', '占用锁要落在它身上')
+})
+
+test('C-03 · 子会话发布后复查策略：不对就停掉它（不带着错的边界跑完）', async () => {
+  // 安全性来自"创建前把根设对并验证过"；发布后这次复查是为了**证伪**那一步。
+  // 真读到不对（比如某个 preset 把边界换掉了）就停掉 —— 让一条越界的审核跑完，
+  // 后果是它写到了工作区外面的东西上，那比"这次审核没跑成"严重得多。
+  const stopped = []
+  const disposed = []
+  // 子会话的 **abort 信号**与 **run 句柄**：`stopChild` 的两个可观察效果。
+  // 只断言错误文案是不够的 —— 把 stopChild 那一行删掉，错误文案与锁清理照样成立，
+  // "不让一条越界的审核跑完"就成了一句无法证伪的话（2026-09-29 复查抓到）。
+  let childSignal
+  const childSession = makeAuditSession({ cwd: '/cases/space', mode: 'danger-full-access' })
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        if (id === 'child-1') return makeAuditAgent(childSession, { id, status: 'running' })
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        childSignal = request.signal
+        return { id: 'child-1', provider: 'spawn', dispose: async () => { disposed.push('child-1') }, request }
+      },
+      async interrupt() { stopped.push('interrupt') },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /子代理的策略不符合要求/)
+  assert.match(result.error, /danger-full-access/)
+  assert.match(result.error, /已停止该子会话/)
+  assert.equal(childSignal?.aborted, true, '复查发现策略不对时必须真的中止子会话（abort 信号）')
+  assert.deepEqual(disposed, ['child-1'], '并且要释放它的 run 句柄')
+  // 第三个可观察效果：`interrupt` 也发过一次（句柄没了的退路才是 agents.cancel）。
+  assert.deepEqual(stopped, ['interrupt'], '停止时要走一次 subagents.interrupt')
+  assert.equal(state.activeChildId, '', '策略不对时不得留下占用锁')
+  assert.equal(state.audits.k, undefined, '也不得留下审核记录')
+})
+
+test('C-03b · 子会话的工具可见性复查：根本可见、**子会话 scope 不可见**时也要停掉它', async () => {
+  // 硬门禁四（child scope）：`provider` 可能在子会话上再收窄一次。根 Agent 可见
+  // **不等于**子代理可见 —— 而"子代理自己去找 PATH 上的命令"正是这套改造要消灭的行为，
+  // 所以这条复查必须真的停掉子会话，不只是回一个错。
+  const disposed = []
+  let childSignal
+  const childSession = makeAuditSession({ cwd: '/cases/space' })
+  const childAgent = makeAuditAgent(childSession, { id: 'child-1', status: 'running' })
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        if (id === 'child-1') return childAgent
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        childSignal = request.signal
+        return { id: 'child-1', provider: 'spawn', dispose: async () => { disposed.push('child-1') }, request }
+      },
+    },
+  })
+  // 只有在**子会话 scope** 下 `crwu_audit_oss_publish` 不可见（根 scope 一切正常）。
+  const original = ctx.get
+  ctx.get = (name) => {
+    const base = original(name)
+    if (name !== 'tools') return base
+    return {
+      ...base,
+      get: (toolName, agent) => (agent === childAgent && toolName === 'crwu_audit_oss_publish'
+        ? undefined
+        : { name: toolName }),
+    }
+  }
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /crwu_audit_oss_publish/, '必须点名子会话里缺失的那个工具')
+  assert.match(result.error, /已停止该子会话/)
+  assert.equal(childSignal?.aborted, true, '必须真的中止子会话')
+  assert.deepEqual(disposed, ['child-1'], '并且要释放它的 run 句柄')
+  assert.equal(state.activeChildId, '', '失败后不得留下占用锁')
+})
+
+test('硬门禁二：**别的报告**在跑时拒绝第二条（同一条走重启，但跨报告绝不放行）', async () => {
+  // 模块头的第 2 条门禁是"单条并发"。这个门禁有**两个方向**，此前只有"同一条报告 → 带时间戳重启"
+  // 那一个方向有用例；"另一条报告正在跑 → 拒绝"没有任何证据（删掉那段 if 也不会红）。
+  // 放行的后果很具体：两条子会话往**同一个案例目录**对写交付件。
+  let starts = 0
+  const ctx = makeCtx({
+    agents: agentsServingChild(),
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { starts += 1; return { id: 'child-2', provider: 'spawn', dispose: async () => {}, request: {} } },
+    },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { delegationDepth: 0 } } : undefined) },
+  })
+  const { deps, state } = startDeps({
+    ctx,
+    state: { parentSessionId: 'parent-1', activeChildId: 'child-running', activeKey: 'other-report', activeSince: 1 },
+  })
+  const result = await auditStart(deps, { key: 'k-new', seqNo: 'S2', objectId: 'o2', project: '另一个项目' })
+  assert.equal(result.ok, false, '别的报告在跑时必须拒绝')
+  assert.match(result.error, /同一时间只允许一条/)
+  assert.equal(starts, 0, '被拒绝时一个子代理都不许起')
+  // 原有占用必须**原样保留**（不能被这次尝试覆盖或释放）。
+  assert.equal(state.activeKey, 'other-report')
+  assert.equal(state.activeChildId, 'child-running')
+  assert.equal(state.startingKey, '', '进程内锁必须在 finally 里放掉（否则再也发不起来）')
+})
+
+test('门禁顺序：并发冲突**先于**能力预检 —— 冲突时零预检、报的也是冲突', async () => {
+  // 源码注释（`audit/ops.ts` 硬门禁三）："放在占用门禁之后：并发冲突是更早、更便宜的拒绝理由，
+  // 不该被能力检查的耗时挡在后面。" 顺序被换掉的表现不是"错了"，而是员工先等一轮昂贵预检、
+  // 再看到一条与真正原因无关的错误 —— 所以顺序本身要可证伪：
+  // 同时制造"有别的报告在跑"与"环境不就绪"，断言报的是**并发**，且预检一次都没跑。
+  let starts = 0
+  const ctx = makeCtx({
+    agents: agentsServingChild(),
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { starts += 1; return { id: 'child-2', provider: 'spawn', dispose: async () => {}, request: {} } },
+    },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { delegationDepth: 0 } } : undefined) },
+  })
+  const { deps } = startDeps({
+    ctx,
+    state: { parentSessionId: 'parent-1', activeChildId: 'child-running', activeKey: 'other-report' },
+  })
+  let readinessCalls = 0
+  const result = await auditStart(
+    { ...deps, readiness: async () => { readinessCalls += 1; return { ok: false, error: '本机访问尚未允许' } } },
+    { key: 'k-new', seqNo: 'S2', objectId: 'o2' },
+  )
+  assert.equal(result.ok, false)
+  assert.match(result.error, /同一时间只允许一条/, '冲突要报冲突，不许报成环境问题')
+  assert.equal(result.error.includes('环境已不就绪'), false, '错误必须是更早、更便宜的那一条')
+  assert.equal(starts, 0)
+  assert.equal(readinessCalls, 0, '占用门禁要在预检之前：冲突时预检一次都不该跑')
+  // 光看 `readiness` 还不够：它是**排在能力预检之后**的一道门。这条注释说的是
+  // "不该被**能力检查**的耗时挡在后面"，所以判据必须落在**工具真的被调用**上 ——
+  // 只断言 readiness 的话，把占用门禁挪到能力预检之后仍然全绿（实测）。
+  assert.deepEqual(ctx.toolCalls, [], '冲突时一个结构化 Tool 都不许调（能力预检要整个跳过）')
+})
+
+test('C-07 · 创建子代理之前环境已不就绪：终止，且一个子代理都不起', async () => {
+  // 到这一步之前已经花掉了策略收敛、工具预检、能力自检与输入快照四段外部调用；
+  // 期间"允许本机访问"可能被撤销、工作空间可能被换掉。带着过期事实起一条审核的后果不是
+  // "晚点失败"，而是**一条注定拿不到凭据的审核**（它会把「未登录」当结论写进交付件）。
+  let starts = 0
+  const ctx = makeCtx({
+    agents: agentsServingChild(),
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { starts += 1; return { id: 'child-1', provider: 'spawn', dispose: async () => {} } },
+    },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { delegationDepth: 0 } } : undefined) },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(
+    { ...deps, readiness: async () => ({ ok: false, error: '本机访问尚未允许：请先在「账号连接」里允许一次' }) },
+    { key: 'k', seqNo: 'S1', objectId: 'o1' },
+  )
+  assert.equal(result.ok, false)
+  assert.match(result.error, /环境已不就绪/)
+  assert.match(result.error, /未创建子代理/)
+  assert.equal(starts, 0, '必须一个子代理都没起')
+  assert.equal(state.activeChildId, '', '被拒绝时不得占用门禁')
+})
+
 test('audit-start refuses a duplicate submission while one is being created', async () => {
   const { deps } = startDeps({ state: { parentSessionId: 'parent-1', startingKey: 'k' } })
   const result = await auditStart(deps, { key: 'k', seqNo: 'S1' })
@@ -655,8 +954,8 @@ test('audit-start creates the first attempt and takes the occupancy lock', async
 test('a second start for the same report becomes a timestamped restart', async () => {
   const labels = []
   const ctx = makeCtx({
-    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space' } } : undefined) },
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space/S1' } } : undefined) },
+    agents: agentsServingChild({ childOptions: { status: 'idle' } }),
     subagents: {
       list: () => ['spawn'],
       async listChildren() { return [] },
@@ -679,21 +978,575 @@ test('a second start for the same report becomes a timestamped restart', async (
   assert.equal(state.audits.k.childId, 'child-2', '记录指向最新那条子会话')
 })
 
-test('audit-start aborts the restart when the stale child cannot be stopped', async () => {
+test('重启中止：旧子会话**仍在运行**（dispose 不收敛）时不许起第二条', async () => {
+  // 2026-09-29 用户复查的 P1：旧实现里 dispose 超时是"正常完成"的计时器先赢 →
+  // `disposed=false` 但 `errors=[]`，上层只要 abort 发出就继续重试 → 起第二条并覆盖旧 childId。
+  // 现在判据是**静默**：dispose 未完成且 Agent 仍 running = 不许重启，并且**保留**旧身份。
+  const started = []
   const ctx = makeCtx({
-    // 根会话活着；旧子会话（gone）查不到 —— 于是「停不掉」，这才是本用例要验的事。
-    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space' } } : undefined) },
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
-    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        // 旧子会话仍显示 running（它没停下来）
+        if (id === 'gone') return makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id, status: 'running' })
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { started.push('start'); return { id: 'child-2', provider: 'spawn', dispose: async () => {} } },
+    },
+  })
+  const { deps, state } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1',
+      audits: { k: record({ key: 'k', childId: 'gone', ended: false, stopped: false }) },
+      runs: { gone: { run: { dispose: () => new Promise(() => {}) }, abort: () => {} } },
+    },
+  })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /没法确认已经停下来/)
+  assert.deepEqual(started, [], '没确认停下来就不许起第二条')
+  assert.equal(state.audits.k.childId, 'gone', '旧身份不许被覆盖/丢弃')
+})
+
+test('stopChild：**问不到** agents 服务时 `quiesced=false`（fail closed，且不丢身份）', async () => {
+  // 三态判据：`true` 还在跑 / `false` 确认不在跑 / `undefined` 问不到。
+  // 问不到时**不许**当成"已经停了" —— 否则重启会在旧子会话可能还在跑时起第二条。
+  const { stopChild } = await import(new URL('src/host/audit/spawn.ts', ROOT).href)
+  const ctx = makeCtx({})
+  const originalGet = ctx.get
+  // 计时器用"立刻完成"的替身：这几条用例只关心判据，不该真等 8 秒。
+  ctx.get = (name) => (name === 'agents' ? undefined : (name === 'timer' ? { timeout: async () => {} } : originalGet(name)))
+
+  const outcome = await stopChild(ctx, 'gone', '测试：问不到状态', {})
+  assert.equal(outcome.quiesced, false, '问不到状态 → 不算停下来')
+  assert.equal(outcome.disposed, false)
+  assert.match(outcome.errors.join('；'), /agents 服务不可用/)
+
+  // 反向：注册表在、且查不到这个 child → **确认**不在运行。
+  const okCtx = makeCtx({ agents: { get: () => undefined } })
+  const confirmed = await stopChild(okCtx, 'gone', '测试：确认不在运行', {})
+  assert.equal(confirmed.quiesced, true, '注册表在且查不到 → 确认已经不在运行')
+  assert.deepEqual(confirmed.errors, [])
+})
+
+test('stopChild：dispose 不收敛 + Agent 仍 running → `disposed=false` 且**有错误**（超时不算成功）', async () => {
+  // 用户复查 P1 的直接复现：旧实现里计时器先完成时不会进 catch，于是
+  // `{aborted:true, disposed:false, errors:[]}` —— 上层据此继续重试。
+  const { stopChild } = await import(new URL('src/host/audit/spawn.ts', ROOT).href)
+  const base = makeCtx({ agents: { get: () => ({ id: 'gone', status: 'running' }) } })
+  const baseGet = base.get
+  base.get = (name) => (name === 'timer' ? { timeout: async () => {} } : baseGet(name))
+  const ctx = base
+  const outcome = await stopChild(ctx, 'gone', '测试：dispose 不收敛', {
+    handle: { run: { dispose: () => new Promise(() => {}) }, abort: () => {} },
+  })
+  assert.equal(outcome.aborted, true)
+  assert.equal(outcome.disposed, false, 'dispose 没完成就不能算 disposed')
+  assert.equal(outcome.quiesced, false, 'Agent 仍 running → 不算停下来')
+  assert.equal(outcome.errors.length > 0, true, '超时必须留下错误（旧实现这里是空的）')
+  assert.match(outcome.errors.join('；'), /无法确认子会话已经停下来/)
+})
+
+test('旧子会话确实已经不在运行（注册表查不到）时，重启照常继续', async () => {
+  // 反面：把"停不掉"当成一律中止会让**正常重启**（旧会话早就结束了）永远起不来。
+  const started = []
+  const ctx = makeCtx({
+    agents: agentsServingChild({ absent: ['gone'], childOptions: { status: 'idle' } }),
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start(_p, request) { started.push('start'); return { id: 'child-2', provider: 'spawn', dispose: async () => {}, request } } },
   })
   const { deps, state } = startDeps({
     ctx,
     state: { parentSessionId: 'parent-1', audits: { k: record({ key: 'k', childId: 'gone', ended: false, stopped: false }) } },
   })
-  const result = await auditStart(deps, { key: 'k', seqNo: 'S1' })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true, result.error)
+  assert.deepEqual(started, ['start'], '确认旧会话不在运行 → 允许重启')
+  assert.equal(state.audits.k.childId, 'child-2')
+})
+
+test('两阶段启动：**创建子会话之前**就落 pending scope，返回后写上真 childId', async () => {
+  // 用户复查 P1：`subagents.start()` 返回时子会话已经发布并能执行工具，而权威记录那时还不存在。
+  // 现在：先落 pending（父会话 = 审核根）→ 再创建 → 拿到 childId 后补齐并清掉 pending。
+  let seenDuringStart = null
+  const ctx = makeCtx({
+    agents: agentsServingChild(),
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        // **在 start 内部**看状态：这一刻就已经必须有可认领的 scope。
+        seenDuringStart = JSON.parse(JSON.stringify(state.audits.k ?? null))
+        return { id: 'child-1', provider: 'spawn', dispose: async () => {}, request }
+      },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true, result.error)
+  assert.notEqual(seenDuringStart, null, 'start 必须被调用')
+  assert.equal(seenDuringStart.pending, true, 'start 期间必须已有 pending 记录')
+  assert.equal(seenDuringStart.childId, '', 'pending 期间 childId 还是空的（真 id 由 start 返回）')
+  assert.equal(seenDuringStart.casePath, '/cases/space/S1', 'pending 记录里要有本轮案例目录')
+  assert.equal(seenDuringStart.parentSessionId, 'parent-1', '父会话 = 审核根（窗口内按它认领）')
+  assert.equal(state.audits.k.pending, false, '返回后要清掉 pending')
+  assert.equal(state.audits.k.childId, 'child-1')
+})
+
+test('两阶段启动：scope 落盘失败就**不创建**子会话（最初的 Windows 权限现场）', async () => {
+  let started = 0
+  const ctx = makeCtx({
+    agents: agentsServingChild(),
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { started += 1; return { id: 'child-1', provider: 'spawn', dispose: async () => {} } },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  // 让状态文件写不进去：Broker 的 writeText 抛错。
+  const broken = {
+    ...deps,
+    access: { ...deps.access, writeText: async () => ({ ok: false, error: 'write failed' }) },
+  }
+  const result = await auditStart(broken, { key: 'k', seqNo: 'S1', objectId: 'o1' })
   assert.equal(result.ok, false)
-  assert.match(result.error, /停不掉/)
-  assert.equal(state.activeChildId, '', '中止时不得留下半截状态')
+  assert.match(result.error, /scope 没能写入状态文件/)
+  assert.equal(started, 0, 'scope 落不下来就不许创建子会话')
+  assert.equal(state.audits.k, undefined, '不许留下半截记录')
+  assert.equal(state.activeChildId, '', '不许占用门禁')
+})
+
+test('子会话创建失败：pending 记录必须回滚（不留"在跑但没人"的假记录）', async () => {
+  const ctx = makeCtx({
+    agents: agentsServingChild(),
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { throw new Error('provider 罢工') },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /创建子会话失败/)
+  assert.equal(state.audits.k, undefined, 'pending 必须回滚')
+  assert.equal(state.activeChildId, '')
+})
+
+test('手动停止：**没确认停下来**时必须报失败，并保留记录与句柄（不许半截状态）', async () => {
+  // B 注入的靶子：`stopAuditChild` 里那条 `if (!outcome.quiesced)`。
+  // 没有它就等于"abort 发出去了 = 停好了" —— 旧子会话可能还在跑，而记录已被标成 stopped、
+  // 句柄已被删除、占用已释放（用户复查 P1 的"旧身份不能在确认静默前丢弃"）。
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        // 旧子会话仍显示 running，且 dispose 永不收敛
+        if (id === 'child-1') return makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id, status: 'running' })
+        return undefined
+      },
+    },
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const base = makeCtx({})
+  const { deps, state } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1', ended: false, stopped: false }) },
+      runs: { 'child-1': { run: { dispose: () => new Promise(() => {}) }, abort: () => {} } },
+    },
+  })
+  // 计时器立刻完成：让 dispose 的 race 立刻判超时，然后按"Agent 仍 running"判未静默。
+  const originalGet = deps.ctx.get
+  deps.ctx.get = (name) => (name === 'timer' ? { timeout: async () => {} } : originalGet(name))
+  void base
+
+  const stopped = await auditStop(deps, { childId: 'child-1' })
+  // 两阶段：RPC 只**接受**请求（还没停好就不许说"已停止"）
+  assert.equal(stopped.accepted, true, '停止请求必须被接受')
+  assert.equal(stopped.phase, 'requested', '立刻回到"已请求"阶段')
+  assert.equal(stopped.quiesced, false, '这一刻绝不许声称已静默')
+  await settleStop(deps, 'child-1')
+  assert.equal(state.audits.k.stopPhase, 'timeout', '后台跑完仍然无法确认静默 → timeout')
+  assert.equal(state.audits.k.quiesced, false)
+  assert.equal(state.audits.k.stopped, false, '记录不许被标成已停止')
+  assert.equal(state.audits.k.ended, false, '更不许标成已结束')
+  assert.equal(state.activeChildId, 'child-1', '占用不许释放（它可能还在写案例目录）')
+  assert.notEqual(state.runs['child-1'], undefined, '句柄不许丢（还要靠它再停一次）')
+})
+
+test('audit-stop 透传**真实**停止结果（不许写死 aborted/disposed）', async () => {
+  // 用户第三轮复查的 P2：`auditStop` 曾固定返回 aborted:true + disposed/interrupted/agentCancelled:false，
+  // 于是"dispose 成功"、"只是 Agent 已结束"、"超时未静默"三种情况在界面上长得一模一样。
+  const childAgent = makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id: 'child-1', status: 'running' })
+  const ctx = makeCtx({
+    agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : (id === 'child-1' ? childAgent : undefined)) },
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps, state } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+    },
+  })
+
+  // ① dispose 真的完成 + Agent 已不在 running → aborted/disposed/quiesced 都是 true
+  const { deps: d1, state: s1 } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+      runs: { 'child-1': { run: { dispose: async () => {} }, abort: () => {} } },
+    },
+  })
+  const quiet = await auditStop(d1, { childId: 'child-1' })
+  assert.equal(quiet.ok, true, quiet.error)
+  assert.equal(quiet.accepted, true)
+  assert.equal(quiet.phase, 'requested')
+  await settleStop(d1, 'child-1')
+  // **真实结果落在状态里**（不许写死）：abort 发了、dispose 完成了、确认静默
+  assert.equal(s1.audits.k.stopPhase, 'quiesced')
+  assert.equal(s1.audits.k.stopAborted, true, 'abort 真的发出去了')
+  assert.equal(s1.audits.k.stopDisposed, true, 'dispose 真的完成了')
+  assert.equal(s1.audits.k.quiesced, true)
+  const view1 = await auditStatus(d1, {})
+  assert.equal(view1.canStartNext, true, '确认静默 → 可以启动下一条')
+  assert.equal(view1.audits.find((item) => item.key === 'k').stop.disposed, true)
+
+  // ② 没有 run 句柄、"Agent 已不在 running"（句柄丢了但会话已结束）：aborted=false，但确认静默 → ok
+  const idleCtx = makeCtx({
+    agents: agentsServingChild({ childOptions: { status: 'idle' } }),
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps: d2 } = startDeps({
+    ctx: idleCtx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+    },
+  })
+  const dormant = await auditStop(d2, { childId: 'child-1' })
+  assert.equal(dormant.accepted, true)
+  await settleStop(d2, 'child-1')
+  const view2 = await auditStatus(d2, {})
+  const stop2 = view2.audits.find((item) => item.key === 'k').stop
+  assert.equal(stop2.aborted, false, '没有 abort 通道就不许写死 true')
+  assert.equal(stop2.disposed, false, '没有 dispose 就不许写死 true')
+  assert.equal(stop2.quiesced, true, 'Agent 已不在 running → 静默成立')
+  assert.equal(view2.canStartNext, true)
+
+  // ③ 无句柄 + Agent **仍 running**：不许写死成功（fail closed，保留身份）
+  const { deps: d3, state: s3 } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+    },
+  })
+  const stuck = await auditStop(d3, { childId: 'child-1' })
+  assert.equal(stuck.accepted, true, '请求照样被接受')
+  await settleStop(d3, 'child-1')
+  assert.equal(s3.audits.k.stopPhase, 'timeout', '拿不到句柄又确认不了静默 → 不是 quiesced')
+  assert.equal(s3.audits.k.quiesced, false)
+  assert.equal(s3.audits.k.stopped, false, '身份与占用都保留')
+  const view3 = await auditStatus(d3, {})
+  assert.equal(view3.canStartNext, false)
+
+  void state
+})
+
+test('停止 / 释放：状态文件写不进去时**不能**报成功（P2）', async () => {
+  // 用户复查 P2：`persistAudits` 的返回值此前被忽略 —— 内存里放开了、磁盘上还留着占用锁，
+  // 重启后又冒出来。停止与释放都是"员工的安全出口"，报成功必须是真成功。
+  const brokenAccess = (deps) => ({ ...deps.access, writeText: async () => ({ ok: false, error: 'write failed' }) })
+
+  // ① 停止：子会话已经确认停下来，但状态没落盘 → ok:false + 说清后果
+  const ctx = makeCtx({
+    agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : (id === 'child-1' ? makeAuditAgent(makeAuditSession({ cwd: '/cases/space/S1' }), { id, status: 'idle' }) : undefined)) },
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps, state } = startDeps({
+    ctx,
+    state: { parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1', audits: { k: record({ key: 'k', childId: 'child-1' }) } },
+  })
+  const stopped = await auditStop({ ...deps, access: brokenAccess(deps) }, { childId: 'child-1' })
+  // 两阶段：**接受阶段**的 ok 表示"请求已被接受"，但 `quiesced` 仍然是 false（还没停好）。
+  // 落盘失败本身在后台阶段体现为 `stopPhase: 'failed'`，见下面的断言。
+  assert.equal(stopped.accepted, true)
+  assert.equal(stopped.quiesced, false, '接受 ≠ 已停止')
+  await settleStop(deps, 'child-1')
+  assert.equal(state.audits.k.stopPhase, 'failed', '落盘失败必须如实记 failed，不许伪装成已停止')
+  // 子会话本身确实停下了（quiesced=true 是事实），但**持久化失败**让这一步不算完成：
+  // 不许启动下一条（磁盘上可能还留着占用锁）。这两件事必须能同时被表达出来。
+  const failedView = await auditStatus(deps, {})
+  assert.equal(failedView.canStartNext, false, 'failed 阶段一律不许启动下一条')
+
+  // ② 释放：同样不许报成功（**独立的夹具**：停止已经清掉占用了）
+  const releaseDeps = startDeps({
+    ctx,
+    state: { parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1', audits: { k: record({ key: 'k', childId: 'child-1' }) } },
+  })
+  const released = await auditRelease({ ...releaseDeps.deps, access: brokenAccess(releaseDeps.deps) })
+  assert.equal(released.ok, false, '释放的落盘失败同样要如实报')
+  assert.equal(released.released, 'k', '仍然要告诉调用方释放的是哪一条')
+})
+
+test('真实 toolFilter 生效（deny 工具对子会话不可见）时，子会话仍然齐备并启动成功', async () => {
+  // 用户第三轮复查要求的组合：`tools.get()` 对三条 denied 工具返回 undefined，其余可见；
+  // 子会话必须**启动成功**（bootstrap 不该被算成"子会话缺必需工具"），
+  // 而那三条对子会话必须**不可见**（可见性这一半；可执行性那一半在 host-tools.test.mjs）。
+  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' })
+  const childAgent = makeAuditAgent(childSession, { id: 'child-1', status: 'running' })
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        if (id === 'child-1') return childAgent
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) { return { id: 'child-1', provider: 'spawn', dispose: async () => {}, request } },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+
+  // 夹具本身先被证明"真的在模拟过滤"，否则这条用例是空转。
+  assert.deepEqual(auditToolsVisible(ctx, childAgent, REQUIRED_AUDIT_CHILD_TOOLS), [],
+    '子会话必需集必须齐备')
+  assert.deepEqual(auditToolsVisible(ctx, childAgent), ['crwu_audit_case_bootstrap'],
+    '拿根必需集查子会话会误报 —— 这正是被修掉的缺陷形态')
+
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true, result.error)
+  assert.equal(state.activeChildId, 'child-1', '子会话没有被误杀')
+})
+
+test('启动后复查失败 + dispose 不收敛：**保留**身份 / 句柄 / 占用（不许抹掉仍在跑的子会话）', async () => {
+  // 用户第三轮复查的 P1：这三条失败分支调用 stopChild 后直接 rollbackRecord ——
+  // 若 dispose 超时且 Agent 仍 running，旧子会话还在写案例目录，而 Host 已经删掉它的身份与 scope。
+  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'danger-full-access' })
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        // 子会话仍显示 running（没停下来）
+        if (id === 'child-1') return makeAuditAgent(childSession, { id, status: 'running' })
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() {
+        return {
+          id: 'child-1', provider: 'spawn',
+          // ⚠️ `stopChild` 用的是 `handle.run.dispose`，而 `handle.run` 就是 start 返回的**整个
+          // run 对象** —— 所以"dispose 不收敛"要写在**这一层**（2026-09-29 我在这里写错过一次，
+          // 用例于是走了干净回滚那条路，断言全绿但没测到目标分支）。
+          dispose: () => new Promise(() => {}),
+          request: {},
+        }
+      },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const originalGet = deps.ctx.get
+  deps.ctx.get = (name) => (name === 'timer' ? { timeout: async () => {} } : originalGet(name))
+
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /没法确认它已经停下来/)
+  assert.match(result.error, /停止审核/, '要告诉用户去哪重试')
+  // **身份 / 句柄 / 占用都不许丢**
+  assert.notEqual(state.audits.k, undefined, '记录必须保留（否则 Host 不再认识那个子会话）')
+  assert.equal(state.audits.k.retired, true, '标成退役：只拒绝、不放行')
+  assert.equal(state.audits.k.childId, 'child-1', 'childId 留着，才能再停一次')
+  assert.notEqual(state.runs['child-1'], undefined, 'run 句柄必须保留')
+  assert.equal(state.activeChildId, 'child-1', '占用不许释放')
+})
+
+test('启动后复查失败且**确认**停下来：才允许回滚记录与占用', async () => {
+  // 反面：确认静默之后必须干净回滚（否则会留下一条永远"在跑"的假记录）。
+  const childSession = makeAuditSession({ cwd: '/cases/space/S1', mode: 'danger-full-access' })
+  const ctx = makeCtx({
+    agents: {
+      get: (id) => {
+        if (id === 'parent-1') return rootAgentOf()
+        if (id === 'child-1') return makeAuditAgent(childSession, { id, status: 'idle' })
+        return undefined
+      },
+    },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start() { return { id: 'child-1', provider: 'spawn', dispose: async () => {}, request: {} } },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /策略不符合要求/)
+  assert.equal(state.audits.k, undefined, '确认停下来 → 记录回滚')
+  assert.equal(state.runs['child-1'], undefined, '句柄回滚')
+  assert.equal(state.activeChildId, '', '占用释放')
+})
+
+test('读不到子会话的 Agent（远程 provider / 注册表查不到）：**fail closed**，不是记一条 warning 继续跑', async () => {
+  // 用户第三轮复查的 P1：`SubagentRun.localAgent` 对远程 provider 是 undefined，
+  // 而沙箱/审批/工具可见性的复查全靠读到那个 child Agent。只 warning 继续 = 在无法验证边界的
+  // 子会话里把审核跑完。
+  const stoppedSignals = []
+  const ctx = makeCtx({
+    // 根可读；子 Agent **读不到**（agents.get 对子 id 返回 undefined）
+    agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : undefined) },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        // 远程运行的形态：没有 localAgent
+        stoppedSignals.push(request)
+        return { id: 'child-remote', provider: 'spawn', dispose: async () => {}, request }
+      },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false, '读不到子 Agent 就不许继续')
+  assert.match(result.error, /读不到审核子代理的 Agent/)
+  assert.equal(state.audits.k, undefined, '确认停下后不留记录')
+  assert.equal(state.activeChildId, '', '不占锁')
+})
+
+test('`localAgent` 优先于注册表：注册表查不到它也能完成复查（真实 in-process provider 的形态）', async () => {
+  // 反向：provider 在 start 兑现时给出了本进程子 Agent —— 那就不该因为 agents.get 查不到而失败。
+  const localChild = makeAuditAgent(
+    makeAuditSession({ cwd: '/cases/space/S1', mode: 'workspace-write', policy: 'never' }),
+    { id: 'child-local', status: 'running' },
+  )
+  const ctx = makeCtx({
+    agents: { get: (id) => (id === 'parent-1' ? rootAgentOf() : undefined) },
+    subagents: {
+      list: () => ['spawn'],
+      async listChildren() { return [] },
+      async start(_p, request) {
+        // 夹具的统一包装不会再补（这里显式给），模拟 provider 兑现时带 localAgent
+        return { id: 'child-local', provider: 'spawn', dispose: async () => {}, request, localAgent: localChild }
+      },
+    },
+  })
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, true, result.error)
+  assert.equal(state.activeChildId, 'child-local')
+})
+
+test('F1 幂等：重复点停止不启动第二条流程，也不重复 abort', async () => {
+  const aborts = []
+  let disposeCalls = 0
+  const ctx = makeCtx({
+    agents: agentsServingChild({ childOptions: { status: 'idle' } }),
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps, state } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+      runs: { 'child-1': { run: { dispose: async () => { disposeCalls += 1 } }, abort: () => { aborts.push('abort') } } },
+    },
+  })
+  const first = await auditStop(deps, { childId: 'child-1' })
+  assert.equal(first.accepted, true)
+  assert.equal(first.alreadyStopping, false, '第一次不是"已在停"')
+  const second = await auditStop(deps, { childId: 'child-1' })
+  assert.equal(second.accepted, true, '重复点击照样被接受（幂等）')
+  assert.equal(second.alreadyStopping, true, '但必须告诉调用方"已经在停了"')
+  await settleStop(deps, 'child-1')
+  assert.deepEqual(aborts, ['abort'], 'abort 只许发一次')
+  assert.equal(disposeCalls, 1, 'dispose 只许调一次')
+  assert.equal(state.audits.k.stopPhase, 'quiesced')
+})
+
+test('F1 门禁：停止流程在跑（或上一条 timeout/failed）时不许启动新的审核', async () => {
+  const ctx = makeCtx({
+    agents: agentsServingChild({ childOptions: { status: 'running' } }),
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  // ① 停止在跑（用一个永不收敛的 dispose 卡住它）
+  const { deps, state } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+      runs: { 'child-1': { run: { dispose: () => new Promise(() => {}) }, abort: () => {} } },
+    },
+  })
+  const originalGet = deps.ctx.get
+  deps.ctx.get = (name) => (name === 'timer' ? { timeout: async () => {} } : originalGet(name))
+  await auditStop(deps, { childId: 'child-1' })
+  const blocked = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(blocked.ok, false, '停止过程中不许启动新的审核')
+  assert.match(blocked.error, /还在停止过程中|确认停止前/)
+  await settleStop(deps, 'child-1')
+  assert.equal(state.audits.k.stopPhase, 'timeout')
+
+  // ② 上一条留下 timeout（未确认静默）→ 同样拒绝，且**跨重启**成立
+  const fresh = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1', stopPhase: 'timeout', quiesced: false }) },
+    },
+  })
+  const blocked2 = await auditStart(fresh.deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(blocked2.ok, false)
+  assert.match(blocked2.error, /还在停止过程中|确认停止前/)
+})
+
+test('F4 契约：停止阶段跨重启保留，且 canStartNext 由 Host 判定', async () => {
+  // ① 记录里的阶段/结果落盘
+  const ctx = makeCtx({
+    agents: agentsServingChild({ childOptions: { status: 'idle' } }),
+    subagents: { list: () => ['spawn'], async listChildren() { return [] }, async start() { throw new Error('不应被调用') } },
+  })
+  const { deps } = startDeps({
+    ctx,
+    state: {
+      parentSessionId: 'parent-1', activeKey: 'k', activeChildId: 'child-1',
+      audits: { k: record({ key: 'k', childId: 'child-1' }) },
+      runs: { 'child-1': { run: { dispose: async () => {} }, abort: () => {} } },
+    },
+  })
+  await auditStop(deps, { childId: 'child-1' })
+  await settleStop(deps, 'child-1')
+  const saved = deps.state.audits.k
+  assert.equal(saved.stopPhase, 'quiesced')
+  assert.equal(typeof saved.stopRequestedAt, 'number')
+  assert.equal(saved.quiesced, true)
+
+  // ② 换个进程（新 state）恢复：阶段与 quiesced 都还在，canStartNext 由 Host 现算
+  const restored = startDeps({
+    ctx,
+    state: { parentSessionId: 'parent-1', audits: { k: record({ key: 'k', childId: 'child-1', stopPhase: 'timeout', quiesced: false, stopRequestedAt: 1, stopElapsedMs: 5 }) } },
+  })
+  const view = await auditStatus(restored.deps, {})
+  const stop = view.audits.find((item) => item.key === 'k').stop
+  assert.equal(stop.phase, 'timeout', '阶段跨重启保留')
+  assert.equal(stop.quiesced, false)
+  assert.equal(stop.requestedAt, 1)
+  assert.equal(view.canStartNext, false, 'timeout 未确认静默 → Host 说不能启动下一条')
+  assert.equal(typeof stop.elapsedMs, 'number')
+  assert.ok(Array.isArray(stop.notes))
 })
 
 test('audit-status adopts a running unclaimed child and restores the lock', async () => {
@@ -761,7 +1614,7 @@ test('audit-status queries the audit root and every recorded parent', async () =
     ctx,
     state: {
       parentSessionId: 'parent-now',
-      auditRoot: { workspacePath: '/cases/space', sessionId: 'parent-root', title: '', assignedAt: '' },
+      auditRoot: { workspacePath: '/cases/space', casePath: '/cases/space/S1', sessionId: 'parent-root', title: '', assignedAt: '' },
       activeKey: 'old',
       activeChildId: 'dead',
       audits: { old: record({ key: 'old', childId: 'dead', parentSessionId: 'parent-then' }) },
@@ -790,9 +1643,11 @@ test('audit-stop marks the record stopped and releases the lock', async () => {
     },
   })
   const result = await auditStop(deps, {})
-  assert.equal(result.ok, true)
+  assert.equal(result.accepted, true, '停止请求被接受')
   assert.equal(result.key, 'k')
-  assert.ok(aborts.includes('abort'))
+  await settleStop(deps, 'child-1')
+  assert.ok(aborts.includes('abort'), 'abort 真的发出去了')
+  assert.equal(state.audits.k.stopPhase, 'quiesced', '确认静默')
   assert.equal(state.audits.k.stopped, true)
   assert.equal(state.audits.k.status, 'stopped')
   assert.equal(state.activeChildId, '')
@@ -824,11 +1679,11 @@ function gateDeps(tools) {
   const state = makeState({
     workspaceChosen: true,
     workspacePath: '/cases/space',
-    auditRoot: { workspacePath: '/cases/space', sessionId: 'parent-1', title: '', assignedAt: '' },
+    auditRoot: { workspacePath: '/cases/space', casePath: '/cases/space/S1', sessionId: 'parent-1', title: '', assignedAt: '' },
   })
   const ctx = makeCtx({
-    agents: { get: (id) => (id === 'parent-1' ? { id, status: 'running' } : undefined) },
-    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space' } } : undefined) },
+    agents: agentsServingChild(),
+    sessions: { get: (id) => (id === 'parent-1' ? { header: { cwd: '/cases/space/S1' } } : undefined) },
     subagents: {
       list: () => ['spawn'],
       async listChildren() { return [] },

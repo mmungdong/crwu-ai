@@ -1,24 +1,28 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
-import { runShell, sandboxDenialNote } from '../shell/run.ts'
 import { shellInvoke } from '../platform/shell.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
-import type { ShellResult } from '../shell/run.ts'
+import { sandboxDenialNote, type ShellResult } from '../shell/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessOperation, LocalAccessSource } from '../access/operations.ts'
 
 /**
  * `crwu` 命令执行器。
  *
- * 三条门禁，缺一条就会变成「工作台能执行任意命令」：
+ * ## 协议 18 起的三条门禁（缺一条就变成"工作台能执行任意命令"）
+ *
  * 1. **只允许 argv[0] === 'crwu'**，其余一律拒绝；
- * 2. **无沙箱执行（escalate）只有白名单子命令能声明**：`crwu h3yun session login` 与
- *    `forms/records/apps/files/file/tools`。这些都必须在沙箱外跑（要读系统钥匙串）。
- *    白名单是**必要条件**：不在白名单里的子命令即使调用方传 `escalate: true` 也直接失败；
- * 3. **提权的真实语义**（这一段曾与实现互相矛盾，以代码为准）：
- *    `effective = (trusted ∧ 白名单) ∨ escalate`。也就是说
- *    - 员工已在面板上授权（`trusted`）时，白名单内的读凭据命令**自动**提权，不再逐次询问；
- *    - 未授权时，只有调用方**显式**声明 `escalate: true` 才会提权（这是客户端「去授权」重试
- *      与插件内部初始化路径的通道），DSH 的审批策略决定放不放行。
- *    两种路径都**不要求员工改启动参数**。
+ * 2. **合法子命令必须能映射到一个登记的本地访问操作**（`crwuOperationOf`）——
+ *    映射不出来的直接失败。提权与否由那个**操作身份**决定，调用方提交不了；
+ * 3. **执行一律经 Broker**：未授权时 Broker 连进程都不起，并把原因如实回给界面。
+ *
+ * ## 为什么把「提权开关」换成「argv → 操作」的固定映射
+ *
+ * 旧形态是 `escalate?: boolean` + `trusted: boolean`：`effective = (trusted ∧ 白名单) ∨ escalate`。
+ * 那个 `escalate` 是**调用方**给的，同一个子命令在不同调用点可以拿到不同的权限，
+ * 而审查时只能沿着调用链读。现在提权是**子命令自己**的属性：`crwu h3yun session status`
+ * 就是 `h3yun.session.status`（要提权），`crwu h3yun records get` 就是 `h3yun.records.read`
+ * （要提权）—— 没有第二个变量。模型与客户端都碰不到它（操作名不在任何 schema 里）。
  */
 
 export interface CrwuRun {
@@ -36,24 +40,36 @@ export interface CrwuRun {
   sandbox: ShellResult['sandbox']
   /** stdout/stderr 命中「钥匙串被拒」特征：提示用户需要无沙箱执行。 */
   keychainBlocked: boolean
-  /** 界面应显示一次「授权入口」：本次读本机凭据被拦，且用户还没记住授权。 */
+  /** 界面应显示一次「授权入口」：本次读本机凭据被拦，且用户还没允许本机访问。 */
   escalateAvailable: boolean
 }
 
+/** `h3yun` 子命令 → 本机访问操作（**固定映射**，不是调用方参数）。 */
+const CRWU_OPERATION_BY_SUBCOMMAND: Record<string, LocalAccessOperation> = {
+  forms: 'h3yun.forms.read',
+  records: 'h3yun.records.read',
+  files: 'h3yun.files.read',
+  file: 'h3yun.files.read',
+}
+
 /**
- * 该 crwu 子命令是否允许无沙箱执行。
+ * 把一条 **argv 形状合法**的 `crwu` 命令映射成本机访问操作。
  *
- * 判据写成显式白名单而不是「h3yun 开头的都行」：氚云子命令将来会增加，默认必须是**拒绝**。
+ * 返回 `null` = 这条子命令还没有登记操作 → **拒绝执行**（默认拒绝）。
+ * 显式登记而不是"h3yun 开头的都放行"：氚云子命令会继续增加，新命令必须同时想清楚
+ * 「它属于哪个 capability、要不要提权、哪些来源能做」——这正是这张表存在的意义。
  */
-export function escalationAllowed(argv: string[]): boolean {
-  if (argv[1] !== 'h3yun') return false
-  const sub = argv[2]
-  // `h3yun session` 整段放行：`login` 写钥匙串，而 `status` / `bind` **读**钥匙串 ——
-  // 受限沙箱下读不到就会回 `secret not found in keyring`，那是**假结论**（实测同一台机器
-  // 同一时刻：沙箱里「没找到」，带 `sandboxPolicy: danger-full-access` 时才拿到真状态）。
-  // 只放行 `login` 是 2026-09-28 之前留下的缺口：面板因此把「未授权/被沙箱拦」显示成「未登录」。
-  if (sub === 'session') return true
-  return sub === 'forms' || sub === 'records' || sub === 'apps' || sub === 'files' || sub === 'file' || sub === 'tools'
+export function crwuOperationOf(argv: readonly string[]): LocalAccessOperation | null {
+  if (text(argv[0]) !== 'crwu') return null
+  const domain = text(argv[1])
+  if (domain !== 'h3yun') return null
+  const sub = text(argv[2])
+  if (sub === 'session') {
+    const action = text(argv[3])
+    if (action === 'status' || action === 'login' || action === 'bind') return `h3yun.session.${action}`
+    return null
+  }
+  return CRWU_OPERATION_BY_SUBCOMMAND[sub] ?? null
 }
 
 /** stdout/stderr 是否命中「凭据存储 / 钥匙串」失败特征。 */
@@ -62,21 +78,39 @@ export function keychainBlocked(result: { stdout?: unknown; stderr?: unknown }):
   return blob.includes('credential store') || blob.includes('auto-refresh failed') || blob.includes('exit status 161')
 }
 
+/**
+ * 给界面 / 诊断用的命令摘要：**只有域 + 子命令**。
+ *
+ * `--schema <表单 code>` / `--id <记录 id>` / `--out <本地路径>` 这类业务标识一律不进摘要 ——
+ * 诊断是要给人看"发生过哪一类操作"，不是回放参数。
+ */
+export function describeCrwuCommand(argv: readonly string[]): string {
+  const words: string[] = []
+  for (const item of argv) {
+    const token = text(item)
+    if (token === '' || token.startsWith('-')) break
+    words.push(token)
+    if (words.length >= 4) break
+  }
+  return words.join(' ')
+}
+
 export interface CrwuOptions {
   workdir?: string
   timeoutMs?: number
-  escalate?: boolean
   stdoutMaxBytes?: number
-  /** 用户在面板上是否已信任氚云（写在插件状态里）。 */
-  trusted: boolean
-  /** 用于拼接命令的引用方式；Windows 与 POSIX 不同。 */
-  platform?: string
   /** 调用方（Tool 的 `exec.signal`）的取消信号；透传到 `ShellExecRequest.signal`。 */
   signal?: AbortSignal
+  /** 用于拼接命令的引用方式；Windows 与 POSIX 不同。 */
+  platform?: string
+  /** Broker（协议 18）：唯一执行入口，提权由操作身份决定。 */
+  access: LocalAccessBroker
+  /** 这次调用是谁发起的。 */
+  source: LocalAccessSource
 }
 
-/** 执行一条 crwu 命令。返回结构与 legacy 一致，界面不需要改。 */
-export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions): Promise<CrwuRun> {
+/** 执行一条 crwu 命令。 */
+export async function runCrwu(ctx: Context, argv: readonly string[], options: CrwuOptions): Promise<CrwuRun> {
   const failed = (error: string): CrwuRun => ({
     ok: false, error, exitCode: null, stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false,
     escalated: false,
@@ -88,36 +122,34 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
   const clean = argv.map((item) => text(item))
   if (clean[0] !== 'crwu') return failed('工作台只允许调用 crwu 命令')
 
-  const allowed = escalationAllowed(clean)
-  if (options.escalate === true && !allowed) {
-    return failed(`该 crwu 子命令不允许无沙箱执行：${clean.slice(0, 3).join(' ')}`)
+  const operation = crwuOperationOf(clean)
+  if (operation === null) {
+    // 形状合法但没登记操作 = 这个功能还没有权限归属，**不猜、不放行**。
+    return failed(`该 crwu 子命令还没有登记本机访问操作，拒绝执行：${describeCrwuCommand(clean)}`)
   }
-  // 提权 = 白名单 ∧ (已授权 ∨ 调用方显式声明)。授权就是用户对「读本机凭据」的同意；
-  // 没授权又没显式声明时，这里不会偷偷无沙箱执行 —— 环境自检会把「未授权」算成阻塞项。
-  const effective = (options.trusted === true && allowed) || options.escalate === true
 
-  // 提权请求必须带 `workspaceRoot`（DSH 契约），所以会话工作区未知时**退回沙箱执行**：
-  // 不能因为拿不到工作区就把命令直接判失败 —— 那样员工看到的是一句基础设施错误，
-  // 而不是「钥匙串被拒，去授权」这条可操作的路径。
-  const canEscalate = effective && (options.workdir ?? '') !== ''
   const platform = options.platform ?? ''
-  // 上面已经按「argv[0] 必须是 crwu」放行过了；这里再把命令名换成**包内绝对路径**。
-  // 只按名字调用会在 Finder 启动的桌面端直接失败（PATH 里没有 crwu，实测
-  // `bash: crwu: command not found`），而那时「氚云登录」按钮点了没有任何反应。
+  // 命令名换成**包内绝对路径**：只按名字调用会在 Finder 启动的桌面端直接失败
+  // （PATH 里没有 crwu，实测 `bash: crwu: command not found`），而那时「氚云登录」
+  // 按钮点了没有任何反应。`shellInvoke` 负责 Windows 上的调用运算符 `&`。
   const resolved = await resolveBundledCommand(ctx, platform, 'crwu')
-  // 命令位置必须走 `shellInvoke`：Windows 上的 PowerShell 需要调用运算符 `&`，
-  // 否则以引号开头的绝对路径会被当成字符串表达式（员工实测的 ParserError）。
-  const result: ShellResult = await runShell(ctx, shellInvoke(resolved, clean.slice(1), platform), {
-    ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
-    timeoutMs: options.timeoutMs ?? 60_000,
-    escalate: canEscalate,
-    ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  })
+
+  const result: ShellResult = await options.access.runShell(
+    { operation, source: options.source, ...(options.workdir === undefined ? {} : { workdir: options.workdir }) },
+    shellInvoke(resolved, clean.slice(1), platform),
+    {
+      ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
+      timeoutMs: options.timeoutMs ?? 60_000,
+      ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      summary: describeCrwuCommand(clean),
+    },
+  )
 
   const blocked = keychainBlocked(result)
-  // 沙箱拒绝（受限沙箱下读钥匙串 / 写用户目录）要说清原因，否则上层会把
-  // 「secret not found in keyring」当成「真的没登录」显示出去。
+  const granted = options.access.consent().state === 'granted'
+  // 沙箱拒绝要认出并说清：受限沙箱下读钥匙串会回 `secret not found in keyring` ——
+  // 那看起来像「真的没登录」。归因写在消息最前面，原文附在后面以供对照。
   const denied = result.ok ? '' : sandboxDenialNote(result)
   return {
     ok: result.ok,
@@ -130,12 +162,14 @@ export async function runCrwu(ctx: Context, argv: string[], options: CrwuOptions
     truncated: result.truncated,
     timedOut: result.timedOut,
     aborted: result.aborted,
-    escalated: canEscalate,
+    // `escalated` 现在是**事实**而不是请求：Broker 认为该提权、且确实按那个模式跑的。
+    escalated: result.sandbox.requested === 'danger-full-access',
     sandbox: result.sandbox,
     keychainBlocked: blocked,
-    // 需要给员工一个「授权入口」的两种情况：凭据读取被钥匙串/沙箱拦下（blocked），
-    // 或者命令根本没跑起来（`error`：沙箱后端不可用、审批被拒）。已经记住授权就不再打扰。
-    escalateAvailable: (blocked || result.error !== '') && options.trusted !== true,
+    // 需要给员工一个「允许入口」的两种情况：凭据读取被钥匙串/沙箱拦下（blocked），
+    // 或者命令根本没跑起来（`error`：沙箱后端不可用、审批被拒、未授权）。
+    // 已经允许过本机访问就不再打扰（那时该看的是真实故障，不是再点一次允许）。
+    escalateAvailable: (blocked || result.error !== '') && !granted,
   }
 }
 

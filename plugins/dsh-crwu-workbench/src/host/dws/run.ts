@@ -2,8 +2,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../shared/utils/value.ts'
 import { shellInvoke } from '../platform/shell.ts'
 import { requireBundledCommand } from '../platform/command.ts'
-import { runShell, sandboxDenialNote } from '../shell/run.ts'
-import { DWS_ALLOWED_PREFIXES, DWS_ESCALATION_PREFIXES, DWS_STDOUT_MAX, DWS_TIMEOUT_MS } from './consts.ts'
+import { sandboxDenialNote, type ShellResult } from '../shell/run.ts'
+import { DWS_ALLOWED_PREFIXES, DWS_OPERATION_BY_PREFIX, DWS_STDOUT_MAX, DWS_TIMEOUT_MS } from './consts.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessOperation, LocalAccessSource } from '../access/operations.ts'
 
 /**
  * `dws` 的结构化执行器：**唯一**允许调用 `dws` 的地方（自研审核链路）。
@@ -82,17 +84,24 @@ export function assertDwsCommand(argv: readonly string[]): DwsCommandCheck {
 }
 
 /**
- * 该命令是否允许申请无沙箱执行（读本机凭据）。
+ * 把一条**形状合法**的 `dws` 命令映射成本机访问操作。
  *
- * 与命令白名单是**两层**：白名单回答「能不能跑」，这一层回答「能不能提权」。
- * 只有 `dws/consts.ts` 的 `DWS_ESCALATION_PREFIXES` 命中才算数，表外一律不提权。
+ * 与命令白名单是**两层**：白名单回答「能不能跑」，这一层回答「算哪一类本机访问、
+ * 要不要提权、哪些来源能做」。表外（或白名单里有、操作表里没有）一律返回 `null` → 拒绝执行。
+ *
+ * 最长前缀优先与 `matchDwsPrefix` 保持一致：`drive +upload` 不能被 `drive +list` 之类的
+ * 短前缀抢走，否则一次上传会被算成只读操作。
  */
-export function dwsEscalationAllowed(argv: readonly string[]): boolean {
+export function dwsOperationOf(argv: readonly string[]): LocalAccessOperation | null {
   const prefix = matchDwsPrefix(argv)
-  if (prefix === null) return false
-  return DWS_ESCALATION_PREFIXES.some(
-    (allowed) => allowed.length === prefix.length && allowed.every((word, index) => word === prefix[index]),
-  )
+  if (prefix === null) return null
+  let best: { length: number; operation: LocalAccessOperation } | null = null
+  for (const [candidate, operation] of DWS_OPERATION_BY_PREFIX) {
+    if (candidate.length !== prefix.length) continue
+    if (!candidate.every((word, index) => word === prefix[index])) continue
+    if (best === null || candidate.length > best.length) best = { length: candidate.length, operation }
+  }
+  return best?.operation ?? null
 }
 
 /** 失败分类：与「命令跑完了但退出码非 0」严格区分。 */
@@ -116,17 +125,14 @@ export interface DwsRunResult {
 export interface DwsRunOptions {
   /** 命令的工作目录；提权必须有它（DSH 契约）。 */
   workdir: string
-  /** 员工是否已在面板上授权读取本机凭据。 */
-  trusted: boolean
   /** Tool 的 `exec.signal`。 */
   signal?: AbortSignal
   timeoutMs?: number
   stdoutMaxBytes?: number
-  /**
-   * 这条命令**是否需要读本机凭据**。由 Tool 内部显式声明，模型无法设置。
-   * 只有 `true` 且该命令在提权白名单里、且已授权、且 workspaceRoot 已知时才提权。
-   */
-  credentialOperation: boolean
+  /** Broker（协议 18）：唯一执行入口。提权由操作身份决定，调用方提交不了。 */
+  access: LocalAccessBroker
+  /** 这次调用是谁发起的（面板登录 / 审核 Tool / 宿主后台）。 */
+  source: LocalAccessSource
 }
 
 /** 给界面/日志用的命令摘要：只保留命中的白名单前缀，避免把参数里的业务标识散出去。 */
@@ -175,22 +181,27 @@ export async function runDws(
   const checked = assertDwsCommand(argv)
   if (!checked.ok) return failure('input', checked.error, shown)
 
+  const operation = dwsOperationOf(argv)
+  if (operation === null) {
+    // 形状合法但没有权限归属 = 这个功能还没有登记本机访问操作：**不猜、不放行**。
+    return failure('input', `${shown} 还没有登记本机访问操作，拒绝执行`, shown)
+  }
+
   const resolved = await requireBundledCommand(ctx, platform, 'dws')
   if (!resolved.ok) return failure(resolved.errorKind, resolved.error, shown)
 
-  const canEscalate = options.credentialOperation === true
-    && options.trusted === true
-    && options.workdir !== ''
-    && dwsEscalationAllowed(argv)
-
   const command = shellInvoke(resolved.path, argv.map((item) => text(item)), platform)
-  const result = await runShell(ctx, command, {
-    ...(options.workdir === '' ? {} : { workdir: options.workdir }),
-    timeoutMs: options.timeoutMs ?? DWS_TIMEOUT_MS,
-    stdoutMaxBytes: options.stdoutMaxBytes ?? DWS_STDOUT_MAX,
-    escalate: canEscalate,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  })
+  const result: ShellResult = await options.access.runShell(
+    { operation, source: options.source, workdir: options.workdir },
+    command,
+    {
+      ...(options.workdir === '' ? {} : { workdir: options.workdir }),
+      timeoutMs: options.timeoutMs ?? DWS_TIMEOUT_MS,
+      stdoutMaxBytes: options.stdoutMaxBytes ?? DWS_STDOUT_MAX,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      summary: shown,
+    },
+  )
 
   const errorKind = classifyShellFailure(result)
   // 沙箱拒绝要认出并说清：dws 自己的报错（`Access is denied` 写 `~/.dws`）看起来像它的 bug，
@@ -210,7 +221,8 @@ export async function runDws(
     truncated: result.truncated,
     timedOut: result.timedOut,
     aborted: result.aborted,
-    escalated: canEscalate,
+    // `escalated` 是**事实**：Broker 认为该提权、且请求确实带着 danger-full-access 出去了。
+    escalated: result.sandbox.requested === 'danger-full-access',
     command: shown,
   }
 }

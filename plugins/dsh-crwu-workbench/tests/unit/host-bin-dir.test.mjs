@@ -11,6 +11,7 @@ import test from 'node:test'
 import { join } from 'node:path'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { BUNDLED_BIN_PLATFORMS, binPlatformDir, binaryFileName, binDirFor, bundledBinaryPath } = await import(
   new URL('src/host/platform/bin-dir.ts', ROOT).href
@@ -199,12 +200,12 @@ test('runCrwu 真的用包内绝对路径去起进程（PATH 里没有 crwu 也�
     },
   }
   const ctx = ctxOf(fsStub({ [bundled]: { type: 'file' } }), { get: (n) => (n === 'shell' ? shell : undefined) })
-  await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], { trusted: false, platform })
+  await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], { access: makeTestAccess(ctx).access, source: 'panel', platform })
   assert.equal(specs.length, 1)
   assert.equal(specs[0].command, `${bundled} h3yun session status`, '必须换成包内绝对路径')
 
   // 安全边界不变：非 crwu 的 argv 仍然被拒（换路径发生在白名单校验之后）。
-  const denied = await runCrwu(ctx, ['sh', '-c', 'ls'], { trusted: false, platform })
+  const denied = await runCrwu(ctx, ['sh', '-c', 'ls'], { access: makeTestAccess(ctx).access, source: 'panel', platform })
   assert.equal(denied.ok, false)
   assert.match(denied.error, /只允许调用 crwu/)
 })

@@ -9,7 +9,16 @@ import { finiteNumber, text } from '../../shared/utils/value.ts'
 import { auditRelease, auditStart, auditStatus, auditStop } from '../audit/ops.ts'
 import { WORKBENCH_PROTOCOL } from '../../shared/consts.ts'
 import { ensureRegistry } from '../state/registry.ts'
-import { writeWorkbenchConfig } from '../state/persist.ts'
+import {
+  grantLocalAccess,
+  localAccessGranted,
+  readLocalAccessConsent,
+  revokeLocalAccess,
+  syncLocalAccessConsent,
+} from '../access/consent.ts'
+import { PERMISSION_SCHEMA_VERSION } from '../../shared/access/types.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 import { adoptWorkspace, autoWorkspace, pickWorkspace } from '../workspace/ops.ts'
 import { sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
@@ -20,6 +29,7 @@ import { createUploadWatch } from '../oss/watch.ts'
 import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
 import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
+import { dwsLocalDoctor, dwsLocalPermissionRepair, hasAttributableDwsFailure } from '../dws/local.ts'
 import { loadEnvironment } from '../environment/ops.ts'
 import { createCapabilityGate, guardOperation } from '../environment/gate.ts'
 import { ifindCredentialClear, ifindCredentialSave, ifindProbe, ifindStatus, type IfindOpsDeps } from '../tools/ifind-ops.ts'
@@ -94,6 +104,11 @@ export interface HostResolvers {
   form: H3yunFormResolver
   /** DSH 自带 Python 的实例级解析器（审核启动与环境页共用）。 */
   python: PythonRuntimeResolver
+  /**
+   * **本地访问代理（协议 18）**：操作表这一层不再自己拼 `sandboxPolicy`，
+   * 所有跨边界的调用都带着"操作 + 来源"交给它判。
+   */
+  access: LocalAccessBroker
 }
 
 export function createCoreOperations(
@@ -110,12 +125,16 @@ export function createCoreOperations(
    * 必须每次调用时重新构造：清单是环境自检拉来的，平台是探测出来的，
    * 都可能在这之后才就绪。构造时抓一次快照会让第一次调用永远拿到内置默认清单。
    */
-  const ossDeps = async (): Promise<OssDeps> => ({
+  const ossDeps = async (source: LocalAccessSource = 'panel'): Promise<OssDeps> => ({
     ctx,
     manifest: state.manifest,
+    // **来源必须逐次给**：面板 RPC 是 `panel`，审核 Tool 与自动上传是 `audit-tool`。
+    // 少了它就等于让"谁发起的"这件事由默认值决定 —— 那正是本次改造要消灭的东西。
+    source,
     platform: await world.platform(),
     home: await world.home(),
     workdir: () => world.workdir(),
+    access: resolvers.access,
   })
   // 上传看门狗：审核跑完不会回调，只能轮询「有结果就传」。句柄挂在插件实例上。
   const watch = createUploadWatch(ctx, state, ossDeps)
@@ -130,7 +149,7 @@ export function createCoreOperations(
   let meCache: WhoamiResult | null = null
   const identity = async (): Promise<WhoamiResult> => {
     if (meCache !== null) return meCache
-    const me = await dwsSelf({ ctx, workdir: () => world.workdir(), platform: await world.platform() })
+    const me = await dwsSelf({ ctx, access: resolvers.access, workdir: () => world.workdir(), platform: await world.platform() })
     if (me.name !== '') meCache = me
     return me
   }
@@ -149,6 +168,7 @@ export function createCoreOperations(
       // 「我是谁」跟着自检一起拿（见 identity 的注释）：自检本来就要问一次钉钉登录态。
       {
         ctx, config, state, home, platform,
+        access: resolvers.access,
         sessionRoot: () => world.workdir(),
         identity,
         // DSH 自带 Python 由实例级解析器给（成功缓存、失败可显式刷新）。
@@ -182,6 +202,7 @@ export function createCoreOperations(
     : (extra.ifindProbeCache ?? createIfindProbeCache())
   const ifindDeps: IfindOpsDeps = {
     ctx,
+    access: resolvers.access,
     home: () => world.home(),
     platform: () => world.platform(),
     ...(extra.ifindTransport === undefined ? {} : { transport: extra.ifindTransport }),
@@ -215,11 +236,18 @@ export function createCoreOperations(
     boot: async () => {
       // legacy 的 boot 是面板挂载后第一个被调用的操作，它顺手恢复了注册表并采用工作空间；
       // 不补这一步，第一次响应里的 workspace 永远是「未选定」，界面会先闪一下空状态。
-      await ensureRegistry(ctx, await world.home(), state)
-      await adoptWorkspace({ ctx, config, state, world })
+      const home = await world.home()
+      await ensureRegistry({ ctx, home, state, access: resolvers.access })
+      await adoptWorkspace({ ctx, config, state, world, access: resolvers.access })
+      // 授权收据：`boot` 是面板挂载后第一个被调用的操作，界面靠它决定「先显示授权卡」
+      // 还是「正常进环境页」。在这里读一次，就把「第一次打开」的判据固定在最前面。
+      const localAccess = await syncLocalAccessConsent({ ctx, home, state, access: resolvers.access })
       return {
       ok: true,
       protocol: WORKBENCH_PROTOCOL,
+      // 权限说明版本：客户端启动时与自己的 schema 比对，不一致就停在本机操作之前。
+      permissionSchemaVersion: PERMISSION_SCHEMA_VERSION,
+      localAccess,
       // 面板标题旁要显示「现在跑的是哪一版」：客户端刷一下就换新，宿主只有重启才换，
       // 把 rev 与构建时间一起给它，用户报问题时能直接对上号（见 AGENTS.md §7.2）。
       // `version` / `buildKind` 供侧栏入口那枚小标签用：dev（源码检出）还是装好的包 + 具体版本。
@@ -238,6 +266,7 @@ export function createCoreOperations(
         // 只列包形态真的实现了的操作。曾经把 clipboard 列进 done，但操作表里没有它，
         // 于是客户端点「复制提示词」时拿到 404 —— 声明必须跟着实现走。
         done: ['ping', 'boot', 'workspace', 'workspace-auto', 'bind-session', 'trust',
+          'local-access-grant', 'local-access-revoke', 'access-diagnostics',
 
           // 第 2 层：氚云表单定位 + 待审核列表 + 受白名单约束的 crwu 直通。
           'pending', 'crwu',
@@ -253,6 +282,8 @@ export function createCoreOperations(
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
           'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
+          // 协议 18 · 子项目 D：DWS 本机目录的只读体检与最小权限修复。
+          'dws-local-doctor', 'dws-local-permission-repair',
           // 协议 16：自助更新四个操作（安装目标由 Host 自己授权，调用方只能传空参数）。
           ...Object.keys(updateOperations)],
         // 24 个 legacy RPC 已全部搬完；这里保留空数组，是为了让「声明跟着实现走」的测试继续成立。
@@ -262,30 +293,62 @@ export function createCoreOperations(
     },
     // 换工作空间会改掉案例根目录（审核产物写到哪）：先落盘再作废快照。
     workspace: async (args) => {
-      const result = await pickWorkspace({ ctx, config, state, world }, args)
+      const result = await pickWorkspace({ ctx, config, state, world, access: resolvers.access }, args)
       gate.invalidate()
       return result
     },
 
     'workspace-auto': async () => {
-      const result = await autoWorkspace({ ctx, config, state, world })
+      const result = await autoWorkspace({ ctx, config, state, world, access: resolvers.access })
       gate.invalidate()
       return result
     },
 
-    trust: async (args) => {
-      // `h3yun` 是旧客户端的字段名，继续接受（协议号已 +1，但没必要为一个布尔值让旧页面报错）。
-      const granted = args.credentials === true || args.h3yun === true
-      state.trustCredentials = granted
-      // 授权改变了"读本机凭据"这条事实：作废旧快照，下一次操作重新自检。
+    /**
+     * **旧版授权入口，保留一代、但不再授予任何权限**（协议 18）。
+     *
+     * 旧客户端（协议 ≤17）会带着 `{ credentials: true }` 调它。那个布尔值表达的是**旧范围**
+     * （只覆盖「读本机凭据」），而协议 18 的范围扩到了氚云凭据存储 / DWS 目录 / OSS 配置 /
+     * iFinD 凭据 / 系统集成五项。若继续按旧请求授予，就是**未经员工同意地扩权** ——
+     * 所以这里一律回协议不匹配的失败，让界面去提示「完全退出并重新打开 DeepSeek Harness」。
+     *
+     * 保留这个 handler（而不是直接删掉）是为了让旧客户端拿到**一句能读懂的话**，而不是 404
+     * 「未知 op」。
+     */
+    trust: async () => ({
+      ok: false,
+      error: `客户端与宿主的权限说明版本不一致：本机访问授权已改为版本化收据（协议 ${String(WORKBENCH_PROTOCOL)}），`
+        + '请完全退出并重新打开 DeepSeek Harness 后在「账号连接」里按新的范围允许一次。',
+      protocolMismatch: true,
+      consent: await readLocalAccessConsent({ ctx, home: await world.home(), access: resolvers.access }),
+    }),
+
+    /**
+     * 允许工作台访问本机账号和配置（协议 18）。
+     *
+     * **先落盘、后放行**：写盘失败就是 `ok:false` 且不获得任何权限（见 `access/consent.ts`）。
+     * 提交的能力集合必须**逐字**等于当前版本的规范清单 —— 被改过的客户端无法提交一个
+     * 与界面不同的范围。
+     */
+    'local-access-grant': async (args) => {
+      const home = await world.home()
+      // `state` 传进去：授权/撤销的状态迁移由 `access/consent.ts` **自己**负责。
+      // 这里**不再**无条件采用 `result.consent` —— 写盘失败时那份视图可能来自磁盘上的旧授权，
+      // 照抄进活状态就等于一次失败的「重新允许」把权限重新打开（2026-09-29 复查的 P1）。
+      const result = await grantLocalAccess({ ctx, home, state, access: resolvers.access }, args)
+      // 授权改变了「能不能读本机凭据」这条事实：作废旧快照，下一次操作重新自检。
       gate.invalidate()
-      // **落盘**：一次授权长期有效，否则员工每次重启 profile 都要重新授权（用户 2026-09-22 口径）。
-      const saved = await writeWorkbenchConfig(ctx, await world.home(), { trustCredentials: granted })
-      return {
-        ok: true,
-        trust: { credentials: state.trustCredentials },
-        ...(saved ? {} : { persistError: '授权没能写入磁盘，重启后需要重新授权' }),
-      }
+      return { ok: result.ok, error: result.error, consent: result.consent, permissionSchemaVersion: PERMISSION_SCHEMA_VERSION }
+    },
+
+    /** 撤销本机访问：**内存先关**，写盘失败也要 fail closed（见 `access/consent.ts`）。 */
+    'local-access-revoke': async () => {
+      const home = await world.home()
+      // `state` 传进去：撤销要在**任何 await 之前**把内存切到关闭态（见 consent.ts）。
+      // 撤销同理：状态由 `access/consent.ts` 负责（它在任何 `await` 之前就把内存切到关闭态）。
+      const result = await revokeLocalAccess({ ctx, home, state, access: resolvers.access })
+      gate.invalidate()
+      return { ok: result.ok, error: result.error, consent: result.consent, permissionSchemaVersion: PERMISSION_SCHEMA_VERSION }
     },
     'bind-session': async (args) => {
       const id = text(args.sessionId)
@@ -304,7 +367,7 @@ export function createCoreOperations(
       }
       state.parentSessionId = id
       // 登记是用户按引导做的第一步；顺带把工作空间采用了，别让他再额外点一次自检。
-      await adoptWorkspace({ ctx, config, state, world })
+      await adoptWorkspace({ ctx, config, state, world, access: resolvers.access })
       return {
         ok: true,
         parentSessionId: id,
@@ -323,7 +386,7 @@ export function createCoreOperations(
       // 平台探测要跑子进程，所以按实例缓存一次；提权执行必须带工作区，由 loadPending 统一解析。
       const platform = await world.platform()
       return await loadPending(
-        { ctx, state, trusted: state.trustCredentials, platform, sessionRoot: () => world.workdir(), form: resolvers.form },
+        { ctx, state, access: resolvers.access, platform, sessionRoot: () => world.workdir(), form: resolvers.form },
         args,
       )
     },
@@ -336,8 +399,10 @@ export function createCoreOperations(
       return await runCrwu(ctx, argv, {
         ...(workdir === '' ? {} : { workdir }),
         timeoutMs: finiteNumber(args.timeoutMs) > 0 ? finiteNumber(args.timeoutMs) : 60_000,
-        escalate: args.escalate === true,
-        trusted: state.trustCredentials,
+        // 协议 18：**不再接受 `escalate`**（那是调用方提交的提权开关）。这条直通入口现在只能
+        // 执行**能映射到登记操作**的子命令，提权与否由操作身份决定（`crwuOperationOf`）。
+        access: resolvers.access,
+        source: 'panel',
         platform,
       })
     },
@@ -346,7 +411,17 @@ export function createCoreOperations(
       // 界面上的门禁只负责体验，**这里才是真实性与绕过防护**（同源路由是公开契约）。
       const blocked = await guard('audit-start')
       if (blocked !== null) return blocked
-      const result = await auditStart({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }, args)
+      const result = await auditStart({
+        ctx, config, state, world, access: resolvers.access, form: resolvers.form, python: resolvers.python,
+        // 与**界面门禁同一份**能力快照（`environment/gate.ts`）：创建子代理之前再确认一次
+        // 环境仍然就绪。撤销授权 / 换工作空间都会 `invalidate()`，所以这里看到的是新事实。
+        readiness: async () => {
+          const blocked = await guard('audit-start')
+          return blocked === null
+            ? { ok: true, error: '' }
+            : { ok: false, error: text(blocked.error) || '环境未就绪' }
+        },
+      }, args)
       // 起了审核就开始盯交付件：子会话跑完不会回调，只能轮询。
       if (result.ok) watch.start()
       return result
@@ -354,7 +429,7 @@ export function createCoreOperations(
     'audit-stop': async (args) => {
       // **不判门禁**：停止正在跑的审核是安全动作。环境刚坏了（AK 被撤、登录过期）时更要能停，
       // 判门禁会把人锁在外面，只能重启 profile。
-      const result = await auditStop({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }, args)
+      const result = await auditStop({ ctx, config, state, world, access: resolvers.access, form: resolvers.form, python: resolvers.python }, args)
       // 手动停止后把看门狗也停掉（legacy 行为）：这条审核已经不活动了，
       // 定时器留着只是空转。真正已产出的交付件仍会被 audit-status 的每轮触发上传。
       if (result.ok) watch.stop()
@@ -366,16 +441,17 @@ export function createCoreOperations(
         config,
         state,
         world,
+        access: resolvers.access,
         form: resolvers.form,
         python: resolvers.python,
-        autoUpload: async (record) => await maybeAutoUpload(await ossDeps(), record),
+        autoUpload: async (record) => await maybeAutoUpload(await ossDeps('audit-tool'), record),
       }, args)
       // 状态轮询本来就每 10 秒一次，顺手踢一脚看门狗，不必再等满 30 秒。
       await watch.kick()
       return result
     },
     // 同上：释放占用锁是应急出口，不判门禁。
-    'audit-release': async () => await auditRelease({ ctx, config, state, world, form: resolvers.form, python: resolvers.python }),
+    'audit-release': async () => await auditRelease({ ctx, config, state, world, access: resolvers.access, form: resolvers.form, python: resolvers.python }),
     'report-files': async (args) => await reportFiles(
       {
         ctx,
@@ -384,7 +460,7 @@ export function createCoreOperations(
         // 氚云附件是「这份报告该有哪些文件」的权威来源：与 `pending` 同一个表单 code、
         // 同一条授权纪律（没授权就不去读钥匙串）。
         formCode: () => state.formCode,
-        trusted: state.trustCredentials === true,
+        access: resolvers.access,
         platform: await world.platform(),
         workdir: () => world.workdir(),
       },
@@ -406,32 +482,82 @@ export function createCoreOperations(
       return result
     },
     'open-path': async (args) => await openPath(
-      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
       args,
     ),
     clipboard: async (args) => await clipboard(
-      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
       args,
     ),
     // 登录成功 = 登录态事实变了：作废快照，下一次自检才能看到真结论。
     relogin: async () => {
-      const result = await relogin({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() })
+      const result = await relogin({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() })
       gate.invalidate()
       return result
     },
+    /**
+     * **DWS 本机目录只读体检**（协议 18 · D2）。
+     *
+     * 不接受任何路径：目录由 Host 从 world facts 推导（`<home>/.dws`）。
+     * 只在"已经出过一次本机访问失败、且事实排除了沙箱拒绝"之后才有意义
+     * （`classification` 字段就是给调用方判断这一点的）。
+     */
+    'dws-local-doctor': async () => await dwsLocalDoctor({
+      ctx,
+      access: resolvers.access,
+      home: await world.home(),
+      platform: await world.platform(),
+      workdir: await world.workdir(),
+      source: 'panel',
+    }),
+
+    /**
+     * **最小权限修复**（协议 18 · D3）：面板上二次确认之后才调用。
+     *
+     * 参数只接受 `{ confirm: true }`；路径、机制、权限位全部由 Host 决定。
+     * 界面只在结论是"本机文件权限问题"时才渲染那个按钮 —— 但**判据在服务端**：
+     * 客户端即使伪造请求，这里同样会拒（沙箱拒绝 / 降级 / 钥匙串 / 认证失败 / 锁 / 所有者不对）。
+     */
+    'dws-local-permission-repair': async (args) => await dwsLocalPermissionRepair({
+      ctx,
+      access: resolvers.access,
+      home: await world.home(),
+      platform: await world.platform(),
+      workdir: await world.workdir(),
+      source: 'panel',
+    }, args),
+
     'dws-login': async (args) => {
       const result = await dwsLogin(
-        { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+        { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
         args,
       )
       gate.invalidate()
       return result
     },
-    session: async () => await sessionStatus({ ctx, state, platform: await world.platform(), workdir: () => world.workdir() }),
+    session: async () => await sessionStatus({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() }),
     'oss-cred': async () => await ossCred(
-      { ctx, state, platform: await world.platform(), workdir: () => world.workdir() },
+      { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
       await world.home(),
     ),
+
+    /**
+     * 最近的本机访问诊断（协议 18 · B3）。
+     *
+     * **只读、零副作用、脱敏**：给「开发者诊断」看"刚才那次为什么失败"。
+     * 记的是操作名 / 来源 / 请求·解析·实际沙箱模式 / 是否被沙箱拒绝 / 归因类别与版本，
+     * 不含凭据、签名 URL、文件正文与原始 argv（见 `host/access/diagnostics.ts`）。
+     * 故意**不**落盘：落盘会引出"诊断文件在哪、怎么轮转、会不会带上凭据"一整套新问题，
+     * 而它要回答的问题在同一个进程生命周期里就有答案。
+     */
+    'access-diagnostics': async () => ({
+      ok: true,
+      entries: resolvers.access.diagnostics(),
+      consent: resolvers.access.consent(),
+      // 界面据此决定「检查本机目录」能不能点 —— **由 Host 给事实，客户端不自己推断**
+      //（与体检的前置门禁同一个判据，见 `hasAttributableDwsFailure`）。
+      dwsDiagnosable: hasAttributableDwsFailure({ access: resolvers.access, platform: await world.platform(), ctx, home: await world.home(), workdir: await world.workdir() }),
+    }),
 
     // ⑥ 外部数据（iFinD）的凭据生命周期。**不是模型可见的 Tool**：界面把 SK 交给 Host，
     // Host 校验 → 写盘（0600）→ 收紧权限 → 立刻真实探测；返回值只有状态与脱敏摘要。
@@ -461,5 +587,8 @@ export function createCoreOperations(
 
 /** iFinD 凭据的脱敏视图（只给界面看，**没有明文**）。 */
 async function ifindCredentialViewFor(deps: IfindOpsDeps): Promise<Record<string, unknown>> {
-  return await ifindCredentialView(deps.ctx, await deps.home()) as unknown as Record<string, unknown>
+  const home = await deps.home()
+  return await ifindCredentialView(deps.ctx, home, {
+    access: deps.access, source: 'panel', workdir: home,
+  }) as unknown as Record<string, unknown>
 }

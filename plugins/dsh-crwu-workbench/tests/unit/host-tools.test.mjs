@@ -18,15 +18,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { applyShellEffect } from '../helpers/shell-effects.mjs'
+import { grantedConsent, missingConsent } from '../helpers/local-access-fixture.mjs'
+import { makeTestAccess } from '../helpers/local-access-broker-fixture.mjs'
 
 const ROOT = new URL('../../', import.meta.url)
 
 const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
 const { registerCrwuTools, missingAuditTools } = await import(new URL('src/host/tools/register.ts', ROOT).href)
-const { REQUIRED_AUDIT_TOOLS, TOOL_NAMES } = await import(new URL('src/host/tools/consts.ts', ROOT).href)
+const { AUDIT_CHILD_DENIED_TOOLS, CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_CHILD_TOOLS, REQUIRED_AUDIT_TOOLS, TOOL_NAMES } = await import(new URL('src/host/tools/consts.ts', ROOT).href)
 const { sanitizeOssError } = await import(new URL('src/host/tools/oss.ts', ROOT).href)
 const { classifyRun } = await import(new URL('src/host/tools/outcome.ts', ROOT).href)
-const { assertDwsCommand, dwsEscalationAllowed, runDws } = await import(new URL('src/host/dws/run.ts', ROOT).href)
+const { assertDwsCommand, dwsOperationOf, runDws } = await import(new URL('src/host/dws/run.ts', ROOT).href)
+const { DWS_ALLOWED_PREFIXES } = await import(new URL('src/host/dws/consts.ts', ROOT).href)
 const { buildPublishPlan, parseIsoStamp, safeProjectId, nodeSize } = await import(new URL('src/host/dws/plan.ts', ROOT).href)
 const { channelFor, buildPathIndex, resolveRequestedPaths } = await import(new URL('src/host/dws/knowledge-tree.ts', ROOT).href)
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
@@ -42,7 +45,9 @@ const SEQ = '2026-301705-LX10170-BG8746'
 const CASE_DIR = `/cases/space/${SEQ}`
 
 /** `crwu h3yun records get` 的真实形状：`{ data: {...} }`，字段代码原样保留。 */
-const RECORD_JSON = JSON.stringify({ data: { F0000049: '某项目', F0000020: 'B' } })
+// 真实形状（对照 `host-crwu-h3yun.test.mjs` 里从 CLI 抄下来的样本）：记录**自带**
+// `ObjectId` 与 `SeqNo`。bootstrap 现在会核对这两个字段（身份绑定，2026-09-29 复查的 P1）。
+const RECORD_JSON = JSON.stringify({ data: { ObjectId: 'obj-1', SeqNo: SEQ, F0000049: '某项目', F0000020: 'B' } })
 /** `crwu h3yun files list` 的真实形状：`{ data: [ { field, fileId, fileName, fileSize, contentType, downloadUrl } ] }`。 */
 const FILES_JSON = JSON.stringify({
   data: [{
@@ -93,6 +98,9 @@ function makeFs({ dirs = [], files = {} } = {}) {
       const p = String(parent.displayPath).replace(/[\\/]+$/, '')
       const c = String(child.displayPath)
       return c === p || c.startsWith(`${p}/`)
+              // 两种分隔符都要认：真实 `fs.contains` 是**规范化**比较（Windows 路径不在少数），
+              // 夹具只认 `/` 会让 Windows 用例假红、或掩盖真实行为。
+              || c.startsWith(`${p}\\`)
     },
   }
 }
@@ -200,7 +208,9 @@ function makeState(patch = {}) {
   state.manifest.oss.bucket = 'crwu-workspace'
   state.manifest.oss.prefix = 'crwu/audit'
   state.manifest.oss.endpoint = 'oss-cn-beijing.aliyuncs.com'
-  return { ...state, trustCredentials: false, ...patch }
+  // 缺省**已允许**本机访问：绝大多数用例关心的是业务行为；验授权闸门的用例显式传
+  // `localAccess: missingConsent()`（见 B-04 那条）。
+  return { ...state, localAccess: grantedConsent(), ...patch }
 }
 
 /**
@@ -230,12 +240,14 @@ function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64' } =
   const registry = tools ?? makeRegistry()
   const ctx = makeCtx({ fs: theFs, shell: theShell.service, tools: registry })
   const theForm = form ?? makeForm()
+  const { access } = makeTestAccess(ctx, { state: theState })
   return {
     ctx, fs: theFs, shell: theShell, registry, state: theState, form: theForm,
     deps: {
       ctx,
       config: { ...CONFIG },
       state: theState,
+      access,
       form: theForm.resolver,
       world: {
         platform: async () => platform,
@@ -244,6 +256,44 @@ function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64' } =
         cached: () => ({ platform, home: '/Users/x' }),
       },
     },
+  }
+}
+
+/** 审核子会话的 childId（案例内 Tool 必须能由它找到本轮的 Host 记录）。 */
+const AUDIT_CHILD = 'child-audit-1'
+
+/**
+ * 给状态种一个**正在跑的审核 scope**：`casePath` / `allowedAttachmentIds` 都是 Host 的值。
+ *
+ * 案例内 Tool 的判据是"与 Host 记录的 casePath 规范解析后**精确相等**"，
+ * 所以夹具必须先有这条记录 —— 这也正是被测的那条不变式（模型提交的字符串不是权威）。
+ */
+function withAuditScope(state, patch = {}) {
+  const childId = patch.childId ?? AUDIT_CHILD
+  state.audits = {
+    ...(state.audits ?? {}),
+    S1: {
+      key: 'S1', childId, seqNo: SEQ, project: '', objectId: patch.objectId ?? 'obj-1',
+      startedAt: '', parentSessionId: 'parent-1', status: 'running', ended: false, stopped: false,
+      stopReason: '', endReason: '', casePath: patch.casePath ?? CASE_DIR,
+      attemptId: patch.attemptId ?? 'S1-a1-x',
+      allowedAttachmentIds: patch.allowedAttachmentIds ?? ['f-1'],
+      resultFile: '', htmlFile: '', caseName: '', uploadedAt: '', uploadError: '', ossPrefix: '', attempt: 1,
+      // ⚠️ `...patch` 必须放在**最后**：夹具要能表达"已结束 / 被停止"这些状态，
+      // 否则反例会被夹具自己悄悄改成合法状态（第一次写这个用例时就是这么假绿的）。
+      ...patch,
+    },
+  }
+  state.activeKey = 'S1'
+  state.activeChildId = childId
+  return childId
+}
+
+/** 带 agent 的 exec：模拟**审核子会话**发起调用（`Agent.id` = 该轮的 childId）。 */
+function scopedExec(name, args, signal, childId = AUDIT_CHILD) {
+  return {
+    callId: 'c1', rootCallId: 'c1', token: Symbol('t'), name, arguments: args, signal,
+    agent: { id: childId }, deferContext() {}, concludeTurn() {},
   }
 }
 
@@ -263,7 +313,9 @@ const OSSUTIL = new URL('ossutil', PKG_BIN).pathname
 test('registerCrwuTools registers exactly the nine business tools and unregisters them on disposal', () => {
   const { deps, registry } = makeDeps()
   const dispose = registerCrwuTools(deps.ctx, deps)
-  assert.deepEqual([...registry.definitions.keys()].sort(), [...REQUIRED_AUDIT_TOOLS].sort())
+  // 注册面 = `CRWU_BUSINESS_TOOLS`（含面向面板的两条氚云查询）；
+  // `REQUIRED_AUDIT_TOOLS` 是**审核子会话的能力集**，比注册面小（见 consts.ts 的注释）。
+  assert.deepEqual([...registry.definitions.keys()].sort(), [...CRWU_BUSINESS_TOOLS].sort())
   dispose()
   assert.deepEqual([...registry.definitions.keys()], [], '插件卸载时必须完整注销')
 })
@@ -336,6 +388,261 @@ test('crwu_h3yun_record_get runs the packaged crwu through ctx.shell and returns
   assert.equal(shell.requests[0].timeoutMs <= 10 * 60_000, true, '单个命令的超时不超过 10 分钟')
 })
 
+test('审核子会话不能查氚云记录：`record_get` / `files_list` 拒绝且零命令', async () => {
+  // 这两条 Tool 的 `objectId` 是**模型提交**的，Host 无法把它绑定到本轮审核
+  //（本轮那一条已经由 `crwu_audit_case_bootstrap` 取进输入快照）。
+  // 所以它们的正确行为是：**调用方是进行中的审核子会话 → 直接拒绝**，而且在任何 fs / shell 之前拒绝。
+  // 旧形态只校验"caseDir 落在工作空间之下"，于是子会话可以读**任意** objectId 的记录。
+  for (const name of [TOOL_NAMES.h3yunRecordGet, TOOL_NAMES.h3yunFilesList]) {
+    const fs = makeFs({ dirs: [CASE_DIR] })
+    const shell = makeShell(() => shellOk(RECORD_JSON))
+    const { deps, registry } = makeDeps({ fs, shell })
+    withAuditScope(deps.state, { casePath: CASE_DIR })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(name, { objectId: 'obj-OTHER', caseDir: CASE_DIR },
+      new AbortController().signal))
+    assert.equal(result.value.ok, false, `${name} 必须拒绝审核子会话`)
+    assert.equal(result.value.errorKind, 'policy', `${name} 的拒绝类别`)
+    assert.match(result.value.error, /审核子会话不能直接查询氚云记录/)
+    assert.deepEqual(shell.commands, [], `${name} 拒绝时一个进程都不许起`)
+  }
+
+  // **刚结束**的审核子会话同样要拒绝：`ended: true` 之后 scope 不可用，
+  // 但那个子会话可能还活着 —— 用"scope 是否可用"当判据会在这一刻放它去读任意 objectId
+  //（2026-09-29 自审发现的漏洞，判据已改成"调用者身份"）。
+  {
+    const fs = makeFs({ dirs: [CASE_DIR] })
+    const shell = makeShell(() => shellOk(RECORD_JSON))
+    const { deps, registry } = makeDeps({ fs, shell })
+    withAuditScope(deps.state, { casePath: CASE_DIR, ended: true })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.h3yunRecordGet,
+      { objectId: 'obj-OTHER', caseDir: CASE_DIR }, new AbortController().signal))
+    assert.equal(result.value.ok, false, '已结束的审核子会话也不许查记录')
+    assert.equal(result.value.errorKind, 'policy')
+    assert.deepEqual(shell.commands, [], '拒绝时一个进程都不许起')
+  }
+
+  // 面板 / 宿主后台（没有 Agent 身份）照常用它：拒绝的是"审核子会话"，不是这两条 Tool 本身。
+  const inside = makeFs({ dirs: [CASE_DIR] })
+  const okShell = makeShell(() => shellOk(RECORD_JSON))
+  const ok = makeDeps({ fs: inside, shell: okShell })
+  registerCrwuTools(ok.deps.ctx, ok.deps)
+  const ran = await ok.registry.execute({
+    callId: 'c2', name: TOOL_NAMES.h3yunRecordGet, arguments: { objectId: 'obj-1', caseDir: CASE_DIR },
+    signal: new AbortController().signal,
+  })
+  assert.equal(ran.value.ok, true, String(ran.value.error))
+  assert.equal(okShell.commands.length, 1)
+})
+
+test('案例内 Tool 的反例矩阵：工作空间根 / 兄弟案例 / 子目录 / 外来 fileId / 已结束 —— 全部零进程', async () => {
+  // 用户复查的 P1 在 Tool 层的完整反例。判据是"**拒绝 + 一个进程都不许起**"：
+  // 只断言 ok=false 会让"先起进程再拒绝"这种形态继续存在（那正是越界读写真正发生的地方）。
+  const WORKSPACE = '/cases/space'
+  const SIBLING = `${WORKSPACE}/S2-other`
+  const built = (scopePatch = {}, fsPatch = {}) => {
+    const fs = makeFs({
+      dirs: [CASE_DIR, SIBLING, WORKSPACE, `${CASE_DIR}/输入快照`],
+      files: { [`${CASE_DIR}/审核意见.${SEQ}.html`]: '<html>x</html>' },
+      ...fsPatch,
+    })
+    const shell = dwsRouter([['cp -f', { ok: true }], ['ls ', '']])
+    const { deps, registry } = makeDeps({ fs, shell })
+    withAuditScope(deps.state, { casePath: CASE_DIR, ...scopePatch })
+    registerCrwuTools(deps.ctx, deps)
+    return { registry, shell, state: deps.state }
+  }
+
+  // ① 三种"不是本案例目录"的写法：oss_publish 一律 policy 拒绝且零进程
+  for (const [caseDir, label] of [
+    [WORKSPACE, '工作空间根本身'],
+    [SIBLING, '兄弟案例'],
+    [`${CASE_DIR}/输入快照`, '案例目录的子目录'],
+  ]) {
+    const { registry, shell } = built()
+    const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish,
+      { caseDir, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
+    assert.equal(result.value.ok, false, `${label} 必须被拒绝（${result.value.errorKind}: ${result.value.error}）`)
+    assert.equal(result.value.errorKind, 'policy', `${label}：${result.value.error}`)
+    assert.deepEqual(shell.commands, [], `${label} 被拒时一个进程都不许起`)
+  }
+
+  // ② caseDir 是本案例、但 seqNo 是别人的：拒绝（否则能把本轮产物挂到别的流水号上）
+  {
+    const { registry, shell } = built()
+    const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish,
+      { caseDir: CASE_DIR, seqNo: 'S9-other', files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
+    assert.equal(result.value.ok, false)
+    assert.equal(result.value.errorKind, 'input')
+    assert.deepEqual(shell.commands, [], '流水号不一致时一个进程都不许起')
+  }
+
+  // ③ file_get：不在本轮输入快照里的 fileId 必须在起进程**之前**被拒绝
+  {
+    const { registry, shell } = built()
+    const foreign = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+      { fileId: 'f-OTHER', caseDir: CASE_DIR, relativePath: '材料-源/x.pdf' }, new AbortController().signal))
+    assert.equal(foreign.value.ok, false)
+    assert.equal(foreign.value.errorKind, 'policy')
+    assert.match(foreign.value.error, /不在本轮审核的输入快照里/)
+    assert.deepEqual(shell.commands, [], '外来 fileId 一个进程都不许起')
+  }
+
+  // ④ 已结束 / 未知的 childId：没有 scope，案例内 Tool 一律拒绝
+  for (const [scopePatch, childId, label] of [
+    [{ ended: true }, AUDIT_CHILD, '已结束的审核'],
+    [{}, 'ghost-child', '未知的 childId'],
+    [{ casePath: '', attemptId: '' }, AUDIT_CHILD, 'scope 不完整的认领记录'],
+  ]) {
+    const { registry, shell } = built(scopePatch)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish,
+      { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal, childId))
+    assert.equal(result.value.ok, false, `${label} 必须被拒绝（${result.value.errorKind}: ${result.value.error}）`)
+    assert.equal(result.value.errorKind, 'policy', `${label}：${result.value.errorKind} / ${result.value.error}`)
+    assert.deepEqual(shell.commands, [], `${label} 被拒时一个进程都不许起`)
+  }
+
+  // ⑤ 正向：scope 成立且 caseDir 正确时照常上传（拒绝的是越界，不是这个调用）
+  {
+    const { registry, shell } = built()
+    const html = '<html>x</html>'
+    // 写后列举必须报**真实字节数**（工具的判据就是它），所以这里跟着内容长度走。
+    const listing = `2026-09-20 10:35:52 +0800 CST  ${html.length}  Standard  d41d8cd98f00b204e9800998ecf8427e  oss://crwu-workspace/crwu/audit/${SEQ}/审核意见.${SEQ}.html\n`
+    const okShell = dwsRouter([['cp -f', { ok: true }], ['ls ', listing]])
+    const made = makeDeps({
+      fs: makeFs({ dirs: [CASE_DIR], files: { [`${CASE_DIR}/审核意见.${SEQ}.html`]: html } }),
+      shell: okShell,
+    })
+    withAuditScope(made.deps.state, { casePath: CASE_DIR })
+    registerCrwuTools(made.deps.ctx, made.deps)
+    const ok = await made.registry.execute(scopedExec(TOOL_NAMES.ossPublish,
+      { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
+    assert.equal(ok.value.ok, true, String(ok.value.error))
+    assert.equal(ok.value.uploaded, 1)
+    assert.ok(okShell.commands.length > 0, '正向路径必须真的发命令（否则上面的"零进程"断言没有意义）')
+    assert.ok(shell.commands.length === 0, '前一个替身不应被这次调用碰到')
+  }
+})
+
+test('case_bootstrap 也只认本轮的 `<工作空间>/<流水号>`：工作空间根 / 兄弟案例 —— 零命令', async () => {
+  // 它在创建子代理**之前**由 Host 调用，落盘的是本轮输入快照。只判"落在工作空间里"时，
+  // 一个传错的 `caseDir` 会把快照写进**别的案例目录**（同一工作空间里到处都是案例）。
+  for (const [caseDir, label] of [
+    ['/cases/space', '工作空间根本身'],
+    ['/cases/space/S2-other', '兄弟案例'],
+  ]) {
+    const shell = makeShell(() => shellOk(RECORD_JSON))
+    const fs = makeFs({ dirs: [caseDir, '/cases/space', CASE_DIR] })
+    const { deps, registry } = makeDeps({ shell, fs, state: makeState({ workspacePath: '/cases/space' }) })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute({
+      callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap,
+      arguments: { objectId: 'obj-1', seqNo: SEQ, caseDir, attemptId: 'S1-a1-x', refresh: true },
+      signal: new AbortController().signal,
+    })
+    assert.equal(result.value.ok, false, `${label} 必须被拒绝`)
+    assert.equal(result.value.errorKind, 'policy', `${label}：${result.value.errorKind} / ${result.value.error}`)
+    assert.match(result.value.error, /必须是本轮的/)
+    assert.deepEqual(shell.commands, [], `${label} 被拒时一个命令都不许发`)
+  }
+})
+
+test('case_bootstrap 也只给 Host 用：审核子会话用它取别人的记录 —— 拒绝且零命令', async () => {
+  // 交接点是 Host 在**创建子代理之前**用的；子代理手里已经有快照。
+  // 它的 `caseDir` 被钉在本轮案例目录，但 `objectId` 是提交进来的 ——
+  // 不拦的话子代理能拿**别的** objectId 把别人的记录取进自己的案例目录。
+  const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(RECORD_JSON) : shellOk(FILES_JSON)))
+  const { deps, registry } = makeDeps({
+    shell, fs: makeFs({ dirs: [CASE_DIR] }), state: makeState({ workspacePath: '/cases/space' }),
+  })
+  withAuditScope(deps.state, { casePath: CASE_DIR })
+  registerCrwuTools(deps.ctx, deps)
+  const result = await registry.execute(scopedExec(TOOL_NAMES.auditCaseBootstrap, {
+    objectId: 'obj-OTHER', seqNo: SEQ, caseDir: CASE_DIR, attemptId: 'S1-a1-x', refresh: true,
+  }, new AbortController().signal))
+  assert.equal(result.value.ok, false)
+  assert.equal(result.value.errorKind, 'policy')
+  assert.match(result.value.error, /不要再取数/)
+  assert.deepEqual(shell.commands, [], '拒绝时一个命令都不许发')
+})
+
+test('bootstrap 核对返回记录的身份：别的 objectId / 流水号不符 / 缺字段 —— 都在**落盘前**终止', async () => {
+  // 用户复查 P1：`records get --id B` 之"取回一条记录"不等于"取回的是 B"。
+  // 不核对的话，公开 RPC 可以用 `seqNo=A, objectId=B` 把 B 的记录与附件写进 A 的案例目录，
+  // 而且这套错配还会被登记成权威 scope。
+  const bootstrapArgs = { seqNo: SEQ, caseDir: CASE_DIR, attemptId: 'S1-a1-x', refresh: true }
+  // 夹具里预置了包内二进制，所以"没落盘"只能按**案例目录**断言。
+  const caseFiles = (fs) => [...fs.files.keys()].filter((path) => String(path).startsWith(CASE_DIR))
+  const run = async (recordJson, objectId) => {
+    const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(recordJson) : shellOk(FILES_JSON)))
+    const fs = makeFs({ dirs: [CASE_DIR] })
+    const { deps, registry } = makeDeps({ shell, fs, state: makeState({ workspacePath: '/cases/space' }) })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute({
+      callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap,
+      arguments: { ...bootstrapArgs, objectId }, signal: new AbortController().signal,
+    })
+    return { result, fs, shell }
+  }
+
+  // ① 返回的是**别的**记录（ObjectId 不一致）
+  const foreign = await run(JSON.stringify({ data: { ObjectId: 'obj-OTHER', SeqNo: SEQ } }), 'obj-1')
+  assert.equal(foreign.result.value.ok, false)
+  assert.equal(foreign.result.value.errorKind, 'input')
+  assert.match(foreign.result.value.error, /不是请求的那一条/)
+  assert.equal(foreign.shell.commands.some((c) => c.includes('files list')), false, '身份不对就不许再去取附件')
+  assert.deepEqual(caseFiles(foreign.fs), [], '案例目录下一个字节都不许落盘')
+
+  // ② 流水号不一致（同一个 objectId，但记录属于另一个流水号）
+  const wrongSeq = await run(JSON.stringify({ data: { ObjectId: 'obj-1', SeqNo: 'S9-other' } }), 'obj-1')
+  assert.equal(wrongSeq.result.value.ok, false)
+  assert.equal(wrongSeq.result.value.errorKind, 'input')
+  assert.match(wrongSeq.result.value.error, /流水号与请求的不一致/)
+  assert.deepEqual(caseFiles(wrongSeq.fs), [], '案例目录下一个字节都不许落盘')
+
+  // ③ 记录**缺**身份字段 → fail closed（不许拿调用方提交的值兜底）
+  for (const missing of [
+    { data: { F0000049: '某项目' } },
+    { data: { SeqNo: SEQ, F0000049: '某项目' } },
+    { data: { ObjectId: 'obj-1', F0000049: '某项目' } },
+  ]) {
+    const gap = await run(JSON.stringify(missing), 'obj-1')
+    assert.equal(gap.result.value.ok, false, JSON.stringify(missing))
+    assert.equal(gap.result.value.errorKind, 'cli')
+    assert.match(gap.result.value.error, /缺少 ObjectId \/ SeqNo/)
+    assert.deepEqual(caseFiles(gap.fs), [], '缺字段时案例目录下一个字节都不许落盘')
+  }
+})
+
+test('工具集不变量：子会话必需集与 deny 集**不相交**（否则真实 toolFilter 会误杀正常子会话）', () => {
+  // 用户第三轮复查的 P1：`crwu_audit_case_bootstrap` 曾是"根必需 + 子会话 deny"，
+  // 而子会话复查用的是根必需集 —— 真实过滤生效后每条正常子会话都会被判成缺工具并停掉。
+  const overlap = REQUIRED_AUDIT_CHILD_TOOLS.filter((name) => AUDIT_CHILD_DENIED_TOOLS.includes(name))
+  assert.deepEqual(overlap, [], '子会话必需集里不许出现被 deny 的工具')
+  // 根必需集**可以**与 deny 集相交（bootstrap 就是 Host 专用），这正是两个集合必须分开的原因。
+  assert.equal(REQUIRED_AUDIT_TOOLS.includes('crwu_audit_case_bootstrap'), true, 'bootstrap 仍是根必需')
+  assert.equal(REQUIRED_AUDIT_CHILD_TOOLS.includes('crwu_audit_case_bootstrap'), false, '但它不是子会话必需')
+  assert.deepEqual(REQUIRED_AUDIT_CHILD_TOOLS, REQUIRED_AUDIT_TOOLS.filter((n) => !AUDIT_CHILD_DENIED_TOOLS.includes(n)))
+})
+
+test('真实 toolFilter 生效时（denied 工具对子会话不可见）子会话仍然齐备；根必需集则会误报', () => {
+  // 用户要求的最小夹具：`tools.get(name, agent)` 对三条 denied 工具返回 undefined，其余可见。
+  const childAgent = { id: 'child-1' }
+  const visible = (name, agent) => {
+    if (agent !== childAgent) return { name }
+    return AUDIT_CHILD_DENIED_TOOLS.includes(name) ? undefined : { name }
+  }
+  const ctx = { get: (n) => (n === 'tools' ? { get: visible } : undefined) }
+
+  assert.deepEqual(missingAuditTools(ctx, childAgent, REQUIRED_AUDIT_CHILD_TOOLS), [],
+    '真实过滤生效后，子会话必需集必须齐备（否则正常子会话刚创建就被停掉）')
+  // 反向：拿根必需集去查子会话 → bootstrap 会被算成缺失（这正是被修掉的 bug 形态）。
+  assert.deepEqual(missingAuditTools(ctx, childAgent, REQUIRED_AUDIT_TOOLS), ['crwu_audit_case_bootstrap'])
+  // 根会话不受影响：三条 denied 对根都可见。
+  assert.deepEqual(missingAuditTools(ctx, { id: 'root-1' }, REQUIRED_AUDIT_TOOLS), [])
+})
+
 test('crwu_h3yun_files_list returns metadata only and never a download URL', async () => {
   const shell = makeShell((spec) => spec.command.includes('files list')
     ? shellOk(JSON.stringify({ ok: true, data: [
@@ -362,23 +669,20 @@ test('crwu_h3yun_file_get downloads one attachment inside the case directory and
   })
   const shellFs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/材料-源`] })
   const { deps, registry } = makeDeps({ fs: shellFs, shell })
+  withAuditScope(deps.state, { casePath: CASE_DIR, allowedAttachmentIds: ['f-1'] })
   registerCrwuTools(deps.ctx, deps)
 
-  const ok = await registry.execute({
-    callId: 'c1', name: TOOL_NAMES.h3yunFileGet,
-    arguments: { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/估值报告.pdf' },
-    signal: new AbortController().signal,
-  })
+  const ok = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+    { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/估值报告.pdf' },
+    new AbortController().signal))
   assert.equal(ok.value.ok, true)
   assert.equal(ok.value.path, `${CASE_DIR}/材料-源/估值报告.pdf`)
   assert.equal(ok.value.sizeBytes, 3)
   assert.ok(shell.commands[0].startsWith(CRWU))
 
-  const escape = await registry.execute({
-    callId: 'c2', name: TOOL_NAMES.h3yunFileGet,
-    arguments: { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '../outside.pdf' },
-    signal: new AbortController().signal,
-  })
+  const escape = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+    { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '../outside.pdf' },
+    new AbortController().signal))
   assert.equal(escape.value.ok, false)
   assert.equal(escape.value.errorKind, 'input', '越界路径必须在执行前被拒绝')
   assert.equal(shell.commands.length, 1, '被拒绝的请求不许发出任何命令')
@@ -386,30 +690,36 @@ test('crwu_h3yun_file_get downloads one attachment inside the case directory and
 
 // ── 4：默认沙箱与提权白名单 ─────────────────────────────────────────────────
 
-test('default operations carry no danger-full-access sandbox policy', async () => {
+test('B-04 未授权：审核 Tool 连命令都不发（不是"发了但没提权"）', async () => {
   const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(JSON.stringify({ ok: true, data: { ObjectId: 'o' } })) : null))
-  const { deps, registry } = makeDeps({ shell, state: makeState({ trustCredentials: false }) })
+  const { deps, registry } = makeDeps({ shell, state: makeState({ localAccess: missingConsent() }) })
   registerCrwuTools(deps.ctx, deps)
-  await registry.execute({ callId: 'c1', name: TOOL_NAMES.h3yunRecordGet, arguments: { objectId: 'o', caseDir: CASE_DIR }, signal: new AbortController().signal })
-  assert.equal(shell.requests[0].sandboxPolicy, undefined, '未授权时不得申请无沙箱执行')
+  const result = await registry.execute({ callId: 'c1', name: TOOL_NAMES.h3yunRecordGet, arguments: { objectId: 'o', caseDir: CASE_DIR }, signal: new AbortController().signal })
+  // 旧形态是"发一条不提权的命令、然后拿到假的未登录"；协议 18 起是**一个进程都不起**。
+  assert.deepEqual(shell.requests, [], '未授权时不许发任何命令')
+  assert.equal(result.value.ok, false)
+  assert.match(String(result.value.error), /允许工作台访问本机账号和配置/)
 })
 
 test('a whitelisted credential command escalates only when authorized and the workspace is known', async () => {
   const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(JSON.stringify({ ok: true, data: { ObjectId: 'o' } })) : null))
-  const trusted = makeDeps({ shell, state: makeState({ trustCredentials: true }) })
+  const trusted = makeDeps({ shell, state: makeState({ localAccess: grantedConsent() }) })
   registerCrwuTools(trusted.deps.ctx, trusted.deps)
   await trusted.registry.execute({ callId: 'c1', name: TOOL_NAMES.h3yunRecordGet, arguments: { objectId: 'o', caseDir: CASE_DIR }, signal: new AbortController().signal })
   assert.deepEqual(shell.requests[0].sandboxPolicy, { mode: 'danger-full-access', workspaceRoot: CASE_DIR }, '白名单 + 已授权 + 工作区已知 → 提权')
 
-  // 工作区未知（caseDir 省略、会话根也取不到）时**退回沙箱**，而不是报基础设施错误。
-  const noWorkspace = makeDeps({ shell: makeShell((spec) => (spec.command.includes('records get') ? shellOk('{"ok":true,"data":{}}') : null)), state: makeState({ trustCredentials: true }) })
+  // 工作区未知（caseDir 省略、会话根也取不到）时 **fail closed**：不提权、也不发命令。
+  // 旧口径是"退回沙箱执行"，但那正是最坏的一种：受限沙箱下读钥匙串会回一个**假的**
+  // 「未登录 / secret not found」，员工照着去重新扫码，而真正的问题是拿不到工作目录。
+  const noWorkspace = makeDeps({ shell: makeShell((spec) => (spec.command.includes('records get') ? shellOk('{"ok":true,"data":{}}') : null)), state: makeState({ localAccess: grantedConsent() }) })
   noWorkspace.deps.world.workdir = async () => ''
   registerCrwuTools(noWorkspace.deps.ctx, noWorkspace.deps)
-  await noWorkspace.registry.execute({ callId: 'c2', name: TOOL_NAMES.h3yunRecordGet, arguments: { objectId: 'o' }, signal: new AbortController().signal })
-  assert.equal(noWorkspace.shell.requests[0].sandboxPolicy, undefined, '拿不到工作区就不提权')
+  const result = await noWorkspace.registry.execute({ callId: 'c2', name: TOOL_NAMES.h3yunRecordGet, arguments: { objectId: 'o' }, signal: new AbortController().signal })
+  assert.deepEqual(noWorkspace.shell.requests, [], '拿不到工作区就不发命令')
+  assert.match(String(result.value.error), /工作目录/)
 })
 
-test('the dws command allowlist rejects anything outside the registered shapes', () => {
+test('B-08：dws 命令白名单拒绝表外子命令，且每条都要映射到本机访问操作', () => {
   for (const argv of [
     ['wiki', '+node-list'],
     ['doc', '+export'],
@@ -431,8 +741,18 @@ test('the dws command allowlist rejects anything outside the registered shapes',
   ]) {
     assert.equal(assertDwsCommand(argv).ok, false, `必须拒绝：${argv.join(' ')}`)
   }
-  assert.equal(dwsEscalationAllowed(['api', 'call']), false, '白名单外的命令不许提权')
-  assert.equal(dwsEscalationAllowed(['chat', '+messages-send']), true)
+  // 协议 18：提权不再由 `escalationAllowed` 决定，而是由「命令 → 操作」的固定映射决定。
+  // 白名单外 → 映射不出来 → 拒绝；白名单里但还没登记操作的 → 同样拒约（默认拒绝）。
+  assert.equal(dwsOperationOf(['api', 'call']), null, '白名单外的命令没有操作身份')
+  assert.equal(dwsOperationOf(['chat', '+messages-send']), 'dws.message.write')
+  assert.equal(dwsOperationOf(['drive', '+upload']), 'dws.drive.write')
+  assert.equal(dwsOperationOf(['drive', '+list']), 'dws.drive.read')
+  assert.equal(dwsOperationOf(['wiki', '+node-list']), 'dws.knowledge.read')
+  assert.equal(dwsOperationOf(['auth', 'login']), 'dws.auth.login')
+  // 白名单与操作表必须**逐条对齐**：白名单里有、操作表里没有的，一个都不许留。
+  for (const prefix of DWS_ALLOWED_PREFIXES) {
+    assert.notEqual(dwsOperationOf([...prefix]), null, `白名单前缀没有登记操作：${prefix.join(' ')}`)
+  }
 })
 
 test('runDws never falls back to a bare command name on a supported platform', async () => {
@@ -489,7 +809,8 @@ test('auditToolsVisible is empty only when the registry resolves every required 
   const { deps, registry } = makeDeps()
   registerCrwuTools(deps.ctx, deps)
   assert.deepEqual(auditToolsVisible(deps.ctx, undefined), [])
-  assert.equal(registry.definitions.size, REQUIRED_AUDIT_TOOLS.length)
+  // 注册面 = 全部业务 Tool；`auditToolsVisible` 判的是**审核子会话的能力集**（更小）。
+  assert.equal(registry.definitions.size, CRWU_BUSINESS_TOOLS.length)
 })
 
 // ── 5.5：报告定位交接（crwu_audit_case_bootstrap + schemaCode 归 Host） ─────
@@ -539,7 +860,9 @@ test('bootstrap 每个 attempt 只取一次数：records get / files list 各一
     if (spec.command.includes('files list')) return shellOk(FILES_JSON)
     return shellOk('{}')
   })
-  const { deps, registry } = makeDeps({ shell, fs: makeFs({ dirs: [CASE_DIR] }) })
+  // 权威案例目录 = `<工作空间>/<流水号>`：夹具的工作空间必须就是它的父级，
+  // 否则工具会（正确地）拒绝 —— 它现在要求精确等于 Host 约定算出来的那一个。
+  const { deps, registry } = makeDeps({ shell, fs: makeFs({ dirs: [CASE_DIR] }), state: makeState({ workspacePath: '/cases/space' }) })
   registerCrwuTools(deps.ctx, deps)
   const args = { objectId: 'obj-1', seqNo: SEQ, caseDir: CASE_DIR, attemptId: 'S1-a1-x', refresh: true }
   const first = await registry.execute({ callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap, arguments: args, signal: new AbortController().signal })
@@ -553,7 +876,8 @@ test('bootstrap 每个 attempt 只取一次数：records get / files list 各一
   assert.equal(first.value.snapshotPath, `${CASE_DIR}/输入快照/报告记录.json`)
   assert.equal(first.value.attachmentsPath, `${CASE_DIR}/输入快照/附件清单.json`)
   assert.match(String(first.value.digest), /^sha256:[0-9a-f]{64}$/)
-  assert.equal(first.value.fieldCount, 2)
+  // 跟夹具走，不写死：记录现在自带 `ObjectId` / `SeqNo`（身份绑定要用的两个字段）。
+  assert.equal(first.value.fieldCount, Object.keys(JSON.parse(RECORD_JSON).data).length)
   assert.equal(first.value.attachmentCount, 1)
   assert.equal(first.value.reused, false)
   assert.equal('record' in first.value, false, '完整记录不进模型上下文')
@@ -575,7 +899,7 @@ test('bootstrap 每个 attempt 只取一次数：records get / files list 各一
 test('bootstrap 把快照写进案例目录：记录、附件清单与元数据（元数据里只有 schemaCode 指纹）', async () => {
   const shell = makeShell((spec) => (spec.command.includes('records get') ? shellOk(RECORD_JSON) : shellOk(FILES_JSON)))
   const fs = makeFs({ dirs: [CASE_DIR] })
-  const { deps, registry } = makeDeps({ shell, fs, form: makeForm({ code: 'FORM-SECRET' }) })
+  const { deps, registry } = makeDeps({ shell, fs, form: makeForm({ code: 'FORM-SECRET' }), state: makeState({ workspacePath: '/cases/space' }) })
   registerCrwuTools(deps.ctx, deps)
   const result = await registry.execute({
     callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap,
@@ -629,19 +953,31 @@ test('crwu_audit_oss_publish uploads, lists the object back and reports the veri
     ['ls ', `2026-09-20 10:35:52 +0800 CST  ${html.length}  Standard  d41d8cd98f00b204e9800998ecf8427e  oss://crwu-workspace/crwu/audit/${SEQ}/审核意见.${SEQ}.html\n`],
   ])
   const { deps, registry } = makeDeps({ fs, shell })
+  withAuditScope(deps.state, { casePath: CASE_DIR })
   registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute({
-    callId: 'c1', name: TOOL_NAMES.ossPublish,
-    arguments: { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] },
-    signal: new AbortController().signal,
-  })
+  const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish, { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
   assert.equal(result.isError, false, result.isError ? result.error.message : '')
   assert.equal(result.value.ok, true, result.value.error)
   assert.equal(result.value.uploaded, 1)
   assert.equal(result.value.results[0].sizeBytes, html.length, '必须回报写后列举到的真实字节数')
   assert.equal(result.value.results[0].key, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
   assert.ok(shell.commands.some((command) => command.includes(`${OSSUTIL.replace(/'/g, '')}`) || command.includes(OSSUTIL)), '必须用包内 ossutil')
-  assert.equal(shell.requests.every((request) => request.sandboxPolicy === undefined), true, 'OSS 是非凭据操作，不提权')
+  // **口径已改**（2026-09-29 用户复查 P1）：`ossutil` 的每一次调用都会读
+  // `~/.ossutilconfig`（工作区之外的凭据文件），受限沙箱下读不到 —— 上传与写后校验
+  // 都必须逐次声明 `danger-full-access`。旧断言写的是"OSS 是非凭据操作，不提权"，
+  // 那个前提本身就是错的，于是把"审核子会话里必然失败"这件事固定成了预期。
+  // `resolve()` 与 `execute()` 逐条配对（一条命令一次 resolve），按下标配对就能拿回策略。
+  const ossIndexes = shell.commands
+    .map((command, index) => ({ command, index }))
+    .filter((entry) => entry.command.includes('ossutil'))
+    .map((entry) => entry.index)
+  assert.equal(ossIndexes.length >= 2, true, `至少要有上传与写后校验两条 ossutil 调用：${String(ossIndexes.length)}`)
+  for (const index of ossIndexes) {
+    assert.equal(
+      shell.requests[index]?.sandboxPolicy?.mode, 'danger-full-access',
+      `ossutil 必须逐次提权：${shell.commands[index]}`,
+    )
+  }
 })
 
 test('crwu_audit_oss_publish fails when the object is missing or its size differs after upload', async () => {
@@ -651,18 +987,15 @@ test('crwu_audit_oss_publish fails when the object is missing or its size differ
   const registryFor = (lsOut) => {
     const shell = dwsRouter([['cp -f', { ok: true }], ['ls ', lsOut]])
     const made = makeDeps({ fs, shell })
+    withAuditScope(made.deps.state, { casePath: CASE_DIR })
     registerCrwuTools(made.deps.ctx, made.deps)
     return made.registry
   }
-  const mismatch = await registryFor(listing(3)).execute({
-    callId: 'c1', name: TOOL_NAMES.ossPublish, arguments: { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, signal: new AbortController().signal,
-  })
+  const mismatch = await registryFor(listing(3)).execute(scopedExec(TOOL_NAMES.ossPublish, { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
   assert.equal(mismatch.value.ok, false, '字节数不符必须算失败')
   assert.match(mismatch.value.results[0].error, /字节数不符/)
 
-  const missing = await registryFor('').execute({
-    callId: 'c2', name: TOOL_NAMES.ossPublish, arguments: { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, signal: new AbortController().signal,
-  })
+  const missing = await registryFor('').execute(scopedExec(TOOL_NAMES.ossPublish, { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
   assert.equal(missing.value.ok, false, '写后列举里没有目标对象必须算失败')
   assert.match(missing.value.results[0].error, /没有目标对象/)
 })
@@ -712,12 +1045,10 @@ test('crwu_audit_dingtalk_archive resolves every id from real returns and verifi
     }
     return null
   })
-  const { deps, registry } = makeDeps({ fs, shell, state: makeState({ trustCredentials: true }) })
+  const { deps, registry } = makeDeps({ fs, shell, state: makeState({ localAccess: grantedConsent() }) })
+  withAuditScope(deps.state, { casePath: CASE_DIR })
   registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute({
-    callId: 'c1', name: TOOL_NAMES.dingtalkArchive,
-    arguments: { caseDir: CASE_DIR, seqNo: SEQ }, signal: new AbortController().signal,
-  })
+  const result = await registry.execute(scopedExec(TOOL_NAMES.dingtalkArchive, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
   assert.equal(result.isError, false, result.isError ? result.error.message : '')
   assert.equal(result.value.ok, true, result.value.error)
   assert.equal(result.value.remoteName, '审核结果.PRJ-1.20260918-140607123456.json')
@@ -757,13 +1088,11 @@ test('crwu_audit_dingtalk_notify_self sends once, is idempotent per case, and ne
     }
     return null
   })
-  const { deps, registry } = makeDeps({ fs, shell, state: makeState({ trustCredentials: true }) })
+  const { deps, registry } = makeDeps({ fs, shell, state: makeState({ localAccess: grantedConsent() }) })
+  withAuditScope(deps.state, { casePath: CASE_DIR })
   registerCrwuTools(deps.ctx, deps)
 
-  const first = await registry.execute({
-    callId: 'c1', name: TOOL_NAMES.dingtalkNotifySelf,
-    arguments: { caseDir: CASE_DIR, seqNo: SEQ }, signal: new AbortController().signal,
-  })
+  const first = await registry.execute(scopedExec(TOOL_NAMES.dingtalkNotifySelf, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
   assert.equal(first.isError, false, first.isError ? first.error.message : '')
   assert.equal(first.value.ok, true, first.value.error)
   assert.equal(first.value.alreadySent, false)
@@ -777,10 +1106,7 @@ test('crwu_audit_dingtalk_notify_self sends once, is idempotent per case, and ne
   assert.match(ding, /--type app/, 'DING 必须是应用内（免费）通道')
   assert.equal(/sms|call/.test(shell.commands.join(' ')), false, '命令里不许出现 sms / call')
 
-  const second = await registry.execute({
-    callId: 'c2', name: TOOL_NAMES.dingtalkNotifySelf,
-    arguments: { caseDir: CASE_DIR, seqNo: SEQ }, signal: new AbortController().signal,
-  })
+  const second = await registry.execute(scopedExec(TOOL_NAMES.dingtalkNotifySelf, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
   assert.equal(second.value.ok, true)
   assert.equal(second.value.alreadySent, true, '同一案例第二次调用必须命中幂等')
   assert.equal(sentMessages.length, 1, '幂等命中时不许再发一条')
@@ -791,11 +1117,9 @@ test('crwu_audit_dingtalk_archive refuses an AuditResult whose timestamps lack a
   const fs = makeFs({ dirs: [CASE_DIR], files: { [`${CASE_DIR}/审核结果.${SEQ}.json`]: json } })
   const shell = makeShell(() => null)
   const { deps, registry } = makeDeps({ fs, shell })
+  withAuditScope(deps.state, { casePath: CASE_DIR })
   registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute({
-    callId: 'c1', name: TOOL_NAMES.dingtalkArchive,
-    arguments: { caseDir: CASE_DIR, seqNo: SEQ }, signal: new AbortController().signal,
-  })
+  const result = await registry.execute(scopedExec(TOOL_NAMES.dingtalkArchive, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
   assert.equal(result.value.ok, false)
   assert.equal(result.value.errorKind, 'input')
   assert.match(result.value.error, /auditTask.auditTime 必须包含时区/)
@@ -919,7 +1243,10 @@ test('bootstrap 在 Windows 案例目录下用 `\\` 拼快照路径（含落盘�
   const has = (command, verb) => command.includes(`records ${verb}`) || command.includes(`'records' '${verb}'`)
   const shell = makeShell((spec) => (has(spec.command, 'get') ? shellOk(RECORD_JSON) : shellOk(FILES_JSON)))
   const fs = makeFs({ dirs: [winCase] })
-  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64' })
+  // 信任域也要与案例目录同平台：案例目录必须落在它之下（真实流程里案例目录就是
+  // `<工作空间>\<流水号>`；这套夹具此前是 POSIX 的 `/cases` + Windows 的 `C:\Cases\…`，自相矛盾）。
+  const winState = makeState({ caseRoot: 'C:\\Cases', workspacePath: 'C:\\Cases' })
+  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64', state: winState })
   registerCrwuTools(deps.ctx, deps)
   const result = await registry.execute({
     callId: 'c1', name: TOOL_NAMES.auditCaseBootstrap,
@@ -948,13 +1275,13 @@ test('knowledge 在 Windows 案例目录下用 `\\` 拼 knowledge 目录', async
   // 已经在返回值里，正好用来断言拼接方式（不需要把整条下载链路都替身出来）。
   const shell = makeShell((spec) => (spec.command.includes('+space-list') ? shellOk('{"spaces":[]}') : shellOk('{}')))
   const fs = makeFs({ dirs: [winCase] })
-  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64' })
+  // 信任域也要与案例目录同平台：案例目录必须落在它之下（真实流程里案例目录就是
+  // `<工作空间>\<流水号>`；这套夹具此前是 POSIX 的 `/cases` + Windows 的 `C:\Cases\…`，自相矛盾）。
+  const winState = makeState({ caseRoot: 'C:\\Cases', workspacePath: 'C:\\Cases' })
+  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64', state: winState })
+  withAuditScope(deps.state, { casePath: winCase })
   registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute({
-    callId: 'c1', name: TOOL_NAMES.knowledgeMaterialize,
-    arguments: { caseDir: winCase, paths: ['02-资产类型/机器设备/评估审核条目'] },
-    signal: new AbortController().signal,
-  })
+  const result = await registry.execute(scopedExec(TOOL_NAMES.knowledgeMaterialize, { caseDir: winCase, paths: ['02-资产类型/机器设备/评估审核条目'] }, new AbortController().signal))
   assert.equal(result.value.caseDir, winCase)
   assert.equal(result.value.knowledgeDir, `${winCase}\\knowledge`)
   assert.equal(String(result.value.knowledgeDir).includes('/'), false)

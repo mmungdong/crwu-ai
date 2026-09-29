@@ -3,6 +3,7 @@ import { text } from '../../shared/utils/value.ts'
 import { finiteNumber } from '../../shared/utils/value.ts'
 import type { AuditRecord, WorkbenchState } from './types.ts'
 import { readWorkbenchConfig, writeWorkbenchConfig } from './persist.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 
 /**
  * 审核记录的落盘与恢复。
@@ -31,6 +32,21 @@ export function normalizeAudit(key: string, raw: unknown): AuditRecord | null {
     stopReason: text(r.stopReason),
     endReason: text(r.endReason),
     casePath: text(r.casePath),
+    attemptId: text(r.attemptId),
+    pending: r.pending === true,
+    retired: r.retired === true,
+    // 停止阶段跨重启保留：界面要知道"上次停到哪一步"，而不是退回"正在跑"。
+    stopPhase: text(r.stopPhase) as never,
+    stopRequestedAt: typeof r.stopRequestedAt === 'number' ? r.stopRequestedAt : 0,
+    stopElapsedMs: typeof r.stopElapsedMs === 'number' ? r.stopElapsedMs : 0,
+    quiesced: r.quiesced === true,
+    stopAborted: r.stopAborted === true,
+    stopDisposed: r.stopDisposed === true,
+    stopError: text(r.stopError),
+    stopNotes: Array.isArray(r.stopNotes) ? r.stopNotes.map((item) => text(item)).filter((item) => item !== '') : [],
+    allowedAttachmentIds: Array.isArray(r.allowedAttachmentIds)
+      ? (r.allowedAttachmentIds as unknown[]).map((id) => text(id)).filter((id) => id !== '')
+      : [],
     resultFile: text(r.resultFile),
     htmlFile: text(r.htmlFile),
     caseName: text(r.caseName),
@@ -61,6 +77,18 @@ export function persistableAudits(audits: Record<string, AuditRecord>): Record<s
       stopReason: text(record.stopReason),
       endReason: text(record.endReason),
       casePath: text(record.casePath),
+      attemptId: text(record.attemptId),
+      ...(record.pending === true ? { pending: true } : {}),
+      ...(record.retired === true ? { retired: true } : {}),
+      ...(record.stopPhase === undefined ? {} : { stopPhase: record.stopPhase }),
+      ...(record.stopRequestedAt === undefined || record.stopRequestedAt === 0 ? {} : { stopRequestedAt: record.stopRequestedAt }),
+      ...(record.stopElapsedMs === undefined || record.stopElapsedMs === 0 ? {} : { stopElapsedMs: record.stopElapsedMs }),
+      ...(record.quiesced === true ? { quiesced: true } : {}),
+      ...(record.stopAborted === true ? { stopAborted: true } : {}),
+      ...(record.stopDisposed === true ? { stopDisposed: true } : {}),
+      ...(text(record.stopError) === '' ? {} : { stopError: record.stopError }),
+      ...(record.stopNotes === undefined || record.stopNotes.length === 0 ? {} : { stopNotes: record.stopNotes }),
+      allowedAttachmentIds: (record.allowedAttachmentIds ?? []).map((id) => text(id)).filter((id) => id !== ''),
       resultFile: text(record.resultFile),
       htmlFile: text(record.htmlFile),
       caseName: text(record.caseName),
@@ -74,9 +102,23 @@ export function persistableAudits(audits: Record<string, AuditRecord>): Record<s
   return out
 }
 
+/**
+ * 落盘 / 恢复这三个入口的依赖。
+ *
+ * `access` 是 Broker（协议 18 · B-01/B-02）：状态文件的写入是**跨工作区边界**的动作，
+ * 策略判据只能在 Broker 一处。
+ */
+export interface RegistryDeps {
+  ctx: Context
+  home: string
+  state: WorkbenchState
+  access: LocalAccessBroker
+}
+
 /** 落盘当前审核记录与占用锁。 */
-export async function persistAudits(ctx: Context, home: string, state: WorkbenchState): Promise<boolean> {
-  return await writeWorkbenchConfig(ctx, home, {
+export async function persistAudits(deps: RegistryDeps): Promise<boolean> {
+  const { ctx, home, state, access } = deps
+  return await writeWorkbenchConfig({ ctx, home, access }, {
     audits: persistableAudits(state.audits),
     activeKey: state.activeKey,
     activeChildId: state.activeChildId,
@@ -86,8 +128,9 @@ export async function persistAudits(ctx: Context, home: string, state: Workbench
 }
 
 /** 单独落一次根会话（新建根之后立刻写，不等审核记录变化）。 */
-export async function persistAuditRoot(ctx: Context, home: string, state: WorkbenchState): Promise<boolean> {
-  return await writeWorkbenchConfig(ctx, home, { auditRoot: { ...state.auditRoot } })
+export async function persistAuditRoot(deps: RegistryDeps): Promise<boolean> {
+  const { ctx, home, state, access } = deps
+  return await writeWorkbenchConfig({ ctx, home, access }, { auditRoot: { ...state.auditRoot } })
 }
 
 /**
@@ -95,7 +138,8 @@ export async function persistAuditRoot(ctx: Context, home: string, state: Workbe
  *
  * 已存在的记录**不覆盖** —— 本进程里跑着的记录比磁盘上的新。
  */
-export async function ensureRegistry(ctx: Context, home: string, state: WorkbenchState): Promise<void> {
+export async function ensureRegistry(deps: RegistryDeps): Promise<void> {
+  const { ctx, home, state } = deps
   if (state.registryLoaded) return
   state.registryLoaded = true
   const config = await readWorkbenchConfig(ctx, home)
@@ -106,13 +150,26 @@ export async function ensureRegistry(ctx: Context, home: string, state: Workbenc
   for (const [key, raw] of Object.entries(saved)) {
     if (state.audits[key] !== undefined) continue
     const record = normalizeAudit(key, raw)
-    if (record !== null) state.audits[key] = record
+    if (record === null) continue
+    // **跨进程不恢复"没落地过 childId"的 pending**（2026-09-29 第三轮复查的 P2）：
+    // 那条记录来自"创建子会话失败、而且回滚写盘也失败"的现场 —— 它绑不到任何已确认的 child。
+    // 保留它但**退役**：既不发放任何 scope，也不再参与占用锁；同时 `isAuditChild` 仍认它
+    //（父会话匹配），所以万一那个孩子还活着，面板类 Tool 继续拒绝。
+    state.audits[key] = record.pending === true && record.childId === ''
+      ? { ...record, retired: true, status: 'unknown', stopReason: '重启时发现未落地的子会话记录（已退役）' }
+      : record
   }
 
   // 占用锁必须跟着恢复：否则重装后同一条报告能被起第二条子会话，两条往同一个案例目录对写。
+  // ⚠️ 但**指向空 childId 的锁不许恢复**：那条记录已经退役，锁会挡住一切后续发起却没有可停的对象。
   if (state.activeChildId === '') {
-    state.activeKey = text(config.activeKey)
-    state.activeChildId = text(config.activeChildId)
+    const candidateKey = text(config.activeKey)
+    const candidateChild = text(config.activeChildId)
+    const candidate = candidateChild === '' ? undefined : state.audits[candidateKey]
+    const usable = candidateChild !== '' && candidate !== undefined
+      && candidate.retired !== true && candidate.ended !== true && candidate.stopped !== true
+    state.activeKey = usable ? candidateKey : ''
+    state.activeChildId = usable ? candidateChild : ''
   }
   // 根会话钩子：字段逐个收窄，老状态文件（没有 auditRoot）当作没有根。
   const rawRoot = config.auditRoot
@@ -124,6 +181,8 @@ export async function ensureRegistry(ctx: Context, home: string, state: Workbenc
     const rootText = (value: unknown): string => (typeof value === 'string' ? value : '')
     state.auditRoot = {
       workspacePath: rootText(root.workspacePath),
+      // 老状态文件没有这个字段 → 空串 → `auditRootUsability` 判过期（绝不当成"通用根"复用）。
+      casePath: rootText(root.casePath),
       sessionId: rootText(root.sessionId),
       title: rootText(root.title),
       assignedAt: rootText(root.assignedAt),

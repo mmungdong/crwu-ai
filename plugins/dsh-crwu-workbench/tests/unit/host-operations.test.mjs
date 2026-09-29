@@ -32,7 +32,9 @@ test('门面覆盖除 HOST_ONLY 之外的全部操作（少一个的表现是点
   //
   // Task 4 曾把四个 `update-*` 临时列在这里（当时 Client 门面还没实现）。Task 5 的门面已经接上，
   // 四项临时豁免已删除 —— 再往这里加回任何 `update-*`，就等于承认客户端少了一个入口。
-  const HOST_ONLY = ['ping', 'audit-release']
+  // 协议 18 追加第三个：`trust` 保留一代但**不再授予任何权限**（新客户端走
+  // `local-access-grant` / `local-access-revoke`），所以它只存在于 Host 侧。
+  const HOST_ONLY = ['ping', 'audit-release', 'trust', 'access-diagnostics']
   const facade = new Set(Object.values(OPERATION_OF))
   const missing = FROZEN_OPERATIONS.filter((name) => !facade.has(name) && !HOST_ONLY.includes(name))
   assert.deepEqual(missing, [], `Host 有但门面没有：${missing.join(' ')}`)

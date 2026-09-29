@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { loadEnvironment } = await import(new URL('src/host/environment/ops.ts', ROOT).href)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
@@ -23,6 +24,9 @@ const { createWorkbenchState } = await import(new URL('src/host/state/store.ts',
 const { ifindCredentialPath } = await import(new URL('src/host/ifind/store.ts', ROOT).href)
 const { createIfindProbeCache } = await import(new URL('src/host/ifind/env.ts', ROOT).href)
 const { makeIfindTransport } = await import(new URL('tests/helpers/ifind-fixture.mjs', ROOT).href)
+const { consentConfigJson, grantedConsent, missingConsent } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
+const { LOCAL_ACCESS_REQUIRED_REASON } = await import(new URL('src/shared/access/types.ts', ROOT).href)
+const zhCNConsentReason = LOCAL_ACCESS_REQUIRED_REASON
 
 const CONFIG = {
   configSource: '/tmp/test-crwu-workbench.yml', caseRoot: '', formName: '报告审核',
@@ -129,7 +133,7 @@ function healthyContext(patch = {}) {
       // OSS AK 与 iFinD SK 都落在**员工自己的**凭据/状态文件里（不是技能目录、不是插件包）。
       '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=SECRET\n',
       [ifindCredentialPath('/Users/x')]: '{"auth_token":"ifind-token-123456"}',
-      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+      '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
     },
     ...patch,
   })
@@ -154,6 +158,8 @@ function depsOf(ctx, patch = {}) {
       // iFinD 真探替身（默认就绪）；显式传 `ifindTransport: null` 表示"这一例不探"。
       ifindTransport: patch.ifindTransport === null ? undefined : (patch.ifindTransport ?? ifindOkTransport()),
       ctx, config: { ...CONFIG, ...(patch.config ?? {}) }, state,
+      // Broker：自检里每一次跨边界的本机访问都由它判（真 Broker，策略走真实代码）。
+      access: makeTestAccess(ctx, { state }).access,
       home: patch.home ?? '/Users/x', platform: patch.platform ?? 'darwin-arm64',
       sessionRoot: async () => '/cases/session',
       // DSH 自带 Python 的解析：主 agent 接线后才会传。缺省给一个就绪的替身；
@@ -222,7 +228,7 @@ test('iFinD 是必检项：未配置即阻塞，且不是 degraded（2026-09-26 
   // 同一套"其它全部健康"的夹具，只把 iFinD 凭据文件拿掉。
   const ctx = healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
-    '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -296,7 +302,7 @@ test('统一环境模型：必需项缺失是 action-required，且归属与处�
     },
     files: {
       '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
-      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":false}',
+      '/Users/x/.dsh/crwu-workbench.json': '{}',
     },
   })
   const { deps } = depsOf(ctx)
@@ -352,7 +358,7 @@ test('统一环境模型：OSS 缺 AK 是员工任务，bucket 未配置是管�
   // ① bucket 由部署配置提供、AK 由员工填：没填 AK → user。
   const noAk = depsOf(healthyContext({ files: {
     [ifindCredentialPath('/Users/x')]: '{"auth_token":"ifind-token-123456"}',
-    '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } }))
   const first = await loadEnvironment(noAk.deps, {})
   const cred = first.state.issues.find((issue) => issue.id === 'oss-cred')
@@ -522,7 +528,7 @@ test('「我是谁」跟着自检一起回来：已授权才问一次，未授�
     return { name: '杨凡宾', org: '中瑞世联资产评估集团有限公司', userId: '142227076626112869', reason: '' }
   }
 
-  // ① 状态文件里 trustCredentials=true（healthyContext 就是这份）→ 姓名进 me。
+  // ① 状态文件里是**新版授权收据**（healthyContext 就是这份）→ 姓名进 me。
   const trusted = depsOf(healthyContext(), { identity })
   const withMe = await loadEnvironment(trusted.deps, {})
   assert.deepEqual(withMe.me, { name: '杨凡宾', org: '中瑞世联资产评估集团有限公司', userId: '142227076626112869' })
@@ -530,14 +536,14 @@ test('「我是谁」跟着自检一起回来：已授权才问一次，未授�
 
   // ② 未授权：**一次都不问**（受限沙箱下 dws 会假报「未登录」，问出来的姓名不可信）。
   const untrustedState = createWorkbenchState(CONFIG)
-  untrustedState.trustCredentials = false
+  untrustedState.localAccess = missingConsent()
   const untrustedCtx = healthyContext({
     shellLines: { 'dws auth status': { stdout: '{"authenticated":true}' } },
     files: {
       '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=SECRET\n',
       [ifindCredentialPath('/Users/x')]: '{"auth_token":"ifind-token-123456"}',
       // 状态文件里写着未授权：自检会把它读回 state。
-      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":false}',
+      '/Users/x/.dsh/crwu-workbench.json': '{}',
     },
   })
   const before = calls
@@ -605,7 +611,7 @@ test('a logged-out service is blocked by its label, and so is a missing iFinD ke
       'dws auth status': { stdout: JSON.stringify({ authenticated: false }) },
       ' ls ': { stdout: 'ok\n' },
     },
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
+    files: { '/Users/x/.dsh/crwu-workbench.json': consentConfigJson() },
   })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -656,10 +662,15 @@ test('request arguments cannot replace the configured manifest and protected OSS
   assert.equal(result.delivery.oss.bucket, 'private-bucket')
 })
 
-test('the trust flag is echoed so the panel can render the switch state', async () => {
-  const { deps } = depsOf(healthyContext(), { state: { trustCredentials: true } })
+test('the local-access receipt is echoed so the panel can render the consent card state', async () => {
+  const { deps } = depsOf(healthyContext(), { state: { localAccess: grantedConsent() } })
   const result = await loadEnvironment(deps, {})
-  assert.deepEqual(result.trust, { credentials: true })
+  // 协议 18：`trust: { credentials: boolean }` 被整条收据取代 —— 界面要能显示
+  // 「授的是哪个范围、什么时候授的」，布尔值答不了（旧字段不许再回）。
+  assert.equal(result.trust, undefined, '旧布尔字段必须消失')
+  assert.equal(result.localAccess.state, 'granted')
+  assert.deepEqual(result.localAccess.capabilities, grantedConsent().capabilities)
+  assert.equal(result.localAccess.requiredSchemaVersion, result.localAccess.schemaVersion)
   assert.equal(DEFAULT_MANIFEST.workspace.preferTitle, '中瑞世联工作空间')
 })
 
@@ -687,12 +698,12 @@ test('钉钉探测：未授权就说需要授权（绝不谎报未登录）；�
   const dingtalk = unauthorized.services.find((service) => service.id === 'dingtalk')
   assert.equal(dingtalk.state, '需要授权')
   assert.equal(dingtalk.ok, false)
-  assert.ok(unauthorized.blocked.some((item) => item.includes('授权读取本机凭据')), '未授权必须是阻塞项')
+  assert.ok(unauthorized.blocked.some((item) => item.includes('允许工作台访问本机账号和配置')), '未授权必须是阻塞项')
   assert.equal(unauthorized.state.userSetup.credentialsConsent.state, 'unconfigured')
   assert.equal(makeUnauthorizedSpecs().some((spec) => String(spec.command).includes('dws auth status')), false, '未授权不该去问 dws')
 
   // ② 已授权：凭据类命令自己声明无沙箱权限 → 拿到真结论（这里 fixture 回 authenticated:true）。
-  const { deps } = depsOf(ctx, { state: { trustCredentials: true } })
+  const { deps } = depsOf(ctx, { state: { localAccess: grantedConsent() } })
   const result = await loadEnvironment(deps, {})
   const dwsSpec = specs.find((spec) => String(spec.command).includes('dws auth status'))
   assert.ok(dwsSpec, '授权后应当问过 dws auth status')
@@ -700,10 +711,88 @@ test('钉钉探测：未授权就说需要授权（绝不谎报未登录）；�
   assert.equal(dwsSpec.sandboxPolicy?.mode, 'danger-full-access', '读钥匙串的命令必须声明无沙箱（钥匙串在沙箱外）')
   assert.equal(result.services.find((service) => service.id === 'dingtalk').ok, true)
   assert.equal(result.blocked.some((item) => item.includes('授权读取本机凭据')), false, '授权后授权项消失')
-  // 反向护栏：插件包核对与 OSS 实测这类命令**不能**跟着提权（能给最小权限就给最小）。
+  // OSS 实测**同样要提权**（协议 18 改）：`ossutil` 每一次都会读 `~/.ossutilconfig`，
+  // 受限沙箱下读不到就报一个和 AK 无关的错。所以它不是"不需要无沙箱"，而是
+  // "本机凭据访问"这一类 —— 旧断言（undefined）在这里是**错的**，改它并写清原因。
   const ossSpec = specs.find((spec) => String(spec.command).includes(' ls '))
   assert.ok(ossSpec, '应当实测过一次 OSS')
-  assert.equal(ossSpec.sandboxPolicy, undefined, 'OSS 实测不需要无沙箱')
+  assert.equal(ossSpec.sandboxPolicy?.mode, 'danger-full-access', 'ossutil 会读本机配置，必须声明无沙箱')
+
+  // 反向护栏：**不打凭据**的命令一律不提权（能给最小权限就给最小）——
+  // 插件包核对只 stat 包内文件，连命令都不发。
+  assert.equal(specs.some((spec) => String(spec.command).includes('dws version')), false, '不得执行 dws version')
+})
+
+/**
+ * A-03：**授权前零副作用**。
+ *
+ * 判据是「发生过哪些调用」，不是「文案看起来对不对」：未授权时插件不许起任何读本机凭据的子进程
+ * （氚云会话、钉钉登录态、ossutil 读 `%USERPROFILE%\.ossutilconfig`），也不许读 iFinD 凭据文件。
+ * 这三件事恰好也是"沙箱里读不到 → 假的未登录 / 密钥错误"的来源。
+ */
+test('A-03 授权前零副作用：不起凭据子进程、不读凭据文件，且如实说「需要先允许」', async () => {
+  const commands = []
+  const reads = []
+  const ctx = healthyContext()
+  const originalGet = ctx.get
+  ctx.get = (name) => {
+    const value = originalGet(name)
+    if (value === undefined) return value
+    if (name === 'shell') {
+      const inner = value.execute
+      return { ...value, execute: async (spec) => { commands.push(String(spec.command)); return inner(spec) } }
+    }
+    if (name === 'fs') {
+      const innerRead = value.readText
+      return {
+        ...value,
+        async readText(target) {
+          const key = String(target.targetKey)
+          reads.push(key)
+          // 未授权：工作台状态文件里**没有**任何收据（其它文件照常，用来证明"不是读不到"）。
+          if (key.endsWith('crwu-workbench.json')) return '{}'
+          return innerRead(target)
+        },
+      }
+    }
+    return value
+  }
+
+  // `refresh` + `probeIfind`：这是**最想**去探一次的组合（用户点了「重新检查」）。
+  // 但没允许本机访问时它必须一步都不走。
+  const { deps } = depsOf(ctx)
+  const result = await loadEnvironment(deps, { refresh: true, probeIfind: true })
+
+  for (const needle of ['h3yun session', 'dws auth status', 'ossutil']) {
+    assert.equal(commands.some((command) => command.includes(needle)), false, `未授权不该发：${needle}`)
+  }
+  for (const path of [ifindCredentialPath('/Users/x'), '/Users/x/.ossutilconfig']) {
+    assert.equal(reads.includes(path), false, `未授权不该读：${path}`)
+  }
+
+  // 四项凭据类事实一律是「需要先允许」，**不许**出现未登录 / 密钥错误 / 未找到这类假结论。
+  const setup = result.state.userSetup
+  for (const key of ['h3yun', 'dingtalk', 'aliyunOss', 'ifind']) {
+    assert.equal(setup[key].state, 'unconfigured', key)
+    assert.equal(setup[key].reason, zhCNConsentReason, `${key} 的原因必须是授权提示`)
+  }
+  assert.equal(result.external.state, 'unconfigured')
+  assert.equal(result.external.tokenLength, 0, '未授权连密钥长度都不该知道')
+  assert.equal(result.delivery.ossCred.exists, false)
+  assert.equal(result.delivery.ossCred.hasSecret, false)
+  // 未授权时凭据类故障**不许各占一条**：唯一要做的动作是"允许一次"。
+  // （授权说明本身会解释「没允许时读到的『未登录』不可信」——所以这条按 issue id 判，
+  //  不能拿整句文本做包含式断言。）
+  const issueIds = result.state.issues.map((issue) => issue.id)
+  assert.equal(issueIds.includes('consent'), true)
+  for (const id of ['h3yun', 'dingtalk', 'oss-config', 'oss-cred', 'oss-probe', 'ifind', 'ifind-external']) {
+    assert.equal(issueIds.includes(id), false, `未授权不该出现凭据类任务：${id}`)
+  }
+  assert.deepEqual(result.blocked, [result.state.issues[0].message], '未授权时只有一条阻塞项')
+
+  // 正控：授权前**该做**的检查照常做完了（不是整页失败）。
+  assert.equal(result.packageIntegrity.ok, true)
+  assert.equal(result.runtime.ok, true)
 })
 
 /** 未授权的 ctx（配置文件里没有授权标记）+ 记录它发出的 shell 请求。 */
@@ -741,7 +830,7 @@ test('氚云探测：未授权就不问（unsandboxed 才拿得到真结论）�
       'h3yun session status': { stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) },
       ' ls ': { stdout: 'ok\n' },
     },
-    files: { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' },
+    files: { '/Users/x/.dsh/crwu-workbench.json': consentConfigJson() },
   })
   const originalGet = ctx.get
   ctx.get = (name) => {
@@ -765,7 +854,7 @@ test('氚云探测：未授权就不问（unsandboxed 才拿得到真结论）�
 
   // ② 已授权：自己声明无沙箱权限去拿真结论。这条断言就是缺陷复现 ——
   //    去提权白名单里只放行 `session login` 时它立刻变红。
-  const { deps } = depsOf(ctx, { state: { trustCredentials: true } })
+  const { deps } = depsOf(ctx, { state: { localAccess: grantedConsent() } })
   const result = await loadEnvironment(deps, {})
   const sessionSpec = specs.find((spec) => String(spec.command).includes('h3yun session status'))
   assert.ok(sessionSpec, '授权后应当问过 h3yun session status')
@@ -784,10 +873,10 @@ test('信任本机凭据后确实没登录，仍然如实报未登录并阻塞',
     },
     files: {
       '/Users/x/.agents/skills/ifind-finance-data/mcp_config.json': '{"auth_token":"t"}',
-      '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+      '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
     },
   })
-  const { deps } = depsOf(ctx, { state: { trustCredentials: true } })
+  const { deps } = depsOf(ctx, { state: { localAccess: grantedConsent() } })
   const result = await loadEnvironment(deps, {})
 
   const dingtalk = result.services.find((service) => service.id === 'dingtalk')
@@ -848,7 +937,7 @@ test('iFinD 是必检项：清单里 required=true（旧口径 required=false �
   assert.equal(DEFAULT_MANIFEST.ifind.required, true, 'iFinD 必须是必需项')
   const ctx = healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
-    '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } })
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, {})
@@ -942,7 +1031,7 @@ test('Host 门禁：iFinD 未通过时 audit-start 被拒（页面绕过也没�
   // 真实自检的结论（iFinD 未填 → 阻塞 + external-data scope 关掉 auditCore）。
   const { deps } = depsOf(healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
-    '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } }))
   const env = await loadEnvironment(deps, {})
   assert.equal(env.state.capabilities.auditCore, false)
@@ -964,7 +1053,7 @@ test('Host 门禁：拿不到凭据时保守拒绝；补齐之后放行', async 
   // 未填 iFinD → 拒。
   const missing = depsOf(healthyContext({ files: {
     '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=S\n',
-    '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
   } }))
   const blocked = await loadEnvironment(missing.deps, {})
   assert.equal((await decideCapability({ at: 0, refresh: false, state: blocked.state }, 'auditCore')).allowed, false)

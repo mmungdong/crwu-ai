@@ -6,6 +6,7 @@ import type { AuditRecord, WorkbenchState } from '../state/types.ts'
 import { inspectCase } from './case.ts'
 import type { AuditStatus } from './consts.ts'
 import { agentRegistry, stopChild } from './spawn.ts'
+import type { StopOutcome } from './spawn.ts'
 
 /**
  * 审核状态判定。
@@ -263,13 +264,34 @@ export async function stopAuditChild(
   state: WorkbenchState,
   childId: string,
   reason: string,
-): Promise<{ ok: boolean; error: string; key: string; errors: string[] }> {
-  if (childId === '') return { ok: false, error: '当前没有正在运行的审核子会话。', key: '', errors: [] }
+  /**
+   * 阶段回调（F1）：`aborting` / `waiting-quiescence` / `quiesced` / `timeout`。
+   * 调用方在这里落盘，界面才能在等待期间看到"停到哪一步"。
+   */
+  onPhase?: (phase: 'aborting' | 'waiting-quiescence' | 'quiesced' | 'timeout') => void | Promise<void>,
+): Promise<{
+  ok: boolean
+  error: string
+  key: string
+  /** **真实的**停止结果，直接透传给 RPC/UI —— 不许再在 `auditStop` 里写死。 */
+  outcome: StopOutcome
+}> {
+  if (childId === '') {
+    return {
+      ok: false,
+      error: '当前没有正在运行的审核子会话。',
+      key: '',
+      outcome: {
+        childId: '', aborted: false, disposed: false, quiesced: true,
+        interrupted: false, agentCancelled: false, errors: [], notes: [],
+      },
+    }
+  }
   const outcome = await stopChild(ctx, childId, reason, {
     handle: state.runs[childId],
     parentSessionId: state.parentSessionId,
+    ...(onPhase === undefined ? {} : { onPhase }),
   })
-  delete state.runs[childId]
 
   let key = ''
   for (const [candidate, record] of Object.entries(state.audits)) {
@@ -278,6 +300,20 @@ export async function stopAuditChild(
       break
     }
   }
+
+  // **没确认停下来就什么都不改**（2026-09-29 用户复查的 P1）：
+  // 旧实现在这里无条件 `delete state.runs` + 把记录标成 stopped + `releaseActive` ——
+  // 等于在旧子会话可能还在跑的时候就把它的身份丢了，随后重启会起第二条并覆盖 childId。
+  if (!outcome.quiesced) {
+    return {
+      ok: false,
+      error: `没法确认该子会话已经停下来（${outcome.errors.join('；') || '状态未知'}）：已保留它的记录与占用，不覆盖、不启动下一条。`,
+      key,
+      outcome,
+    }
+  }
+
+  delete state.runs[childId]
   if (key !== '') {
     const record = state.audits[key]
     if (record !== undefined) {
@@ -285,7 +321,7 @@ export async function stopAuditChild(
     }
   }
   releaseActive(state, childId)
-  return { ok: true, error: '', key, errors: outcome.errors }
+  return { ok: true, error: '', key, outcome }
 }
 
 /** 诊断用：列出仍持有句柄的 childId。 */

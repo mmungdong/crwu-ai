@@ -10,6 +10,8 @@
  * 否则会出现"探测说已认证、取数说 401"这种只有真机能发现的漂移。
  */
 import { ifindCredentialPath } from '../../src/host/ifind/store.ts'
+import { consentFor, missingConsent } from './local-access-fixture.mjs'
+import { makeTestAccess } from './local-access-broker-fixture.mjs'
 
 export const IFIND_TEST_TOKEN = 'FAKE-TOKEN-abcdefghijklmnop'
 export const IFIND_TEST_HOME = '/Users/example'
@@ -144,16 +146,21 @@ export function makeIfindTransport(options = {}) {
 }
 
 /** 只记命令、永远成功的 shell 替身（建目录 / chmod 用它）。 */
-export function makeIfindShell({ runs = true, error = 'boom', commands = [] } = {}) {
+export function makeIfindShell({ runs = true, error = 'boom', commands = [], mode = '600' } = {}) {
   return {
     commands,
     resolve: (request) => request,
     async execute(spec) {
       commands.push(spec.command)
       if (!runs) throw new Error(error)
+      // 权限回读（`stat -f %Lp` / `stat -c %a`）要回一个**可解析的模式**：
+      // 协议 18 起"保存凭据成功"必须由回读确认（`credentialPermissionSatisfied`），
+      // 回空的夹具会让每一次保存都合理地判成失败。`mode` 用来造"没收紧"那种情形。
+      const isModeRead = /^stat\s/.test(spec.command)
       return { result: async () => ({
         exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
-        stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        stdout: { text: isModeRead ? `${mode}\n` : '', truncated: false },
+        stderr: { text: '', truncated: false },
       }) }
     },
   }
@@ -162,8 +169,11 @@ export function makeIfindShell({ runs = true, error = 'boom', commands = [] } = 
 /** 造一个可用的 `ifind-ops` 依赖包（全部走替身，无真实 IO）。 */
 export function makeIfindOpsDeps({ fs = makeIfindFs(), transport = makeIfindTransport(), timeoutMs = 50,
                                     shell = makeIfindShell() } = {}) {
+  const ctx = { get: (name) => (name === 'shell' ? shell : fs.get(name)) }
   return {
-    ctx: { get: (name) => (name === 'shell' ? shell : fs.get(name)) },
+    ctx,
+    /** Broker（协议 18）：保存 / 清除凭据都是跨边界写，经它执行。 */
+    access: makeTestAccess(ctx, { home: IFIND_TEST_HOME }).access,
     home: async () => IFIND_TEST_HOME,
     platform: async () => 'darwin-arm64',
     transport,
@@ -173,11 +183,15 @@ export function makeIfindOpsDeps({ fs = makeIfindFs(), transport = makeIfindTran
 
 /** 造一个可用的 `ToolDeps`（取数 Tool 用；`world` 提供 home / platform）。 */
 export function makeIfindToolDeps({ fs = makeIfindFs(), transport = makeIfindTransport(), trusted = true,
-                                     timeoutMs = 50, noTransport = false } = {}) {
+                                     timeoutMs = 50, noTransport = false, access } = {}) {
+  const ctx = { get: (name) => fs.get(name) }
   return {
-    ctx: { get: (name) => fs.get(name) },
+    ctx,
     config: {},
-    state: { trustCredentials: trusted },
+    state: { localAccess: consentFor(trusted) },
+    // 协议 18：读凭据前必须过 Host 侧门禁 —— 取数 Tool 也不例外，所以夹具默认给一个
+    // 与 `trusted` 一致的 Broker（`trusted: false` 时它是未授权的）。
+    access: access ?? makeTestAccess(ctx, { home: IFIND_TEST_HOME, consent: consentFor(trusted) }).access,
     world: { workdir: async () => '/cases', home: async () => IFIND_TEST_HOME, platform: async () => 'darwin-arm64' },
     form: {},
     ...(noTransport ? {} : { ifind: transport }),

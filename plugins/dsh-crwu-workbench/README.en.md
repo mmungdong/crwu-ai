@@ -71,9 +71,11 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
    **② Bundled components** only ever reports "package incomplete / platform unsupported" if one is missing.
    Section **③ DSH script runtime** reports the **DSH-bundled** Python (with its `openpyxl` and other
    package versions); the system `python3` is not a dependency and is never used as a fallback.
-3. To dispatch an audit, register the parent from a **top-level** session header first. Audits may only
-   be parented by a top-level session; nesting them is what used to make status tracking lose track of
-   a running child.
+3. To dispatch an audit, just click **AI audit** on the report-audit page. The plugin creates its own
+   **audit subagent root session** inside the selected workspace and parents the audit child to *that*
+   root — not to whichever chat session you happen to be looking at. The session-header
+   "register as sub-session parent" button now only passes the **preset of the session you are using**
+   to the audit root (so the audit toolchain matches your manual runs); it is **not** a prerequisite.
 
 > **The Skills ship with the package, organized in layers**: the tarball carries `skills/crwu/`
 > (27 in-repo Skills), `skills/dws/` (14 vendored `dingtalk-workspace-cli` Skills) and `common/skills/`
@@ -85,12 +87,21 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
 > layer is upgraded.
 
 > **Permissions**: no startup parameters are needed (`DSH_PERMISSION_MODE` stays untouched), but the
-> **first run requires one authorization** — the "trust this plugin to read local credentials" switch in
-> the login layer. It is written to the workbench state file (`trustCredentials`), so it survives
-> restarts. Without it the plugin cannot read the H3Yun session or the DingTalk login state and the
-> self-check blocks the gate — and it never reports a false "not logged in". Once authorized, only the
-> commands that genuinely read local credentials ask for unconfined execution; everything else stays in
-> the profile's default sandbox.
+> **first run requires one authorization** — the "allow the workbench to reach local accounts and
+> configuration" switch in the account-connection step. It is written to the workbench state file as a
+> **versioned receipt** (`localAccess`: `schemaVersion` + timestamp + five fixed capabilities).
+> Protocol 18 treats the old `trustCredentials: true` as `outdated` — **it is not a grant**. Upgrading
+> from 0.0.14 therefore needs a **full quit and relaunch** (protocol 17 → 18 is a semantic break);
+> refreshing the page only leaves the old host running. Without a receipt the plugin cannot read the
+> H3Yun session or the DingTalk login state, the self-check blocks the gate, and **no credential
+> process is started at all** — so it can never report a false "not logged in". Once authorized, each
+> **named operation** decides for itself whether it needs per-call `danger-full-access`
+> (`src/host/access/operations.ts`); callers cannot submit an escalation switch and neither can the
+> model. Only operations that genuinely touch paths outside the workspace escalate (H3Yun session,
+> DingTalk `~/.dws`, `~/.ossutilconfig`, the iFinD credential file, plugin state); package integrity
+> checks, case-directory writes and opening the browser stay in the profile's default sandbox. Audit
+> root and child sessions are always `workspace-write` with `approval=never`, and the account-connection
+> step also offers a read-only `.dws` checkup with a second-confirmed permission repair.
 
 ### Updating CRWU (self-update, from 0.0.12)
 

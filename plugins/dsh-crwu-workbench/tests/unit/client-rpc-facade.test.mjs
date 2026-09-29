@@ -76,7 +76,13 @@ test('the facade sends the declared operation for every method', async () => {
  * Task 4 曾把四个 `update-*` 临时列进来；Task 5 的门面已接上，那四项临时豁免**必须**
  * 保持删除状态（`host-operations.test.mjs` 与这里一起盯）。
  */
-const HOST_ONLY = ['ping', 'audit-release']
+const HOST_ONLY = [
+  'ping',
+  'audit-release',
+  // `trust`：协议 18 起**保留一代但不再授予任何权限**（只回协议不匹配的失败）。
+  // 新客户端一律调 `local-access-grant` / `local-access-revoke`，所以它是 HOST_ONLY。
+  'trust',
+]
 
 test('the facade covers exactly the frozen Host operation inventory (both directions)', () => {
   // 为什么以**冻结清单**为准而不是正则扫 `core.ts` 的对象字面量：Task 4 的四个更新操作是

@@ -9,7 +9,9 @@ import { labelOf, pick } from '../h3yun/fields.ts'
 import { requireBundledCommand } from '../platform/command.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { ensureDirectory } from './case-files.ts'
-import { requireCaseDir } from './case-dir.ts'
+import { allowedCaseRootOf, requireCaseDir } from './case-dir.ts'
+import { callerIdentity, callerParentSessionId, isAuditChild } from '../audit/scope.ts'
+import { caseDirOf } from '../../shared/utils/case-dir.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from './outcome.ts'
 import { canonicalJson, digestOf, digestOnly } from './snapshot.ts'
@@ -77,6 +79,12 @@ interface SnapshotSummary {
   digest: string
   fieldCount: number
   attachmentCount: number
+  /**
+   * 本轮快照里登记的附件 id（Host 用它写进审核 scope 的白名单）。
+   *
+   * 只回**标识符**，不回 `downloadUrl`（那带会话鉴权）。
+   */
+  attachmentIds: string[]
   snapshotDir: string
   snapshotPath: string
   attachmentsPath: string
@@ -127,7 +135,8 @@ function routingFactsOf(record: Record<string, JsonValue>, seqNo: string, formNa
     reviewState: labelOf(pick(record, [H3YUN_FIELDS.reviewState])),
     currentNode: labelOf(pick(record, [H3YUN_FIELDS.currentNode])),
     modifiedAt: value(['ModifiedTime', 'modifiedTime', 'CreatedTime', 'createdTime']),
-    seqNo: value(['SeqNo', 'seqNo']) || seqNo,
+    // 身份已在取数时核对过（`SeqNo` 必须等于请求值），这里不再回退到调用方提交值。
+    seqNo: value(['SeqNo', 'seqNo']),
     formName,
   }
 }
@@ -178,6 +187,11 @@ export function bootstrapTools(deps: ToolDeps) {
           digest: { type: 'string', required: true, description: '本轮输入快照的内容指纹' },
           fieldCount: { type: 'integer', required: true },
           attachmentCount: { type: 'integer', required: true },
+          attachmentIds: {
+            type: 'array', required: true,
+            description: '本轮快照登记的可信附件 id（仅标识符）',
+            items: { type: 'string' },
+          },
           reused: { type: 'boolean', required: true, description: 'true = 同一 attemptId 已有快照，本次没有重新取数' },
           snapshotDir: { type: 'string', required: true },
           snapshotPath: { type: 'string', required: true, description: `完整记录快照：${SNAPSHOT_DIR}/${SNAPSHOT_RECORD_FILE}` },
@@ -211,13 +225,41 @@ export function bootstrapTools(deps: ToolDeps) {
       const attemptId = text(args.attemptId).trim()
       const empty: SnapshotSummary = {
         attemptId, objectId, seqNo, schemaCodeDigest: '', fetchedAt: '', digest: '',
-        fieldCount: 0, attachmentCount: 0, snapshotDir: '', snapshotPath: '', attachmentsPath: '',
+        fieldCount: 0, attachmentCount: 0, attachmentIds: [], snapshotDir: '', snapshotPath: '', attachmentsPath: '',
         metadataPath: '', routingFacts: { ...EMPTY_ROUTING_FACTS }, reused: false,
       }
-      const caseCheck = await requireCaseDir(ctx, args.caseDir)
-      if (!caseCheck.ok) return { ...caseCheck, ...empty }
       if (objectId === '' || seqNo === '') {
         return { ...failure('input', 'objectId 与 seqNo 都不能为空'), ...empty }
+      }
+      // **审核子会话不许自己再取一次数**。这条 Tool 是 Host 在创建子代理**之前**用的交接点；
+      // 子代理手里已经有本轮输入快照。它的 `caseDir` 虽然被钉死在本轮案例目录，但 `objectId`
+      // 仍是提交进来的 —— 不拦的话，子代理可以用**别的** objectId 把别人的记录取进自己的案例目录
+      //（与 `crwu_h3yun_record_get` 同一条越界读，2026-09-29 自审发现）。
+      // 判据用**身份**（`isAuditChild`）：Host 调用时传的是审核根 Agent，不是任何记录里的 childId。
+      if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
+        return { ...failure('policy', '审核子会话不要再取数：本轮记录与附件清单已在输入快照里'), ...empty }
+      }
+      // 案例目录**由 Host 的约定算出来**（`<工作空间>/<流水号>`），而不是"落在这个工作空间里就行"。
+      // 这条 Tool 在创建子代理**之前**由 Host 调用，落盘的是本轮输入快照 —— 只判包含关系时，
+      // 一个传错（或被喂错）的 `caseDir` 会把快照写进**别的案例目录**（同一工作空间里到处都是案例）。
+      // 与子会话的 `requireAuditScope` 同一条口径：**精确相等**，工作空间根与兄弟案例都不行。
+      const caseCheck = await requireCaseDir(ctx, args.caseDir, { allowedRoot: allowedCaseRootOf(deps.state) })
+      if (!caseCheck.ok) return { ...caseCheck, ...empty }
+      const expectedCase = caseDirOf(deps.state.workspacePath || deps.state.caseRoot, seqNo)
+      if (expectedCase === '') {
+        return { ...failure('input', '缺少案例目录：请先选定工作空间'), ...empty }
+      }
+      const expectedCheck = await requireCaseDir(ctx, expectedCase, { allowedRoot: allowedCaseRootOf(deps.state) })
+      if (!expectedCheck.ok) return { ...expectedCheck, ...empty }
+      const [given, expected] = await Promise.all([
+        resolveTarget(ctx, caseCheck.path), resolveTarget(ctx, expectedCheck.path),
+      ])
+      // `targetKey` 是不透明 ID：只允许等值比较（**不许**拿 `displayPath` 兜底 —— 那是给人看的）。
+      if (text(given.targetKey) === '' || given.targetKey !== expected.targetKey) {
+        return {
+          ...failure('policy', '案例目录必须是本轮的 `<工作空间>/<流水号>`：不许用工作空间根、兄弟案例或子目录'),
+          ...empty,
+        }
       }
 
       // 同一 attemptId 且不要求刷新 → 直接复用上一份摘要，**不再取数**。
@@ -240,7 +282,8 @@ export function bootstrapTools(deps: ToolDeps) {
       const runOptions = {
         workdir: caseCheck.path,
         timeoutMs: 90_000,
-        trusted: credentialsTrusted(deps),
+        access: deps.access,
+        source: 'audit-tool' as const,
         platform,
         stdoutMaxBytes: RECORDS_STDOUT_MAX,
         ...(exec.signal === undefined ? {} : { signal: exec.signal }),
@@ -251,6 +294,27 @@ export function bootstrapTools(deps: ToolDeps) {
       if (!recordRun.ok) return { ...failure(recordRun.error !== '' ? 'infrastructure' : 'cli', reasonOf(recordRun)), ...empty }
       const record = recordOf(recordRun.stdout)
       if (record === null) return { ...failure('cli', `records get 没有返回可解析的记录 JSON：${clampText(recordRun.stdout, 400)}`), ...empty }
+
+      // ①.5 **返回记录的身份核对**（2026-09-29 用户复查的 P1）。
+      //
+      // `records get --id B` 之"取回了一条记录"不等于"取回的是 B"。此前不看返回记录的
+      // `ObjectId` / `SeqNo`，于是公开 RPC 可以用 `seqNo=A, objectId=B` 把 **B 的记录与附件**
+      // 写进 **A 的案例目录**，而且（协议 19 起）这套错配还会被 Host 登记成权威 scope。
+      // 所以：**在请求附件与任何写盘之前**核对身份；缺字段或不一致一律 fail closed。
+      const recordId = text(pick(record, ['ObjectId', 'objectId', 'Id', 'id']))
+      const recordSeq = text(pick(record, ['SeqNo', 'seqNo']))
+      if (recordId === '' || recordSeq === '') {
+        return {
+          ...failure('cli', `records get 返回的记录缺少 ObjectId / SeqNo（无法确认它就是要审的那一条）：${clampText(recordRun.stdout, 200)}`),
+          ...empty,
+        }
+      }
+      if (recordId !== objectId) {
+        return { ...failure('input', '取回的记录不是请求的那一条（ObjectId 不一致）：已终止本次审核'), ...empty }
+      }
+      if (recordSeq !== seqNo) {
+        return { ...failure('input', '取回的记录流水号与请求的不一致：已终止本次审核'), ...empty }
+      }
 
       // ② 附件元数据：同一个 objectId，取一次。
       const filesRun = await runCrwu(ctx, [...argvBase, 'files', 'list', '--schema', form.code, '--id', objectId], runOptions)
@@ -276,6 +340,7 @@ export function bootstrapTools(deps: ToolDeps) {
         digest,
         fieldCount: Object.keys(record).length,
         attachmentCount: attachments.length,
+        attachmentIds: attachments.map((item) => item.fileId),
         snapshotDir,
         snapshotPath: joinLocalPath(snapshotDir, SNAPSHOT_RECORD_FILE),
         attachmentsPath: joinLocalPath(snapshotDir, SNAPSHOT_ATTACHMENTS_FILE),

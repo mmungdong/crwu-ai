@@ -11,6 +11,7 @@
  * - Client 只 import 这里的类型。
  */
 import type { EnvironmentStateView } from './environment/model.ts'
+import type { LocalAccessConsentView } from './access/types.ts'
 
 /** 一行氚云待审核记录。 */
 export interface TaskRow {
@@ -27,6 +28,46 @@ export interface TaskRow {
   modifiedAt: string
   id: string
   idTail: string
+}
+
+/**
+ * 审核停止的**阶段**（F1 的状态机，Host 与 Client 用同一套枚举）。
+ *
+ * - `idle`：没发起过停止
+ * - `requested`：已收到停止请求，还没发出 abort
+ * - `aborting`：abort / cancel 已发出，等子会话退出
+ * - `waiting-quiescence`：dispose 未完成，或 Agent 仍显示 running
+ * - `quiesced`：已确认停下（dispose 完成，或 Agent 已不在 running）
+ * - `timeout`：有界等待到点，仍无法确认静默
+ * - `failed`：停止过程发生基础设施 / 持久化错误
+ */
+export type AuditStopPhase =
+  | 'idle' | 'requested' | 'aborting' | 'waiting-quiescence' | 'quiesced' | 'timeout' | 'failed'
+
+/**
+ * 停止状态的线上视图。
+ *
+ * ⚠️ 客户端拿到**缺失字段**时必须按"未知"处理，**不许**自行推断成 stopped / quiesced
+ *（2026-09-29 第三轮复查的 F4）：只有 Host 能回答"是不是真的停下了"。
+ */
+export interface AuditStopView {
+  phase: AuditStopPhase
+  /** 发起停止的时刻（epoch ms，0 = 没发起过）。 */
+  requestedAt: number
+  /** 已经等了多久（由 Host 计算，客户端不自己算 —— 时钟不同源）。 */
+  elapsedMs: number
+  /** 是否已确认静默。**只有它决定"能不能启动下一条"**。 */
+  quiesced: boolean
+  /** abort / cancel 是否真的发出去过（诊断用，不许写死）。 */
+  aborted: boolean
+  /** dispose 是否真的完成了（超时不算）。 */
+  disposed: boolean
+  /** 阻塞性错误（phase = failed 时的原因）。 */
+  error: string
+  /** 非阻塞观察（例如"dispose 超时但 Agent 已不在运行"）。 */
+  notes: string[]
+  /** 能不能启动下一条审核 —— **只能由 Host 判定**。 */
+  canStartNext: boolean
 }
 
 /** 一条审核记录的线上视图。 */
@@ -54,6 +95,10 @@ export interface AuditView {
   adopted?: boolean
   childAlive?: boolean
   activity?: string
+  /**
+   * 停止状态（F4）。缺失 = 未知（旧宿主 / 老记录），客户端按"不知道"处理。
+   */
+  stop?: AuditStopView
 }
 
 /** 云端一个流水号下的交付件。 */
@@ -263,10 +308,20 @@ export interface AuditRootView {
   sessionId: string
   title: string
   workspacePath: string
+  /** 这条根服务的**案例目录**（协议 19 起：根的 cwd 与沙箱边界都是它）。 */
+  casePath: string
   assignedAt: string
   /** 现在还可用吗；不可用会在下次发起审核时自动新建一个（旧的树保留）。 */
   usable: boolean
   reason: string
+  /**
+   * 审核根的沙箱模式与审批策略（协议 18 · 子项目 C）。
+   *
+   * 空串 = 还没建根 / 读不到。⑧ 上显示它们，验收里也要求"根与子会话都显示
+   * workspace-write / never" —— 只写提示词不算数，得看得见。
+   */
+  sandboxMode?: string
+  approvalPolicy?: string
 }
 
 /** 占用门禁。 */
@@ -311,7 +366,12 @@ export interface EnvResultView {
   allOk: boolean
   home: string
   platform: string
-  trust: { credentials: boolean }
+  /**
+   * 本机访问授权收据（协议 18）：取代了旧的 `trust: { credentials: boolean }`。
+   *
+   * 界面读它来决定「显示授权卡 / 禁用凭据类操作」，Host 门禁读同一份事实 —— 两侧不许各算一遍。
+   */
+  localAccess: LocalAccessConsentView
   /** ① 案例根目录。 */
   workspace: WorkspaceView
   /** 可选：老版本 Host 不带这个字段，界面按「尚未创建」显示即可。 */
@@ -329,4 +389,102 @@ export interface EnvResultView {
    * 可选是刻意的：宿主是旧构建时没有它，界面走「不认识 → 不放行」的失败关闭路径（§7.12）。
    */
   state?: EnvironmentStateView
+}
+
+/**
+ * DWS 本机目录的**只读体检**结果（协议 18 · 子项目 D2）。
+ *
+ * 脱敏口径写在这里，因为它是跨进程契约：没有 ACL 条目、账户名、SID、钥匙串条目名、
+ * 原始 `dws doctor` 输出。`directoryMode` / `lockMode` 只在 POSIX 上是规范八进制串，
+ * Windows 上恒为空串；两个布尔拿不到结论时是 `null`（"不知道"与"不行"处置不同）。
+ */
+export interface DwsLocalDoctorView {
+  ok: boolean
+  error: string
+  platform: string
+  permissionMechanism: 'windows-acl' | 'posix-mode' | 'unknown'
+  /**
+   * 目录 / 锁文件**在不在**：`true` 在、`false` 确实没有、`null` **探测失败**。
+   *
+   * `null` 这一态不能省：Windows 上 `Access is denied` 与"真的没有"是两件事，
+   * 压成一个 `false` 会让体检报「目录不存在，请先登录一次」（用户复查抓到的 P1）。
+   */
+  directoryExists: boolean | null
+  lockExists: boolean | null
+  ownerMatchesCurrentUser: boolean | null
+  currentUserCanModify: boolean | null
+  /**
+   * 锁文件**自身**能不能被当前账户改：`true` 能、`false` 确定不能、`null` 不知道 / 锁不存在。
+   *
+   * 与 `currentUserCanModify`（说的是目录）分开：真实现场里"目录能写、`.data.lock` 单独不可写"
+   * 很常见，而原始报错通常正是 `opening lock file ... Access is denied`。
+   * 合成一个布尔会让体检报「可读写，正常」却同时给出修复入口（自相矛盾的画面）。
+   */
+  lockWritable: boolean | null
+  /** 锁文件属主是不是当前账户（`null` = 不知道 / 锁不存在）。 */
+  lockOwnerMatchesCurrentUser: boolean | null
+  directoryMode: string
+  lockMode: string
+  credentialStoreState: 'unknown' | 'available' | 'missing-secret' | 'interaction-denied' | 'access-denied'
+  dwsDoctorState: string
+  /**
+   * 这次体检有没有真的跑起来（`false` = 前置条件不满足，按规定拒绝）。
+   *
+   * 由 Host 给出，界面据此解释"为什么没有结论" —— **不要让客户端自己推断**。
+   */
+  canDiagnose: boolean
+  /** 归因类别（与开发者诊断同一套词表）。空串 = 还没有可归因的失败。 */
+  classification: string
+}
+
+/** 最小权限修复的结果（协议 18 · 子项目 D3）。 */
+export interface DwsLocalRepairView {
+  ok: boolean
+  error: string
+  /** 修了哪几类目标（**不**回具体路径：都在 `<home>/.dws` 之内）。 */
+  repaired: string[]
+  /** 想做但没做成的（命令被拒、路径是符号链接……）。 */
+  skipped: string[]
+  /** 修复后**重新体检**的结果：它是"修好了没有"的唯一判据。 */
+  doctor: DwsLocalDoctorView
+  /** 修复后 `dws auth status` 的结论词（不给原始输出）。 */
+  authStatus: string
+}
+
+/**
+ * 最近一次本机访问的**脱敏事实**（协议 18 · B3 的诊断视图）。
+ *
+ * 与 `host/access/diagnostics.ts` 的 `AccessDiagnostic` 同形：Host 那边 `operation` / `source`
+ * 是更窄的联合类型，赋给这里的 `string` 是结构兼容的。允许出现的只有操作名、来源、三个模式、
+ * 两个布尔、归因类别、是否起过进程、版本与时刻 —— **没有** AccessKey / token / 命令原文 / 路径。
+ */
+export interface AccessDiagnosticView {
+  operation: string
+  source: string
+  consentVersion: number
+  requestedMode: string
+  resolvedMode: string
+  ranMode: string
+  sandboxDenied: boolean
+  runnerFailed: boolean
+  errorClass: string
+  processStarted: boolean
+  hostVersion: string
+  protocolVersion: number
+  summary: string
+  at: string
+}
+
+/** `access-diagnostics` 的返回体。 */
+export interface AccessDiagnosticsView {
+  ok: boolean
+  entries: AccessDiagnosticView[]
+  consent: { state: string; schemaVersion: number }
+  /**
+   * 现在**能不能**做可归因的 DWS 体检 —— 由 Host 按体检前置条件同一判据算好。
+   *
+   * 界面用它决定「检查本机目录」是否可点：**不让客户端自己推断**
+   *（客户端看不到 `lockRelated` 这类事实，猜出来的一定与 Host 不一致）。
+   */
+  dwsDiagnosable: boolean
 }

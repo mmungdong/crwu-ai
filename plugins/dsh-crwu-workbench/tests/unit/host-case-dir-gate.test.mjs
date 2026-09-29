@@ -46,7 +46,7 @@ test('requireCaseDir 只接受绝对路径：裸盘符、相对路径、空串�
   // **裸 `C:` 不是绝对路径**：它是「盘符相对路径」，指向该盘上的当前目录。
   // 接受它就等于接受一条随进程 cwd 变化的案例目录 —— 产物落点不可预测。
   for (const bad of ['C:', 'c:', 'work/S1', './S1', '../S1', 'S1', '']) {
-    const result = await requireCaseDir(ctxWith([]), bad)
+    const result = await requireCaseDir(ctxWith([]), bad, { allowedRoot: '/work' })
     assert.equal(result.ok, false, `必须拒绝：${JSON.stringify(bad)}`)
     assert.equal(result.errorKind, 'input')
     assert.match(result.error, /绝对路径|缺少案例目录/)
@@ -55,7 +55,7 @@ test('requireCaseDir 只接受绝对路径：裸盘符、相对路径、空串�
 
 test('requireCaseDir 拒绝含 .. 片段的路径（两种分隔符都查）', async () => {
   for (const bad of ['/work/../etc', 'C:\\work\\..\\etc', '\\\\server\\share\\..\\x']) {
-    const result = await requireCaseDir(ctxWith([]), bad)
+    const result = await requireCaseDir(ctxWith([]), bad, { allowedRoot: '/work' })
     assert.equal(result.ok, false, `必须拒绝：${bad}`)
     assert.match(result.error, /不能包含 \.\./)
   }
@@ -63,20 +63,52 @@ test('requireCaseDir 拒绝含 .. 片段的路径（两种分隔符都查）', a
 
 test('requireCaseDir 接受 POSIX 根、盘符根与 UNC，并按 fs 的事实回 displayPath', async () => {
   const dirs = ['/work/S1', 'C:\\Work\\S1', '\\\\server\\share\\S1']
+  const roots = { '/work/S1': '/work', 'C:\\Work\\S1': 'C:\\Work', '\\\\server\\share\\S1': '\\\\server\\share' }
   for (const good of dirs) {
-    const result = await requireCaseDir(ctxWith(dirs), good)
+    const result = await requireCaseDir(ctxWith(dirs), good, { allowedRoot: roots[good] })
     assert.equal(result.ok, true, `必须接受：${good}（${result.ok ? '' : result.error}）`)
     assert.equal(result.path, good)
   }
 })
 
+test('requireCaseDir：案例目录必须落在工作空间之内（模型不能自己指定信任域）', async () => {
+  // 2026-09-29 复查：这条要求此前**只写在注释里**。`caseDir` 是模型参数，
+  // 只校验"绝对 + 存在 + 是目录 + 没有 .."，于是模型可以把案例目录指到工作空间之外 ——
+  // `crwu_audit_oss_publish` 会把那里任意可读文件传到 OSS（读不受沙箱限制），
+  // `crwu_h3yun_record_get` 更直接把它当特权命令的 cwd。
+  const outside = await requireCaseDir(ctxWith(['/etc', '/work/S1']), '/etc', { allowedRoot: '/work' })
+  assert.equal(outside.ok, false, '工作空间之外的目录必须拒绝')
+  assert.equal(outside.errorKind, 'policy')
+  assert.match(outside.error, /必须落在当前工作空间之下/)
+
+  // 前缀混淆：`/work-evil` **不是** `/work` 之下（实现用 fs.contains，不做字符串前缀比较）。
+  const prefix = await requireCaseDir(ctxWith(['/work-evil']), '/work-evil', { allowedRoot: '/work' })
+  assert.equal(prefix.ok, false, '前缀相似的兄弟目录必须拒绝')
+  assert.equal(prefix.errorKind, 'policy')
+
+  // 工作空间本身作为案例根是**允许**的：员工把工作空间当案例根是合法配置
+  //（`ensureAuditRoot` 就是用 `workspacePath || caseRoot`，两处同一条线）。
+  const equal = await requireCaseDir(ctxWith(['/work']), '/work', { allowedRoot: '/work' })
+  assert.equal(equal.ok, true, '工作空间自身应当被接受（它是自己之下的边界情形）')
+
+  // Host 还没选工作空间 → 一律拒绝（fail closed），不许"没传就跳过"。
+  const noRoot = await requireCaseDir(ctxWith(['/work/S1']), '/work/S1', { allowedRoot: '' })
+  assert.equal(noRoot.ok, false)
+  assert.equal(noRoot.errorKind, 'policy')
+  assert.match(noRoot.error, /还没有选定工作空间/)
+  // 连 options 都没传（JS 调用点漏传）也必须 fail closed，而不是抛异常或放行。
+  const missing = await requireCaseDir(ctxWith(['/work/S1']), '/work/S1')
+  assert.equal(missing.ok, false)
+  assert.equal(missing.errorKind, 'policy')
+})
+
 test('requireCaseDir 对不存在 / 不是目录的目标如实拒绝，不猜', async () => {
-  const missing = await requireCaseDir(ctxWith([]), '/work/S1')
+  const missing = await requireCaseDir(ctxWith([]), '/work/S1', { allowedRoot: '/work' })
   assert.equal(missing.ok, false)
   assert.match(missing.error, /不存在或不是目录/)
 
-  const file = { get: (name) => (name === 'fs' ? { resolve: async (p) => ({ targetKey: p, displayPath: p }), stat: async () => ({ type: 'file', version: 'v' }) } : undefined) }
-  const asFile = await requireCaseDir(file, '/work/S1')
+  const file = { get: (name) => (name === 'fs' ? { resolve: async (p) => ({ targetKey: p, displayPath: p }), stat: async () => ({ type: 'file', version: 'v' }), contains: () => true } : undefined) }
+  const asFile = await requireCaseDir(file, '/work/S1', { allowedRoot: '/work' })
   assert.equal(asFile.ok, false)
   assert.match(asFile.error, /不存在或不是目录/)
 })

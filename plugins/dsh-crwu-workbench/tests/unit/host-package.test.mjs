@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { Config, resolveWorkbenchConfig } = await import(new URL('src/host/config/config.ts', ROOT).href)
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
@@ -33,12 +34,43 @@ const { readJsonBody, writeJson } = await import(new URL('src/host/http/json.ts'
 const { FROZEN_AUDIT_TOOLS, FROZEN_AUDIT_TOOL_COUNT, FROZEN_OPERATIONS, FROZEN_OPERATION_COUNT } =
   await import(new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
 
+const { LOCAL_ACCESS_CAPABILITIES, LOCAL_ACCESS_SCHEMA_VERSION } =
+  await import(new URL('src/shared/access/types.ts', ROOT).href)
+const { consentConfigJson } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
+const { localAccessGranted } = await import(new URL('src/host/access/consent.ts', ROOT).href)
+
 const YAML_CONFIG = new URL('config/crwu-workbench.yml', ROOT)
 const YAML_RUNTIME = resolveWorkbenchConfig({ configFile: YAML_CONFIG.pathname })
 
 /** 操作单测从真实 YAML 起步，只覆盖该用例关心的字段。 */
 function resolveConfig(patch = {}) {
   return { ...YAML_RUNTIME, ...patch }
+}
+
+/**
+ * **有状态**的内存 fs 替身。
+ *
+ * 授权路径是「先落盘、再回读、回读是 granted 才放行」，所以写进去必须真的能读回来 ——
+ * 默认的 `stubFs` 只返回一个成功信封、什么都不存，用它测授权会永远停在"回读不是已授权"。
+ */
+function memoryFs() {
+  const files = {}
+  return {
+    files,
+    writes: [],
+    policies: [],
+    async resolve(path) { return { targetKey: path, displayPath: path } },
+    async stat(target) { return files[target.targetKey] === undefined ? undefined : { type: 'file' } },
+    async readText(target) { return files[target.targetKey] ?? '' },
+    async writeText(target, content, ...rest) {
+      this.writes.push(content)
+      // writeText(target, content, expected?, signal?, sandboxPolicy?) —— 策略是第 5 个参数。
+      this.policies.push(rest[2])
+      files[target.targetKey] = content
+      return { operation: 'update', version: 'v', before: null, after: content }
+    },
+    async listDir() { return [] },
+  }
 }
 
 /** 最小的 webServer 替身：只保留 register 并把 handler 交出来。 */
@@ -174,13 +206,9 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
       return { result: async () => ({ exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: 'stub: 无服务', truncated: false } }) }
     },
   }
-  const stubFs = {
-    async resolve(path) { return { targetKey: path, displayPath: path } },
-    async stat() { return undefined },
-    async readText() { return '' },
-    async writeText() { return { operation: 'create', version: 'v', before: null, after: '' } },
-    async listDir() { return [] },
-  }
+  // 有状态的内存 fs：授权路径是「先落盘、再回读、回读是 granted 才放行」，
+  // 用"写了什么都不存"的替身测会永远停在"回读不是已授权"。
+  const stubFs = memoryFs()
   const ctx = {
     get: (name) => (name === 'shell' ? stubShell : (name === 'fs' ? stubFs : undefined)),
     // 真实 Cordis 上下文一定有 effect：插件用它登记随生命周期释放的资源。
@@ -212,12 +240,16 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
     version: PLUGIN_VERSION,
     buildKind: HOST_BUILD_KIND,
     home: () => world.home(),
+    access: makeTestAccess(ctx, { state }).access,
   })
   return {
     state,
     ctx,
+    fs: stubFs,
     operations: createCoreOperations(
-      ctx, resolved, state, world, { form, python }, { update: update.operations },
+      ctx, resolved, state, world,
+      { form, python, access: makeTestAccess(ctx, { state }).access },
+      { update: update.operations },
     ),
   }
 }
@@ -292,9 +324,15 @@ test('ping and boot answer with the state the panel needs to render', async () =
   }
   assert.deepEqual(boot.ported.todo, [], '不该再有未移植的操作')
 
-  // 协议 17：凭据权限结论（`permission`）是跨进程契约的一部分（见 shared/consts.ts）。
-  // ping 与 boot 都必须报同一代，否则「界面新、宿主旧」只能在用户点保存凭据时才暴露。
-  assert.equal(WORKBENCH_PROTOCOL, 17, '凭据权限结论结构化（chmodOk → permission）后协议必须 +1')
+  // 协议 18：本机访问授权收据（`localAccess`）与「授权前零副作用自检」是跨进程契约的一部分。
+  // 协议 19：**审核 scope 绑定**（案例目录/根会话 cwd 与沙箱边界从"工作空间"收紧到"本轮案例目录"，
+  // 氚云记录查询移出审核子会话能力集）。两者都是跨进程契约，ping 与 boot 必须报同一代 ——
+  // 否则「界面新、宿主旧」只能在用户操作到那一步时才暴露（旧宿主仍按工作空间级边界跑审核）。
+  assert.equal(WORKBENCH_PROTOCOL, 19, '审核 scope 绑定（案例目录=边界）后协议必须 +1')
+  // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
+  assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
+  assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
+  assert.deepEqual(bootAnswer.localAccess.capabilities, [])
   assert.equal(pong.protocol, WORKBENCH_PROTOCOL, 'ping 必须报当前协议代')
   assert.equal(bootAnswer.protocol, WORKBENCH_PROTOCOL, 'boot 必须报当前协议代')
   // 四个更新操作必须真的在操作表里（不是只写进 boot 的声明）。
@@ -379,7 +417,11 @@ test('the Host half still registers the frozen inventory of operations', async (
   // 30 → 29：`install-prompt` 已删除（2026-09-26，「复制安装提示词」在环境页不再需要）。
   // 同批协议号 13 → 14（旧客户端挂载时会调这个操作，必须靠协议号让"界面新、宿主旧"显形）。
   // 29 → 33：自助更新四个操作（协议 15 → 16）。
-  assert.equal(FROZEN_OPERATION_COUNT, 33)
+  // 33 → 35：本机访问授权两个操作（协议 18）。`trust` **保留**（旧客户端要拿到一句能读懂的话，
+  // 而不是 404「未知 op」），所以它是 +2 而不是「替换」。
+  // 35 → 36：`access-diagnostics`（协议 18 · B3 的本机访问诊断，只读、脱敏）。
+  // 36 → 38：DWS 本机目录的只读体检 + 最小权限修复（协议 18 · 子项目 D）。
+  assert.equal(FROZEN_OPERATION_COUNT, 38)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {
@@ -412,46 +454,124 @@ test('workspace selection trims trailing slashes and can be reset to auto', asyn
   assert.deepEqual(workspaceView(state), { chosen: false, path: '', title: '', id: '', source: '', missing: false })
 })
 
-test('trust 记一次长期授权：严格的 credentials 布尔 + 落盘（重启后仍有效）', async () => {
+test('local-access-grant：先落盘、后放行；提交的清单必须逐字等于规范清单', async () => {
   const { state, operations, ctx } = operationsFor()
-  const written = []
-  const policies = []
-  const fs = ctx.get('fs')
-  const inner = fs.writeText
-  fs.writeText = async (target, content, ...rest) => {
-    written.push(content)
-    // writeText(target, content, expected?, signal?, sandboxPolicy?) —— 策略是第 5 个参数。
-    policies.push(rest[2])
-    return await inner(target, content, ...rest)
+  const fs = memoryFs()
+  const originalGet = ctx.get
+  ctx.get = (name) => (name === 'fs' ? fs : originalGet(name))
+  const { writes: written, policies } = fs
+
+  // ① 提交一个被改过的范围（缺项 / 多项 / 顺序不同 / 版本不符）一律拒绝，且**不落盘**。
+  const tampered = [
+    { schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION, capabilities: LOCAL_ACCESS_CAPABILITIES.slice(0, 4) },
+    { schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION, capabilities: [...LOCAL_ACCESS_CAPABILITIES, 'evil'] },
+    { schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION, capabilities: [...LOCAL_ACCESS_CAPABILITIES].reverse() },
+    { schemaVersion: 0, capabilities: [...LOCAL_ACCESS_CAPABILITIES] },
+  ]
+  // 先把活状态钉在"未授权"，这样"坏请求不产生任何影响"才是可判定的。
+  state.localAccess = { state: 'missing', schemaVersion: 0, requiredSchemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
+    grantedAt: '', capabilities: [], reason: '尚未允许' }
+  for (const args of tampered) {
+    const refused = await operations['local-access-grant'](args)
+    assert.equal(refused.ok, false, `被改过的范围必须拒绝：${JSON.stringify(args)}`)
+    // ⚠️ 坏请求（版本不符 / 清单被改）**什么都不改**：返回的是活状态（真相），不是编出来的关闭态。
+    // 把它当成"授权失败"并落实关闭态，就等于一个旧版界面或手工坏请求能掀掉已授权的状态
+    //（2026-09-29 复查 M5）。真正的落盘失败才是 `persist-failed`（见下一个用例）。
+    assert.equal(refused.consent.state, 'missing')
+    assert.equal(state.localAccess.state, 'missing', '坏请求不许改动活状态')
   }
+  assert.deepEqual(written, [], '拒绝时不许写盘')
 
-  // 只有严格 true 才算授权。
-  assert.deepEqual(await operations.trust({ credentials: 'true' }), { ok: true, trust: { credentials: false } })
-  assert.equal(state.trustCredentials, false)
-  assert.deepEqual(await operations.trust({ credentials: true }), { ok: true, trust: { credentials: true } })
-  assert.equal(state.trustCredentials, true)
-  // 旧客户端的字段名（h3yun）继续接受：协议号虽已 +1，没必要为一个布尔值让旧页面报错。
-  assert.deepEqual(await operations.trust({ h3yun: true }), { ok: true, trust: { credentials: true } })
-
-  // **落盘**：一次授权长期有效，否则员工每次重启都要重新授权。
+  // ② 规范清单：落盘 + 回读 → 放行。
+  const granted = await operations['local-access-grant']({
+    schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
+    capabilities: [...LOCAL_ACCESS_CAPABILITIES],
+  })
+  assert.equal(granted.ok, true)
+  assert.equal(granted.consent.state, 'granted')
+  assert.equal(state.localAccess.state, 'granted')
+  assert.deepEqual(state.localAccess.capabilities, [...LOCAL_ACCESS_CAPABILITIES])
   assert.ok(written.length > 0, '授权必须写进工作台状态文件')
   const parsed = JSON.parse(written[written.length - 1])
-  assert.equal(parsed.trustCredentials, true)
-  // 员工默认是受限沙箱（workspace-write）：写 `~/.dsh/` 会被拦，于是「点了同意却存不住、
-  // 重启又要重新授权」——实测踩到过。所以这次写入必须**逐次声明策略**。
+  assert.equal(parsed.localAccessConsent.schemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
+  assert.deepEqual(parsed.localAccessConsent.capabilities, [...LOCAL_ACCESS_CAPABILITIES])
+  assert.equal(parsed.trustCredentials, undefined, '新代码不再写旧布尔键')
+  // 员工默认是受限沙箱（workspace-write）：写 `~/.dsh/` 会被拦，于是「点了允许却存不住、
+  // 重启又要允许一次」——实测踩到过。所以这次写入必须**逐次声明策略**。
   assert.equal(
     policies[policies.length - 1]?.mode,
     'danger-full-access',
     '状态文件写入必须带 sandboxPolicy，否则受限环境下授权存不住',
   )
+
+  // ③ 撤回落盘（空能力集合的墓碑）。
+  const revoked = await operations['local-access-revoke']({})
+  assert.equal(revoked.ok, true)
+  assert.equal(revoked.consent.state, 'revoked')
+  assert.equal(state.localAccess.state, 'revoked')
+  const tombstone = JSON.parse(written[written.length - 1])
+  assert.deepEqual(tombstone.localAccessConsent.capabilities, [])
+  assert.equal(tombstone.localAccessConsent.schemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
 })
 
-test('授权状态重启后仍在（从状态文件读回，不需要重新授权）', async () => {
+test('授权写盘失败：RPC 回 ok:false、内存**仍不放行**（先落盘后放行）', async () => {
+  const { state, operations, ctx } = operationsFor()
+  const fs = memoryFs()
+  const originalGet = ctx.get
+  ctx.get = (name) => (name === 'fs' ? fs : originalGet(name))
+  fs.writeText = async () => { throw new Error('disk full') }
+
+  const result = await operations['local-access-grant']({
+    schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
+    capabilities: [...LOCAL_ACCESS_CAPABILITIES],
+  })
+  // 旧实现的缺陷就在这里：它先写内存、再写盘，而且无论写盘成败都回 ok:true ——
+  // 表现是「点了同意、下次重启又要同意一次」，界面还说是成功的。
+  assert.equal(result.ok, false)
+  assert.match(result.error, /磁盘/)
+  // ⚠️ 写盘失败时活状态必须是**关闭态**，而且返回的视图也必须是关闭态 ——
+  // 旧实现返回磁盘上的旧授权（可能还是 `granted`），调用方照抄就把权限重新打开了（用户复查的 P1）。
+  assert.equal(state.localAccess.state, 'persist-failed', '写盘失败时内存必须保持未授权')
+  assert.equal(result.consent.state, 'persist-failed')
+  assert.equal(localAccessGranted(state.localAccess), false)
+})
+
+test('撤销写盘失败：仍然立刻 fail closed，状态标 persist-failed 并如实报错', async () => {
+  const { state, operations, ctx } = operationsFor()
+  const fs = memoryFs()
+  const originalGet = ctx.get
+  ctx.get = (name) => (name === 'fs' ? fs : originalGet(name))
+  await operations['local-access-grant']({
+    schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
+    capabilities: [...LOCAL_ACCESS_CAPABILITIES],
+  })
+  assert.equal(state.localAccess.state, 'granted')
+  fs.writeText = async () => { throw new Error('disk full') }
+
+  const revoked = await operations['local-access-revoke']({})
+  assert.equal(revoked.ok, false)
+  // 撤销是**收紧**权限：写盘失败时反而不能"当没撤" —— 否则员工撤销完还在被读凭据。
+  assert.equal(state.localAccess.state, 'persist-failed')
+  assert.equal(revoked.consent.state, 'persist-failed')
+})
+
+test('旧版 trust 入口保留一代，但**不再授予任何权限**', async () => {
+  const { state, operations } = operationsFor()
+  const legacy = await operations.trust({ credentials: true })
+  // 旧客户端带着布尔值来：那个范围（只覆盖读本机凭据）比协议 18 的收据窄，
+  // 继续授予就等于**未经员工同意地扩权**。所以一律回协议不匹配的失败。
+  assert.equal(legacy.ok, false)
+  assert.equal(legacy.protocolMismatch, true)
+  assert.match(legacy.error, /重新打开 DeepSeek Harness/)
+  assert.equal(state.localAccess.state, 'missing', '旧入口不许改授权状态')
+})
+
+test('授权状态重启后仍在（从状态文件读回收据，不需要重新允许）', async () => {
   // 这一条盯的是「一次授权、长期有效」：环境自检必须**先读盘**再决定是否阻塞。
   const { loadEnvironment } = await import(new URL('src/host/environment/ops.ts', ROOT).href)
   const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
   const dirs = new Set(['/cases/space'])
-  const files = { '/Users/x/.dsh/crwu-workbench.json': '{"trustCredentials":true}' }
+  const files = { '/Users/x/.dsh/crwu-workbench.json': consentConfigJson() }
   const ctx = {
     get(name) {
       if (name === 'shell') {
@@ -486,11 +606,38 @@ test('授权状态重启后仍在（从状态文件读回，不需要重新授�
   }
   const state = createWorkbenchState(resolveConfig({}))
   const result = await loadEnvironment(
-    { ctx, config: resolveConfig({}), state, home: '/Users/x', platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' },
+    { ctx, config: resolveConfig({}), state, home: '/Users/x', platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', access: makeTestAccess(ctx, { state }).access },
     {},
   )
-  assert.equal(state.trustCredentials, true, '重启后从状态文件恢复授权')
-  assert.equal(result.blocked.includes('授权读取本机凭据（氚云 / 钉钉）'), false, '已授权不再阻塞')
+  assert.equal(state.localAccess.state, 'granted', '重启后从状态文件恢复整条收据')
+  assert.deepEqual(state.localAccess.capabilities, [...LOCAL_ACCESS_CAPABILITIES])
+  assert.equal(result.localAccess.state, 'granted')
+  assert.equal(result.blocked.some((item) => item.includes('允许工作台访问本机账号和配置')), false, '已授权不再阻塞')
+})
+
+test('access-diagnostics：只读、脱敏，且与授权收据一致（协议 18 · B3）', async () => {
+  const { operations, state } = operationsFor()
+  const answer = await operations['access-diagnostics']()
+  assert.equal(answer.ok, true)
+  assert.deepEqual(answer.entries, [], '刚启动时没有任何本机访问')
+  assert.deepEqual(answer.consent, state.localAccess)
+
+  // 跑一次会失败的本机访问（这个 ctx 的 shell 替身一律退出码 1）→ 诊断里出现**结构化事实**。
+  const denied = await operations['local-access-grant']({ schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION, capabilities: [...LOCAL_ACCESS_CAPABILITIES] })
+  assert.equal(denied.ok, true)
+  await operations.pending({})
+  const after = await operations['access-diagnostics']()
+  assert.equal(after.entries.length > 0, true, '失败的调用必须留痕（否则"点了没反应"查不到东西）')
+  const entry = after.entries[0]
+  for (const field of ['operation', 'source', 'requestedMode', 'resolvedMode', 'ranMode',
+    'sandboxDenied', 'runnerFailed', 'errorClass', 'processStarted', 'hostVersion', 'protocolVersion', 'at']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(entry, field), true, `诊断缺字段：${field}`)
+  }
+  // 脱敏：序列化之后不许出现命令原文 / 凭据 / 路径。
+  const serialized = JSON.stringify(after.entries)
+  for (const forbidden of ['--schema', '--id', 'accessKeySecret', 'crwu-workspace']) {
+    assert.equal(serialized.includes(forbidden), false, `诊断泄露了 ${forbidden}`)
+  }
 })
 
 test('bind-session refuses a subagent session as the audit parent', async () => {
@@ -725,13 +872,20 @@ test('an installed tarball can actually be installed and imported', async () => 
   const { fileURLToPath } = await import('node:url')
   const run = promisify(execFile)
 
+  // 这条会触发 `prepack`（重写包根的 `lib/`），与 `host-prepare-script.test.mjs` 里那次真构建
+  // 共享同一套依赖目录 —— 并行会互相踩（2026-09-29 全量跑偶发红，单独跑必过）。见 build-lock.mjs。
+  const { withBuildLock } = await import(new URL('tests/helpers/build-lock.mjs', ROOT).href)
   const workdir = await mkdtemp(join(tmpdir(), 'crwu-pack-'))
   try {
     // npm 的 `dry_run` 配置会**继承给子进程**：在 `npm publish --dry-run`（发布前的常规自检）
     // 之下，这条测试里的 `npm pack` 会跟着变成 dry-run、不产出 tarball，于是门禁因为一个
     // 与被测行为无关的原因变红。这里显式关掉它，让测试只看「打包能不能装」这件事本身。
     const env = { ...process.env, npm_config_dry_run: 'false' }
-    await run(npm.command, [...npm.args, 'pack', '--pack-destination', workdir], { cwd: fileURLToPath(ROOT), maxBuffer: 16 * 1024 * 1024, env })
+    // 这次 pack 会触发 `prepack`（重写包根的 `lib/`），与 `host-prepare-script.test.mjs` 里
+    // 那次真构建共享同一套依赖目录 —— 并行会互相踩（2026-09-29 全量跑偶发红、单独跑必过）。
+    await withBuildLock(async () => {
+      await run(npm.command, [...npm.args, 'pack', '--pack-destination', workdir], { cwd: fileURLToPath(ROOT), maxBuffer: 16 * 1024 * 1024, env })
+    })
     const tarball = (await (await import('node:fs/promises')).readdir(workdir)).find((name) => name.endsWith('.tgz'))
     assert.ok(tarball, 'npm pack 没有产出 tarball')
 
@@ -848,6 +1002,43 @@ test('every declared peer dependency is a real DSH package reference', async () 
  * 不必逐个列举（`^0.2.0-rc.1` 已含 `0.2.0`…`0.2.x`）。
  */
 const SUPPORTED_DSH_RUNTIMES = ['0.1.7-rc.2', '0.1.7', '0.2.0-rc.1']
+
+test('用 DSH **自己**的兼容判定跑一遍：受支持的三条线都不禁用，0.3 线明确禁用', async (t) => {
+  // 上面那条测试用的是我们自己重写的 `semver.satisfies` 判据。这一条换成
+  // **DSH 真的会调用的那个函数**（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility`）：
+  // `dsh-app-boot` 在加载 profile 的每个 bundle 时就是用它判定的，判定不过**直接抛错**，
+  // 表现是「插件装上了但整行被跳过 / 被标 disabled」。这么测才能覆盖它自己的额外规则
+  // （`identityField` 对 name/version 的校验、`workspace:` 区间的特判、exemptions 形状）。
+  //
+  // `compat:dsh`（`scripts/check-dsh-compat.mjs`）比这多一步"每条线真装一遍"；那一步要么在 CI、
+  // 要么在装了 npm 的机器上跑，本机跑不了。这里覆盖的是**判定本身**。
+  let boot
+  try {
+    boot = await import('@deepseek-ai/dsh-app-boot')
+  } catch (error) {
+    // 拿不到 DSH 自己的包时显式 skip（不是静默通过）：它由 DSH 运行时提供，
+    // 本仓只是碰巧通过传递依赖看得到它。
+    void error
+    t.skip('本机解析不到 @deepseek-ai/dsh-app-boot：这条判定改由 CI 的 plugin 矩阵覆盖')
+    return
+  }
+  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
+  for (const runtime of SUPPORTED_DSH_RUNTIMES) {
+    const issue = boot.evaluatePluginCompatibility(pkg, {}, runtime)
+    assert.equal(issue, undefined,
+      `DSH ${runtime} 会把本插件判为不兼容：${issue === undefined ? '' : JSON.stringify(issue)}`)
+  }
+  // 反向：声明区间之外的线必须被判不兼容，而且**两个新 peer 也要在名单里**
+  //（只写 `>=0.1.7` 这种手滑会顺带放行还没验证过的 0.3 线）。
+  const outOfRange = boot.evaluatePluginCompatibility(pkg, {}, '0.3.0-rc.1')
+  assert.notEqual(outOfRange, undefined, '0.3.0-rc.1 必须被判为不兼容')
+  const peers = Object.keys(outOfRange?.peers ?? {})
+  assert.equal(peers.includes('@deepseek-ai/dsh-sandbox-policy'), true, '子项目 C 新增的 peer 也要被判')
+  assert.equal(peers.includes('@deepseek-ai/dsh-user-approval'), true, '子项目 C 新增的 peer 也要被判')
+  // 装到的这一条线本身必须是受支持集合里的（否则上面那些断言没意义）。
+  assert.equal(SUPPORTED_DSH_RUNTIMES.includes(boot.getDshRuntimeVersion()), true,
+    `当前装到的 DSH 运行时是 ${boot.getDshRuntimeVersion()}，不在声明支持的集合里`)
+})
 
 test('peer 区间必须覆盖每一条我们声明支持的 DSH 运行时线（否则装上去直接被禁用）', async () => {
   const { satisfies, validRange } = await import('semver')

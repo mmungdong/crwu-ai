@@ -16,12 +16,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { DEFAULT_MANIFEST } = await import(new URL('src/host/environment/manifest-default.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
 const {
   buildOssProbeCommand, probePackageIntegrity, packageIntegrityPaths,
-  probeOss, resolveOssutil, ossutilMissingMessage, serviceChecks,
+  probeOss: probeOssRaw, resolveOssutil, ossutilMissingMessage, serviceChecks,
 } = await import(new URL('src/host/environment/probe.ts', ROOT).href)
 // 引用与命令位置已经集中到 `platform/shell.ts`：这里的断言随实现一起搬过去，
 // 表格化的逐字断言在 `tests/unit/host-platform-shell.test.mjs` 里更全。
@@ -323,6 +324,20 @@ test('resolveOssutil 在文件服务不可用时说「无法核对」，不说�
 /** 包内 ossutil 就绪的 ctx（OSS 实测的前置条件）。 */
 const withBundledOssutil = (...rest) => ctxOf(packagedFs(), ...rest)
 
+/**
+ * `probeOss` 的包装：注入真 Broker。
+ *
+ * 协议 18 起 `probeOss` 必须经 Broker 执行（每一次 `ossutil` 都会读 `~/.ossutilconfig`），
+ * 所以每个调用点都要给出"操作 + 来源"这条链路。包一层比改 10 个调用点更不容易漏 ——
+ * 而且**策略仍走真实代码**，替身只负责"世界"。
+ */
+const probeOss = (ctx, oss, platform = 'darwin-arm64', options = {}) =>
+  probeOssRaw(ctx, oss, platform, { access: makeTestAccess(ctx).access, ...options })
+
+/** writeIfindSecret / clearIfindSecret 的 Broker（home 必须与调用一致：目标路径要逐字对上）。 */
+const ifindAccess = (ctx, home) => makeTestAccess(ctx, { home }).access
+
+
 test('probeOss refuses to probe without enabled/bucket/ossutil', async () => {
   const idle = withBundledOssutil(shellStub().ctx)
   const disabled = await probeOss(idle, { ...DEFAULT_MANIFEST.oss, enabled: false }, 'darwin-arm64')
@@ -489,7 +504,7 @@ test('凭据文件落在插件状态目录，不在技能目录、也不在插�
 test('readIfindSecret 读配置字段、写回后能再读出来（明文只在 Host 内部）', async () => {
   const path = ifindCredentialPath('/Users/x')
   const fs = fsStub({ files: { [path]: '{"auth_token":"abcdefghij"}' }, infos: { [path]: { type: 'file' } } })
-  const check = await readIfindSecret({ get: (name) => fs.get(name) }, '/Users/x')
+  const check = await readIfindSecret({ get: (name) => fs.get(name) }, '/Users/x', { access: ifindAccess({ get: (name) => fs.get(name) }, '/Users/x') })
   assert.equal(check.ok, true)
   assert.equal(check.secret, 'abcdefghij')
   assert.equal(check.view.length, 10)
@@ -498,23 +513,23 @@ test('readIfindSecret 读配置字段、写回后能再读出来（明文只在 
 })
 
 test('readIfindSecret 解释未配置 / 坏 JSON / 占位符 / 无 fs', async () => {
-  const missing = await readIfindSecret({ get: (name) => fsStub({}).get(name) }, '/Users/x')
+  const missing = await readIfindSecret({ get: (name) => fsStub({}).get(name) }, '/Users/x', { access: ifindAccess({ get: (name) => fsStub({}).get(name) }, '/Users/x') })
   assert.equal(missing.ok, false)
   assert.equal(missing.state, 'unconfigured')
   assert.match(missing.reason, /还没有保存/)
 
   const path = ifindCredentialPath('/Users/x')
   const badFs = fsStub({ files: { [path]: '{oops' }, infos: { [path]: { type: 'file' } } })
-  const badJson = await readIfindSecret({ get: (name) => badFs.get(name) }, '/Users/x')
+  const badJson = await readIfindSecret({ get: (name) => badFs.get(name) }, '/Users/x', { access: ifindAccess({ get: (name) => badFs.get(name) }, '/Users/x') })
   assert.equal(badJson.state, 'invalid')
   assert.match(badJson.reason, /不是合法 JSON/)
 
   const placeholderFs = fsStub({ files: { [path]: '{"auth_token":"your ifind-mcp key"}' }, infos: { [path]: { type: 'file' } } })
-  const placeholder = await readIfindSecret({ get: (name) => placeholderFs.get(name) }, '/Users/x')
+  const placeholder = await readIfindSecret({ get: (name) => placeholderFs.get(name) }, '/Users/x', { access: ifindAccess({ get: (name) => placeholderFs.get(name) }, '/Users/x') })
   assert.equal(placeholder.state, 'invalid')
   assert.match(placeholder.reason, /占位符/)
 
-  const noFs = await readIfindSecret({ get: () => undefined }, '/Users/x')
+  const noFs = await readIfindSecret({ get: () => undefined }, '/Users/x', { access: ifindAccess({ get: () => undefined }, '/Users/x') })
   assert.equal(noFs.state, 'unreachable')
   assert.match(noFs.reason, /文件服务不可用/)
 })
@@ -522,7 +537,7 @@ test('readIfindSecret 解释未配置 / 坏 JSON / 占位符 / 无 fs', async ()
 test('空值 / 占位符 / 首尾空白 / 换行在**写盘之前**就被拒绝（不留坏文件）', async () => {
   for (const bad of ['', '   ', 'your ifind-mcp key', ' abcdefgh', 'abcdefgh\n']) {
     const ctx = asShellCtx(fsStub({}), { runs: true })
-    const result = await writeIfindSecret(ctx, '/Users/x', bad, { platform: 'darwin-arm64' })
+    const result = await writeIfindSecret(ctx, '/Users/x', bad, { platform: 'darwin-arm64', access: ifindAccess(ctx, '/Users/x') })
     assert.equal(result.ok, false, JSON.stringify(bad))
     assert.equal(result.errorKind, 'input', JSON.stringify(bad))
     assert.deepEqual(ctx.written, [], `坏值不得触发任何写盘：${JSON.stringify(bad)}`)
@@ -532,24 +547,38 @@ test('空值 / 占位符 / 首尾空白 / 换行在**写盘之前**就被拒绝�
 test('写入失败与权限设置失败都要如实上报（不假装成功、也不删掉已保存的凭据）', async () => {
   // ① 写盘抛错 → infrastructure。
   const failing = fsStub({ failWrite: true })
-  const writeFailed = await writeIfindSecret(asShellCtx(failing, { runs: true }), '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  const writeFailed = await writeIfindSecret(asShellCtx(failing, { runs: true }), '/Users/x', 'abcdefgh', { platform: 'darwin-arm64', access: ifindAccess(asShellCtx(failing, { runs: true }), '/Users/x') })
   assert.equal(writeFailed.ok, false)
   assert.equal(writeFailed.errorKind, 'infrastructure')
   assert.match(writeFailed.error, /写入/)
 
-  // ② chmod 失败 → 凭据仍然保存成功，但权限结论必须是 failed + 原因带出来。
+  // ② chmod 失败 → **不算保存成功**（协议 18 收紧口径，P-09/M-04）。
+  //
+  // 旧口径是"文件写下去了就算保存成功，只把权限结论标 failed"——但员工看到的是
+  // 「已保存」，而凭据其实没被保护住。现在顶层 `ok:false` + `errorKind:'policy'`，
+  // 已写入的事实与权限原因一起带回来（文件不删：删掉会让员工白填一次）。
   const ctx = asShellCtx(fsStub({}), { failOn: 'chmod 600', error: 'chmod: Operation not permitted' })
-  const chmodFailed = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
-  assert.equal(chmodFailed.ok, true, '权限没收紧不该作废已保存的凭据')
+  const chmodFailed = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64', access: ifindAccess(ctx, '/Users/x') })
+  assert.equal(chmodFailed.ok, false, '权限没生效就不是保存成功')
+  assert.equal(chmodFailed.errorKind, 'policy')
   assert.equal(chmodFailed.permission.status, 'failed')
   assert.equal(chmodFailed.permission.mechanism, 'posix-0600')
   assert.match(chmodFailed.permission.message, /Operation not permitted/)
+  assert.match(chmodFailed.error, /权限/)
   assert.equal(ctx.written.length, 1, '文件确实写下去了')
+
+  // ③ Windows 的 `inherited / windows-acl` 按设计成立，不算失败。
+  const winCtx = asShellCtx(fsStub({}), { runs: true, platform: 'win32-x64' })
+  const winResult = await writeIfindSecret(winCtx, 'C:\\Users\\x', 'abcdefgh', {
+    platform: 'win32-x64', access: ifindAccess(winCtx, 'C:\\Users\\x'),
+  })
+  assert.equal(winResult.ok, true, JSON.stringify(winResult))
+  assert.equal(winResult.permission.status, 'inherited')
 })
 
 test('成功保存：文件内容只有那一个字段、权限收紧到 0600、并回脱敏视图', async () => {
   const ctx = asShellCtx(fsStub({}), { runs: true })
-  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64' })
+  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { platform: 'darwin-arm64', access: ifindAccess(ctx, '/Users/x') })
   assert.equal(result.ok, true)
   assert.deepEqual(result.permission, { status: 'verified', mechanism: 'posix-0600', message: '' })
   assert.equal(result.mode, 'file')
@@ -566,11 +595,11 @@ test('成功保存：文件内容只有那一个字段、权限收紧到 0600、
 
 test('清除凭据走显式命令，失败要如实报', async () => {
   const ok = asShellCtx(fsStub({}), { runs: true })
-  assert.equal((await clearIfindSecret(ok, '/Users/x', { platform: 'darwin-arm64' })).ok, true)
+  assert.equal((await clearIfindSecret(ok, '/Users/x', { platform: 'darwin-arm64', access: ifindAccess(ok, '/Users/x') })).ok, true)
   assert.equal(ok.commands.some((command) => command.startsWith('rm -f ')), true)
 
   const down = asShellCtx(fsStub({}), { runs: false, error: 'no sandbox backend' })
-  const failed = await clearIfindSecret(down, '/Users/x', { platform: 'darwin-arm64' })
+  const failed = await clearIfindSecret(down, '/Users/x', { platform: 'darwin-arm64', access: ifindAccess(down, '/Users/x') })
   assert.equal(failed.ok, false)
   assert.equal(failed.errorKind, 'infrastructure')
 })
@@ -580,7 +609,7 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
   // 前缀匹配 -Force 与 -Filter（「参数名不明确」）—— 三条在 PowerShell 里都会失败。
   const ctx = asShellCtx(fsStub({}), { runs: true })
   const home = 'C:\\Users\\x'
-  const result = await writeIfindSecret(ctx, home, 'abcdefgh', { platform: 'win32-x64' })
+  const result = await writeIfindSecret(ctx, home, 'abcdefgh', { platform: 'win32-x64', access: ifindAccess(ctx, home) })
   assert.equal(result.ok, true)
   assert.equal(result.mode, 'file')
   assert.equal(ctx.commands.some((command) => command.includes('chmod')), false, 'Windows 不得执行 chmod')
@@ -595,7 +624,7 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
     status: 'inherited', mechanism: 'windows-acl', message: '使用当前 Windows 账户 ACL；POSIX 0600 不适用',
   })
 
-  await clearIfindSecret(ctx, home, { platform: 'win32-x64' })
+  await clearIfindSecret(ctx, home, { platform: 'win32-x64', access: ifindAccess(ctx, home) })
   const remove = ctx.commands.find((command) => command.startsWith('if (Test-Path -LiteralPath ')) ?? ''
   assert.notEqual(remove, '', `删除必须是 PowerShell 幂等写法：${ctx.commands.join(' | ')}`)
   assert.match(remove, /-ErrorAction Stop \}$/, '真实失败必须能传播（不能 SilentlyContinue）')
@@ -606,14 +635,14 @@ test('Windows 上没有 mkdir -p / chmod / rm -f：换成 PowerShell 的等价�
 test('Windows 上凭据落盘本身失败仍是操作失败（权限结论不得掩盖它）', async () => {
   // ① 建目录失败（目录不存在又报错）→ infrastructure，且权限结论是 failed。
   const mkdirDown = asShellCtx(fsStub({}), { runs: false, error: 'Access is denied' })
-  const dirFailed = await writeIfindSecret(mkdirDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64' })
+  const dirFailed = await writeIfindSecret(mkdirDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64', access: ifindAccess(mkdirDown, 'C:\\Users\\x') })
   assert.equal(dirFailed.ok, false, '目录没建出来就不是成功')
   assert.equal(dirFailed.errorKind, 'infrastructure')
   assert.equal(dirFailed.permission.status, 'failed')
 
   // ② 写盘抛错 → infrastructure；权限结论同样是 failed（不是 inherited）。
   const writeDown = asShellCtx(fsStub({ failWrite: true }), { runs: true })
-  const writeFailed = await writeIfindSecret(writeDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64' })
+  const writeFailed = await writeIfindSecret(writeDown, 'C:\\Users\\x', 'abcdefgh', { platform: 'win32-x64', access: ifindAccess(writeDown, 'C:\\Users\\x') })
   assert.equal(writeFailed.ok, false)
   assert.equal(writeFailed.errorKind, 'infrastructure')
   assert.equal(writeFailed.permission.status, 'failed')
@@ -621,14 +650,14 @@ test('Windows 上凭据落盘本身失败仍是操作失败（权限结论不得
 
   // ③ 清除失败 → 仍然是操作失败。
   const clearDown = asShellCtx(fsStub({}), { runs: false, error: 'file is locked' })
-  const cleared = await clearIfindSecret(clearDown, 'C:\\Users\\x', { platform: 'win32-x64' })
+  const cleared = await clearIfindSecret(clearDown, 'C:\\Users\\x', { platform: 'win32-x64', access: ifindAccess(clearDown, 'C:\\Users\\x') })
   assert.equal(cleared.ok, false)
   assert.equal(cleared.errorKind, 'infrastructure')
 })
 
 test('未知平台时不猜权限机制，写盘直接拒绝', async () => {
   const ctx = asShellCtx(fsStub({}), { runs: true })
-  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', {})
+  const result = await writeIfindSecret(ctx, '/Users/x', 'abcdefgh', { access: ifindAccess(ctx, '/Users/x') })
   assert.equal(result.ok, false)
   assert.equal(result.permission.status, 'failed')
   assert.match(result.error, /未知平台/)

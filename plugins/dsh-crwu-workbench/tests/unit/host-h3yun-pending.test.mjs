@@ -6,8 +6,12 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { missingConsent } from '../helpers/local-access-fixture.mjs'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+const accessOf = (ctx) => makeTestAccess(ctx).access
+const makeUnauthorizedAccess = (ctx) => makeTestAccess(ctx, { consent: missingConsent() }).access
 
 const { loadPending } = await import(new URL('src/host/h3yun/pending.ts', ROOT).href)
 const { H3yunFormResolver } = await import(new URL('src/host/h3yun/form.ts', ROOT).href)
@@ -25,7 +29,7 @@ function formOf(shell, state) {
     ctx: shell.ctx,
     config: CONFIG,
     state,
-    trusted: () => true,
+    access: accessOf(shell.ctx),
     platform: async () => 'darwin-arm64',
     workdir: async () => '/cases/session',
   })
@@ -34,7 +38,7 @@ function formOf(shell, state) {
 function stateOf(patch = {}) {
   return {
     caseRoot: '/cases', workspacePath: '', workspaceTitle: '', workspaceSource: '', workspaceChosen: false,
-    parentSessionId: '', trustCredentials: false, formCode: '', formName: '', audits: {},
+    parentSessionId: '', localAccess: missingConsent(), formCode: '', formName: '', audits: {},
     activeKey: '', activeChildId: '', activeSince: 0, ...patch,
   }
 }
@@ -79,7 +83,7 @@ function rowsJson(rows, total) {
 
 test('discoverForm reports the located form code', async () => {
   const shell = shellStub(() => ({ stdout: FORMS_JSON }))
-  const found = await discoverForm(shell.ctx, '报告审核', { trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' })
+  const found = await discoverForm(shell.ctx, '报告审核', { access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session' })
   assert.equal(found.ok, true)
   assert.equal(found.code, 'FORM-1')
   assert.equal(found.name, '报告审核')
@@ -89,21 +93,32 @@ test('discoverForm reports the located form code', async () => {
 
 test('discoverForm explains a failed search and a missing form differently', async () => {
   const failed = shellStub(() => ({ exitCode: 1, stderr: 'not logged in' }))
-  const bad = await discoverForm(failed.ctx, '报告审核', { trusted: true, sessionRoot: async () => '/cases/session' })
+  const bad = await discoverForm(failed.ctx, '报告审核', { access: accessOf(failed.ctx), sessionRoot: async () => '/cases/session' })
   assert.equal(bad.ok, false)
   assert.match(bad.error, /not logged in/)
 
   const noForm = shellStub(() => ({ stdout: JSON.stringify({ data: { returnData: [{ displayName: '别的', nodeType: '999' }] } }) }))
-  const missing = await discoverForm(noForm.ctx, '报告审核', { trusted: true, sessionRoot: async () => '/cases/session' })
+  const missing = await discoverForm(noForm.ctx, '报告审核', { access: accessOf(noForm.ctx), sessionRoot: async () => '/cases/session' })
   assert.equal(missing.ok, false)
   assert.match(missing.error, /未在氚云定位到表单/)
 })
 
-test('discoverForm surfaces that escalation is available when the keychain blocked it', async () => {
+test('未允许本机访问时提示"去允许"，而不是发一条注定读到假结论的命令', async () => {
+  // 旧形态是"发一条不提权的命令、拿到 keychain 报错、再提示去授权"。协议 18 起更直接：
+  // 没允许就**不发命令**，`escalateAvailable` 就是"界面该把员工带回授权卡"。
   const shell = shellStub(() => ({ exitCode: 1, stderr: 'failed to access credential store' }))
-  const found = await discoverForm(shell.ctx, '报告审核', { trusted: false, sessionRoot: async () => '/cases/session' })
-  assert.equal(found.ok, false)
-  assert.equal(found.escalateAvailable, true)
+  const denied = await discoverForm(shell.ctx, '报告审核', {
+    access: makeUnauthorizedAccess(shell.ctx), sessionRoot: async () => '/cases/session',
+  })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.escalateAvailable, true)
+  assert.deepEqual(shell.commands, [], '未允许时一个进程都不起')
+
+  // 已经允许之后，钥匙串失败就是**真的失败**：不该再劝员工去点一次"允许"。
+  const allowed = await discoverForm(shell.ctx, '报告审核', { access: accessOf(shell.ctx), sessionRoot: async () => '/cases/session' })
+  assert.equal(allowed.ok, false)
+  assert.match(allowed.error, /credential store/)
+  assert.equal(allowed.escalateAvailable, false)
 })
 
 // ── 列表 ────────────────────────────────────────────────────────────────────
@@ -111,7 +126,7 @@ test('discoverForm surfaces that escalation is available when the keychain block
 test('loadPending locates the form once and then reuses its code', async () => {
   const shell = shellStub((command) => (command.includes('forms search') ? { stdout: FORMS_JSON } : { stdout: rowsJson([{ ObjectId: 'obj-1', Name: 'X' }], 1) }))
   const state = stateOf()
-  const deps = { ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
+  const deps = { ctx: shell.ctx, state, access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
 
   const first = await loadPending(deps, {})
   assert.equal(first.ok, true)
@@ -128,7 +143,7 @@ test('loadPending locates the form once and then reuses its code', async () => {
 test('loadPending passes the filter only when the query is usable', async () => {
   const shell = shellStub(() => ({ stdout: rowsJson([], 0) }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const deps = { ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
+  const deps = { ctx: shell.ctx, state, access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
 
   await loadPending(deps, { query: '2026-301705-LX10170' })
   assert.match(shell.commands[0], /--filter 'SeqNo Equal '\\''2026-301705-LX10170'\\'''/)
@@ -143,7 +158,7 @@ test('loadPending passes the filter only when the query is usable', async () => 
 test('loadPending clamps page/size and never sends NaN', async () => {
   const shell = shellStub(() => ({ stdout: rowsJson([], 0) }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const deps = { ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
+  const deps = { ctx: shell.ctx, state, access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }
 
   const clamped = await loadPending(deps, { page: -5, size: 9999 })
   assert.equal(clamped.page, 1)
@@ -159,14 +174,14 @@ test('loadPending clamps page/size and never sends NaN', async () => {
 test('loadPending requests the big stdout budget so a full page is not truncated', async () => {
   const shell = shellStub(() => ({ stdout: rowsJson([], 0) }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  await loadPending({ ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, {})
+  await loadPending({ ctx: shell.ctx, state, access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, {})
   assert.equal(shell.specs[0].stdoutMaxBytes, RECORDS_STDOUT_MAX)
 })
 
 test('loadPending reports a truncated/failed payload with the CLI reason, not an empty list', async () => {
   const shell = shellStub(() => ({ exitCode: 0, stdout: '{"data":{"returnData":[', truncated: true }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const result = await loadPending({ ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, {})
+  const result = await loadPending({ ctx: shell.ctx, state, access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, {})
   assert.equal(result.ok, false)
   assert.equal(result.rows.length, 0)
   assert.ok(result.error.length > 0, '必须带出原因，否则界面会显示「没有待办」')
@@ -180,7 +195,7 @@ test('loadPending returns the total and rows from a successful page', async () =
     ], 37),
   }))
   const state = stateOf({ formCode: 'FORM-1', formName: '报告审核' })
-  const result = await loadPending({ ctx: shell.ctx, state, trusted: true, platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, { page: 2, size: 20 })
+  const result = await loadPending({ ctx: shell.ctx, state, access: accessOf(shell.ctx), platform: 'darwin-arm64', sessionRoot: async () => '/cases/session', form: formOf(shell, state) }, { page: 2, size: 20 })
   assert.equal(result.ok, true)
   assert.equal(result.total, 37)
   assert.equal(result.rows.length, 2)

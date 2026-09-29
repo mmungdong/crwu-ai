@@ -11,6 +11,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+const { grantedConsent, missingConsent } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
 
 const { reportFiles } = await import(new URL('src/host/report/files.ts', ROOT).href)
 const { manifestFixture } = await import(new URL('tests/helpers/manifest-fixture.mjs', ROOT).href)
@@ -79,6 +81,9 @@ function deps(patch = {}) {
             const p = String(parent.displayPath).replace(/[\\/]+$/, '')
             const c = String(child.displayPath).replace(/[\\/]+$/, '')
             return c === p || c.startsWith(`${p}/`)
+                    // 两种分隔符都要认：真实 `fs.contains` 是**规范化**比较（Windows 路径不在少数），
+                    // 夹具只认 `/` 会让 Windows 用例假红、或掩盖真实行为。
+                    || c.startsWith(`${p}\\`)
           },
         }
       }
@@ -91,15 +96,18 @@ function deps(patch = {}) {
       ctx,
       oss: {
         ctx,
+        access: makeTestAccess(ctx, { home: '/tmp/home' }).access,
+        // 协议 18：`OssDeps` 逐次说明"谁发起的"；report-files 是面板操作。
+        source: 'panel',
         manifest: manifest(),
         platform: 'darwin-arm64',
         workdir: async () => '/tmp',
         home: '/tmp/home',
       },
       workspacePath: () => patch.workspacePath ?? '/ws/中瑞世联工作空间',
-      // 氚云那一路：表单 code + 授权状态（没授权就不该去读钥匙串）。
+      // 氚云那一路：表单 code + 授权收据（没允许就不该去读钥匙串）。
       formCode: () => patch.formCode ?? 'Srabfcm8figc1xuzxawc5u04x5',
-      trusted: patch.trusted !== false,
+      access: makeTestAccess(ctx, { home: '/tmp/home', consent: patch.trusted === false ? missingConsent() : grantedConsent() }).access,
       platform: 'darwin-arm64',
       workdir: async () => '/tmp',
     },
@@ -212,14 +220,14 @@ test('report-files：没选工作空间时本地部分为空，但云端照常�
   assert.equal(result.oss.length, 1, '工作空间没选不该把云端那半也丢掉')
 })
 
-test('report-files：没授权就不去读氚云（不假装"没有附件"）', async () => {
+test('report-files：没允许本机访问就不去读氚云（不假装"没有附件"）', async () => {
   const harness = deps({ trusted: false, dirs: {} })
   const result = await reportFiles(harness.value, { seqNo: SEQ, objectId: '5f6924e2-f722-4477-9d34-d52aa855a1ad' })
   assert.deepEqual(result.h3yun, [])
-  assert.match(result.h3yunError, /授权/, '要说清是"还没授权"，而不是"没有附件"')
+  assert.match(result.h3yunError, /允许/, '要说清是"还没允许工作台访问本机账号和配置"，而不是"没有附件"')
   assert.equal(
     harness.commands.some((command) => /files list/.test(command)), false,
-    '没授权时不该去读钥匙串（那条命令问出来的"没登录"是假的）',
+    '没允许时不该去读钥匙串（那条命令问出来的"未登录"是假的）',
   )
 })
 

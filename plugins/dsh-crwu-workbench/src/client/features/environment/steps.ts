@@ -1,6 +1,7 @@
 import { zhCN } from '../../locales/zh-CN.ts'
 import type { EnvResult } from '../report-audit/api.ts'
 import type { SetupItemView } from '../../../shared/environment/model.ts'
+import { consentGranted } from './local-access.ts'
 
 /**
  * 环境页的**步骤模型**（纯逻辑，可单测）。
@@ -56,7 +57,8 @@ const MISSING: SetupItemView = { state: 'unknown', value: '', reason: '', requir
 export function setupStepInput(env: EnvResult, authorized: boolean | undefined): SetupStepInput {
   const setup = env.state?.userSetup
   return {
-    authorized: authorized ?? env.trust.credentials,
+    // 授权判据来自 Host 的收据视图（`env.localAccess`），不是「有没有凭据 / 是不是登录过」。
+    authorized: authorized ?? consentGranted(env),
     h3yun: setup?.h3yun ?? MISSING,
     dingtalk: setup?.dingtalk ?? MISSING,
     oss: setup?.aliyunOss ?? MISSING,

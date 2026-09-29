@@ -4,6 +4,7 @@ import { isSafeSeqNo } from '../../shared/consts.ts'
 import { text } from '../../shared/utils/value.ts'
 import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { runCrwu } from '../crwu/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { ossIndex, type OssDeps } from '../oss/ops.ts'
@@ -90,8 +91,8 @@ export interface ReportFilesDeps {
   workspacePath: () => string
   /** 氚云表单 code（`records list` 用的同一个；空串 = 还没解析出来）。 */
   formCode: () => string
-  /** 用户是否已授权读本机凭据（与 `pending` 同一条纪律：没授权就不去读钥匙串）。 */
-  trusted: boolean
+  /** Broker（协议 18）：附件清单要读氚云，走 `h3yun.files.read`（与 `pending` 同一条纪律）。 */
+  access: LocalAccessBroker
   platform: string
   workdir: () => Promise<string>
 }
@@ -186,8 +187,9 @@ export async function reportFiles(deps: ReportFilesDeps, args: Record<string, un
   let h3yunError = ''
   const formCode = deps.formCode()
   if (objectId !== '') {
-    if (!deps.trusted) {
-      h3yunError = '还没授权读取本机凭据（授权后这里会列出氚云上的全部附件）'
+    if (deps.access.consent().state !== 'granted') {
+      // 未允许本机访问时**不去问氚云**：受限沙箱下只会问出一个假的"没登录"。
+      h3yunError = '还没允许工作台访问本机账号和配置（允许后这里会列出氚云上的全部附件）'
     } else if (formCode === '') {
       h3yunError = '还没解析出氚云表单 code，无法列附件'
     } else {
@@ -196,7 +198,8 @@ export async function reportFiles(deps: ReportFilesDeps, args: Record<string, un
       ], {
         workdir: await deps.workdir(),
         timeoutMs: 90_000,
-        trusted: deps.trusted,
+        access: deps.access,
+        source: 'panel',
         platform: deps.platform,
         stdoutMaxBytes: 4 * 1024 * 1024,
       })

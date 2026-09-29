@@ -10,6 +10,7 @@
 import { gt, valid } from 'semver'
 
 import { readWorkbenchConfigResult, writeWorkbenchConfig } from '../state/persist.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import type { ConfigRead } from '../state/persist.ts'
 import type { PersistedPluginUpdate, PluginUpdateStore } from './types.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -160,10 +161,10 @@ export function createPluginUpdateStore(io: PluginUpdateIo): PluginUpdateStore {
  *
  * 复用现有合并写入，不给状态文件开第二条写路径。
  */
-export function pluginUpdateStoreOf(ctx: Context, home: string): PluginUpdateStore {
+export function pluginUpdateStoreOf(ctx: Context, home: string, access: LocalAccessBroker): PluginUpdateStore {
   return createPluginUpdateStore({
     readConfig: () => readWorkbenchConfigResult(ctx, home),
-    writeConfig: (patch) => writeWorkbenchConfig(ctx, home, patch),
+    writeConfig: (patch) => writeWorkbenchConfig({ ctx, home, access }, patch),
   })
 }
 
@@ -173,9 +174,13 @@ export function pluginUpdateStoreOf(ctx: Context, home: string): PluginUpdateSto
  * 所以这里拿的是 provider 而不是字符串 —— 既不在模块加载时猜 home，也不把 `apply()` 变成
  * 阻塞磁盘/网络的异步入口；真正读盘时（恢复、安装前落盘）才去问一次，`WorldFacts` 自己缓存。
  */
-export function pluginUpdateStoreFor(ctx: Context, home: () => Promise<string>): PluginUpdateStore {
+export function pluginUpdateStoreFor(
+  ctx: Context,
+  home: () => Promise<string>,
+  access: LocalAccessBroker,
+): PluginUpdateStore {
   return createPluginUpdateStore({
     readConfig: async () => readWorkbenchConfigResult(ctx, await home()),
-    writeConfig: async (patch) => writeWorkbenchConfig(ctx, await home(), patch),
+    writeConfig: async (patch) => writeWorkbenchConfig({ ctx, home: await home(), access }, patch),
   })
 }

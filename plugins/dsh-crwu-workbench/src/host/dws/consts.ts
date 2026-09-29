@@ -1,3 +1,5 @@
+import type { LocalAccessOperation } from '../access/operations.ts'
+
 /**
  * `dws`（钉钉工作台 CLI）在自研审核链路里被允许使用的**命令白名单**。
  *
@@ -22,6 +24,8 @@
 export const DWS_ALLOWED_PREFIXES: readonly (readonly string[])[] = [
   ['auth', 'status'],
   ['auth', 'login'],
+  // 只读健康检查（子项目 D2）：读 `~/.dws` 与钥匙串状态，不写、不改。
+  ['doctor'],
   ['profile', 'list'],
   ['wiki', '+space-list'],
   ['wiki', '+space-search'],
@@ -45,16 +49,37 @@ export const DWS_ALLOWED_PREFIXES: readonly (readonly string[])[] = [
 ] as const
 
 /**
- * 允许申请无沙箱执行（`sandboxPolicy: danger-full-access`）的命令前缀。
+ * 白名单前缀 → 本机访问操作（协议 18）。
  *
- * 判据只有一条：**这条命令必须读本机凭据（钥匙串 / 本机 dws profile）才能工作** ——
- * 受限沙箱下读不到 token，`dws` 会如实回「未登录」，那是**假结论**。所以这一层与插件既有的
- * 「读本机凭据的命令才提权」口径同源，不是新增权限类别。
- *
- * 提权还额外要求 `trustCredentials` 已授权、`workspaceRoot` 已知（见 `runDws`）。
- * 白名单外的命令即使被误标也不提权（`runDws` 双重校验）。
+ * 与 `DWS_ALLOWED_PREFIXES` 放在同一个文件：**能跑什么**与**算哪一类本机访问**必须一起读，
+ * 分开放会漂移 —— 新增一个白名单前缀却忘了登记操作时，`runDws` 会拒绝它（默认拒绝），
+ * 而不是悄悄按"不需要凭据"跑一遍。
  */
-export const DWS_ESCALATION_PREFIXES: readonly (readonly string[])[] = DWS_ALLOWED_PREFIXES
+export const DWS_OPERATION_BY_PREFIX: readonly (readonly [readonly string[], LocalAccessOperation])[] = [
+  [['auth', 'status'], 'dws.auth.status'],
+  [['auth', 'login'], 'dws.auth.login'],
+  [['doctor'], 'dws.doctor.read'],
+  [['profile', 'list'], 'dws.profile.read'],
+  [['wiki', '+space-list'], 'dws.knowledge.read'],
+  [['wiki', '+space-search'], 'dws.knowledge.read'],
+  [['wiki', '+space-get'], 'dws.knowledge.read'],
+  [['wiki', '+node-list'], 'dws.knowledge.read'],
+  [['wiki', '+node-search'], 'dws.knowledge.read'],
+  [['wiki', '+node-get'], 'dws.knowledge.read'],
+  [['wiki', 'space', 'list'], 'dws.knowledge.read'],
+  [['doc', '+export'], 'dws.knowledge.read'],
+  [['drive', '+download'], 'dws.drive.read'],
+  [['drive', '+list'], 'dws.drive.read'],
+  [['drive', '+inspect'], 'dws.drive.read'],
+  [['drive', '+create-folder'], 'dws.drive.write'],
+  [['drive', '+upload'], 'dws.drive.write'],
+  [['contact', 'user', 'get-self'], 'dws.contact.read'],
+  [['aisearch', 'person'], 'dws.contact.read'],
+  // 会话类命令：发消息与读自己的会话记录同属"消息"能力（读也只读员工自己的会话）。
+  [['chat', '+messages-send'], 'dws.message.write'],
+  [['chat', '+chat-messages'], 'dws.message.write'],
+  [['ding', 'message', 'send-by-message'], 'dws.message.write'],
+]
 
 /** 结果回传区的固定目标：组织 / 团队空间 / 结果根目录（契约见技能 `13-dingtalk-result-publish.md`）。 */
 export const DINGTALK_TARGET = {

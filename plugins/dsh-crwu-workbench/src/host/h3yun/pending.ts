@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
 import { runCrwu, describeFailure } from '../crwu/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import { RECORDS_STDOUT_MAX } from './consts.ts'
 import type { H3yunFormResolver } from './form.ts'
@@ -34,7 +35,8 @@ export interface PendingResult {
 export interface PendingDeps {
   ctx: Context
   state: WorkbenchState
-  trusted: boolean
+  /** Broker（协议 18）：待审核列表要读氚云，走 `h3yun.records.read`。 */
+  access: LocalAccessBroker
   platform: string
   /** 显式 workdir；省略/空串时用会话工作目录（提权执行必须有它）。 */
   workdir?: string
@@ -94,8 +96,8 @@ export async function loadPending(deps: PendingDeps, args: Record<string, unknow
   const run = await runCrwu(ctx, argv, {
     ...(workdir === '' ? {} : { workdir }),
     timeoutMs: 90_000,
-    escalate: args.escalate === true,
-    trusted: deps.trusted,
+    access: deps.access,
+    source: 'panel',
     platform: deps.platform,
     stdoutMaxBytes: RECORDS_STDOUT_MAX,
   })

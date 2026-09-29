@@ -1,5 +1,6 @@
 import type { WorkbenchConfig } from '../config/config.ts'
 import { applyDeploymentConfig } from '../config/deployment.ts'
+import { missingLocalAccessView } from '../access/consent.ts'
 import { DEFAULT_MANIFEST } from '../environment/manifest-default.ts'
 import type { WorkspaceView } from '../../shared/types.ts'
 import type { WorkbenchState } from './types.ts'
@@ -19,9 +20,12 @@ export function createWorkbenchState(config: WorkbenchConfig): WorkbenchState {
     registryLoaded: false,
     startingKey: '',
     runs: {},
+    stopInFlight: {},
     parentSessionId: '',
-    auditRoot: { workspacePath: '', sessionId: '', title: '', assignedAt: '' },
-    trustCredentials: false,
+    auditRoot: { workspacePath: '', casePath: '', sessionId: '', title: '', assignedAt: '' },
+    // 授权收据的初值是 `missing`：在真正读一次磁盘之前**绝不**假定已授权。
+    // 启动时是它、`boot`/`env` 会立刻用真实读盘结果覆盖。
+    localAccess: missingLocalAccessView(),
     formCode: '',
     formName: '',
     audits: {},

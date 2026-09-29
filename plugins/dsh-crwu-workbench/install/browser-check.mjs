@@ -699,16 +699,109 @@ async function main() {
             return page.locator(`[data-crwu-env-step-panel="${id}"]`).first()
           }
 
-          // 账号连接：一次性授权**不使用模态层**，是这一步里可见的一行。
+          // 账号连接：本机访问授权**不使用模态层**，是这一步里的一张卡（协议 18 起逐条列范围）。
           const accounts = await pick('accounts')
           const consent = accounts.locator('[data-crwu-env-item="consent"]').first()
-          checks.that('授权是「账号连接」步骤里可见的一行（不是模态层）', await consent.count() > 0)
+          checks.that('授权卡在「账号连接」步骤里可见（不是模态层）', await consent.count() > 0)
           checks.that('页面上没有遮住整页的授权弹框', await page.locator('.crwu-audit-auth-mask').count() === 0)
           const accountsText = await accounts.innerText()
-          if (accountsText.includes('同意并继续')) {
-            checks.that('未授权时给「同意并继续」', accountsText.includes('同意并继续'))
+          const consentState = await consent.getAttribute('data-crwu-consent-state')
+          if (consentState === 'granted') {
+            checks.that('已允许后给出那句"已允许工作台访问本机账号和配置"',
+              accountsText.includes('已允许工作台访问本机账号和配置'))
+            checks.that('已允许时给出撤销入口（同意必须可撤销）', accountsText.includes('撤销授权'))
           } else {
-            checks.that('已授权后给出「已授权读取本机凭据」', accountsText.includes('已授权读取本机凭据'))
+            checks.that('未允许时给「允许并继续」', accountsText.includes('允许并继续'))
+            checks.that('未允许时给「暂不允许」', accountsText.includes('暂不允许'))
+            // 逐条列出这次允许覆盖的固定功能 —— 这是协议 18 的核心要求：
+            // 员工要知道自己同意了写 .ossutilconfig / .dws 这类事，而不是"信任本插件"一句话。
+            const scope = accounts.locator('[data-crwu-consent-scope="1"]')
+            checks.that('未允许时逐条列出授权范围', await scope.count() > 0)
+            if (await scope.count() > 0) {
+              const scopeItems = await scope.locator('li').count()
+              checks.that('授权范围是五项固定功能', scopeItems === 5, `实际 ${String(scopeItems)} 项`)
+              const scopeText = await scope.innerText()
+              for (const needle of ['.dws', '.ossutilconfig', 'crwu / dws / ossutil', 'H3Yun', 'API-Key']) {
+                checks.that(`授权范围里写明「${needle}」`, scopeText.includes(needle))
+              }
+            }
+          }
+          // 「钉钉本机目录」卡（协议 18 · 子项目 D）：
+          // 「修复权限」**只在确诊"本机文件权限问题"时**渲染 —— 设计 §D3 的界面硬规则。
+          //
+          // ⚠️ 体检**不是随时可跑的健康检查**（设计 §D2）：它只在"刚刚发生过一次可归因的 DWS 失败"
+          // 之后运行。所以这一段能接受的结论有**两种**：真的给出权限事实，或**按规定拒绝**
+          //（`还没有可以归因的 DWS 失败`）—— 除这两者之外的任何结果都算失败。
+          // 早先这里只断言"不再是未检查"，那种断言在体检彻底坏掉时**照样通过**（界面会显示别的错误），
+          // 是假绿（2026-09-29 复查）。
+          const dwsCard = accounts.locator('[data-crwu-dws-local="1"]').first()
+          checks.that('「钉钉本机目录」卡在「账号连接」里可见', await dwsCard.count() > 0)
+          if (await dwsCard.count() > 0) {
+            const cardText = await dwsCard.innerText()
+            checks.that('卡片给「检查本机目录」按钮', cardText.includes('检查本机目录'))
+            checks.that('没查过时不显示「修复权限」（不许给假希望）', !cardText.includes('修复权限'))
+            const checkButton = dwsCard.locator('button', { hasText: '检查本机目录' }).first()
+            if (await checkButton.count() > 0) {
+              await checkButton.click()
+              // 体检要跑一次 `dws doctor`（带网络检查）与几条只读命令，给足时间；
+              // 用**条件等待**而不是固定等待（固定等待在慢机器上会假红）。
+              await page.waitForFunction(
+                () => {
+                  const card = document.querySelector('[data-crwu-dws-local="1"]')
+                  return card !== null && !card.innerText.includes('未检查')
+                },
+                undefined, { timeout: 60_000 },
+              ).catch(() => {})
+              const afterText = await dwsCard.innerText()
+              // 真结论：卡片的口径文案（locale 里的几条），或"没查出确定结论"。
+              const factTexts = [
+                '可读写，正常', '当前账户改不了这个目录', '目录属于别的账户',
+                '锁文件（.data.lock）当前账户改不了', // 目录正常、锁文件单独不可写（原始报错常见形态）
+                '文件被别的程序占用', '系统钥匙串不允许访问', '还没有登录', '没查出确定结论',
+                '还没有在本机登录过',
+              ]
+              const documentedRefusal = '还没有可以归因的 DWS 失败'
+              const isFact = factTexts.some((text) => afterText.includes(text))
+              checks.that(
+                '体检点下去之后给出的是**真结论**或设计 §D2 的**规定性拒绝**（不是别的错误）',
+                !afterText.includes('未检查') && (isFact || afterText.includes(documentedRefusal)),
+                `实际：${afterText.slice(0, 160)}`,
+              )
+              // 兜底：`检查没有完成` 是"失败但没给出原因"的口径，那种情况必须报错。
+              checks.that('体检失败时必须给出原因（不许只说"检查没有完成"）',
+                !afterText.includes('检查没有完成'), `实际：${afterText.slice(0, 160)}`)
+              // 只读体检**不许**顺手发修复请求。
+              checks.that('只读体检不会发送权限修复', !ops.includes('dws-local-permission-repair'))
+            }
+          }
+          // 开发者诊断里要有「最近的本机访问」（协议 18 · B3）：验收 §11 要求的
+          // 操作名 / 来源 / 三个模式 / denied / runnerFailed / 进程是否起过，只有这里有出口。
+          const diagHead = page.locator('[data-crwu-env-diag="1"] button').first()
+          if (await diagHead.count() > 0) {
+            await diagHead.click()
+            await page.waitForTimeout(400)
+            const diagText = await page.locator('[data-crwu-env-diag="1"]').first().innerText()
+            checks.that('开发者诊断里有「最近的本机访问」', diagText.includes('最近的本机访问'))
+          }
+
+          // 未允许时客户端**不许**自己发授权操作：同意必须是员工点的。
+          checks.that('客户端不会自动发送本机访问授权', !ops.includes('local-access-grant') && !ops.includes('trust'),
+            ops.join(','))
+
+          // **A-04**：「暂不允许」是一次**纯客户端**动作 —— 一个 Host 请求都不发（不写状态、
+          // 不改任何本机状态）。它是"拒绝"这条路上的硬口径，所以用真实请求记录来断言，
+          // 而不是看源码里有没有 `await`。
+          const consentCard = page.locator('[data-crwu-env-item="consent"]').first()
+          const declineButton = consentCard.getByRole('button', { name: /暂不允许|不允许/ }).first()
+          if (await declineButton.count() > 0) {
+            const beforeDecline = [...ops]
+            await declineButton.click()
+            await page.waitForTimeout(600)
+            const afterDecline = ops.slice(beforeDecline.length)
+            checks.that('「暂不允许」不发任何 Host 请求（A-04：拒绝不产生本机变更）',
+              afterDecline.length === 0, afterDecline.join(','))
+            checks.that('「暂不允许」之后仍然没有授权',
+              !ops.includes('local-access-grant') && !ops.includes('local-access-revoke'), ops.join(','))
           }
           checks.that('账号步骤里给出氚云与钉钉', accountsText.includes('氚云') && accountsText.includes('钉钉'))
 

@@ -3,6 +3,7 @@ import { Button, Loading, LoadingBar, Notice } from '../../components/primitives
 import { CheckIcon, CopyIcon, DeepSeekIcon, RefreshIcon, SearchIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
+import { stopPresentationOf } from './stop-view.ts'
 import type { CloudItem } from '../../../shared/types.ts'
 import { isSafeSeqNo } from '../../../shared/consts.ts'
 import { Handoff } from '../workbench/Handoff.tsx'
@@ -109,6 +110,18 @@ export interface ReportPaneProps {
   onClearCloudSearch: () => void
   onEscalateRetry: () => void
   onHandoffCopied: (copied: boolean) => void
+  /**
+   * 界面本地记下的"我刚点过停止"的时刻（0 = 没点过）。
+   *
+   * 为什么要本地记：`audit-stop` 是两阶段的，第一次 `audit-status` 轮询回来之前
+   * （POLL 间隔 10 秒）界面必须已经显示「正在请求停止审核…」——
+   * 否则用户会以为点了没反应（F1 的 100ms 要求）。
+   */
+  stopRequestedAt?: number
+  /** 「继续等待」：只刷新状态，不再发起停止。 */
+  onRefreshStatus?: () => void
+  /** 「复制诊断」：把当前审核的停止诊断复制到剪贴板。 */
+  onCopyDiagnostics?: (key: string) => void
   handoffCopied: boolean
   /** 环境里选中的工作空间（讨论会话建在它下面，也写进注入给 AI 的报告事实里）。 */
   workspace: { id: string; path: string }
@@ -1068,18 +1081,58 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       : <Handoff task={state.handoff} copied={props.handoffCopied} onCopied={props.onHandoffCopied} />}
     {state.childAliveHint === '' ? null : <div className={C.muted}>{state.childAliveHint}</div>}
 
-    {state.activeKey === '' ? null : <Notice tone="warn">
-      {zhCN.activePrefix + state.activeKey + zhCN.activeSuffix}
-      <div className={C.row} style={{ marginTop: '6px' }}>
-        <Button label={zhCN.stopAudit} tone="warn" onClick={() => { props.onStop('') }} />
-        <span className={C.grow}>{zhCN.stopHint}</span>
-      </div>
-      {/*
-        「只释放占用（不停子会话）」按钮在 2026-09-20 按用户要求删掉了：他说用不到。
-        宿主侧的 `audit-release` 操作保留，但界面上不再提供 —— 它会把占用锁解开而子会话继续跑，
-        正是「两条子会话往同一个案例目录对写」那条闸门要拦的状态。
-      */}
-    </Notice>}
+    {state.activeKey === '' ? null : (() => {
+      // ── 当前审核摘要卡（F2/F3）────────────────────────────────────────────
+      // 位置很关键：它在**表格之外**，所以当前审核不在当前分页 / 筛选结果里时，
+      // 这张卡与「打开审核会话」入口依然可见（用户明确要求）。
+      const activeRecord = state.audits[state.activeKey]
+      const stop = stopPresentationOf({
+        stop: activeRecord?.stop,
+        requestedAt: props.stopRequestedAt ?? 0,
+        now: Date.now(),
+      })
+      const childId = activeRecord?.childId ?? ''
+      const canOpen = childId !== ''
+      // `Notice` 只支持 ok/warn 两种语气（不改它的 API）：阶段语义由文案表达，
+      // 成功态用 `ok`，其余（等待 / 超时 / 失败）用 `warn`。
+      return <Notice tone={stop.tone === 'success' ? 'ok' : 'warn'}>
+        <div className={C.row}>
+          <strong>{zhCN.currentAuditTitle}</strong>
+          <span className={C.grow}>{`${state.activeKey}${activeRecord?.project === undefined || activeRecord.project === '' ? '' : ` · ${activeRecord.project}`}`}</span>
+          <Button
+            label={canOpen ? zhCN.openAuditSession : zhCN.openAuditSessionPending}
+            onClick={() => { props.onOpenSession(state.activeKey) }}
+            disabled={!canOpen}
+            title={zhCN.openAuditSessionHint}
+          />
+        </div>
+        <div className={C.cellSub}>
+          {`${activeRecord?.status ?? ''}${activeRecord === undefined ? '' : ` · ${zhCN.currentAuditAttempt}${activeRecord.attempt}${zhCN.currentAuditAttemptSuffix}`}${activeRecord?.startedAt === undefined || activeRecord.startedAt === '' ? '' : ` · ${zhCN.currentAuditStarted}${formatDateTime(activeRecord.startedAt)}`}${childId === '' ? '' : ` · ${zhCN.currentAuditChildTail}${childId.slice(-8)}`}`}
+        </div>
+        {/* 阶段文案用 aria-live 播报：键盘焦点不动，屏幕阅读器也能听到阶段变化（F2）。
+            记录还没拿到（`audit-status` 首次返回前）时不渲染这一行 —— 那时说"宿主没回报"
+            只会让人以为部署有问题。 */}
+        <div className={C.row} style={{ marginTop: '6px' }}>
+          {/* 阶段文案用 aria-live 播报：键盘焦点不动，屏幕阅读器也能听到阶段变化（F2）。
+              记录还没拿到（`audit-status` 首次返回前）时不渲染这句 —— 那时说"宿主没回报"
+              只会让人以为部署有问题；但**停止按钮一直在**（占用锁在，用户必须能停）。 */}
+          {activeRecord === undefined
+            ? <span className={C.grow} />
+            : <span aria-live="polite" role="status" className={C.grow}>
+                {stop.label}
+                {stop.elapsedText === '' ? '' : ` · ${stop.elapsedText}`}
+                {stop.waitHint === '' ? '' : ` · ${stop.waitHint}`}
+              </span>}
+          <Button label={zhCN.stopAudit} tone="warn" onClick={() => { props.onStop('') }} disabled={stop.stopDisabled} />
+          {stop.actions.keepWaiting ? <Button label={zhCN.stopActionKeepWaiting} onClick={() => { props.onRefreshStatus?.() }} /> : null}
+          {stop.actions.stopAgain ? <Button label={zhCN.stopActionStopAgain} tone="warn" onClick={() => { props.onStop('') }} /> : null}
+          {stop.actions.openSession ? <Button label={zhCN.stopActionOpenSession} onClick={() => { props.onOpenSession(state.activeKey) }} /> : null}
+          {stop.actions.copyDiagnostics ? <Button label={zhCN.stopActionCopyDiagnostics} onClick={() => { props.onCopyDiagnostics?.(state.activeKey) }} /> : null}
+        </div>
+        {activeRecord === undefined || stop.hint === '' ? null : <div className={C.cellSub}>{stop.hint}</div>}
+        {stop.notes.length === 0 ? null : <div className={C.cellSub}>{stop.notes.join('；')}</div>}
+      </Notice>
+    })()}
 
     {state.ossIndexError === '' ? null : <Notice tone="warn">{zhCN.cloudFailed + state.ossIndexError}</Notice>}
 

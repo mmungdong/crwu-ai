@@ -1,9 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { text } from '../../shared/utils/value.ts'
-import { resolveBundledCommand } from '../platform/command.ts'
-import { shellInvoke } from '../platform/shell.ts'
-import { runShell } from '../shell/run.ts'
+import { runDws } from '../dws/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 
 /**
  * 取「我是谁」——面板头部那句问候里的姓名。
@@ -34,6 +33,8 @@ export interface WhoamiResult {
 
 export interface WhoamiDeps {
   ctx: Context
+  /** Broker（协议 18）：读钉钉个人信息属于 `dws.contact.read`。 */
+  access: LocalAccessBroker
   workdir: () => Promise<string>
   timeoutMs?: number
   /** 执行世界的平台，用于把 `dws` 解析成包内绝对路径；缺省时回退按名字调用。 */
@@ -63,13 +64,13 @@ export function readSelfDocument(payload: unknown): { name: string; org: string;
 }
 
 export async function dwsSelf(deps: WhoamiDeps): Promise<WhoamiResult> {
-  // 命令是固定的字面量（没有用户输入、没有需要转义的字符），与「钉钉认证」那条探测同样写法。
-  // 用**包内绝对路径**：只按名字调用在 Finder 启动的桌面端会 `bash: dws: command not found`。
-  const dws = await resolveBundledCommand(deps.ctx, deps.platform ?? '', 'dws')
-  const run = await runShell(deps.ctx, shellInvoke(dws, ['contact', 'user', 'get-self', '--format', 'json'], deps.platform ?? ''), {
+  // 走 `runDws`：命令形状、包内绝对路径解析、argv 白名单与 Broker 提权**一次到位** ——
+  // 自己拼命令会绕开白名单这一层（`dws` 是通用 CLI，白名单是它唯一的收敛点）。
+  const run = await runDws(deps.ctx, deps.platform ?? '', ['contact', 'user', 'get-self', '--format', 'json'], {
     workdir: await deps.workdir(),
+    access: deps.access,
+    source: 'host-background',
     timeoutMs: deps.timeoutMs ?? 30_000,
-    escalate: true,
   })
   if (!run.ok) {
     // 命令**没跑起来**与「跑完了但没登录」是两件事：都要如实带原因回去（界面反正不展示）。

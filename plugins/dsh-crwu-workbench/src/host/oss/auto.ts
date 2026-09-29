@@ -4,6 +4,8 @@ import { ossutilMissingMessage, resolveOssutil } from '../environment/probe.ts'
 import { resolveTarget } from '../fs/paths.ts'
 import { inspectCase } from '../audit/case.ts'
 import type { AuditRecord } from '../state/types.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 import { uploadArtifacts } from './ops.ts'
 
 /**
@@ -20,6 +22,13 @@ export interface AutoUploadDeps {
   platform: string
   home: string
   workdir: () => Promise<string>
+  /** Broker（协议 18）：自动上传也是跨边界动作（起 `ossutil`、读 `.ossutilconfig`）。 */
+  access: LocalAccessBroker
+  /**
+   * 自动上传由**审核事件**触发（子代理结束），不是面板点的 —— 来源必须如实标 `audit-tool`，
+   * 否则 Broker 会按面板的权限去判，把"谁发起的"这件事抹掉。
+   */
+  source?: LocalAccessSource
 }
 
 export interface UploadOutcome {
@@ -71,7 +80,7 @@ export async function maybeAutoUpload(deps: AutoUploadDeps, record: AuditRecord)
       return { ok: false, error: item === null ? '案例目录不可读' : '案例还没有交付件', prefix: '' }
     }
 
-    const out = await uploadArtifacts(deps, item, record.key, ossutil, oss)
+    const out = await uploadArtifacts({ ...deps, source: deps.source ?? 'audit-tool' }, item, record.key, ossutil, oss)
     record.uploading = false
     if (out.ok) {
       record.uploadedAt = new Date().toISOString()

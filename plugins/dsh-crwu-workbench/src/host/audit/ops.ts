@@ -4,10 +4,14 @@ import type { WorkbenchConfig } from '../config/config.ts'
 import { normalizeOss } from '../environment/manifest.ts'
 import { persistAudits, ensureRegistry } from '../state/registry.ts'
 import type { AuditRecord, WorkbenchState } from '../state/types.ts'
+import type { AuditStopPhase, AuditStopView } from '../../shared/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import { auditLabel, seqNoFromLabel } from './consts.ts'
+import { REQUIRED_AUDIT_CHILD_TOOLS } from '../tools/consts.ts'
 import { auditPrompt } from './prompt.ts'
 import { agentRegistry, startChild, stopChild } from './spawn.ts'
+import { inspectAuditRootPolicy } from './policy.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { ensureAuditRoot } from './root.ts'
 import { auditToolsVisible, bootstrapInputSnapshot, capabilityPreflight } from './preflight.ts'
@@ -43,6 +47,8 @@ export interface AuditDeps {
   config: WorkbenchConfig
   state: WorkbenchState
   world: WorldFacts
+  /** Broker（协议 18）：状态落盘与跨边界取数都经它；审核链路**没有**第二条特权通道。 */
+  access: LocalAccessBroker
   /** 表单 code 的实例级解析器：审核启动必须先把 `schemaCode` 解析出来，再交给 bootstrap。 */
   form: H3yunFormResolver
   /** DSH 自带 Python：审核脚本的运行时，启动前必须解析成功（否则子代理会去找系统 python3）。 */
@@ -55,6 +61,16 @@ export interface AuditDeps {
    * 它就不会被置上。在轮询里按 `status === 'done'` 再触发一次，是这条链路的兜底。
    */
   autoUpload?: (record: AuditRecord) => Promise<unknown>
+  /**
+   * **授权后的环境就绪检查**（协议 18 · C3）。
+   *
+   * 由 Host 接线到与界面门禁**同一份能力快照**（`environment/gate.ts`）。为什么在
+   * `audit-start` 已经判过一次之后还要再判：那一次判的是"操作能不能进"，这一次判的是
+   * "**创建子代理**之前事实有没有变"——两者之间隔着根会话创建、能力预检与输入快照三条
+   * 外部调用（各要几秒到几十秒），期间员工完全可能撤销授权或把工作空间改掉。
+   * 缺省（测试直接调 `auditStart`）时跳过，生产路径由 `ops/core.ts` 注入。
+   */
+  readiness?: () => Promise<{ ok: boolean; error: string }>
 }
 
 /** 从 args/state 里取任务标识。 */
@@ -127,7 +143,7 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     mode: 'one-shot', isRetry: false, replaced: '', replacedCount: 0, startedAt: '', attempt: 0,
   })
 
-  await ensureRegistry(ctx, await deps.world.home(), state)
+  await ensureRegistry({ ctx, home: await deps.world.home(), state, access: deps.access })
 
   const key = auditKeyOf(args)
   if (key === '') return failed('缺少任务标识')
@@ -148,22 +164,35 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
   state.startingKey = key
   try {
     const seqNo = text(args.seqNo)
+    const previous = state.audits[key]
 
-    // 硬门禁一：审核必须挂在**审核根会话**下 —— 一个建在插件选定工作空间里的干净顶层会话。
+    // 硬门禁一：别的报告正在跑时拒绝；同一条报告走后面的「重启」。
+    // 放在**建案例目录与建根之前**：并发冲突是最便宜的拒绝理由，被拒的发起不该留下
+    // 空目录、更不该新起一个根会话（那会让面板上多出一个没人用的根）。
+    if (state.activeChildId !== '' && state.activeKey !== key) {
+      return failed(`已有审核在进行中（${state.activeKey || state.activeChildId}）。同一时间只允许一条，等它结束或先点「停止」。`)
+    }
+
+    // 硬门禁零之二：**先由 Host 把本轮的案例目录算出来并建出来**。
+    //
+    // 顺序是硬要求（2026-09-29 用户复查 P1 的第 4 条）：审核根的 cwd 与沙箱边界**都是案例目录**，
+    // 所以案例目录必须先存在；"先建根、再算案例目录"会让根在那个瞬间没有合法边界。
+    const caseDir = caseDirOf(state.workspacePath || state.caseRoot, seqNo)
+    if (caseDir === '') return failed('缺少案例目录：请先在第 ① 步选定工作空间，并确认任务带有流水号。')
+    const madeCase = await ensureDirectory(ctx, caseDir, {
+      workdir: state.workspacePath || state.caseRoot,
+      platform: await deps.world.platform(),
+    })
+    if (!madeCase.ok) return failed(`创建案例目录失败：${caseDir}（${madeCase.error}）`)
+
+    // 硬门禁一：审核必须挂在**审核根会话**下 —— 一个 cwd 就是本轮案例目录的干净顶层会话。
     //
     // 这里原来是「哪个会话头最后挂载就用谁当父级」，于是你从工作空间 A 的会话点开面板，
     // 审核就挂到 A 下，从别处点开又挂到别处（用户报的「创建新会话时挂错了」）。
     // 根会话还顺带解决了 cwd：子会话只能继承父会话的 cwd，而根的 cwd 就是案例根目录。
-    const root = await ensureAuditRoot(deps, { presetHint: presetHintOf(ctx, state) })
+    const root = await ensureAuditRoot(deps, { presetHint: presetHintOf(ctx, state), casePath: caseDir })
     if (!root.ok) return failed(root.error)
     const parentSessionId = root.sessionId
-
-    const previous = state.audits[key]
-
-    // 硬门禁二：别的报告正在跑时拒绝；同一条报告走下面的「重启」。
-    if (state.activeChildId !== '' && state.activeKey !== key) {
-      return failed(`已有审核在进行中（${state.activeKey || state.activeChildId}）。同一时间只允许一条，等它结束或先点「停止」。`)
-    }
 
     // 硬门禁三：**结构化 Tool 链路必须在创建子代理之前证明可用**。
     //
@@ -185,23 +214,6 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     // 也可能读到别的流水号的过期材料。`schemaCode` 是 Host 的基础设施状态，这里一次性解析好，
     // 并把记录与附件元数据落成输入快照交给它。
     const objectId = text(args.objectId)
-    const caseDir = caseDirOf(state.workspacePath || state.caseRoot, seqNo)
-    if (caseDir === '') return failed('缺少案例目录：请先在第 ① 步选定工作空间，并确认任务带有流水号。')
-
-    // 硬门禁四的前置：**案例目录必须先由 Host 建出来**。
-    //
-    // 为什么非有这一步不可：`<工作空间>/<流水号>` 是 Host 自己的约定（`caseDirOf`），
-    // 而写进这个目录的每一个案例内 Tool 都先过 `requireCaseDir`（**要求目录已存在**），
-    // 其中 `crwu_audit_case_bootstrap` 又必须在**创建子代理之前**把输入快照落进去。
-    // 谁都不建这个目录时，新报告就永远卡在「案例目录不存在或不是目录」
-    // （2026-09-28 用户报的真实故障：只有审过的报告能再发起，新报告一律发起不了）。
-    // 旧形态是审核子代理自己 `mkdir -p`；改成结构化 Tool 之后那条路没有了 —— 只能由 Host 补。
-    // 目录已存在时 `mkdir -p` 是空操作，重审走同一段代码。
-    const madeCase = await ensureDirectory(ctx, caseDir, {
-      workdir: state.workspacePath || state.caseRoot,
-      platform: await deps.world.platform(),
-    })
-    if (!madeCase.ok) return failed(`创建案例目录失败：${caseDir}（${madeCase.error}）`)
 
     const form = await deps.form.ensure()
     if (!form.ok) return failed(`无法定位氚云表单（报告审核），已终止本次审核：${form.error}`)
@@ -210,6 +222,17 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     // 否则子代理会退回系统 `python3`（缺 openpyxl，结果不可信）。
     const python = await deps.python.check({ agent: rootAgent })
     if (!python.ok) return failed(`DSH 脚本运行时不可用，已终止本次审核：${python.error || python.state}`)
+
+    // **没确认静默之前不许启动下一条审核**（F1）。两条判据：
+    // ① 还有停止流程在跑（内存事实）；② 上一条留下 stopPhase=timeout/failed 且 quiesced=false
+    //（持久化事实，跨重启也成立）。占用门禁管的是"同一条报告的锁"，这里管的是"停止未确认"。
+    const stoppingNow = Object.keys(state.stopInFlight).length > 0
+    const unquiet = Object.values(state.audits).some((record) => record !== undefined
+      && record.quiesced === false
+      && (record.stopPhase === 'timeout' || record.stopPhase === 'failed'))
+    if (stoppingNow || unquiet) {
+      return failed('上一条审核还在停止过程中（尚未确认子会话完全退出）：确认停止前不能启动新的审核。请在工作台「停止审核」重试或等待。')
+    }
 
     const stale = await findStaleChildren(deps, key, previous, seqNo)
     // 有前一轮（记录里的或清单里的）→ 走重审提示词：从零重跑、不读旧产物。
@@ -222,8 +245,10 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
         handle: state.runs[childId],
         parentSessionId,
       })
-      if (!stopped.aborted && stopped.errors.length > 0) {
-        return failed(`已有的审核子会话（${childId.slice(0, 8)}）停不掉，为避免两条子会话交叉写同一个案例目录，已中止本次重启：${stopped.errors.join('；')}`)
+      // 判据是**静默**（`quiesced`），不是"abort 发出去了"：dispose 超时 + Agent 仍在 running 时，
+      // 旧子会话可能还在写同一个案例目录，起第二条会造成两条对写并覆盖旧 childId（2026-09-29 用户复查的 P1）。
+      if (!stopped.quiesced) {
+        return failed(`已有的审核子会话（${childId.slice(0, 8)}）没法确认已经停下来，为避免两条子会话交叉写同一个案例目录，已中止本次重启：${[...stopped.errors, ...stopped.notes].join('；') || '状态未知'}`)
       }
       delete state.runs[childId]
       if (replaced === '') replaced = childId
@@ -245,6 +270,59 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       return failed(`输入快照交接未完成，已终止本次审核（未创建子代理）：${boot.error}`)
     }
     const snapshot = boot.snapshot
+
+    // 硬门禁五：**创建子代理之前的最后一道环境就绪检查**（协议 18 · C3）。
+    //
+    // 到这一步为止已经花掉了根会话策略收敛、工具可见性预检、能力自检与输入快照四段
+    // 外部调用；期间"允许本机访问"可能被撤销、工作空间可能被换掉。带着过期事实去起一条
+    // 审核，后果不是"晚一点失败"，而是**一条注定拿不到凭据的审核**（它会一路把
+    // 「未登录 / 密钥错误」当结论写进交付件）。
+    if (deps.readiness !== undefined) {
+      const ready = await deps.readiness()
+      if (!ready.ok) return failed(`审核启动前环境已不就绪，未创建子代理：${ready.error}`)
+    }
+
+    // **两阶段握手**（2026-09-29 用户复查的 P1）：子会话在 `start()` 返回**之前**就已经发布、
+    // prompt 也开始跑，所以权威 scope 必须**先**落盘 —— 否则那段窗口里：
+    //   · 面板类 Tool 的身份拒绝（`isAuditChild`）失效（childId 还不存在）；
+    //   · 案例内 Tool 因为没有 scope 而随机 fail closed。
+    // 预留的身份是"**父会话 = 审核根**"：`start()` 返回后再把真 childId 写上去。
+    const pendingRecord: AuditRecord = {
+      key,
+      childId: '',
+      seqNo,
+      project: text(args.project),
+      objectId,
+      startedAt: stamp.toISOString(),
+      parentSessionId,
+      status: 'running',
+      ended: false,
+      stopped: false,
+      stopReason: '',
+      endReason: '',
+      casePath: caseDir,
+      attemptId,
+      allowedAttachmentIds: (Array.isArray(snapshot.attachmentIds) ? snapshot.attachmentIds : [])
+        .map((id) => text(id)).filter((id) => id !== ''),
+      pending: true,
+      resultFile: '',
+      htmlFile: '',
+      caseName: '',
+      uploadedAt: '',
+      uploadError: '',
+      ossPrefix: '',
+      attempt: (previous?.attempt ?? 0) + 1,
+      replacedChildId: replaced,
+    }
+    const previousRecord = state.audits[key]
+    state.audits[key] = pendingRecord
+    const pendingPersisted = await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+    if (!pendingPersisted) {
+      // 连 scope 都落不下来就**不要**创建子会话（这正是最初 Windows 权限现场会踩的坑）。
+      if (previousRecord === undefined) delete state.audits[key]
+      else state.audits[key] = previousRecord
+      return failed('审核 scope 没能写入状态文件（本机权限或磁盘问题）：未创建子会话。')
+    }
 
     const started = await startChild(ctx, {
       label: auditLabel(seqNo, stamp),
@@ -272,34 +350,52 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       }),
       parentSessionId,
     })
-    if (!started.ok) return failed(started.error)
+    if (!started.ok) {
+      // 回滚 pending：否则会留下一条永远"待接管"的记录（面板上显示在跑，其实没有子会话）。
+      if (previousRecord === undefined) delete state.audits[key]
+      else state.audits[key] = previousRecord
+      await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+      return failed(started.error)
+    }
 
-    // 硬门禁四（child scope）：provider 可能在子会话上再收窄一次工具可见范围。
-    //
-    // 根 Agent 可见 **不等于** 子代理可见 —— 子代理是新的 scope，预设/委托运行时都可能
-    // 再加一层 restriction。所以子会话一发布就按**它自己的 scope** 复查一遍；
-    // 缺任何一个就立刻停掉它并失败，不让一条注定要去找 PATH 的审核跑下去。
-    // 子 Agent 还查不到时只记一条 note（不阻断）—— 那种情况下下面的记录里会带 `childGate` 说明。
-    const childAgent = agentRegistry(ctx)?.get(started.childId as SessionId)
-    if (childAgent !== undefined) {
-      const missingInChild = auditToolsVisible(ctx, childAgent)
-      if (missingInChild.length > 0) {
-        await stopChild(ctx, started.childId, '审核子代理看不到必需的 CRWU Tool，停止这条审核', {
-          handle: started.handle,
-          parentSessionId,
-        })
-        return failed(`审核子代理看不到必需的 CRWU Tool：${missingInChild.join('、')}。已停止该子会话；请让部署方确认子代理 preset 没有收窄工具集。`)
+    // **没确认停下来就不许丢身份**（2026-09-29 第三轮复查的 P1）：
+    // 把记录标成退役（只拒绝、不放行），**保留** run 句柄与占用，直到确认静默。
+    // `stopChild` 的超时/仍在运行语义只有在调用方检查 `quiesced` 时才有意义。
+    const retireNotQuiesced = async (childId: string, stopped: { errors: string[]; notes: string[] }): Promise<void> => {
+      // 用**真实记录**（含 childId）：退役之后仍然要靠它认出那个子会话、再停一次。
+      state.audits[key] = {
+        ...record,
+        retired: true,
+        pending: false,
+        ended: false,
+        stopped: false,
+        status: 'unknown',
+        stopReason: '失败后未能确认子会话停止',
       }
-    } else {
-      ctx.logger?.warn?.('审核子代理 %s 的 Agent 句柄暂不可读，child-scope 工具可见性未能复查', started.childId)
+      // 句柄与占用都留着：用户还能在工作台再停一次，也只许停这一条。
+      if (started.handle.run !== undefined || started.handle.abort !== undefined) {
+        state.runs[childId] = started.handle
+      }
+      state.activeKey = key
+      state.activeChildId = childId
+      await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+      void stopped
+    }
+    const notQuiescedText = (stopped: { errors: string[]; notes: string[] }): string =>
+      [...stopped.errors, ...stopped.notes].join('；') || '状态未知'
+
+    // 子会话起来之后的任何失败都要把**这条 pending 记录**一起回滚：
+    // 留着它面板会显示"在跑"，而实际没有可用的子会话（2026-09-29 用户复查的 P1 修复配套）。
+    // ⚠️ 只有在**确认子会话已经停下来**之后才允许调用（调用方负责先看 `stopChild().quiesced`）。
+    const rollbackRecord = async (): Promise<void> => {
+      if (previousRecord === undefined) delete state.audits[key]
+      else state.audits[key] = previousRecord
+      delete state.runs[started.childId]
+      releaseActive(state, started.childId)
+      await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
     }
 
-    // 留住「可中止的信号 + run 句柄」：一次性运行没有别的停止入口
-    // （subagents.interrupt 对 one-shot 是 no-op）。停止时必须先 abort 再 dispose。
-    if (started.handle.run !== undefined || started.handle.abort !== undefined) {
-      state.runs[started.childId] = started.handle
-    }
-
+    // 真身份到手：把记录**先**构造出来（下面的子会话复查失败时，退役记录要用它保住 childId）。
     const record: AuditRecord = {
       key,
       childId: started.childId,
@@ -313,7 +409,14 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       stopped: false,
       stopReason: '',
       endReason: '',
-      casePath: '',
+      // **scope 的核心字段在这里就写死**（Host 自己算出来的案例目录，不是模型提交的字符串）。
+      // 留空再等评估阶段回填是不行的：子会话在评估之前就已经能调 Tool 了，
+      // 那段时间里"这轮的案例目录是什么"完全没有权威答案 —— 正是越界读写的窗口。
+      casePath: caseDir,
+      attemptId,
+      // 只认本轮**可信快照**里登记的附件。空数组不是"都允许"，是"一个都不允许"。
+      allowedAttachmentIds: (Array.isArray(snapshot.attachmentIds) ? snapshot.attachmentIds : [])
+        .map((id) => text(id)).filter((id) => id !== ''),
       resultFile: '',
       htmlFile: '',
       caseName: '',
@@ -322,12 +425,105 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       ossPrefix: '',
       attempt: (previous?.attempt ?? 0) + 1,
       replacedChildId: replaced,
+      // 真身份到手：清掉 pending 标记（窗口关闭）。
+      pending: false,
     }
+
+    // 硬门禁四（child scope）：provider 可能在子会话上再收窄一次工具可见范围。
+    //
+    // 根 Agent 可见 **不等于** 子代理可见 —— 子代理是新的 scope，预设/委托运行时都可能
+    // 再加一层 restriction。所以子会话一发布就按**它自己的 scope** 复查一遍；
+    // 缺任何一个就立刻停掉它并失败，不让一条注定要去找 PATH 的审核跑下去。
+    // 子 Agent 还查不到时只记一条 note（不阻断）—— 那种情况下下面的记录里会带 `childGate` 说明。
+    // ⚠️ 优先用 `started.localAgent`：那是 DSH 在 `start` 兑现时给出的**同一个**本进程子 Agent，
+    // 比事后 `agents.get(id)` 更权威（也可能在注册表里查不到）。
+    const childAgent = started.localAgent ?? agentRegistry(ctx)?.get(started.childId as SessionId)
+    if (childAgent !== undefined) {
+      // ⚠️ 子会话复查必须用**子会话必需集**：`crwu_audit_case_bootstrap` 是"根必需 + 子会话 deny"，
+      // 用根必需集检查会把每一条正常子会话判成缺工具并立刻停掉（2026-09-29 第三轮复查的 P1）。
+      const missingInChild = auditToolsVisible(ctx, childAgent, REQUIRED_AUDIT_CHILD_TOOLS)
+      if (missingInChild.length > 0) {
+        const stopped = await stopChild(ctx, started.childId, '审核子代理看不到必需的 CRWU Tool，停止这条审核', {
+          handle: started.handle,
+          parentSessionId,
+        })
+        if (!stopped.quiesced) {
+          await retireNotQuiesced(started.childId, stopped)
+          return failed(`审核子代理看不到必需的 CRWU Tool（${missingInChild.join('、')}），而且没法确认它已经停下来（${notQuiescedText(stopped)}）：已保留它的身份与占用，请在工作台「停止审核」重试；确认停止前不要启动新的审核。`)
+        }
+        await rollbackRecord()
+        return failed(`审核子代理看不到必需的 CRWU Tool：${missingInChild.join('、')}。已停止该子会话；请让部署方确认子代理 preset 没有收窄工具集。`)
+      }
+    } else {
+      // **读不到就停**（2026-09-29 第三轮复查的 P1）：工具可见性、沙箱、审批、cwd、workspaceRoot
+      // 的复查全都需要那个 child Agent；只记一条 warning 继续跑，等于"审核在无法验证边界的
+      // 子会话里跑完"。远程 provider（`localAgent === undefined`）正是这一情形。
+      const stopped = await stopChild(ctx, started.childId, '读不到审核子代理的 Agent，无法复查边界，停止这条审核', {
+        handle: started.handle,
+        parentSessionId,
+      })
+      if (!stopped.quiesced) {
+        await retireNotQuiesced(started.childId, stopped)
+        return failed(`读不到审核子代理的 Agent（provider 可能是远程运行），无法复查它的沙箱/审批/工具可见性；而且没法确认它已经停下来（${notQuiescedText(stopped)}）：已保留它的身份与占用，请在工作台「停止审核」重试。`)
+      }
+      await rollbackRecord()
+      return failed('读不到审核子代理的 Agent（provider 可能是远程运行），无法复查它的沙箱/审批与工具可见性：已停止该子会话，本次发起失败。审核只允许能在本进程里验证边界的子代理 provider。')
+    }
+
+    // 硬门禁四（child policy，协议 18 · C3）：子会话的**沙箱与审批**同样按它自己复查一遍。
+    //
+    // 为什么是"复查 + 停止"而不是"先拦后起"：子会话的策略由 DSH 在委派边界上 seed，
+    // 安全性来自**创建前**已经把根设对并验证过（`ensureAuditRoot` 的 `applyAuditRootPolicy`）。
+    // 发布之后再读一次是为了**证伪**那一步 —— 真读到不对就是契约被破坏了，
+    // 这时唯一安全的动作是停掉它并如实报出来，而不是让它带着错的边界跑完。
+    if (childAgent !== undefined) {
+      // 期望值是**本轮的案例目录**（协议 19：子会话继承父会话的 cwd，而根 cwd = 案例目录）。
+      // 这里曾写 `state.workspacePath || state.caseRoot` —— 协议 19 之后那是一定对不上的值，
+      // 于是**每一个正常可见的子会话都会被稳定判错并停掉**（2026-09-29 用户复查的 P1）。
+      const childPolicy = inspectAuditRootPolicy(ctx, childAgent, caseDir)
+      if (!childPolicy.ok) {
+        const stopped = await stopChild(ctx, started.childId, '审核子代理的沙箱/审批策略不符合要求，停止这条审核', {
+          handle: started.handle,
+          parentSessionId,
+        })
+        if (!stopped.quiesced) {
+          await retireNotQuiesced(started.childId, stopped)
+          return failed(`审核子代理的策略不符合要求（${childPolicy.error}），而且没法确认它已经停下来（${notQuiescedText(stopped)}）：已保留它的身份与占用，请在工作台「停止审核」重试；确认停止前不要启动新的审核。`)
+        }
+        await rollbackRecord()
+        return failed(`审核子代理的策略不符合要求：${childPolicy.error}。已停止该子会话。`)
+      }
+    }
+
+    // 留住「可中止的信号 + run 句柄」：一次性运行没有别的停止入口
+    // （subagents.interrupt 对 one-shot 是 no-op）。停止时必须先 abort 再 dispose。
+    if (started.handle.run !== undefined || started.handle.abort !== undefined) {
+      state.runs[started.childId] = started.handle
+    }
+
     state.audits[key] = record
     state.activeKey = key
     state.activeChildId = started.childId
     state.activeSince = stamp.getTime()
-    await persistAudits(ctx, await deps.world.home(), state)
+    // 落盘失败**不能**当成成功（2026-09-29 用户复查的 P2）：那会留下"子会话在跑、但 scope 与占用锁
+    // 只在内存里"的形态 —— 热重载后既授权不了案例内 Tool，又能重复发起。停掉它、回滚、如实失败。
+    const persisted = await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+    if (!persisted) {
+      const stopped = await stopChild(ctx, started.childId, '审核记录没能落盘，停止这条审核', {
+        handle: started.handle,
+        parentSessionId,
+      })
+      if (!stopped.quiesced) {
+        // 落盘本来就坏了，退役写盘也会失败 —— 但**内存里必须保留身份、句柄与占用**：
+        // 丢掉的后果是"旧子会话继续写案例目录，而 Host 已经不认识它"。
+        await retireNotQuiesced(started.childId, stopped)
+        return failed(`审核记录没能写入状态文件，而且没法确认刚创建的子会话已经停下来（${notQuiescedText(stopped)}）：已在内存里保留它的身份与占用，请在工作台「停止审核」重试。`)
+      }
+      delete state.audits[key]
+      delete state.runs[started.childId]
+      releaseActive(state, started.childId)
+      return failed('审核记录没能写入状态文件（本机权限或磁盘问题）：已停止刚创建的子会话，本次发起失败。')
+    }
 
     return {
       ok: true,
@@ -351,31 +547,119 @@ export interface AuditStopResult {
   ok: boolean
   error: string
   key: string
+  /** 停止请求是否已被接受（F1 两阶段：接受 ≠ 已停止）。 */
+  accepted: boolean
+  /** 重复点击：已经有一条停止流程在跑，本次没有启动第二条。 */
+  alreadyStopping: boolean
+  /** 当前阶段（Host 权威）。 */
+  phase: AuditStopPhase
   aborted: boolean
   disposed: boolean
+  /** **是否已确认静默**（dispose 完成，或 Agent 已不在 running）。前端据此决定能不能启动下一条。 */
+  quiesced: boolean
   interrupted: boolean
   agentCancelled: boolean
+  /** 阻塞性错误（非空 = 没停好）。 */
   errors: string[]
+  /** 非阻塞观察（例如"dispose 超时但 Agent 已不在运行"）。 */
+  notes: string[]
 }
 
 export async function auditStop(deps: AuditDeps, args: Record<string, unknown>): Promise<AuditStopResult> {
   const { ctx, state } = deps
-  await ensureRegistry(ctx, await deps.world.home(), state)
+  await ensureRegistry({ ctx, home: await deps.world.home(), state, access: deps.access })
   const childId = text(args.childId) || state.activeChildId
   if (childId === '') {
-    return { ok: false, error: '当前没有正在运行的审核子会话。', key: '', aborted: false, disposed: false, interrupted: false, agentCancelled: false, errors: [] }
+    // 没有可停的子会话：不算错，且"静默"天然成立（没有东西在跑）。
+    return {
+      ok: false, error: '当前没有正在运行的审核子会话。', key: '',
+      accepted: false, alreadyStopping: false, phase: 'idle',
+      aborted: false, disposed: false, quiesced: true,
+      interrupted: false, agentCancelled: false, errors: [], notes: [],
+    }
   }
-  const outcome = await stopAuditChild(ctx, state, childId, '用户在中瑞世联工作台手动停止了这条审核')
-  await persistAudits(ctx, await deps.world.home(), state)
+  const key = Object.keys(state.audits).find((candidate) => state.audits[candidate]?.childId === childId) ?? ''
+  const record = key === '' ? undefined : state.audits[key]
+
+  // **幂等**（F1）：已经在停 → 立刻把当前阶段回给调用方，绝不启动第二条停止流程。
+  // 判据是"进程内正在跑"或"持久化阶段还在进行中"两者之一。
+  const persistedPhase = record?.stopPhase
+  const inFlight = state.stopInFlight[childId] !== undefined
+  if (inFlight || persistedPhase === 'requested' || persistedPhase === 'aborting' || persistedPhase === 'waiting-quiescence') {
+    return {
+      ok: false,
+      error: '这条审核的停止流程已经在进行中（重复点击不会启动第二条）。',
+      key,
+      accepted: true,
+      alreadyStopping: true,
+      phase: persistedPhase ?? 'requested',
+      aborted: true, disposed: false, quiesced: record?.quiesced === true,
+      interrupted: false, agentCancelled: false,
+      errors: [], notes: Array.isArray(record?.stopNotes) ? record.stopNotes : [],
+    }
+  }
+
+  const requestedAt = Date.now()
+  const writePhase = async (
+    phase: AuditStopPhase,
+    extra: { error?: string; notes?: string[]; quiesced?: boolean; aborted?: boolean; disposed?: boolean } = {},
+  ): Promise<void> => {
+    const current = state.audits[key]
+    if (current === undefined) return
+    state.audits[key] = {
+      ...current,
+      stopPhase: phase,
+      stopRequestedAt: requestedAt,
+      stopElapsedMs: Math.max(0, Date.now() - requestedAt),
+      ...(extra.quiesced === undefined ? {} : { quiesced: extra.quiesced }),
+      ...(extra.aborted === undefined ? {} : { stopAborted: extra.aborted }),
+      ...(extra.disposed === undefined ? {} : { stopDisposed: extra.disposed }),
+      ...(extra.error === undefined ? {} : { stopError: extra.error }),
+      ...(extra.notes === undefined ? {} : { stopNotes: extra.notes }),
+    }
+    await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+  }
+
+  // **第一阶段：尽快接受**（F1）。先把 `requested` 落盘，界面 100ms 内就能看到
+  // 「正在请求停止审核…」，不必等 abort / dispose 走完。
+  await writePhase('requested', { error: '', notes: [], quiesced: false })
+
+  // **第二阶段：后台把 abort → dispose → 状态复查走完**，每个阶段都落盘。
+  // 这里刻意不 await：`audit-stop` 立刻返回"已接受"，客户端靠 `audit-status` 轮询阶段。
+  // 但把 Promise 存在状态里：`audit-status` 与测试都能等待它收敛（也用于幂等判据）。
+  const task = (async () => {
+    try {
+      const stopped = await stopAuditChild(ctx, state, childId, '用户在中瑞世联工作台手动停止了这条审核',
+        async (phase) => { await writePhase(phase) })
+      const quiesced = stopped.outcome.quiesced
+      await writePhase(quiesced ? 'quiesced' : 'timeout', {
+        quiesced,
+        aborted: stopped.outcome.aborted,
+        disposed: stopped.outcome.disposed,
+        error: stopped.ok ? '' : stopped.error,
+        notes: stopped.outcome.notes,
+      })
+      // 停止执行了但状态文件写不进去：阶段如实记 `failed`，**不伪装成已停止**。
+      const persisted = await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+      if (!persisted) await writePhase('failed', { quiesced, error: '停止已执行，但状态文件没能写入（重启后可能看到旧的占用记录）。' })
+    } catch (error) {
+      await writePhase('failed', { quiesced: false, error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      delete state.stopInFlight[childId]
+    }
+  })()
+  state.stopInFlight[childId] = task
+
   return {
-    ok: outcome.ok,
-    error: outcome.error,
-    key: outcome.key,
-    aborted: true,
-    disposed: false,
-    interrupted: false,
-    agentCancelled: false,
-    errors: outcome.errors,
+    ok: true,
+    error: '',
+    key,
+    accepted: true,
+    alreadyStopping: false,
+    phase: 'requested',
+    aborted: false, disposed: false, quiesced: false,
+    interrupted: false, agentCancelled: false,
+    errors: [], notes: [],
   }
 }
 
@@ -383,8 +667,10 @@ export async function auditRelease(deps: AuditDeps): Promise<{ ok: boolean; rele
   const { state } = deps
   const previous = state.activeKey || state.activeChildId
   releaseActive(state)
-  await persistAudits(deps.ctx, await deps.world.home(), state)
-  return { ok: true, released: previous }
+  const persisted = await persistAudits({ ctx: deps.ctx, home: await deps.world.home(), state, access: deps.access })
+  // 内存里的占用已经放开（这是"释放"这个动作本身），但**磁盘上可能还留着** ——
+  // 如实返回失败，让调用方知道重启后可能看到旧的占用记录（2026-09-29 用户复查的 P2）。
+  return { ok: persisted, released: previous }
 }
 
 export interface AuditStatusResult {
@@ -392,11 +678,58 @@ export interface AuditStatusResult {
   audits: AuditRecord[]
   parentSessionId: string
   active: { key: string; childId: string; since: number }
+  /**
+   * 现在**能不能启动下一条审核**（F4）。
+   *
+   * ⚠️ 只能由 Host 判定：真实静默（`quiesced`）+ 停止流程是否还在跑 + 占用锁是否真的空。
+   * 客户端不许用 `status !== 'running'` 自己推。
+   */
+  canStartNext: boolean
+}
+
+/** 审核停止阶段视图（F4）：把持久化字段 + Host 现算的时长/可启动性合成给客户端。 */
+export function stopViewOf(record: AuditRecord, canStartNext: boolean, now: number): AuditStopView {
+  const requestedAt = typeof record.stopRequestedAt === 'number' ? record.stopRequestedAt : 0
+  const waited = requestedAt === 0 ? 0 : Math.max(0, now - requestedAt)
+  return {
+    phase: record.stopPhase ?? 'idle',
+    requestedAt,
+    // 取"记录里的"与"现算的"较大者：落盘只在阶段变化时发生，界面要看到**跳动的秒数**。
+    elapsedMs: Math.max(typeof record.stopElapsedMs === 'number' ? record.stopElapsedMs : 0, waited),
+    quiesced: record.quiesced === true,
+    aborted: record.stopAborted === true,
+    disposed: record.stopDisposed === true,
+    error: text(record.stopError),
+    notes: Array.isArray(record.stopNotes) ? record.stopNotes : [],
+    canStartNext,
+  }
+}
+
+/** 现在能不能启动下一条：没有停止流程在跑，且占用锁指向的子会话已确认静默（或锁本来就是空的）。 */
+export function canStartNextNow(state: WorkbenchState): boolean {
+  if (Object.keys(state.stopInFlight ?? {}).length > 0) return false
+  const records = Object.values(state.audits ?? {}).filter((item) => item !== undefined)
+  // 任何**没确认静默**的停止都一律不许启动下一条（用户的 F1 口径：
+  // "任何未确认 quiesced 的情况都不能释放安全边界或启动下一条审核"）：
+  // · `failed` —— 停止执行了但状态没落盘，磁盘上可能还带着占用锁；
+  // · `timeout` —— 有界等待到点仍无法确认，旧子会话可能还在写案例目录；
+  // · `requested` / `aborting` / `waiting-quiescence` —— 流程还没走完。
+  // 注意判据不依赖占用锁在不在：重启后锁可能没有被恢复，但"没确认停下"这个事实仍然成立。
+  if (records.some((record) => record.stopPhase === 'failed'
+    || record.stopPhase === 'timeout'
+    || record.stopPhase === 'requested'
+    || record.stopPhase === 'aborting'
+    || record.stopPhase === 'waiting-quiescence')) return false
+  const active = state.activeChildId
+  if (active === '') return true
+  const record = records.find((item) => item.childId === active)
+  if (record === undefined) return true
+  return record.quiesced === true || record.ended === true || record.stopped === true
 }
 
 export async function auditStatus(deps: AuditDeps, args: Record<string, unknown>): Promise<AuditStatusResult> {
   const { ctx, state } = deps
-  await ensureRegistry(ctx, await deps.world.home(), state)
+  await ensureRegistry({ ctx, home: await deps.world.home(), state, access: deps.access })
 
   const wanted = Array.isArray(args.keys) ? args.keys.map((item) => text(item)) : []
   // 优先用**审核根会话**（子代理真正挂着的那个）；`state.parentSessionId` 只是「用户最后看过哪个
@@ -442,7 +775,11 @@ export async function auditStatus(deps: AuditDeps, args: Record<string, unknown>
       stopped: false,
       stopReason: '',
       endReason: '',
+      // 认领来的记录**没有**本轮 scope（不知道当初的 casePath / attemptId / 附件白名单）：
+      // 留空，案例内 Tool 会 fail closed。不许在这里"猜一个"——猜出来的 scope 等于没有门禁。
       casePath: '',
+      attemptId: '',
+      allowedAttachmentIds: [],
       resultFile: '',
       htmlFile: '',
       caseName: '',
@@ -496,13 +833,16 @@ export async function auditStatus(deps: AuditDeps, args: Record<string, unknown>
   }
 
   // 只在真的有变化时落盘：这个接口每 10 秒被轮询一次。
-  if (changed) await persistAudits(ctx, await deps.world.home(), state)
+  if (changed) await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
 
+  const canStartNext = canStartNextNow(state)
   return {
     ok: true,
-    audits: out,
+    // 每条记录都带上 Host 现算的停止视图（F4）：客户端据此渲染阶段，**不许**自己推断。
+    audits: out.map((record) => ({ ...record, stop: stopViewOf(record, canStartNext, now) })),
     parentSessionId: boundParentId,
     active: { key: state.activeKey, childId: state.activeChildId, since: state.activeSince },
+    canStartNext,
   }
 }
 

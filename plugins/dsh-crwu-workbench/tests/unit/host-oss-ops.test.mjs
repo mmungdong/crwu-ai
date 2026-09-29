@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
 const { ossIndex, ossResult, ossLink, ossUpload, ossCredSave, uploadArtifacts, buildConfigContent } = await import(
   new URL('src/host/oss/ops.ts', ROOT).href
@@ -38,7 +39,12 @@ function ossDeps(patch = {}) {
         return {
           resolve: (request) => { commands.push(request.command); return request },
           async execute(spec) {
-            const out = patch.shell === undefined ? { stdout: '' } : patch.shell(spec.command)
+            // 权限回读要回一个可解析的模式位：协议 18 起"保存凭据成功"由回读决定
+            // （`credentialPermissionSatisfied`），回空的夹具会让每次保存都合理地判失败。
+            const modeless = /^stat\s/.test(spec.command)
+            const out = modeless
+              ? { stdout: `${patch.mode ?? '600'}\n` }
+              : (patch.shell === undefined ? { stdout: '' } : patch.shell(spec.command))
             return { result: async () => ({
               exitCode: out.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout ?? '', truncated: out.truncated === true },
@@ -76,6 +82,12 @@ function ossDeps(patch = {}) {
     commands,
     deps: {
       ctx,
+      // Broker：每一次 `ossutil` 都会读 `~/.ossutilconfig`，所以全部经它执行（真 Broker，
+      // 策略走真实代码；替身只负责"世界"）。
+      access: makeTestAccess(ctx, { home: '/Users/x' }).access,
+      // 协议 18：`OssDeps` 必须逐次说明"这次是谁发起的"——少了它 Broker 会按
+      // `invalid-source` 拒掉（这正是"来源不能靠默认值"的体现）。
+      source: patch.source ?? 'panel',
       manifest: patch.manifest ?? manifestWith(),
       platform: 'darwin-arm64',
       home: '/Users/x',
@@ -516,6 +528,24 @@ test('oss-cred-save writes the config, tightens permissions and re-probes', asyn
   // 返回值里只允许出现脱敏后的 key。
   assert.equal(JSON.stringify({ cred: result.cred }).includes('SECRET'), false)
   assert.equal(result.cred.accessKeyIdMasked, 'AKID****7890')
+})
+
+test('P-08/M-04 · 权限回读不是 0600 时，保存**顶层**必须失败（不是"成功但附一条提示"）', async () => {
+  // 有的文件系统会**静默忽略** `chmod`：命令退出码 0、模式没变。旧形态回 `ok:true`
+  // 只是附一句错误字符串，界面漏看就把"其实没保护住"当成功 —— 用户复查抓到的 P1。
+  const writes = []
+  const { deps } = ossDeps({
+    writes,
+    mode: '644',
+    shell: (command) => (command.startsWith('command -v') ? { stdout: '/usr/local/bin/ossutil\n' } : { stdout: '' }),
+  })
+  const result = await ossCredSave(deps, { accessKeyId: 'AKID1234567890', accessKeySecret: 'SECRET' })
+  assert.equal(result.ok, false, '权限没生效就不是保存成功')
+  assert.equal(result.permission.status, 'failed')
+  assert.match(result.error, /权限/)
+  // 已经知道的事实必须一起带回来，员工才知道文件写在哪、下一步该做什么。
+  assert.match(result.path, /ossutilconfig$/)
+  assert.equal(writes.length >= 1, true, '文件本身是写下去了（失败的是权限后置条件）')
 })
 
 test('oss-cred-save 不带 endpoint 时回落到部署配置（YAML 的 oss.protected.endpoint）', async () => {

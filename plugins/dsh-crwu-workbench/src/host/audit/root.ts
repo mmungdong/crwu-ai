@@ -5,10 +5,13 @@ import { mkdirCommand, shellDialect } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
 import { agentRegistry } from './spawn.ts'
 import { auditToolsVisible } from './preflight.ts'
+import { applyAuditRootPolicy, inspectAuditRootPolicy, type AuditPolicyView } from './policy.ts'
+import { samePathText } from './scope.ts'
 import { persistAuditRoot } from '../state/registry.ts'
 import type { AuditRootView } from '../../shared/types.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 
 /**
  * 审核根会话（子代理的挂载点）。
@@ -48,6 +51,8 @@ export interface AuditRootDeps {
   ctx: Context
   state: WorkbenchState
   world: WorldFacts
+  /** Broker（协议 18）：根会话落盘走 `workbench.state.write`。 */
+  access: LocalAccessBroker
 }
 
 export interface AuditRootResult {
@@ -58,6 +63,13 @@ export interface AuditRootResult {
   created: boolean
   /** 已经做过的事（新建时用于界面提示/诊断）。 */
   notes: string[]
+  /**
+   * 审核根的沙箱 / 审批策略事实（协议 18 · 子项目 C）。
+   *
+   * 它**不是**"我们请求了什么"，而是回读 + 按 DSH 委派口径预测出来的"子会话会继承到什么"。
+   * 界面（⑧ 审核根会话）与诊断都读它。
+   */
+  policy: AuditPolicyView
 }
 
 /** 根标题：`审核子代理根节点 · 09-20 21:30`。 */
@@ -110,14 +122,24 @@ export interface RootUsability {
 /**
  * 现有的根还能用吗。
  *
- * 四个判据缺一不可：Agent 还活着（`subagents.start` 要的是活对象，不是 id）、
- * 会话的 cwd 仍然是当前工作空间、它不是子代理、工作空间没换。
+ * 判据缺一不可：Agent 还活着（`subagents.start` 要的是活对象，不是 id）、**本轮案例目录没变**、
+ * 会话的 cwd 就是该案例目录、它不是子代理、策略仍然收敛在"`workspace-write` + 边界=案例目录"。
+ *
+ * ⚠️ `casePath === ''`（老状态文件里的**工作空间级根**）一律判过期，**绝不复用**：
+ * 那种根的子会话继承到的工作区边界是整个工作空间，通用 shell / fs 能改同工作空间的其他案例。
  */
-export function auditRootUsability(ctx: Context, state: WorkbenchState, workspacePath: string): RootUsability {
+export function auditRootUsability(ctx: Context, state: WorkbenchState, casePath: string): RootUsability {
   const sessionId = state.auditRoot.sessionId
   if (sessionId === '') return { ok: false, reason: '还没有审核根会话' }
-  if (state.auditRoot.workspacePath !== workspacePath) {
-    return { ok: false, reason: `工作空间已换（根在 ${state.auditRoot.workspacePath}，现在是 ${workspacePath}）` }
+  if (casePath === '') return { ok: false, reason: '缺少案例目录：无法确认审核根的边界' }
+  // 用 `text()` 收窄：老状态文件、被手改过的文件都可能**没有**这个字段（`undefined`）。
+  // 那种情况与空串同义（工作空间级旧根）—— 不许因为"不是空串"就走到比较那一步。
+  const rootCase = text(state.auditRoot.casePath)
+  if (rootCase === '') {
+    return { ok: false, reason: '已有的根是「工作空间级」根（没有案例目录）：按过期处理，为本轮新建一个' }
+  }
+  if (!samePathText(rootCase, casePath)) {
+    return { ok: false, reason: `根属于另一个案例目录（根在 ${rootCase}，本轮是 ${casePath}）` }
   }
   const agent = liveAgent(ctx, sessionId)
   if (agent === undefined) return { ok: false, reason: '审核根会话已不在运行中（进程重启或被释放）' }
@@ -126,8 +148,15 @@ export function auditRootUsability(ctx: Context, state: WorkbenchState, workspac
   if (header !== undefined) {
     if (text(header.origin) === 'subagent') return { ok: false, reason: '审核根会话本身是子代理' }
     const cwd = text(header.cwd)
-    if (cwd !== '' && cwd !== workspacePath) return { ok: false, reason: `审核根会话的 cwd（${cwd}）不是当前工作空间` }
+    if (cwd !== '' && !samePathText(cwd, casePath)) {
+      return { ok: false, reason: `审核根会话的 cwd（${cwd}）不是本轮的案例目录 ${casePath}` }
+    }
   }
+  // **策略也是可用性的一部分**（协议 18 · C-02）：带着 `auto` / `danger-full-access`
+  // permission preset 的会话、或者策略被别人改漂了的会话，一律不复用 ——
+  // 「先复用再纠正」会让子代理继承到错的边界，而那正是这一层要防的事。
+  const policy = inspectAuditRootPolicy(ctx, agent, casePath)
+  if (!policy.ok) return { ok: false, reason: `策略不符合要求：${policy.error}` }
   return { ok: true, reason: '' }
 }
 
@@ -146,22 +175,39 @@ async function ensureDirectory(ctx: Context, path: string, workspace: string, pl
  * 拿到一个可用的审核根会话：能用就用，不能用就新建（建目录 → 登记工作空间 → 建会话 →
  * 命名 → hello 预检 → 落钩子）。
  */
-export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint?: string } = {}): Promise<AuditRootResult> {
+export async function ensureAuditRoot(
+  deps: AuditRootDeps,
+  options: { presetHint?: string; casePath: string },
+): Promise<AuditRootResult> {
   const { ctx, state } = deps
+  // 工作空间仍要：它是**侧栏分组**与工作空间实体登记的锚（根会挂到它下面）。
   const workspacePath = state.workspacePath || state.caseRoot
-  const fail = (error: string): AuditRootResult => ({ ok: false, error, sessionId: '', created: false, notes: [] })
+  const casePath = text(options.casePath)
+  const fail = (error: string, policy?: AuditPolicyView): AuditRootResult => ({
+    ok: false, error, sessionId: '', created: false, notes: [],
+    policy: policy ?? { ok: false, error, sandboxMode: '', workspaceRoot: '', approvalPolicy: '', permissionPreset: '' },
+  })
   if (workspacePath === '') return fail('尚未选定工作空间：审核根会话需要一个明确的工作空间。')
+  if (casePath === '') return fail('缺少案例目录：审核根会话的边界就是本轮案例目录（不许用整个工作空间）。')
   // 平台事实只探一次：目录创建、预检指令与"当前目录"的写法都要用它。
   const platform = await deps.world.platform()
 
-  const usable = auditRootUsability(ctx, state, workspacePath)
-  if (usable.ok) return { ok: true, error: '', sessionId: state.auditRoot.sessionId, created: false, notes: [] }
+  const usable = auditRootUsability(ctx, state, casePath)
+  if (usable.ok) {
+    // 复用已有的根：策略事实同样要如实带回去（它是**检查过**的，不是"假定还行"）。
+    const policy = inspectAuditRootPolicy(ctx, agentRegistry(ctx)?.get(state.auditRoot.sessionId as never), casePath)
+    return { ok: true, error: '', sessionId: state.auditRoot.sessionId, created: false, notes: [], policy }
+  }
 
   const notes: string[] = []
   if (state.auditRoot.sessionId !== '') notes.push(`上一个根不可用：${usable.reason}（按约定新建一个，旧树保留）`)
 
   const agents = ctx.get('agents') as { create?: (options: Record<string, unknown>) => Promise<{ agent: LiveAgent }> } | undefined
-  if (agents === undefined || typeof agents.create !== 'function') return fail('Host agents 服务不可用，无法创建审核根会话')
+  if (agents === undefined || typeof agents.create !== 'function') {
+    // 把"上一个根为什么不可用"一起说出来：否则运维只看到"服务不可用"，
+    // 完全不知道真正的原因是根过期 / 边界漂了 / 案件目录换了。
+    return fail(`Host agents 服务不可用，无法创建审核根会话（上一个根不可用的原因：${usable.reason}）`)
+  }
 
   // ① 工作空间：先解析，解析不到就建目录再登记。
   let workspace = await resolveWorkspaceEntity(ctx, workspacePath)
@@ -181,7 +227,9 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   try {
     created = await agents.create({
       sessionId,
-      meta: { cwd: workspacePath, ...(presetId === '' ? {} : { agentPreset: presetId }) },
+      // **cwd = 本轮的案例目录**：子会话只能继承父会话的 cwd，而沙箱边界这一版也钉在案例目录上。
+      // 两者必须一致 —— 只对边界不对 cwd 时，通用 fs 的默认落点仍指向工作空间。
+      meta: { cwd: casePath, ...(presetId === '' ? {} : { agentPreset: presetId }) },
       agentOptions: model,
       setup: async (agentCtx: Context, agent: unknown) => {
         const presets = ctx.get('agentPresets') as { mount?: (agentCtx: Context, id: string) => Promise<unknown> } | undefined
@@ -206,6 +254,13 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   const renamed = renameSession(ctx, sessionId, title)
   if (!renamed) notes.push('根会话改名失败（不影响审核，只是标题不好认）')
 
+  // ③.5 **策略收敛**（协议 18 · 子项目 C）：写 `workspace-write` + `never`，回读确认，
+  // 并按 DSH 的委派捕获口径确认"子会话将要继承到什么"。**必须在 hello 预检之前** ——
+  // 预检本身会驱动一次模型回合，而那一轮就该已经跑在正确的沙箱与审批之下。
+  const policy = applyAuditRootPolicy(ctx, created.agent, casePath)
+  if (!policy.ok) return fail(`审核根会话的沙箱/审批策略没有收敛：${policy.error}`, policy)
+  notes.push(`策略已收敛：沙箱 ${policy.sandboxMode} · 边界 ${policy.workspaceRoot} · 审批 ${policy.approvalPolicy}`)
+
   // ④ hello 预检：证明这个会话真的能被驱动，并且 CRWU 工具链路可用。
   const probeError = await preflight(ctx, created.agent, sessionId, platform)
   if (probeError !== '') return fail(`审核根会话预检未通过：${probeError}`)
@@ -221,11 +276,11 @@ export async function ensureAuditRoot(deps: AuditRootDeps, options: { presetHint
   }
 
   // 这一段才是「钩子」：先落到进程内状态，再落盘。
-  state.auditRoot = { workspacePath, sessionId, title, assignedAt: new Date().toISOString() }
+  state.auditRoot = { workspacePath, casePath, sessionId, title, assignedAt: new Date().toISOString() }
   // 落盘没成功不算失败（本次照样能用），但要说出来：下次进程重启会再建一个（分叉）。
-  const persisted = await persistAuditRoot(ctx, await deps.world.home(), state)
+  const persisted = await persistAuditRoot({ ctx, home: await deps.world.home(), state, access: deps.access })
   if (!persisted) notes.push('根会话没能写入磁盘：重启后会新建一个（旧的树保留）')
-  return { ok: true, error: '', sessionId, created: true, notes }
+  return { ok: true, error: '', sessionId, created: true, notes, policy }
 }
 
 /** 一次 hello 预检；返回空串表示通过。 */
@@ -339,16 +394,26 @@ export type AudRootHostType = AuditRootView
 
 /** 根会话在界面上的样子（类型定义在线协议里，这里只负责投影）。 */
 export function auditRootView(ctx: Context, state: WorkbenchState): AuditRootView {
-  const workspacePath = state.workspacePath || state.caseRoot
+  // 面板问的是"**这条已记录的根**还能不能用"：所以判据是它自己记录的案例目录
+  //（不是当前选定的工作空间 —— 那是"下一次发起会用哪个根"的问题，由 `ensureAuditRoot` 回答）。
+  const casePath = text(state.auditRoot.casePath)
   const usability = state.auditRoot.sessionId === ''
     ? { ok: false, reason: '尚未创建（发起审核时自动创建）' }
-    : auditRootUsability(ctx, state, workspacePath)
+    : auditRootUsability(ctx, state, casePath)
+  // ⑧ 上要能看到「审核根跑在什么边界下」：这是设计文档验收 P-12 的可见性要求，
+  // 也是员工/维护者判断"审核为什么写不进案例目录"的第一手事实。
+  const policy = state.auditRoot.sessionId === ''
+    ? undefined
+    : inspectAuditRootPolicy(ctx, agentRegistry(ctx)?.get(state.auditRoot.sessionId as never), casePath)
   return {
     sessionId: state.auditRoot.sessionId,
     title: state.auditRoot.title,
     workspacePath: state.auditRoot.workspacePath,
+    casePath: text(state.auditRoot.casePath),
     assignedAt: state.auditRoot.assignedAt,
     usable: usability.ok,
     reason: usability.reason,
+    sandboxMode: policy?.sandboxMode ?? '',
+    approvalPolicy: policy?.approvalPolicy ?? '',
   }
 }

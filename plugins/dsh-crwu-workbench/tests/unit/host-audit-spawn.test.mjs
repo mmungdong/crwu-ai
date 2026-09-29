@@ -31,6 +31,8 @@ function stubSubagents(overrides = {}) {
   const calls = []
   const subagents = {
     list: () => ['spawn'],
+    // 审核启动要求 provider 声明支持 `toolFilter`（真实边界）；用例可用 overrides 覆盖。
+    getProvider: () => ({ name: 'spawn', capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: false }, inheritsParentContext: false }),
     async start(name, request) {
       calls.push({ name, request })
       return { id: 'child-1' }
@@ -65,8 +67,29 @@ test('startChild sends the request shape DSH declares', async () => {
   assert.equal(request.parent, PARENT, 'parent 必须是 agents 服务给的那个 Agent 本体，不能是复制品')
   assert.equal(typeof request.signal?.aborted, 'boolean', 'signal 必须是 AbortSignal')
   assert.equal(request.signal.aborted, false, '刚创建时不能已经处于 aborted')
-  // 只发这四个字段：多塞字段会被 provider 静默忽略，反而掩盖漂移。
-  assert.deepEqual(Object.keys(request).sort(), ['label', 'parent', 'prompt', 'signal'])
+  // 只发这几个字段：多塞字段会被 provider 静默忽略，反而掩盖漂移。
+  // `toolFilter` 是 2026-09-29 复查后加的**真实工具边界**（见下一条用例）。
+  assert.deepEqual(Object.keys(request).sort(), ['label', 'parent', 'prompt', 'signal', 'toolFilter'])
+  assert.deepEqual(request.toolFilter, {
+    deny: ['crwu_h3yun_record_get', 'crwu_h3yun_files_list', 'crwu_audit_case_bootstrap'],
+  }, '子会话必须看不到、也执行不了这三条 Host 专用工具')
+})
+
+test('provider 不支持 toolFilter 时**在创建子会话之前**拒绝（不许有假边界）', async () => {
+  const { calls, subagents } = stubSubagents({
+    getProvider: () => ({ name: 'spawn', capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: false, persona: false }, inheritsParentContext: false }),
+  })
+  const refused = await startChild(makeCtx({ agents: agentsServing(), subagents }), ARGS)
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /不支持 toolFilter/)
+  assert.deepEqual(calls, [], '不支持过滤就不许创建子会话')
+
+  // 连 getProvider 都没有（老运行时）：同样拒绝。
+  const legacy = stubSubagents({ getProvider: undefined })
+  const legacyRun = await startChild(makeCtx({ agents: agentsServing(), subagents: legacy.subagents }), ARGS)
+  assert.equal(legacyRun.ok, false)
+  assert.match(legacyRun.error, /getProvider|toolFilter/)
+  assert.deepEqual(legacy.calls, [])
 })
 
 test('startChild returns a handle whose abort hits the very signal it handed DSH', async () => {
@@ -113,18 +136,41 @@ test('startChild refuses when the deployment registered no provider', async () =
   assert.equal(calls.length, 0)
 })
 
-test('startChild prefers spawn, then fork, then whatever is first', async () => {
-  const pick = (names) => pickProvider(makeCtx({ subagents: { list: () => names } }))
+test('startChild prefers spawn, then fork；两者都没有就拒绝（不再挑第一个注册的）', async () => {
+  const capable = () => ({ name: 'p', capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: true, persona: false }, inheritsParentContext: false })
+  const pick = (names) => pickProvider(makeCtx({ subagents: { list: () => names, getProvider: capable } }))
   assert.equal(pick(['fork', 'spawn']).provider, 'spawn')
   assert.equal(pick(['acp', 'fork']).provider, 'fork')
-  assert.equal(pick(['acp', 'weird']).provider, 'acp', '都不认识就用第一个注册的')
+  // 2026-09-29 第三轮复查后：**不再**回退到"第一个注册的"（远程/不可验证的 provider 不许选）
+  assert.equal(pick(['acp', 'weird']).ok, false, '没有本地 provider 就拒绝，而不是挑第一个')
   assert.deepEqual(pick([]).ok, false)
+
+  // 不支持 toolFilter 的 provider：**不能**被挑中（否则子会话的工具集收不窄）。
+  const uncapable = pickProvider(makeCtx({ subagents: { list: () => ['spawn'], getProvider: () => ({ name: 'spawn', capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false }, inheritsParentContext: false }) } }))
+  assert.equal(uncapable.ok, false)
+  assert.match(uncapable.error, /不支持 toolFilter/)
 
   // 真的走到 start 时用的也是挑出来的那个 provider。
   const forked = stubSubagents({ list: () => ['fork'] })
   const result = await startChild(makeCtx({ agents: agentsServing(), subagents: forked.subagents }), ARGS)
   assert.equal(result.provider, 'fork')
   assert.equal(forked.calls[0].name, 'fork')
+})
+
+test('pickProvider 只接受本地可验证的 provider：远程 provider 不再"回退到第一个"', async () => {
+  // 用户第三轮复查的 P1：审核要求 toolFilter **且**能拿到本进程子 Agent（回读沙箱/审批/cwd/workspaceRoot）。
+  // 远程 provider 满足不了第二条，所以不许被挑中。
+  const pick = (names) => pickProvider(makeCtx({
+    subagents: {
+      list: () => names,
+      getProvider: () => ({ name: 'p', capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: true, persona: false }, inheritsParentContext: false }),
+    },
+  }))
+  assert.equal(pick(['acp']).ok, false, '只有远程 provider → 拒绝')
+  assert.match(pick(['acp']).error, /本地可验证|spawn \/ fork/)
+  assert.equal(pick(['acp', 'spawn']).provider, 'spawn', '有 spawn 就选 spawn')
+  assert.equal(pick(['acp', 'fork']).provider, 'fork', '没有 spawn 就选 fork')
+  assert.equal(pick(['acp', 'weird']).ok, false, '两个本地 provider 都没有 → 拒绝（不许选第一个注册的）')
 })
 
 test('startChild reports a start failure instead of throwing', async () => {

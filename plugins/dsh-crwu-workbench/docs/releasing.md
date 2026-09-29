@@ -249,6 +249,22 @@ git diff -- plugins/dsh-crwu-workbench/package.json \
 - npm token、AccessKey、API-Key、STS Token、签名 URL
 - `bin/` 下未在 `bin/manifest.json` 声明的运行残留
 
+### 5.3.1 桌面验收必须先走完（0.0.15 起）
+
+`make plugin-pack` 与 `pack:assert` 证明的是**交付形状**，不是"员工机器上真的能用"。
+0.0.15 起，下面这三件事**必须在打 tag 之前**完成，并把结果填进
+[`desktop-acceptance-0.0.15.md`](desktop-acceptance-0.0.15.md)：
+
+1. **公共矩阵 P-01…P-18**：在**干净的非管理员** Windows 账户与 macOS 账户上各走一遍
+   （平台前缀分开记：`WIN-P-xx` / `MAC-P-xx`；一边通过不等于另一边通过）。
+2. **平台原生矩阵**：Windows `W-01…W-07`、macOS `M-01…M-10`。
+3. **两道人工关卡**：用户**亲自测过**打包产物、并且**审过代码**。
+
+失败行必须带设计 §11 规定的九项事实（操作名 / 来源 / 三个沙箱模式 / `sandboxDenied` /
+`runnerFailed` / 归因类别 / 失败在进程创建之前还是之后），且日志脱敏。
+矩阵没填完就发版，等于把"没验过的结论"写进发布记录 —— `plugin-v0.0.15` 的前置条件里
+明确包含这一条。
+
 ### 5.4 提交并等待 CI
 
 明确选择本次发布需要提交的文件，不用无审查的 `git add .`：

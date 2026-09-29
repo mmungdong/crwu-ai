@@ -7,7 +7,9 @@ import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { binPlatformDir, bundledBinaryPath, binaryFileName } from '../platform/bin-dir.ts'
 import { packageRootFrom } from '../platform/package-root.ts'
 import { shellInvoke, shellQuote } from '../platform/shell.ts'
-import { runShell, shellUnavailable } from '../shell/run.ts'
+import { shellUnavailable } from '../shell/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 import type { EnvManifest, OssSpec, PackagedToolSpec, ServiceSpec } from './manifest-default.ts'
 
 /**
@@ -374,7 +376,7 @@ export async function probeOss(
   ctx: Context,
   oss: OssSpec,
   platform: string,
-  options: { workdir?: string } = {},
+  options: { workdir?: string; access: LocalAccessBroker; source?: LocalAccessSource },
 ): Promise<ServiceCheck> {
   const { target } = ossProbeTarget(oss)
   const base: ServiceCheck = {
@@ -400,10 +402,16 @@ export async function probeOss(
     // 模板写坏了（未知占位符 / 换行 / 没有可执行文件）—— 这是**部署配置**问题，不是 AK 问题。
     return { ...base, ok: false, state: '探测配置有误', errorKind: 'config', detail: built.error }
   }
-  const run = await runShell(ctx, built.command, {
-    timeoutMs: 60_000,
-    ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
-  })
+  // 经 Broker：**每一次 `ossutil` 都会读 `~/.ossutilconfig`**，所以远端只读动作也算本机凭据访问。
+  const run = await options.access.runShell(
+    {
+      operation: 'oss.remote.read',
+      source: options.source ?? 'host-background',
+      ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
+    },
+    built.command,
+    { timeoutMs: 60_000, ...(options.workdir === undefined ? {} : { workdir: options.workdir }), summary: 'ossutil ls（探测）' },
+  )
 
   // 「命令根本没跑起来」（沙箱后端不可用 / 审批被拒）与「跑完了报 AK 错」是两件事。
   if (shellUnavailable(run)) {

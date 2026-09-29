@@ -3,6 +3,8 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { WorkbenchConfig } from '../config/config.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { WorldFacts } from '../platform/world.ts'
+import { localAccessGranted } from '../access/consent.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import type { H3yunFormResolver } from '../h3yun/form.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
 
@@ -35,6 +37,8 @@ export interface ToolDeps {
   ifind?: IfindTransport
   /** iFinD 单次请求超时（毫秒）；缺省 60s。测试注入短超时验证超时分支。 */
   ifindTimeoutMs?: number
+  /** Broker（协议 18）：审核 Tool 的每一次跨边界调用都经它（来源 = audit-tool）。 */
+  access: LocalAccessBroker
 }
 
 /**
@@ -59,5 +63,5 @@ export async function sessionWorkdir(deps: ToolDeps): Promise<string> {
 
 /** 是否已在面板上授权读取本机凭据。 */
 export function credentialsTrusted(deps: ToolDeps): boolean {
-  return deps.state.trustCredentials === true
+  return localAccessGranted(deps.state.localAccess)
 }

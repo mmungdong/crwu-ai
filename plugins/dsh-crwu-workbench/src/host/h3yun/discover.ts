@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { parseJsonLoose } from '../../shared/utils/json.ts'
 import { describeFailure, runCrwu } from '../crwu/run.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import { pickForm, rowsFromEnvelope } from './records.ts'
 
 /**
@@ -22,8 +23,8 @@ export async function discoverForm(
   ctx: Context,
   keyword: string,
   options: {
-    escalate?: boolean
-    trusted: boolean
+    /** Broker（协议 18）：表单定位要读氚云（`h3yun.forms.read`）。 */
+    access: LocalAccessBroker
     platform?: string
     /** 显式 workdir；空串表示「用会话工作目录」——提权执行必须有它。 */
     workdir?: string
@@ -36,8 +37,8 @@ export async function discoverForm(
   const run = await runCrwu(ctx, ['crwu', 'h3yun', 'forms', 'search', '--keyword', keyword], {
     ...(workdir === '' ? {} : { workdir }),
     timeoutMs: 60_000,
-    escalate: options.escalate === true,
-    trusted: options.trusted,
+    access: options.access,
+    source: 'panel',
     ...(options.platform === undefined ? {} : { platform: options.platform }),
   })
   const base = {

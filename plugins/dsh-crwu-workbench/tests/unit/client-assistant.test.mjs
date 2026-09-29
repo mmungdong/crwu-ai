@@ -329,6 +329,9 @@ test('案例目录约定只有一份：Host 审核指令与讨论上下文算出
     currentNode: '', modifiedAt: '', formName: '', caseDir: caseDirOf(ws, seq),
     files: [], fetchedAt: '', sources: [],
   })
-  assert.equal(hostText.includes(`**本案例目录必须是：${expected}**`), true, 'Host 侧用这条约定')
+  // 协议 19 起 Host 侧的措辞把"cwd 与可写范围"一起说出来（根会话的 cwd 与沙箱边界都是它）；
+  // **路径本身**仍然只由 `caseDirOf` 算一次 —— 这条用例守的是"约定只有一份"，不是某句文案。
+  assert.equal(hostText.includes(`${expected}**`), true, 'Host 侧用这条约定（同一个路径）')
+  assert.equal(hostText.includes('本案例目录（也是你的工作目录与可写范围）'), true, 'Host 侧要说清它就是 cwd 与可写范围')
   assert.equal(clientText.includes(`${zhCN.aiCaseDirHead}${expected}`), true, '客户端侧用同一条约定')
 })

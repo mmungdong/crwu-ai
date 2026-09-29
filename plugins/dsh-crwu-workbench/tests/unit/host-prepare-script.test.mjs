@@ -100,7 +100,11 @@ test('带空格与单引号的路径下真的能构建（回归：这条路径�
     // 依赖用软链接：Node 的解析会跟随它，不必再装一遍（`preserveSymlinks` 默认为 false）。
     await symlink(join(PLUGIN_DIR, 'node_modules'), join(workdir, 'node_modules'), 'dir')
 
-    const status = build({ root: workdir, log: () => {} })
+    // 这次构建的 `node_modules` 是**软链到包根**的（见上面的注释），
+    // 而 `host-package.test.mjs` 里的 `npm pack` 会重写包根的 `lib/` —— 两者并行会互相踩，
+    // 所以走同一把构建锁（见 `tests/helpers/build-lock.mjs`）。
+    const { withBuildLock } = await import(new URL('tests/helpers/build-lock.mjs', ROOT).href)
+    const status = await withBuildLock(async () => build({ root: workdir, log: () => {} }))
     assert.equal(status, 0, '带空格与单引号的路径下构建必须成功')
     await stat(join(workdir, 'lib', 'index.js'))
     await stat(join(workdir, 'lib', 'client.js'))

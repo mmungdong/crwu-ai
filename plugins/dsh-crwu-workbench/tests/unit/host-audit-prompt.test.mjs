@@ -53,7 +53,13 @@ function task(patch = {}) {
 
 test('审核指令带上案例目录与两个绝对路径要求', () => {
   const text = auditPrompt(task())
-  assert.equal(text.includes(`**本案例目录必须是：${WORKSPACE}/${SEQ}**`), true, '案例目录要写在指令里（子会话 cwd 继承父会话，没法用 cwd 表达）')
+  // 协议 19 起措辞改了：案例目录**就是**子会话的工作目录与可写范围
+  //（根的 cwd 与沙箱边界都是它），所以指令里不再把工作空间说成"唯一根目录" ——
+  // 工作空间级的说法会让子代理以为同工作空间的其他案例也能写。
+  assert.equal(text.includes(`**本案例目录（也是你的工作目录与可写范围）：${WORKSPACE}/${SEQ}**`), true,
+    '案例目录要写在指令里，并且说清它就是 cwd 与可写范围')
+  assert.equal(text.includes('但**可写范围只有上面那个案例目录**'), true, '工作空间只能作为信息出现，可写范围是案例目录')
+  assert.equal(text.includes('读写同一工作空间里的其他案例目录'), true, '要明说别碰同工作空间的其他案例')
   assert.equal(text.includes('`--case` 参数同样传它'), true, '技能脚本的 --case 必须是绝对路径')
   assert.equal(text.includes('不要**在当前工作目录下创建案例目录'), true, '不许另建案例目录')
 })
@@ -125,6 +131,31 @@ test('没有快照时指令明确「不要自己去发现表单」，而不是�
   assert.equal(text.includes('## 输入快照缺失'), true)
   assert.equal(text.includes('直接停止并汇报「输入快照缺失」'), true)
   assert.equal(text.includes('不要**自己去发现表单'), true)
+})
+
+test('C-08 · 未登录 / 未允许本机访问时：指令要求停下并要求用户回工作台，绝不许自己登录', () => {
+  const text = auditPrompt(task())
+  // **只在这一段里断言**：整篇 `includes` 会被别处的同名词组满足 ——
+  // 「立即停止本次审核」在数据边界那一条里也出现过一次，而那一条与登录无关
+  // （2026-09-29 用缺陷注入证伪过：删掉登录段里的这句，整篇断言照样绿）。
+  const at = text.indexOf('**登录与授权（必须照做）**')
+  assert.notEqual(at, -1, '提示词必须有"登录与授权"这一段')
+  const section = text.slice(at, at + 700)
+  for (const needle of [
+    '需要先允许工作台访问本机账号和配置',
+    '立即停止本次审核',
+    '需要员工回到工作台完成账号连接（氚云 / 钉钉）或允许本机访问',
+    '自己执行登录',
+    '让用户扫码',
+    '翻找凭据',
+    '审批策略是 `never`',
+  ]) {
+    assert.equal(section.includes(needle), true, `登录段里缺这句要求：${needle}`)
+  }
+  // 反向：登录段里不许出现任何"登录命令"的字样（那正是子代理会照抄的东西）。
+  for (const forbidden of ['auth login', 'session login']) {
+    assert.equal(section.includes(forbidden), false, `不许给出登录命令：${forbidden}`)
+  }
 })
 
 test('指令不含任何二进制路径 / PATH 注入 / 查找命令', () => {

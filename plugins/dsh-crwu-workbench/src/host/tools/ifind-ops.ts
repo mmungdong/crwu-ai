@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import { clearIfindSecret, ifindCredentialView, readIfindSecret, writeIfindSecret } from '../ifind/store.ts'
 import type { CredentialPermission } from '../../shared/types.ts'
 import { defaultIfindTransport, probeIfind, IFIND_SERVER_TYPES, type IfindServerType, type IfindTransport } from '../ifind/mcp.ts'
@@ -18,6 +19,8 @@ import { defaultIfindTransport, probeIfind, IFIND_SERVER_TYPES, type IfindServer
 
 export interface IfindOpsDeps {
   ctx: Context
+  /** Broker（协议 18）：保存 / 清除凭据都是跨边界写，经它执行。 */
+  access: LocalAccessBroker
   /** 主目录（凭据落在它下面的插件状态目录）。 */
   home: () => Promise<string>
   /** 平台（chmod 命令的引用方式）。 */
@@ -87,7 +90,7 @@ function probeViewOf(result: Awaited<ReturnType<typeof probeIfind>>): IfindProbe
 /** 当前凭据的脱敏视图（不发任何网络请求）。 */
 export async function ifindStatus(deps: IfindOpsDeps): Promise<IfindProbeView & { path: string }> {
   const home = await deps.home()
-  const view = await ifindCredentialView(deps.ctx, home)
+  const view = await ifindCredentialView(deps.ctx, home, { access: deps.access, source: 'panel', workdir: home })
   return {
     ok: view.exists && view.state !== 'invalid',
     // 只读文件是**不**足以说「已认证」的：这里如实回 `unverified`，认证结论只能来自真实探测。
@@ -112,7 +115,7 @@ export async function ifindCredentialSave(
 ): Promise<IfindSaveResult> {
   const home = await deps.home()
   const platform = await deps.platform()
-  const written = await writeIfindSecret(deps.ctx, home, args.secret, { platform })
+  const written = await writeIfindSecret(deps.ctx, home, args.secret, { platform, access: deps.access })
 
   const failedView = (errorKind: string, error: string): IfindSaveResult => ({
     ok: false, error, errorKind, view: written.view,
@@ -149,18 +152,18 @@ export async function ifindCredentialClear(
 ): Promise<{ ok: boolean; error: string; cleared: boolean; path: string }> {
   const home = await deps.home()
   const platform = await deps.platform()
-  const path = (await ifindCredentialView(deps.ctx, home)).path
+  const path = (await ifindCredentialView(deps.ctx, home, { access: deps.access, source: 'panel', workdir: home })).path
   if (args.confirm !== true) {
     return { ok: false, error: '清除同花顺 iFinD API-Key 是不可撤销的操作，需要显式确认（confirm: true）', cleared: false, path }
   }
-  const cleared = await clearIfindSecret(deps.ctx, home, { platform })
+  const cleared = await clearIfindSecret(deps.ctx, home, { platform, access: deps.access })
   return { ok: cleared.ok, error: cleared.error, cleared: cleared.ok, path }
 }
 
 /** 只做一次真实探测（保存之后的复检 / 界面上的「重新验证」）。 */
 export async function ifindProbe(deps: IfindOpsDeps, args: Record<string, unknown> = {}): Promise<IfindProbeView & { path: string }> {
   const home = await deps.home()
-  const view = await ifindCredentialView(deps.ctx, home)
+  const view = await ifindCredentialView(deps.ctx, home, { access: deps.access, source: 'panel', workdir: home })
   const secret = await readSecretFor(deps)
   if (secret === '') {
     return {
@@ -183,7 +186,9 @@ export async function ifindProbe(deps: IfindOpsDeps, args: Record<string, unknow
 /** 读明文（只给探测用；**不导出到线协议**）。 */
 async function readSecretFor(deps: IfindOpsDeps): Promise<string> {
   const home = await deps.home()
-  const result = await readIfindSecret(deps.ctx, home)
+  const result = await readIfindSecret(deps.ctx, home, {
+    access: deps.access, source: 'panel', workdir: await deps.home(),
+  })
   return result.ok ? result.secret : ''
 }
 

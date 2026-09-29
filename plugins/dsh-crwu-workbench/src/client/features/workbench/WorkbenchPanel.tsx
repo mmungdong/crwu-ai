@@ -8,7 +8,7 @@ import { joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { environmentStateOf, gatingOf, workbenchApi } from '../report-audit/api.ts'
 import type { PendingResult } from '../report-audit/api.ts'
-import type { AuditView, CloudItem, TaskRow } from '../../../shared/types.ts'
+import type { AuditView, CloudItem, DwsLocalDoctorView, DwsLocalRepairView, TaskRow } from '../../../shared/types.ts'
 import { openChildSession } from './open-session.ts'
 import { discussionPortOf } from './services.ts'
 import type { ClientServices } from './services.ts'
@@ -22,7 +22,9 @@ import { WorkbenchLoading } from './LoadingPane.tsx'
 import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
 import { moduleLabel, type ModuleId } from './modules.ts'
 import type { NavigateResult } from '../../../shared/environment/model.ts'
-import { buildTagOf, createBuildStore, currentVersionOf, hostIsStale, useBuild, type BuildStore } from './build-store.ts'
+import { buildTagOf, createBuildStore, currentVersionOf, hostIsStale, hostPermissionSchemaStale, useBuild, type BuildStore } from './build-store.ts'
+import { consentGranted, consentOf, consentRequestCapabilities } from '../environment/local-access.ts'
+import { PERMISSION_SCHEMA_VERSION } from '../../../shared/access/types.ts'
 import { UpdateDialog } from '../update/UpdateDialog.tsx'
 import { useUpdateDialog, useUpdateStore } from '../update/react.ts'
 import { updateViewModelOf, type UpdateBadgeTone } from '../update/view-model.ts'
@@ -139,6 +141,19 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [authError, setAuthError] = React.useState('')
   const [pending, setPending] = React.useState<PendingResult | null>(null)
   const [audits, setAudits] = React.useState<Record<string, AuditView>>({})
+  /**
+   * 本地记下的"我刚点过停止"的时刻（F1）。
+   *
+   * `audit-stop` 是两阶段的：RPC 只**接受**请求，真正停下要等后台。而状态轮询是 10 秒一次 ——
+   * 只靠轮询的话，用户点完会盯着没反应的按钮最多 10 秒。本地这个时刻让界面立刻显示
+   * 「正在请求停止审核…」，阶段与结论仍然以 Host 回报为准。
+   */
+  const [stopRequestedAt, setStopRequestedAt] = React.useState(0)
+  /**
+   * Host 说"现在能不能启动下一条审核"（F4）。**只信 Host**：
+   * 缺字段（旧宿主）按"没有正在停的审核"处理，否则老版本界面会被永久禁用。
+   */
+  const [canStartNext, setCanStartNext] = React.useState(true)
   const [activeKey, setActiveKey] = React.useState('')
   const [activeChildId, setActiveChildId] = React.useState('')
   const [ossIndex, setOssIndex] = React.useState<Record<string, CloudItem>>({})
@@ -162,6 +177,14 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const drawerTimer = React.useRef<number | null>(null)
   const [wsBusy, setWsBusy] = React.useState(false)
   const [wsMessage, setWsMessage] = React.useState('')
+  // 钉钉本机目录体检（协议 18 · D）：诊断结果是**组件状态**，不进全局 store ——
+  // 它只服务这一个面板，而且"查过一次"这个事实本身没有跨页面意义。
+  const [dwsLocal, setDwsLocal] = React.useState<DwsLocalDoctorView | null>(null)
+  const [dwsLocalRepair, setDwsLocalRepair] = React.useState<DwsLocalRepairView | null>(null)
+  const [dwsLocalBusy, setDwsLocalBusy] = React.useState(false)
+  const [dwsLocalError, setDwsLocalError] = React.useState('')
+  // 二次确认：**许可**（允许读本机凭据）与**改权限**是两件事，必须分开问。
+  const [dwsLocalConfirming, setDwsLocalConfirming] = React.useState(false)
   const [escalateAvailable, setEscalateAvailable] = React.useState(false)
   const [handoff, setHandoff] = React.useState<TaskRow | null>(null)
   const [handoffCopied, setHandoffCopied] = React.useState(false)
@@ -269,6 +292,41 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 过一会儿跳成「重新审核」（用户 2026-09-22 报的一致性问题）。
   const [auditsReady, setAuditsReady] = React.useState(false)
 
+  /**
+   * 「复制诊断」：把当前审核的停止诊断整理成一段可粘贴的文本。
+   *
+   * 只放**维护者需要的事实**（key / childId 尾 / 阶段 / 错误 / 观察 / attempt / 开始时间）——
+   * 路径、凭据一律不进（脱敏口径见 AGENTS §4.4.2）。
+   */
+  const copyStopDiagnostics = React.useCallback((key: string) => {
+    const record = audits[key]
+    if (record === undefined) return
+    const stop = record.stop
+    const lines = [
+      `key=${key}`,
+      `child=${record.childId === '' ? '(空)' : record.childId.slice(-8)}`,
+      `attempt=${record.attempt}`,
+      `status=${record.status}`,
+      `startedAt=${record.startedAt}`,
+      `stop.phase=${stop?.phase ?? '(未知)'}`,
+      `stop.quiesced=${String(stop?.quiesced ?? '(未知)')}`,
+      `stop.aborted=${String(stop?.aborted ?? '(未知)')}`,
+      `stop.disposed=${String(stop?.disposed ?? '(未知)')}`,
+      `stop.elapsedMs=${String(stop?.elapsedMs ?? 0)}`,
+      `stop.error=${stop?.error === undefined || stop.error === '' ? '(无)' : stop.error}`,
+      `stop.notes=${stop?.notes === undefined || stop.notes.length === 0 ? '(无)' : stop.notes.join('；')}`,
+    ].join('\n')
+    const clipboard = (globalThis as { navigator?: { clipboard?: { writeText?: (text: string) => Promise<void> } } }).navigator?.clipboard
+    if (clipboard?.writeText !== undefined) {
+      void clipboard.writeText(lines).then(() => { setNotice(zhCN.copyDiagnosticsDone) }).catch(() => { setNotice(zhCN.copyDiagnosticsFailed) })
+      return
+    }
+    // 没有浏览器剪贴板（旧 webview）→ 退回宿主剪贴板。
+    void workbenchApi.clipboard({ text: lines })
+      .then((result) => { setNotice(result.ok ? zhCN.copyDiagnosticsDone : result.error) })
+      .catch((cause: unknown) => { setNotice(describe(cause)) })
+  }, [audits])
+
   const refreshAudits = React.useCallback(async () => {
     try {
       const result = await workbenchApi.auditStatus({})
@@ -279,6 +337,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       setAudits(next)
       setActiveKey(result.active.key)
       setActiveChildId(result.active.childId)
+      setCanStartNext(result.canStartNext !== false)
     } catch (cause) {
       // 轮询失败不改状态：下一轮会自愈，把界面清空反而更糟。
       void cause
@@ -404,19 +463,49 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
   }
 
-  // 授权态：Host 的 `env.trust.credentials` 是唯一判据（落盘后重启仍在）。
-  // 未授权**不再遮住整页**（用户口径：「不要让一个模态层遮住整个环境页」）：它变成
-  // 「账号连接」分组里的第一行，一步就能点完；真实门禁仍在 Host 侧（未授权一律拒绝）。
-  const authorized = env !== null && env.trust.credentials === true
+  // 授权态：Host 回的本机访问收据（`env.localAccess`）是**唯一**判据（落盘后重启仍在）。
+  // 客户端不许从「有没有凭据 / 是不是登录过」倒推 —— 那正是"未授权时报未登录"的来源。
+  // 未授权**不遮住整页**（用户口径：「不要让一个模态层遮住整个环境页」）：它变成
+  // 「账号连接」这一步里的第一张卡；真实门禁仍在 Host 侧（未授权一律拒绝）。
+  const consent = consentOf(env)
+  const authorized = env !== null && consentGranted(env)
+  /**
+   * 允许本机访问。
+   *
+   * 提交的是**规范能力清单 + 权限说明版本**（不是 `{credentials: true}`）：Host 逐字核对清单，
+   * 所以「界面显示的清单」与「落盘的收据」不可能不一致。返回的 `consent` 是回读结果 ——
+   * 写盘失败时它不是 granted，界面就照实说"没有获得权限"，而不是一句成功提示。
+   */
   const grantCredentials = (): void => {
     setAuthBusy(true)
     setAuthError('')
-    void workbenchApi.trust({ credentials: true })
+    void workbenchApi.localAccessGrant({
+      schemaVersion: PERMISSION_SCHEMA_VERSION,
+      capabilities: consentRequestCapabilities(),
+    })
       .then((result) => {
-        // 写盘失败时 Host 回 `persistError`：不能假装已授权（下次重启就没了）。
-        const persistError = typeof result.persistError === 'string' ? result.persistError : ''
-        if (persistError !== '') { setAuthError(persistError); return null }
+        if (result.ok !== true) { setAuthError(result.error || zhCN.envConsentPersistFailedGrant); return null }
         setAuthDeclined(false)
+        return envStatus.refresh()
+      })
+      .catch((cause: unknown) => { setAuthError(describe(cause)) })
+      .finally(() => { setAuthBusy(false) })
+  }
+  /** 撤销本机访问：Host 侧**内存先关**，写盘失败也 fail closed（只在界面上如实报错）。 */
+  const revokeCredentials = (): void => {
+    setAuthBusy(true)
+    setAuthError('')
+    void workbenchApi.localAccessRevoke()
+      .then((result) => {
+        setAuthDeclined(false)
+        // **撤销失败时不刷新环境**：宿主内存里已经关闭，但磁盘上可能还是上一份授权；
+        // 刷新会走一次 `syncLocalAccessConsent`，把那份旧授权重新采纳回来 ——
+        // 界面上就会出现"明明报了失败，却仍然是已允许"。宿主侧也有墓碑兜底（见 consent.ts），
+        // 这里不去触发那条路径，是为了不制造一个自相矛盾的画面。
+        if (result.ok !== true) {
+          setAuthError(result.error || zhCN.envConsentPersistFailed)
+          return undefined
+        }
         return envStatus.refresh()
       })
       .catch((cause: unknown) => { setAuthError(describe(cause)) })
@@ -427,6 +516,13 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 客户端产物随页面刷新就换新，宿主产物只有重启 profile 才换 —— 不同代时必须拦住，
   // 否则界面是新的、逻辑是旧的，会按旧规则把审核挂到「当前会话」下（实测踩过）。
   const hostStale = hostIsStale(build)
+  // 权限说明版本不一致（含旧宿主没给这个字段）：**本机凭据操作必须停住**（授权卡整体禁用），
+  // 因为执行旧授权范围的宿主"看起来授权成功"比拦住更危险。
+  //
+  // 为什么它不像 `hostStale` 那样替换整屏：协议 18 起两者是同一个 bundle 里的常量，
+  // 「协议相同但 schema 不同」只有被改过的产物才可能出现 —— 那种情况下该拦的是凭据动作，
+  // 而不是把整个工作台（包括只读的诊断信息）也一起换掉。
+  const permissionStale = hostPermissionSchemaStale(build)
   /**
    * 是不是"第一次进来、还没拿到自检结论"。
    *
@@ -456,6 +552,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     ...(auditBusy === '' ? {} : { auditBusy }),
     stopBusy,
     retryBusy,
+    // 停止没确认静默之前不许再起一条（F1/F2）：与 Host 的 `canStartNext` 取交，
+    // 这样行上的「AI 审核 / 重新审核」会一起变灰，而不是只靠文案提醒。
+    ...(canStartNext ? {} : { canStart: false, gateReason: zhCN.stopNoRestartHint }),
     ...(hostStale ? { canDispatch: false, gateReason: zhCN.hostStaleGate } : {}),
   })
 
@@ -487,6 +586,36 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     handoff,
     notice,
     childAliveHint,
+  }
+
+  /**
+   * 只读体检：**不是随时可跑的健康检查**，而是"刚才那次为什么失败"的事后归因。
+   *
+   * 设计 §D2 规定它只在"刚刚发生过一次 DWS 失败、且结构化事实排除沙箱"之后运行；
+   * Host 在没有任何可归因失败时直接拒绝（`not-applicable`），界面如实显示那句话。
+   * 这里不自己判断"该不该给按钮" —— 那是 Host 的判据，客户端再判一次就会有两套口径。
+   */
+  const checkDwsLocal = (): void => {
+    setDwsLocalBusy(true)
+    setDwsLocalError('')
+    void workbenchApi.dwsLocalDoctor()
+      .then((view) => { setDwsLocal(view); if (!view.ok) setDwsLocalError(view.error) })
+      .catch((error: unknown) => { setDwsLocalError(error instanceof Error ? error.message : String(error)) })
+      .finally(() => { setDwsLocalBusy(false) })
+  }
+  /** 修复：只有走完二次确认才会到这里。 */
+  const repairDwsLocal = (): void => {
+    setDwsLocalConfirming(false)
+    setDwsLocalBusy(true)
+    setDwsLocalError('')
+    void workbenchApi.dwsLocalPermissionRepair({ confirm: true })
+      .then((result) => {
+        setDwsLocalRepair(result)
+        setDwsLocal(result.doctor)
+        if (!result.ok) setDwsLocalError(result.error)
+      })
+      .catch((error: unknown) => { setDwsLocalError(error instanceof Error ? error.message : String(error)) })
+      .finally(() => { setDwsLocalBusy(false) })
   }
 
   // 环境信息页的公共 props：env===null（正在自检/失败）与已有结论时只差 env 本身。
@@ -521,7 +650,19 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     authError={authError}
     authDeclined={authDeclined}
     onGrantCredentials={grantCredentials}
+    onRevokeCredentials={revokeCredentials}
+    onDeclineCredentials={() => { setAuthError(''); setAuthDeclined(true) }}
+    authSchemaMismatch={permissionStale}
     onRegrant={() => { setAuthError(''); setAuthDeclined(false) }}
+    dwsLocal={dwsLocal}
+    dwsLocalRepair={dwsLocalRepair}
+    dwsLocalBusy={dwsLocalBusy}
+    dwsLocalError={dwsLocalError}
+    dwsLocalConfirming={dwsLocalConfirming}
+    onDwsLocalCheck={checkDwsLocal}
+    onDwsLocalAskRepair={() => { setDwsLocalConfirming(true) }}
+    onDwsLocalCancelRepair={() => { setDwsLocalConfirming(false) }}
+    onDwsLocalConfirmRepair={repairDwsLocal}
   />
 
   /**
@@ -659,11 +800,24 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                 }}
                 onStop={(childId) => {
                   setStopBusy(true)
+                  // 点下去**立刻**进入"正在停止"（100ms 内可见），不等轮询。
+                  setStopRequestedAt(Date.now())
                   void workbenchApi.auditStop(childId === '' ? {} : { childId })
-                    .then((result) => { setNotice(result.ok ? '' : result.error); return refreshAudits() })
-                    .catch((cause: unknown) => { setNotice(describe(cause)) })
+                    .then((result) => {
+                      // 两阶段：`ok` 在这里表示"请求已被接受"；**是否真的停下**由 Host 的阶段回答，
+                      // 所以这里不报"已停止"，只把失败原因说出来。
+                      setNotice(result.ok ? '' : result.error)
+                      return refreshAudits()
+                    })
+                    .catch((cause: unknown) => {
+                      setStopRequestedAt(0)
+                      setNotice(describe(cause))
+                    })
                     .finally(() => { setStopBusy(false) })
                 }}
+                stopRequestedAt={stopRequestedAt}
+                onRefreshStatus={() => { void refreshAudits() }}
+                onCopyDiagnostics={(key) => { copyStopDiagnostics(key) }}
                 onRetryUpload={(key) => {
                   setRetryBusy(true)
                   void workbenchApi.ossUpload({ key })
@@ -718,11 +872,12 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                 onEscalateRetry={() => {
                   setEscalateAvailable(false)
                   setBusy(true)
+                  // 协议 18：不再提交 `escalate` —— 提权由操作身份决定，不是调用方的参数。
+                  // 这个按钮现在做的是"允许本机访问之后再取一次"，失败时 Host 的原文会说清去干什么。
                   void workbenchApi.pending({
                     ...(query === '' ? {} : { query }),
                     page: reportState.page,
                     size: reportState.pageSize,
-                    escalate: true,
                   }).then((result) => {
                     setPending(result)
                     setEscalateAvailable(result.escalateAvailable === true)

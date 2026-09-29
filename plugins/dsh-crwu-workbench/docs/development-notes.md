@@ -66,7 +66,7 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 - 沙箱/审批模式来自**启动环境**：`mode: process.env.DSH_PERMISSION_MODE ?? 'workspace-write'`，
   `policy: … === 'danger-full-access' ? 'never' : 'ask'`；
 - **产品口径**：员工不改启动方式。插件按 DSH 的请求契约**逐命令声明** `sandboxPolicy`，
-  且只在员工授权（`trustCredentials`）之后才提权；
+  且只在员工允许（`localAccess` 收据）之后才提权；
 - 读本机凭据的命令（`crwu h3yun …`、`dws auth status`、`dws contact user get-self`）在受限沙箱下
   会**假报"未登录"**（凭据在 macOS 钥匙串里读不到）。同一台机器同一时刻：沙箱里 false、
   带 `sandboxPolicy: danger-full-access` 时 true。所以**未授权时不许猜**，宁可说「需要授权」；
@@ -213,6 +213,67 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 | 样式被截断且不报错 | `WORKBENCH_STYLE_TEXT` 注释里出现了反引号 | 模板字符串里不许有反引号（连注释也不行） |
 | 卡片没边框、底色透明 | 用了 DSH 里**不存在**的 token | 到 theme 表核对；扫硬编码色值的测试扫不出这个 |
 | 长页面被裁一半 / 头部跟着滚 | 滚动容器放错（放 root 或没给 `min-height:0`） | 滚动归 `.crwu-audit-body`（设计规范 §4） |
+| 全量测试里偶发「an installed tarball can actually be installed and imported」 | 有两处测试会真跑 `npm pack`（`host-package.test.mjs` 与 `host-bin-manifest.test.mjs` 的严格模式），而 `node --test` 并行跑文件：两次 `prepack`（`skills:sync` + `prepare.mjs --force`）**同时重写同一棵 `lib/`**，其中一个读到半成品 | 已知**测试侧并发缺陷**（不是插件逻辑问题；2026-09-29 全量跑第一次红、紧接着两次全绿，单独跑该文件 39/39 通过）。**已修**：两处真构建走 `tests/helpers/build-lock.mjs` 的 `mkdir` 文件锁（`host-build-lock.test.mjs` 钉住「不交叠 / 抛错也释放 / 重入立刻报错」）。别用"重试一次"遮掉 —— 那会把真实的打包失败也吞成通过 |
+| 诊断/错误文案把员工路径带进界面 | 诊断的 `summary` 由 argv 前缀拼出来（可能有路径）；`chmod` / fs 的错误消息自带 `EACCES: …, stat '/Users/x/.dws'`，而 doctor 视图与凭据卡片是员工可见的 | 记录时过 `sanitizeDiagnosticSummary()`（遇到像路径的词就截断，最多四词）；展示前过 `redactPaths()`（把绝对路径换成 `<路径>`，错误本身保留）。⚠️ 夹具抛的错也要**带路径**，否则"不该出现主目录"那条断言是空的（证伪时抓到过） |
+| 静态门禁只抓"看得见的形态" | B-01 抓的是"在 `shellInvoke(…)` 里直接写 `ossutil`"，于是"先 `requireBundledCommand(…, 'ossutil')` 拿路径、再用变量 `runShell`"这种**间接形态**在它下面全绿（2026-09-29 用一个临时模块实测过） | 判据往前挪一步：堵在"**解析**业务 CLI 二进制"这里（B-01d）。解析是执行的前提，堵它不必猜命令怎么拼 |
+| 静态门禁"文件里出现过一次 X" | 只断言"某文件里出现过一次 `access.runShell`"——同一文件里另外 6 处裸 `runShell` 全都没被发现，OSS 的列举/读结果/签名/上传在受限沙箱下必然失败 | 门禁要断言**不许出现**（逐个调用点扫），而不是"至少出现过一次"；新增执行器时同时把违规形态（裸调用 + 直接 import `shell/run.ts`）都列进去（2026-09-29 用户复查抓到的 P1 假绿） |
+| 坏请求把已授权的状态掀掉 | 把"请求不合法"（版本不符 / 能力清单被改）与"落盘失败"混成一种失败，于是旧版界面或手工坏请求也会落实一个关闭态 | 两类必须分开：不合法请求**什么都不改**（不改活状态、不碰磁盘），只有落盘/回读失败才 fail closed（2026-09-29 M5） |
+| 拿成功记录做失败归因 | 前置判据取"最新一条 dws 记录"，而界面自检刚跑过成功的 `dws auth status`；`not-authorized` / `invalid-source` 这类访问控制结果也被当成执行失败 | 判据是"**最近一次失败**"：`errorClass === ''` 不是失败、访问控制类不是执行失败、最近失败不是 DWS 时不许往回翻（2026-09-29 M6） |
+| 拼接出来的 PowerShell 结构坏了，本机看不见 | 用数组 `join('; ')` 拼脚本，分号落在 `try {` / `foreach (...) {` 后面 → `try {;` 空语句；括号不配平、有 `try` 没 `catch` 同理 —— 在 macOS 上完全不可见，Windows 上表现成"探测拿不到结论"而不是报错 | Windows 命令一律写成**整段脚本**（不要 join），并由 `host-dws-local.test.mjs` 的结构自检守：左花括号后不许空语句、`{}()[]` 必须配平、有 `try` 必须有 `catch`、POSIX 命令在 Windows 上必须为空（2026-09-29 M7） |
+| CI 合同与生成器各说一套 | 生成器早已输出 `crwu-acl/2` + `modify-mask` + 数字权限位，Windows 合同测试还在要 `/1` 与 `modify\|partial` —— 本机没 pwsh，只在 CI 红 | 生成器与合同测试必须同一协议版本；本地加一条结构化判据（生成器输出必须含 `/2` 与 `modify-mask`，且不含 `/1`）（2026-09-29 M8） |
+| PowerShell 包装异常读错层 | `[IO.File]::Open` 抛出的 IOException 被 `MethodInvocationException` 包住，直接读外层 `$_.Exception.HResult` 永远对不上共享冲突 32/33 → "真的持锁"也变 Unknown | 沿 `InnerException` 解包到根异常再读 HResult；本地用结构判据守（计数器从 0 起、循环有上限、每一步往里走、HResult 从 `$e` 读）（2026-09-29 M9） |
+| 只探目录、漏掉锁文件 | 原始报错目标是 `.data.lock`，只判目录 → 目录正常时归因退化成 `cli`、修复入口不出现；修复还会无条件连目录一起改 | 目录与锁文件**分别**探权限并分别形成 `filesystemAccessDenied`；修复只动被证明有问题的对象（2026-09-29 M10） |
+| 把模式读成 uid | `parseOwnerMode` 把第一个 token 当 uid，只有模式的输出（`644`）被读成 uid=644 → "不是你的文件" → 跳过修复（可修变不可修） | 形状必须是 `<uid> <mode>`，否则结论留 `null`（不知道）；既不说是你的，也不说不是（2026-09-29 M11） |
+| 有人持锁就报文件锁 | `lockHeld === true` 单独成立即归因 `file-lock`，于是"认证失败 + 恰好有人持锁"被说成文件锁 | 两个条件缺一不可：原始失败与锁有关（Broker 记的脱敏布尔事实 `lockRelated`）+ 当前正向探测持锁（2026-09-29 M12） |
+| 客户端替 Host 猜"能不能做" | 体检按钮的可点性若由客户端自己推断，就会与 Host 的前置门禁不一致（亮着被拒 / 灰着却能体检） | 能力/可做性一律由 Host 给事实（`dwsDiagnosable` / `canDiagnose`），且与门禁**同一个判据**；两侧各有证伪用例（2026-09-29 M13） |
+| 注释里的不变式没实现 | `requireCaseDir` 的注释写着"案例目录必须在 Host 选定工作空间之下"，代码里只校验了"绝对 + 存在 + 是目录 + 没有 .." —— `caseDir` 是模型参数，于是可以指到工作空间之外（`oss_publish` 外泄任意可读文件、`h3yun_record_get` 把它当特权命令 cwd） | 把不变式做成**必填参数**（`allowedRoot`，编译器保证不漏传；运行时漏传 fail closed），并补工具级反例：越界 → `policy` + **零命令**（2026-09-29 M14） |
+| 夹具的 `contains` 只认 `/` | 真实 `fs.contains` 是规范化比较（Windows 路径照样成立），夹具只认正斜杠 → Windows 用例假红，或掩盖真实行为 | 夹具的 `contains` 两种分隔符都认；Windows 用例的 `state` 也要与案例目录同平台（信任域自洽）（2026-09-29 M15） |
+| 边界靠"两处巧合相等"成立 | `openPath` 的注释写"只允许打开案例根内的文件"，实现却是"案例根为空就跳过检查"；那天唯一挡住它的是 Broker 的提权必须有 workdir（而 `defaultCaseRoot` 的兜底恰好就是那个 workdir） | **未知信任域 = 拒绝**，判据放在任何 fs 探测之前；用例断言"被拒时对目标零 fs 调用"，这样把判据挪到后面也会红（2026-09-29 M16） |
+| 脱敏声明缺证据 | `dataSample` 的注释写着"绝不回传 token"，但只有**失败路径**被喂过 token；成功路径的 sample 只用 `{"v":1}` 试过 —— 声明成立、证据不在 | 声明式的安全承诺要**端到端**喂一次对抗输入（成功路径也要）；并且注意"值级净化"与"对象路径的密钥字段整条丢掉"是两回事，别把后者当成前者的证据（2026-09-29 M17） |
+| 零件有证据、接线没有 | 卡片自己的 `schemaMismatch` 分支有用例、协议不一致的整屏也有用例，但"权限说明版本不一致 → 卡片被禁用"这条**接线**没有任何用例（面板恒传 `false` 也没人发现） | 安全/门禁类的判据要按**链路**取证：判据真值表 + 每一跳（面板 → 环境页 → 卡片）各一条，四跳都能被注入打红（2026-09-29 M18） |
+| 两个相似的判据被"顺手统一" | `hostIsStale`（协议 null = 还没答 → **不算**旧）与 `hostPermissionSchemaStale`（null = 旧宿主没给字段 → **算**不一致）的 null 语义**刻意相反** | 语义相反的地方要有真值表用例 + 注释写明理由；把两者"统一"会立刻打红两条用例（2026-09-29 M19） |
+| 卸载路径从没跑过 | `smoke:built` 收集 `effects` 却从不调用，"忘了 `return` disposer"（Cordis 经典坑）在本地完全看不见：卸载后路由还在、看门狗还在轮询。替身的 `register` 还返回空 disposer，把"有没有释放"变成永远绿 | 冒烟里真的跑一遍卸载（逆序调用每个 effect 的 disposer），断言路由被摘掉、工具被逐个注销；替身的 `register` 必须返回真的注销函数（2026-09-29 M20） |
+| 门禁只测了一个方向 | "单条并发"有两个方向：同一条报告 → 带时间戳重启（有用例）、**另一条报告在跑 → 拒绝**（没用例，删掉那段 `if` 也不红） | 双向门禁要两边都取证据；拒绝型断言要同时钉住"零子代理"与"原占用原样保留"（2026-09-29 M21） |
+| 顺序声明没有判据落在真调用上 | 注释写"并发冲突先于能力预检"，只断言 `readiness` 没跑**抓不到**（它是更晚的一道门）；要把判据落在**工具真的被调用**（`ctx.toolCalls`）上 | 顺序类声明要观察那个"更贵的步骤"本身是否发生（2026-09-29 M22） |
+| 注入是空操作 → 假证伪 | 我第一次"把门禁挪到预检之后"实际上把它插回了原处（`replace(marker, gate+marker)`），于是"仍然全绿"被我读成"抓不到"；差点据此写下错误的结论 | 注入后要**回读文件**确认真的改了（grep 或带守卫的 assert），否则证伪的是空气（2026-09-29 M23） |
+| 门禁判"包含"而不是"精确等于" | 案例内 Tool 只校验"`caseDir` 落在选定工作空间之下" —— 一个工作空间里有很多案例目录，于是 S1 的子会话可以传 `<工作空间>/S2` 或传工作空间根再读 `S2/文件`（读出来传上 OSS / 往别的案例里写） | 判据改成"与 Host 记录的 `casePath` **规范解析后精确相等**"（`audit/scope.ts`）+ `seqNo`/`objectId` 一致；工作空间级旧根判过期（2026-09-29 M24） |
+| 模型提交的标识没有绑到本轮 | `objectId` / `fileId` 都由模型给，Host 只查"格式对不对"，于是审核子会话能读**别的**记录、把任意附件下到自己的案例目录 | 记录查询移出审核能力集（注册面 ≠ 审核能力集），文件下载只认**可信输入快照**里登记的 `fileId`（2026-09-29 M25） |
+| 边界设对了但 cwd 还是外层 | 沙箱边界改成案例目录、根的 cwd 仍是工作空间：子会话继承的是 **cwd**，通用 fs 的默认落点仍在工作空间 | 根的 `meta.cwd` 与边界**一起**钉成案例目录，并回读核对（读得到时必须相符）（2026-09-29 M26） |
+| 拒绝条件写成"范围可用"而不是"身份" | `record_get`/`files_list` 的拒绝用 `auditScopeFor(...) !== undefined`：一轮审核 `ended:true` 后 scope 变为不可用，那个还活着的子会话就绕过拒绝去读任意 `objectId`。**同一形态**还有 `case_bootstrap`（`caseDir` 钉死了，但 `objectId` 是提交进来的） | 这类"面板能用 / 审核子会话不能用"的判据一律按**调用者身份**（`isAuditChild`，不要求 scope 可用）；交付前自审时补的两条（2026-09-29 M27） |
+| 夹具跳过了整段复查 | `agents.get()` 只返回根 Agent → 子会话策略/工具复查整段被跳过，"期望值写错"这类缺陷永远不会红（第二轮复查的 P1 就是这么漏掉的） | 关键复查必须有一条"**真的返回 child** + 正确值 → 正常启动"的正向用例（2026-09-29 M28） |
+| "名单"当成安全边界 | 把工具从"必需集"里删掉只是预检名单：子会话照样看得到、也执行得了。真边界是 provider 的 `toolFilter`（scoped `tools.restrict()`），且**不支持过滤的 provider 必须在创建前拒绝** | 声明"某类调用者不能用某工具"时，判据必须落在**执行/可见性**上（2026-09-29 M29） |
+| 发布早于记账的窗口 | `subagents.start()` 返回前子会话已在跑：身份拒绝失效、scope 还不存在 | 两阶段握手：**先落 pending scope（父会话认领）→ 再创建 → 再写真身份**；失败回滚（2026-09-29 M30） |
+| 安全判据押在别人的元数据上 | 窗口内"父会话"只读会话头 `meta.parentSession`：那个字段由委派方写入，插件既保证不了也测不到 | 判据要有**权威退路**：读不到就问会话存储（`subagents.listChildren`）"审核根的孩子里有没有它"，两条都拿不到才 fail closed（2026-09-29 M33） |
+| 超时被当成成功 | `Promise.race` 里计时器**正常 resolve**，不会进 catch → `disposed=false` 但 `errors=[]`，上层继续重试 | 超时必须显式区分"谁赢了"，并以"子会话是否仍在 running"作为静默判据；没确认就**不覆盖记录、不起下一条**（2026-09-29 M31） |
+| 不透明 ID 被当路径解析 | `FsTarget.targetKey` 是 `Branded` 不透明标识，只允许等值比较；按路径归一化会错误放行 | 身份比较一律 `===`；`displayPath` 只用于显示；夹具也必须用**不透明 key**建模（2026-09-29 M32） |
+| 必需集与拒绝集重叠 | `crwu_audit_case_bootstrap` 同时属于"根必需"和"子会话 deny"，而子会话复查用根必需集 → 真 `toolFilter` 一生效，**正常子会话刚创建就被停** | 拆成 root-required / child-required 两个集合，并用一条门禁断言二者**不相交**；"谁能看到什么"与"谁必需什么"必须分开表达（2026-09-29 M34） |
+| 用归属当本次启动的身份 | 窗口内按"父会话 = 审核根"认领 scope：同一个 root 下的旧 sibling 可以冒领新审核的案例范围 | 没有不可伪造的 launch token 时，**没有权威 childId 就不放行**（fail closed）；父会话判据只能用在**拒绝方向**（多拒绝是安全的，放行不是）（2026-09-29 M35） |
+| 失败回滚不看静默 | 启动后复查失败就立刻删记录/句柄/占用：dispose 超时 + Agent 仍 running 时，旧子会话还在写案例目录而 Host 已不认识它 | 回滚前必须 `quiesced`；没确认就写成**退役记录**并保留句柄与占用，让用户能再停一次（2026-09-29 M36） |
+| 拿不到子 Agent 也继续跑 | 边界复查依赖 `localAgent`，远程 provider 没有它；只记 warning 继续 = 在无法验证边界的子会话里跑完审核 | 读不到就停并失败；provider 只接受能给出本进程子 Agent 的本地实现，**不回退到"第一个注册的"**（2026-09-29 M37） |
+| 进程内锁当跨进程事实 | 重启时原样恢复 `pending`（childId 从未落地）记录与指向空 childId 的锁 | 恢复时退役不可绑定的 pending，并且**不恢复**指向空 childId 的占用锁（2026-09-29 M38） |
+| 停止只用"一个 RPC 的返回值"表达 | 点了停止后界面只能等这一次 RPC（8 秒空白），而且 timeout 与 disposed 在返回值里长得一样 | 两阶段协议：**先接受并落盘阶段 → 后台继续 → 状态接口回报阶段**；阶段是持久化事实，`canStartNext` 只由 Host 判定（2026-09-29 M39） |
+| 客户端自己推断"已停止" | 用 `status !== 'running'` 或"没看到错误"推 stopped/quiesced —— 后端字段缺失时就会显示成功 | 缺字段 = **未知**：不许推断；`canStartNext` 只信 Host，timeout/failed 一律不放行（2026-09-29 M40） |
+| 子串匹配断言阶段文案 | timeout 的文案「暂时无法确认子会话**已停止**」本身包含"已停止"三个字，`includes` 会假红 | 断阶段文案要比**整行开头**（`startsWith`）或按 aria-live 区域取行，不用整篇 `includes`（2026-09-29 M41） |
+| 撤销授权后还能读到本机凭据 | 界面把入口禁掉，但 `oss-cred` / `ifind-status` / `ifind-probe` / 宿主凭据服务 `set`/`delete` 没有 Host 侧门禁：撤销之后直接调 RPC 照样读 `.ossutilconfig` 与凭据文件 | 门禁写在**读函数**里（`readOssCred` / `readIfindSecret` / `writeIfindSecret` / `clearIfindSecret` / `dwsLocalDoctor`），判据是"未授权时 fs / store / 网络**零调用**"（`host-access-rpc-gate.test.mjs`） |
+| 撤销"点了"但没真的关 | 撤销把内存更新排在 `await writeWorkbenchConfig` 之后；写盘失败后环境刷新又从磁盘读回旧授权，进程内变回 `granted` | 任何 `await` **之前**把内存切到关闭态（`persist-failed` 墓碑）；`syncLocalAccessConsent` **不许**用磁盘授权覆盖这个墓碑；客户端在撤销失败时也不刷新环境 |
+| Windows 上"读不到"被说成"不存在" | `statOf` 把任何异常折成 `exists:false`，`lstat` 的异常也被吞掉——`Access is denied` 于是变成「`.dws` 不存在，请先登录一次」，修复还可能沿着未知类型的路径动手 | `stat` / `lstat` 一律三态（`present` / `absent` / `error`）：只有 `undefined` 才算不存在；`error` 必须停在"无法确认"并阻断修复 |
+| Windows ACL 只找"自己的 Allow" | 给组的权限看不见、显式 Deny 也看不见，于是"修完"报成功而 DWS 依然写不进去 | 判决按**有效权限**算（自己的 + 所属组的 SID、继承 ACE、Deny 优先），并且修复的回读要**真的写一次**（建临时文件 / 以写方式打开） |
+| 锁文件存在 ⇒ 锁被占用 | `lockExists && canModify` 被当成 `lockHeld`；分类器还允许"只有锁文本"就定性 | 锁必须**正向探测**（POSIX `lsof -t --`；Windows 无可靠手段 → `unknown`）；拿不到结论就不定性，也不回退成"本机文件权限问题" |
+| 保存凭据"成功"但没保护住 | OSS/iFinD 的写盘函数在 `permission.status === 'failed'` 时仍回顶层 `ok:true`，只附一句错误字符串 | 顶层 `ok` 由 `credentialPermissionSatisfied()` 决定（POSIX 回读 `0600` 才算成功；Windows `inherited` 按设计成立） |
+| 撤销授权后还能读到本机凭据 | `chmod` / `icacls` 在只读挂载 / 网络盘 / 上层策略覆盖下会**退出码 0 而什么都不改** | `ok` 必须由**回读**决定：修了哪一类就核对哪一类的后置条件（`700` / `600` / `modify=True`），对不上就说"回读与预期不符"（`host-dws-local.test.mjs` 有"静默无效"用例） |
+| 一条探测的"沙箱事实"看起来完全访问，其实什么都没证明 | `shell/run.ts` 的 `resolved = spec.sandboxPolicy?.mode` 是**我们自己请求**的模式，特权操作恒为 `danger-full-access`；`ran`（`ShellRunResult.sandbox.mode`）才是执行器答的 | 判断"这条探测真的跑在完全访问下吗"**只能看 `ran`**；替身也要按**服务形状** `{ mode, denied, runnerFailed }` 返回，写成 `{ ran }` 会被 `runShell` 静默忽略（2026-09-29 踩到） |
+| 体检把「沙箱不让写」当成「操作系统权限不对」，于是给出一个按下去真会改权限的按钮 | 探测命令虽然声明了逐次 `danger-full-access`，但部署可能把提权降级；受限 shell 里 `test -w ~/.dws` 照样回 1（实测：目录是 `700`、属主就是当前用户） | 每条探测都要先判**它自己**有没有被沙箱拦下（`probeSandboxed`：`denied` / `runnerFailed` / `ran !== danger-full-access`）；被拦下时只能说"不知道"（`null`），`classification` 保持沙箱类，`repairOffered` 自然不渲染（2026-09-29 真机探测抓到） |
+| `dws` 体检报「读不到所有者/模式」（`directoryMode`/`ownerMatchesCurrentUser` 空） | `stat -f %u %Lp <path>` —— BSD 的 `-f` **只吃紧跟其后的那一个** token，`%Lp` 被当成文件操作数 → `stat: %Lp: stat: No such file or directory` | 格式串自己也要经 `shellQuote`（`stat -f '%u %Lp' <path>`）；`tests/windows/powershell-contract.test.mjs` 的真 shell 用例会红（2026-09-29 就是这么抓到的 —— 只断言命令字符串的测试全绿） |
+| 体检的结论永远是"没确诊" | `dwsLocalDoctor` 自己也要跑几条特权命令，它们会进诊断环形缓冲；等体检跑完再读 `lastDiagnostic()` 拿到的是**体检自己**那一条 | 进体检第一件事就把上一次失败抓在手里（`const failure = deps.access.lastDiagnostic()`），再用它 + 本次探测结论做归因 |
+| "不许改权限"的用例删掉某条判据后**照样绿** | 真正的守门人是"必须正向确诊 `os-filesystem-permission`"那条白名单判据，前面几条具体拒绝只是更早的文案 | 证伪这类断言时要把**白名单判据**放宽（不是删黑名单项），否则证明不了任何东西（2026-09-29 实测：删掉钥匙串判据两次都不红，放宽正向确诊立刻红 2 条） |
+| 提示词里删掉了"未登录就停下"的要求，测试**照样绿** | 断言用的是整篇 `text.includes('立即停止本次审核')`，而同一句话在"数据边界"那一条里也出现过 | 提示词断言先 `indexOf('**登录与授权（必须照做）**')` 定位段落，再在**段内**逐句查（`host-audit-prompt.test.mjs` 的 C-08 用例就是这么写的）。同类风险：任何"整篇包含式"断言 |
+| 审核子会话跑到工作区外面去了 | 只写了提示词、没设会话策略；DSH 的沙箱是 `session 覆盖 ?? 部署默认`，而部署默认可能是 `danger-full-access` | `host/audit/policy.ts` 显式写 + 回读 + 按委派口径预测（§4.8）；`auto` / `danger-full-access` preset 的根**不可复用** |
+| 加了 Broker 之后，环境自检里的 `dws auth status` 还是自己拼命令 | 它把 `shellInvoke(dws, ...)` 直接交给 Broker —— 提权走对了，但**绕开了 `runDws` 的 argv 白名单** | 业务 CLI 一律经登记的执行器（`runDws` / `runCrwu`）；`host-access-migration.test.mjs` 的 B-01 守卫会红（2026-09-29 实测抓到两处） |
+| 授权类测试全绿，但"未授权不放行"永远测不到 | 夹具给 Broker 传的是 `state` 的**副本**，测试改 `state.localAccess` 时 Broker 看不到 | `makeTestAccess(ctx, { state })` 直接复用同一个对象（见 `tests/helpers/local-access-broker-fixture.mjs`） |
+| 提权断言"没有沙箱策略"在 OSS 上失效 | 协议 18 把 `ossutil` 也归入本机凭据访问（它**每次**都读 `~/.ossutilconfig`） | 这类断言的判据是"要不要碰工作区外的凭据"，不是"这条命令看起来像不像读凭据"。改断言时写清原因，别只改期望值 |
+| **未授权时仍然报「还没有填写 AccessKey」**（协议 18 加授权闸门时踩到） | 给 `if (granted && …)` 加了闸门，但**后面的 `else if` 没有**：被拒绝的 `if` 会继续往下走，于是用占位事实派了一条真实任务 | 闸门要包**整条链**，不能只包第一个分支。判据：`else if` 的每个分支都自己带条件（或整链套一层 `if (granted) { … }`）。`host-environment-env.test.mjs` 的 A-03 用例按 **issue id** 断言"未授权时没有凭据类任务"，就是拦这个的 |
+| 状态文件夹具写了 `trustCredentials:true`，`env` 却报「需要授权」 | 协议 18 的授权是**整条收据**：旧的布尔键被判成 `outdated`（这是刻意的，防静默扩权） | 夹具统一用 `tests/helpers/local-access-fixture.mjs` 的 `grantedConsent()` / `consentConfigJson()`；各文件里手写收据字面量会在下一次升 schema 时静默过期 |
+| 新客户端接旧宿主，授权看起来成功了、实际按旧范围跑 | `boot.permissionSchemaVersion` 与客户端不一致（旧宿主根本没这个字段） | `build-store.ts` 的 `hostPermissionSchemaStale()` 判它；不一致时授权卡整体禁用并提示完全退出重启 DSH。**不要**只依赖协议号：两者是同一个 bundle 里的常量，语义不同（协议号答"哪一代"，权限 schema 答"执行的判据是哪版"） |
 | 「重启了但还是旧行为」 | 客户端刷新即换新，宿主只有重启才换 | 比对 `ping.builtAt` 与 `lib/index.js` 的 mtime |
 | 审核子代理挂在聊天会话下 | 宿主是旧构建（按旧规则挂"当前会话"） | 重启 profile；`audit-start` 的父级必须是审核根会话 |
 | 授权重启后丢失 | 状态文件写入被受限沙箱拦住（且错误被吞） | `writeText` 带 `sandboxPolicy`，失败要报出来 |
@@ -373,7 +434,7 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
    profile / nodeId 都不在 schema 里。审核 Tool 的输入只有业务标识 + `caseDir`。
 2. **命令不经模型**：`dws` 走 `runDws`（argv 前缀白名单，表外默认拒绝），`crwu` 走 `runCrwu` 且审核
    Tool 先做严格二进制解析，`ossutil` 只在 `crwu_audit_oss_publish` 里拼。
-3. **提权不由模型触发**：只有本机凭据命令 + 已授权（`trustCredentials`）+ `workspaceRoot` 已知，
+3. **提权不由模型触发**：只有本机凭据命令 + 已允许（`localAccess` 收据）+ `workspaceRoot` 已知，
    插件才在请求里带 `danger-full-access`；其它一律默认沙箱。
 
 ### 12.3 怎么验

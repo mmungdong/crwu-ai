@@ -4,6 +4,7 @@ import { text } from '../../shared/utils/value.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
 import { applyDeploymentConfig } from '../config/deployment.ts'
 import { runCrwu } from '../crwu/run.ts'
+import { runDws } from '../dws/run.ts'
 import type { WhoamiResult } from '../system/identity.ts'
 import { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } from './manifest-default.ts'
 import { shellInvoke } from '../platform/shell.ts'
@@ -23,8 +24,13 @@ import { ossConfigPath, readOssCred, type OssCredView } from '../oss/cred.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { EnvironmentStateView } from '../../shared/environment/model.ts'
 import type { OssConfigView, RuntimeView, WorkspaceView } from '../../shared/types.ts'
+import {
+  LOCAL_ACCESS_REQUIRED_REASON,
+  type LocalAccessConsentView,
+} from '../../shared/access/types.ts'
 import { ensureRegistry } from '../state/registry.ts'
-import { readWorkbenchConfig } from '../state/persist.ts'
+import { localAccessGranted, syncLocalAccessConsent } from '../access/consent.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import { workspaceView } from '../state/store.ts'
 import { ensureWorkspace, sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
@@ -86,11 +92,12 @@ export interface EnvResult {
   home: string
   platform: string
   /**
-   * 「信任本插件读取本机凭据」当前是否已授权。
-   * 字段名从 `h3yun` 改成 `credentials`（2026-09-22，协议号 +1）：授权范围是**读本机凭据**，
-   * 覆盖氚云会话与钉钉登录态，不再只是氚云。
+   * 本机访问授权收据（协议 18）。
+   *
+   * 取代了旧的 `trust: { credentials: boolean }`：布尔值回答不了「授的是哪个范围、什么时候授的、
+   * 范围升级后旧的同意还算不算」。现在整条收据上线，界面与 Host 门禁读的是同一份事实。
    */
-  trust: { credentials: boolean }
+  localAccess: LocalAccessConsentView
   /** ① 案例根目录（工作空间）：不在 `services` 里，是审核产物的落地目录。 */
   workspace: WorkspaceView
   /** 审核子代理挂在哪个会话下（建在选定工作空间里的那个顶层会话）。 */
@@ -109,10 +116,42 @@ function serviceRequired(manifest: EnvManifest, id: string, fallback: boolean): 
   return hit === undefined ? fallback : hit.required
 }
 
+/**
+ * **未授权时的占位事实**：不是「探测失败」，而是「还没有被允许去看」。
+ *
+ * `state` 用 `需要授权`（`serviceItem()` 会把它映射成 `unconfigured`）、`detail` 用全仓统一的
+ * 那一句原因 —— 于是界面绝不会出现「未登录 / 密钥错误 / 未找到」。这三个词在未授权时都是
+ * **未经探测的假结论**，而员工真正要做的只是先授权。
+ */
+function skippedServiceCheck(id: string, label: string, required: boolean): ServiceCheck {
+  return { id, label, required, ok: false, state: '需要授权', detail: LOCAL_ACCESS_REQUIRED_REASON, errorKind: '' }
+}
+
+/** 同上，iFinD 版本的占位（**不读凭据文件、不打网络**，所以路径与样本都是空串）。 */
+function skippedIfindCheck(manifest: EnvManifest): IfindCheck {
+  return {
+    path: '',
+    required: manifest.ifind.required === true,
+    ok: false,
+    state: 'unconfigured',
+    errorKind: '',
+    reason: LOCAL_ACCESS_REQUIRED_REASON,
+    tokenLength: 0,
+    checkedAt: '',
+    toolCount: 0,
+    dataVerified: false,
+    dataTool: '',
+    dataSample: '',
+    applyUrl: manifest.ifind.applyUrl,
+  }
+}
+
 export interface EnvDeps {
   ctx: Context
   config: WorkbenchConfig
   state: WorkbenchState
+  /** Broker（协议 18）：自检里的每一次本机访问都由它判（来源多为 host-background）。 */
+  access: LocalAccessBroker
   home: string
   platform: string
   sessionRoot: () => Promise<string>
@@ -224,10 +263,15 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const manifest = applyDeploymentConfig(DEFAULT_MANIFEST, config)
   state.manifest = manifest
 
-  await ensureRegistry(ctx, home, state)
-  // 「信任本插件读取本机凭据」是**一次授权、长期有效**的：从工作台状态文件恢复，
+  await ensureRegistry({ ctx, home, state, access: deps.access })
+  // 本机访问授权（协议 18）：从工作台状态文件恢复整条收据 —— 一次授权、长期有效，
   // 否则员工每次重启 profile 都要重新授权（用户 2026-09-22 口径）。
-  state.trustCredentials = (await readWorkbenchConfig(ctx, home)).trustCredentials === true
+  //
+  // `granted` 是**后面所有本机凭据探测的总闸**：没授权就一次子进程都不起、一个凭据文件都不读。
+  // 未授权时读到的「未登录 / 密钥不存在」是**假结论**（受限沙箱下读不到钥匙串），
+  // 把它显示出来会把员工指去重新扫码或换密钥。
+  const localAccess = await syncLocalAccessConsent({ ctx, home, state, access: deps.access })
+  const granted = localAccess.state === 'granted'
   await ensureWorkspace(ctx, home, state, {
     preferTitle: config.preferWorkspaceTitle,
     preferPath: manifest.workspace.preferPath,
@@ -239,15 +283,24 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const runtime = await probePythonRuntime(deps, manifest, args.refresh === true)
   // ⑥ 外部数据：凭据在插件状态目录（五态）。**每次环境校验都真的验一次**
   // （initialize + tools/list + 真取一次数据）；`refresh`（用户点「重新检查」）绕过 30s 缓存。
-  const external = await ifindEnvCheck(ctx, home, {
-    probe: true,
-    force: args.refresh === true || args.probeIfind === true,
-    // 必需与否只由清单一处决定（现为 true）：未通过就是阻塞项。
-    required: manifest.ifind.required === true,
-    applyUrl: manifest.ifind.applyUrl,
-    ...(deps.ifindTransport === undefined ? {} : { transport: deps.ifindTransport }),
-    ...(deps.ifindProbeCache === undefined ? {} : { cache: deps.ifindProbeCache }),
-  })
+  //
+  // **未授权时一次都不探**（协议 18，§A2）：`ifindEnvCheck` 会读凭据文件、还会真打一次外部取数。
+  // 这两件事都属于「本机账号与配置」的范围，没授权时既不该发生，也没有可信结论 ——
+  // 硬探一遍只会得到「未配置」这种假结论（文件权限不足读不到），把员工指去填一份他早就填过的密钥。
+  const external = granted
+    ? await ifindEnvCheck(ctx, home, {
+      probe: true,
+      // 读凭据/打外部取数之前由**读函数自己**再过一次门禁（Host 侧边界，不是界面禁用）。
+      access: deps.access,
+      source: 'panel',
+      force: args.refresh === true || args.probeIfind === true,
+      // 必需与否只由清单一处决定（现为 true）：未通过就是阻塞项。
+      required: manifest.ifind.required === true,
+      applyUrl: manifest.ifind.applyUrl,
+      ...(deps.ifindTransport === undefined ? {} : { transport: deps.ifindTransport }),
+      ...(deps.ifindProbeCache === undefined ? {} : { cache: deps.ifindProbeCache }),
+    })
+    : skippedIfindCheck(manifest)
   const services: ServiceCheck[] = []
 
   // 氚云会话：只有 crwu 能回答，所以直接问它。
@@ -257,12 +310,13 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   // `read H3Yun session from operating system credential store: secret not found in keyring` ——
   // 那是**假结论**，面板照着显示就成了「未登录」，把人指去重新扫码。
   // 之前这里无条件跑一遍：既是假的结论，又因为提权白名单漏了 `session status` 而永远拿不到真值。
-  const trustedCredentials = state.trustCredentials === true
+  const trustedCredentials = granted
   const sessionRun = trustedCredentials
     ? await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], {
       workdir: await deps.sessionRoot(),
       timeoutMs: 20_000,
-      trusted: true,
+      access: deps.access,
+      source: 'host-background',
       platform,
     })
     : null
@@ -310,12 +364,14 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   // `{"authenticated":false,"message":"未登录"}` —— 实测同一台机器同一时刻：沙箱里 false、
   // 带 `sandboxPolicy: danger-full-access` 时 true。所以「未授权时不许猜」：宁可说需要授权，
   // 也不能报一个假的「未登录」把员工指去重新登录。
-  const dwsCommand = await resolveBundledCommand(ctx, platform, 'dws')
+  // 走 `runDws`（而不是自己拼命令 + Broker）：那样**argv 白名单**这一层也照样生效 ——
+  // 否则环境自检就成了绕过白名单的第二条 `dws` 调用点。
   const dwsRun = trustedCredentials
-    ? await runShell(ctx, shellInvoke(dwsCommand, ['auth', 'status', '--format', 'json'], platform), {
+    ? await runDws(ctx, platform, ['auth', 'status', '--format', 'json'], {
       workdir: await deps.sessionRoot(),
+      access: deps.access,
+      source: 'host-background',
       timeoutMs: 30_000,
-      escalate: true,
     })
     : null
   let dwsDoc: Record<string, unknown> | null = null
@@ -330,7 +386,10 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   }
   const dwsAuthed = dwsDoc?.authenticated === true
   // 已授权、但命令**根本没跑起来**（沙箱后端不可用 / 审批被拒）→ 读不到，也要如实说「被拦住」。
-  const dwsUnconfirmed = trustedCredentials && !dwsAuthed && dwsRun !== null && shellUnavailable(dwsRun)
+  // 「命令根本没跑起来」的判据来自**结构化错误类别**（不是文本）：基础设施 / 审批 / 能力缺口
+  // 三种都属于"没拿到真结论"，而 `cli` 是它真的回了「未登录」——那才是可信的。
+  const dwsUnconfirmed = trustedCredentials && !dwsAuthed && dwsRun !== null
+    && (dwsRun.errorKind === 'infrastructure' || dwsRun.errorKind === 'approval' || dwsRun.errorKind === 'capability-gap')
   services.push({
     id: 'dingtalk',
     label: '钉钉认证',
@@ -352,7 +411,13 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const oss = manifest.oss
   const ossutil = packageIntegrity.tools.find((tool) => tool.name === 'ossutil')
   const ossutilReady = ossutil?.ok === true
-  const ossProbe = await probeOss(ctx, oss, platform)
+  //
+  // **未授权时既不读配置、也不探测**（协议 18，§A2）：`probeOss` 要起 `ossutil` 进程，
+  // 而 `ossutil` 一定会去读 `%USERPROFILE%\.ossutilconfig` —— 那正是需要授权的东西；
+  // `readOssCred` 更是直接读这个文件。未授权时给出的「未配置 / AK 无效」都不是事实。
+  const ossProbe = granted
+    ? await probeOss(ctx, oss, platform, { access: deps.access })
+    : skippedServiceCheck('oss', '阿里云 OSS（AK 权限）', serviceRequired(manifest, 'oss', true))
   const delivery = {
     oss: {
       enabled: oss.enabled,
@@ -365,7 +430,14 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
       ossutilReady,
       ossutilPath: ossutilReady ? bundledBinaryPath(platform, 'ossutil') : '',
     },
-    ossCred: await readOssCred(ctx, home),
+    ossCred: granted
+      ? await readOssCred(ctx, home, { access: deps.access, source: 'panel', workdir: home })
+      : {
+        path: ossConfigPath(home), exists: false, endpoint: '', accessKeyIdMasked: '',
+        hasSecret: false, hasSts: false, language: '',
+        // 未授权不是"没配置"：说清是"还没允许"，别让员工去重填一份已有的密钥。
+        reason: localAccessGranted(localAccess) ? '' : '还没有允许工作台读取本机配置',
+      },
     probe: { ...ossProbe, required: serviceRequired(manifest, 'oss', true) },
   }
 
@@ -386,7 +458,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     platform,
     workspace,
     preferWorkspaceTitle: config.preferWorkspaceTitle || manifest.workspace.preferTitle,
-    trustCredentials: state.trustCredentials,
+    localAccess,
     h3yun: services[0] ?? { id: 'h3yun', label: '氚云（H3Yun）员工会话', required: true, ok: false, state: '', detail: '' },
     dingtalk: services[1] ?? { id: 'dingtalk', label: '钉钉认证', required: true, ok: false, state: '', detail: '' },
     packageIntegrity,
@@ -427,7 +499,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     state: envState,
     home,
     platform,
-    trust: { credentials: state.trustCredentials },
+    localAccess,
     workspace,
     auditRoot: auditRootView(ctx, state),
     sessionWorkspace: sessionWorkspaceInfo(ctx, state),

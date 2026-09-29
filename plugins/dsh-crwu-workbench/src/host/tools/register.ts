@@ -8,7 +8,7 @@ import { h3yunTools } from './h3yun.ts'
 import { ifindTool } from './ifind.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { ossTools } from './oss.ts'
-import { REQUIRED_AUDIT_TOOLS } from './consts.ts'
+import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from './consts.ts'
 import type { ToolDeps } from './types.ts'
 
 /**
@@ -55,9 +55,9 @@ export function registerCrwuTools(ctx: Context, deps: ToolDeps): () => void {
   }
 }
 
-/** 注册的工具名（测试与错误信息共用一处）。 */
+/** 注册的工具名（测试与错误信息共用一处）：**注册面**，不是审核子会话的能力集。 */
 export function crwuToolNames(): string[] {
-  return [...REQUIRED_AUDIT_TOOLS]
+  return [...CRWU_BUSINESS_TOOLS]
 }
 
 /**
@@ -66,11 +66,20 @@ export function crwuToolNames(): string[] {
  * 判据是 registry 的 scope resolver（`ctx.tools.get(name, agent)`）而不是「插件注册过没有」：
  * provider 可能给子代理收窄工具集，只看注册表会漏掉那一类失败。返回缺失名单，空数组 = 齐备。
  */
-export function missingAuditTools(ctx: Context, agent: Agent | undefined): string[] {
+export function missingAuditTools(
+  ctx: Context,
+  agent: Agent | undefined,
+  /**
+   * 要检查的必需集。**默认是根必需集**；复查**子会话**时必须传
+   * `REQUIRED_AUDIT_CHILD_TOOLS` —— 否则被 deny 的 `crwu_audit_case_bootstrap`
+   * 会被算成"子会话缺工具"，每条正常子会话刚创建就被停掉（2026-09-29 第三轮复查的 P1）。
+   */
+  required: readonly string[] = REQUIRED_AUDIT_TOOLS,
+): string[] {
   const registry = ctx.get('tools') as { get?: (name: string, scope?: unknown) => unknown } | undefined
   const get = registry?.get
-  if (typeof get !== 'function') return [...REQUIRED_AUDIT_TOOLS]
-  return REQUIRED_AUDIT_TOOLS.filter((name) => {
+  if (typeof get !== 'function') return [...required]
+  return required.filter((name) => {
     try {
       // scope 直接给 **Agent 对象**：DSH 的 scoped 路由就是拿 agent 当 key
       // （`scopeTarget(base, exec.agent)`）。传 `agent.ctx` 会落到别的层，读出来全是「不可见」。

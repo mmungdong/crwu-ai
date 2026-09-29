@@ -25,6 +25,17 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * 于是很容易出现「界面是新的、逻辑是旧的」——审核挂错会话那次就是这么来的（用户看到新按钮、
  * 跑的是老代码，报障说「还是挂错位置」）。
  *
+ * 18：**本机访问授权收据 + 授权前零副作用自检**（2026-09-29）。跨进程契约有三处语义变化，
+ *    必须靠协议号自己喊出来（照 §7.12 的既有口径）：
+ *    ① `env.trust: { credentials: boolean }` 被 `env.localAccess: LocalAccessConsentView` 取代 ——
+ *       布尔值回答不了「授的是哪个范围、什么时候授的、范围升级后旧的同意还算不算」；
+ *    ② **未授权时不再探测**氚云 / 钉钉 / OSS / iFinD：未授权时读到的「未登录 / 密钥错误」是
+ *       受限沙箱造成的**假结论**。旧宿主会在未授权时照样探一遍并显示那些结论，
+ *       新界面读不到 `localAccess` 只会显示「需要授权」——语义上是一致的，但
+ *       新界面**必须**靠协议号拦住旧宿主（否则旧宿主会把假结论说成真实故障）；
+ *    ③ 新增 `local-access-grant` / `local-access-revoke` 两个操作，旧 `trust` 保留一代但
+ *       **只回协议不匹配的失败、不再授予任何权限**（旧客户端静默授予新范围是绝对不行的）。
+ *    操作清单 33 → 38（两个授权操作 + 只读的 `access-diagnostics` + DWS 目录体检与修复；`tests/helpers/frozen-inventory.mjs` 盯着）。
  * 17：**凭据权限结论结构化**（2026-09-28）。`ifind-credential-save` 与 `oss-cred-save` 的应答里
  *    `chmodOk: boolean` / `chmodError: string` 被 `permission: CredentialPermission`
  *    （`status: verified|inherited|failed` + `mechanism` + `message`）取代。语义上必须喊出来的原因：
@@ -99,7 +110,7 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 17
+export const WORKBENCH_PROTOCOL = 19
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

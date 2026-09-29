@@ -29,6 +29,7 @@ const { missingAuditTools, registerCrwuTools } = await import(new URL('src/host/
 const { IFIND_PROTOCOL_VERSION, IFIND_SUPPORTED_PROTOCOL_VERSIONS, negotiateProtocol, trimIfindSchema,
         pickProbeTool, readToolsCallResult } =
   await import(new URL('src/host/ifind/mcp.ts', ROOT).href)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 const { ifindEnvCheck, createIfindProbeCache, credentialFingerprint } =
   await import(new URL('src/host/ifind/env.ts', ROOT).href)
 const { ifindProbe, ifindCredentialSave, ifindCredentialClear, ifindStatus } =
@@ -598,6 +599,16 @@ test('R2·list_tools 有明确上限、truncated=true，且后部工具仍可用
 
 // ── 10. Host 操作：保存 / 清除 / 探测（**不是**模型可见的 Tool）───────────────
 
+test('P-09/M-04 · iFinD 权限回读不是 0600 时，保存顶层必须失败', async () => {
+  const fs = makeIfindFs({ missing: true })
+  const shell = makeIfindShell({ mode: '644' })
+  const result = await ifindCredentialSave(makeIfindOpsDeps({ fs, shell }), { secret: 'abcdefghij' })
+  assert.equal(result.ok, false, '权限没生效就不是保存成功')
+  assert.equal(result.errorKind, 'policy', '这是权限后置条件不成立，不是输入问题')
+  assert.equal(result.permission.status, 'failed')
+  assert.match(result.error, /权限/)
+})
+
 test('ifind-credential-save：保存成功后立刻做一次**真实**探测，认证成功才算通过', async () => {
   const fs = makeIfindFs({ missing: true })
   const transport = makeIfindTransport({ tools: ['a', 'b'] })
@@ -703,7 +714,7 @@ test('ifind-status：只读文件时如实回 unverified，不许说已认证', 
 test('环境校验 = 真的取一次数据：成功时 dataVerified=true 并留下脱敏证据', async () => {
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['get_stock_summary'] })
-  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport })
+  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
   assert.equal(check.ok, true)
   assert.equal(check.state, 'authenticated')
   assert.equal(check.dataVerified, true, '真的取到数据才算验证通过')
@@ -718,7 +729,7 @@ test('环境校验 = 真的取一次数据：成功时 dataVerified=true 并留�
 test('取数结果里回显了 API-Key 也要被净化（dataSample 绝不带出凭据）', async () => {
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['t'], callText: '{"v":1}' })
-  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport })
+  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
   assert.equal(check.dataVerified, true)
   assert.equal(check.dataSample.includes(IFIND_TEST_TOKEN), false, `摘要泄露了 API-Key：${check.dataSample}`)
   assert.equal(check.dataSample.includes('Bearer '), false, '摘要不得带 Authorization')
@@ -734,7 +745,7 @@ test('认证通过但取数失败：ok=true（凭据没问题）且 dataVerified
   for (const [call, kind, pattern] of cases) {
     const fs = makeIfindFs()
     const transport = makeIfindTransport({ tools: ['t'], call: call === 'http500' ? 'http' : call })
-    const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport })
+    const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
     assert.equal(check.dataVerified, false, call)
     // **凭据确实通过了认证**（会话 + 工具清单都过了）→ `ok:true`；
     // 界面据此说"认证通过，但这次没取到数据"，而不是笼统的"验证失败"。
@@ -749,7 +760,7 @@ test('取数阶段的 401 / 403 也分开归因（不是笼统的"取数失败"�
   for (const [call, kind] of [['http401', 'credential'], ['http403', 'entitlement']]) {
     const fs = makeIfindFs()
     const transport = makeIfindTransport({ tools: ['t'], call })
-    const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport })
+    const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
     assert.equal(check.dataVerified, false, call)
     assert.equal(check.errorKind, kind, `${call} → ${check.errorKind}`)
     assert.match(check.reason, /取数失败/, call)
@@ -762,7 +773,7 @@ test('取数阶段取消 → 不算成功，且原因说"已取消"', async () =
   // 第一次调用就取消：initialize 阶段就会走 cancelled 分支。
   const controller = new AbortController()
   controller.abort()
-  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, signal: controller.signal })
+  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }), signal: controller.signal,  })
   assert.equal(check.dataVerified, false)
   assert.equal(check.ok, false)
   assert.match(check.reason, /取消/)
@@ -807,10 +818,67 @@ test('readToolsCallResult：isError / 空内容算失败；有内容才算成功
   assert.match(ok.sample, /"v":1/)
 })
 
+test('取数成功的**短摘要**也必须净化：正文里的 token / Bearer / 密钥字段一律不出现', () => {
+  // 这条声明在类型注释里（`dataSample`：最多 300 字符，**绝不回传 token**），
+  // 但此前只有**失败路径**被喂过 token（`bad.error`）—— 成功路径的 sample 只用 `{"v":1}` 试过。
+  // 也就是说"绝不回传 token"这句在成功路径上没有证据（2026-09-29 复查）。
+  const { redact } = makeIfindRedactor([TOKEN, 'session-42'])
+  const payload = [
+    `{"apiKey":"${TOKEN}","value":42}`,
+    `Authorization: Bearer ${TOKEN}`,
+    `mcp-session-id: session-42`,
+    `note=ok`,
+  ].join('\n')
+  const ok = readToolsCallResult({ content: [{ type: 'text', text: payload }] }, redact)
+  assert.equal(ok.ok, true)
+  assert.equal(ok.sample.includes(TOKEN), false, `短摘要里不许出现 token：${ok.sample}`)
+  assert.equal(/bearer/i.test(ok.sample), false, `Bearer 形式也要抹掉：${ok.sample}`)
+  assert.equal(ok.sample.includes('session-42'), false, `会话 id 同样要抹掉：${ok.sample}`)
+  // ⚠️ `sample` 是从 **文本** 来的（MCP 的 `content[].text`），所以这里只发生"值级"净化：
+  // token / Bearer / 会话 id 都被抹掉，但 JSON 里的**键名**会留下 —— 键名不是凭据本身。
+  // "密钥字段整条丢掉"是**对象路径**的口径（`trimIfindSchema` 与结构化 redact），另有用例覆盖。
+  assert.equal(ok.sample.includes('[凭据已净化]'), true, '要留下净化占位符（证明是抹掉，不是整段丢空）')
+  assert.equal(ok.sample.includes('note'), true, '普通内容要留着（净化不是整段丢弃）')
+  assert.equal(ok.sample.length <= 300, true, `短摘要上限 300 字符：${ok.sample.length}`)
+})
+
+test('取数摘要走的是**带 token 的**净化器（接线本身也要能被证伪）', async () => {
+  // 上一条用例是直接调 `readToolsCallResult(payload, redact)` —— 它证明的是"两个零件接得对"，
+  // **证明不了接线**：把生产者那行的 `makeIfindRedactor([token, …])` 换成 `makeIfindRedactor([])`
+  //（也就是净化器不认识这个 token），那条用例照样全绿。所以这里必须走**真实工具路径**：
+  // 桩 transport 返回带 token 的取数结果，断言工具输出里一个 token 都不剩。
+  const transport = {
+    async post(request) {
+      const parsed = JSON.parse(request.body)
+      if (parsed.method === 'initialize') {
+        return { status: 200, headers: { 'mcp-session-id': 's' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }) }
+      }
+      if (parsed.method === 'notifications/initialized') return { status: 202, headers: {}, body: '' }
+      if (parsed.method === 'tools/list') {
+        return { status: 200, headers: {}, body: JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 't' }] } }) }
+      }
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 3,
+          result: { content: [{ type: 'text', text: `{"apiKey":"${TOKEN}","v":1} Authorization: Bearer ${TOKEN}` }] },
+        }),
+      }
+    },
+    calls: [],
+  }
+  const out = await call(makeIfindToolDeps({ transport }), { operation: 'query', serverType: 'stock', toolName: 't', params: {} })
+  assert.equal(out.ok, true, String(out.error))
+  const serialized = JSON.stringify(out)
+  assert.equal(serialized.includes(TOKEN), false, `工具输出里不许出现 token：${serialized.slice(0, 240)}`)
+  assert.equal(/bearer/i.test(serialized), false, `Bearer 形式也要抹掉：${serialized.slice(0, 240)}`)
+})
+
 test('环境校验默认就真探；probe:false 才跳过（这时只回长度，不回"已认证"）', async () => {
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['t'] })
-  const skipped = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, probe: false })
+  const skipped = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }), probe: false })
   assert.equal(skipped.state, 'unverified')
   assert.equal(skipped.dataVerified, false)
   assert.deepEqual(transport.calls, [], 'probe:false 时一个请求都不发')
@@ -821,15 +889,15 @@ test('探测缓存：30s 内复用（面板反复刷新不打上游）；force �
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['t'] })
   const ctx = { get: (name) => fs.get(name) }
-  const first = await ifindEnvCheck(ctx, HOME, { transport, cache })
+  const first = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), cache })
   assert.equal(first.dataVerified, true)
   const callsAfterFirst = transport.calls.length
   // 第二次（同凭据、未 force）→ 走缓存，不新增请求。
-  const second = await ifindEnvCheck(ctx, HOME, { transport, cache })
+  const second = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), cache })
   assert.equal(second.dataVerified, true)
   assert.equal(transport.calls.length, callsAfterFirst, 'TTL 内不该再打上游')
   // force → 真的重探。
-  await ifindEnvCheck(ctx, HOME, { transport, cache, force: true })
+  await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), cache, force: true })
   assert.ok(transport.calls.length > callsAfterFirst, 'force 必须绕过缓存')
   // 指纹：换一份 key 就是另一个 key（旧条目自然失效）。
   assert.notEqual(credentialFingerprint('a'.repeat(12)), credentialFingerprint('b'.repeat(12)))
@@ -838,9 +906,15 @@ test('探测缓存：30s 内复用（面板反复刷新不打上游）；force �
 
 test('缺 API-Key / 未配置时不发请求，也不报"已认证"', async () => {
   const transport = makeIfindTransport()
-  const check = await ifindEnvCheck({ get: (name) => makeIfindFs({ missing: true }).get(name) }, HOME, { transport })
+  const ctx = { get: (name) => makeIfindFs({ missing: true }).get(name) }
+  const check = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx) })
   assert.equal(check.state, 'unconfigured')
   assert.equal(check.dataVerified, false)
   assert.deepEqual(transport.calls, [])
   assert.match(check.reason, /API-Key/)
 })
+
+/** 环境自检的 Broker：协议 18 起"读凭据 + 打外部取数"之前必须过 Host 侧门禁。 */
+function ifindAccessOf(ctx) {
+  return makeTestAccess(ctx, { home: HOME }).access
+}

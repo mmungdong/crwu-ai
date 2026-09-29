@@ -23,6 +23,7 @@ const { installSpecOf, installOptionsOf, installStageOf, classifyChangeResult, r
   await import(new URL('src/host/update/manager.ts', ROOT).href)
 const { createPluginUpdateStore, pluginUpdateStoreOf, parsePluginUpdate, pluginUpdatePatch, clearPluginUpdatePatch } =
   await import(new URL('src/host/update/persist.ts', ROOT).href)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 const { UPDATE_PACKAGE_NAME, UPDATE_SUCCESS_TTL_MS } = await import(
   new URL('src/shared/update/consts.ts', ROOT).href
 )
@@ -281,7 +282,7 @@ test('持久化 1：合法记录可解析，版本与时间被规范化', async 
 
   // 真实 store 走真实读盘（readWorkbenchConfigResult）。
   const fs = memoryFs({ [CONFIG_PATH]: JSON.stringify({ workspacePath: '/cases/a', pluginUpdate: awaiting }) })
-  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x')
+  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x', makeTestAccess(fs.ctx).access)
   assert.deepEqual(await store.read(), awaiting)
 })
 
@@ -330,7 +331,7 @@ test('持久化 3：合并写入保留 workspace/trust/audit 与未知兄弟字�
       futureField: { nested: [1, 2, 3] },
     }),
   })
-  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x')
+  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x', makeTestAccess(fs.ctx).access)
   const record = {
     phase: 'installing',
     fromVersion: '0.0.11',
@@ -362,7 +363,7 @@ test('持久化 4：清除后顶层 pluginUpdate 真正消失，其它字段一�
       },
     }),
   })
-  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x')
+  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x', makeTestAccess(fs.ctx).access)
   assert.equal(await store.clear(), true)
 
   const file = readConfigFile(fs)
@@ -383,7 +384,7 @@ test('持久化 4：清除后顶层 pluginUpdate 真正消失，其它字段一�
 
 test('持久化 5：落盘内容只有恢复必需字段，没有 registry/requestId/日志/token/命令', async () => {
   const fs = memoryFs({})
-  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x')
+  const store = pluginUpdateStoreOf(fs.ctx, '/Users/x', makeTestAccess(fs.ctx).access)
   await store.write({ phase: 'installing', fromVersion: '0.0.11', targetVersion: '0.0.12', startedAt: NOW })
   await store.write({
     phase: 'awaiting-restart',
@@ -1092,7 +1093,7 @@ test('恢复 34：malformed 持久化 → idle，绝不下发安装', async () =
   const fs = memoryFs({
     [CONFIG_PATH]: JSON.stringify({ workspacePath: '/cases/a', pluginUpdate: { phase: 'installed', nonsense: true } }),
   })
-  const harness = createHarness({ store: pluginUpdateStoreOf(fs.ctx, '/Users/x') })
+  const harness = createHarness({ store: pluginUpdateStoreOf(fs.ctx, '/Users/x', makeTestAccess(fs.ctx).access) })
   const state = await harness.service.recover()
 
   assert.deepEqual(state, { status: 'idle' })

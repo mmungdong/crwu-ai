@@ -3,9 +3,11 @@ import { text } from '../../shared/utils/value.ts'
 import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { mkdirCommand, privateFileMechanism, removeFileCommand } from '../platform/shell.ts'
-import { enforceCredentialPermission, hostStorePermission } from '../platform/credential-permission.ts'
+import { credentialPermissionSatisfied, enforceCredentialPermission, hostStorePermission } from '../platform/credential-permission.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 import type { CredentialPermission } from '../../shared/types.ts'
-import { runShell, shellUnavailable } from '../shell/run.ts'
+import { shellUnavailable } from '../shell/run.ts'
 
 /**
  * iFinD **API-Key** 的**插件自有凭据存储**。
@@ -143,10 +145,23 @@ export interface ReadSecretResult {
  * 失败时 `secret` 恒为空串，调用方只需看 `ok` / `state` / `errorKind`。任何分支都不得把
  * 文件内容带进 `reason`（文件里就是密钥本身）。
  */
-export async function readIfindSecret(ctx: Context, home: string): Promise<ReadSecretResult> {
+export async function readIfindSecret(
+  ctx: Context,
+  home: string,
+  options: { access: LocalAccessBroker; source?: LocalAccessSource; workdir?: string },
+): Promise<ReadSecretResult> {
   const path = ifindCredentialPath(home)
   const empty = (state: string, errorKind: 'input' | 'infrastructure', reason: string): ReadSecretResult =>
     ({ ok: false, secret: '', state, errorKind, reason, view: { path, exists: false, state, length: 0, reason } })
+
+  // **Host 侧门禁**（协议 18 · P-11）：界面把按钮禁掉只是体验，RPC 才是边界。
+  // 未授权时 provider / fs / credential store **零调用** —— 撤销之后直接调 RPC 也读不到任何东西。
+  const decision = options.access.authorize({
+    operation: 'ifind.credential.read',
+    source: options.source ?? 'panel',
+    workdir: options.workdir ?? home,
+  })
+  if (!decision.ok) return empty('unconfigured', 'infrastructure', decision.error)
 
   const resolved = resolveIfindStore(ctx)
   if (resolved.kind === 'host' && resolved.store !== undefined) {
@@ -211,14 +226,23 @@ export async function readIfindSecret(ctx: Context, home: string): Promise<ReadS
  *
  * 刻意**不返回明文**：调用方拿不到就不存在"顺手回显一下"的可能。
  */
-export async function ifindCredentialView(ctx: Context, home: string): Promise<IfindCredentialView> {
-  return (await readIfindSecret(ctx, home)).view
+export async function ifindCredentialView(
+  ctx: Context,
+  home: string,
+  options: { access: LocalAccessBroker; source?: LocalAccessSource; workdir?: string },
+): Promise<IfindCredentialView> {
+  // 走同一个读函数：**视图也是本机事实**（存在与否、长度），所以要过同一道门禁。
+  // 未授权时它不是"没配置"，而是"还没有允许读取" —— 由 `reason` 如实说明。
+  return (await readIfindSecret(ctx, home, options)).view
 }
 
 export interface WriteSecretResult {
   ok: boolean
-  /** `credential` 是输入问题，`infrastructure` 是写盘/权限问题。 */
-  errorKind: 'input' | 'infrastructure' | ''
+  /**
+   * `input` 是输入问题，`infrastructure` 是写盘/环境问题，
+   * `policy` 是**权限后置条件没成立**（文件写进去了但没被保护住，见 P-09/M-04）。
+   */
+  errorKind: 'input' | 'infrastructure' | 'policy' | ''
   error: string
   /** 脱敏视图（成功后有 `exists=true` 与长度）。 */
   view: IfindCredentialView
@@ -266,7 +290,7 @@ export async function writeIfindSecret(
   ctx: Context,
   home: string,
   rawSecret: unknown,
-  options: { platform?: string; placeholder?: unknown } = {},
+  options: { platform?: string; placeholder?: unknown; access: LocalAccessBroker },
 ): Promise<WriteSecretResult> {
   const path = ifindCredentialPath(home)
   // 平台由调用方注入；先解析，失败信封与权限结论都用同一个值。
@@ -276,6 +300,10 @@ export async function writeIfindSecret(
 
   const resolved = resolveIfindStore(ctx)
   if (resolved.kind === 'host' && resolved.store !== undefined) {
+    // 宿主凭据服务也是「本机凭据」：写之前同样要过门禁（旧实现直接 `store.set`，
+    // 未授权也能写进去，等于绕开收据）。
+    const decision = options.access.authorize({ operation: 'ifind.credential.write', source: 'panel', workdir: home })
+    if (!decision.ok) return writeFailure('input', decision.error, path, platform)
     try {
       await resolved.store.set(IFIND_CREDENTIAL_KEY, verdict.value)
       return {
@@ -299,9 +327,11 @@ export async function writeIfindSecret(
     return writeFailure('infrastructure', '未知平台，拒绝在没有平台事实的情况下写凭据', path, platform)
   }
   const dir = ifindStateDir(home)
-  const mkdirRun = await runShell(ctx, mkdirCommand(dir, platform), {
-    workdir: home, timeoutMs: 15_000, escalate: true,
-  })
+  const mkdirRun = await options.access.runShell(
+    { operation: 'ifind.credential.permission', source: 'panel', workdir: home },
+    mkdirCommand(dir, platform),
+    { timeoutMs: 15_000, summary: 'ifind.credential.permission（建目录）' },
+  )
   const dirReady = mkdirRun.ok
   if (!dirReady) {
     return writeFailure('infrastructure',
@@ -309,18 +339,29 @@ export async function writeIfindSecret(
   }
 
   const body = `${JSON.stringify({ [IFIND_CREDENTIAL_FIELD]: verdict.value }, null, 2)}\n`
-  try {
-    await fs.writeText(await resolveTarget(ctx, path), body, undefined, undefined, {
-      mode: 'danger-full-access',
-      workspaceRoot: home,
-    })
-  } catch (error) {
-    return writeFailure('infrastructure',
-      `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, path, platform)
+  const written = await options.access.writeText(
+    { operation: 'ifind.credential.write', source: 'panel', workdir: home },
+    { kind: 'ifind-credential', path },
+    body,
+  )
+  if (!written.ok) {
+    return writeFailure('infrastructure', `写入 iFinD 凭据失败：${written.error}`, path, platform)
   }
 
   // 权限结论由 `enforceCredentialPermission` 统一给出（三条结局各有名字，见 shared/types.ts）。
-  const permission = await enforceCredentialPermission(ctx, path, platform, { workdir: home, escalate: true })
+  const permission = await enforceCredentialPermission({
+    access: options.access, operation: 'ifind.credential.permission', path, platform, workdir: home,
+  })
+  // 权限没成立就不算保存成功（P-09/M-04）：POSIX 上必须**回读**为 0600。
+  // 旧形态回 `ok:true` + 一句附带的错误字符串，界面漏看就会把"其实没保护住"当成功。
+  if (!credentialPermissionSatisfied(permission)) {
+    return {
+      ok: false, errorKind: 'policy',
+      error: `凭据已写入 ${path}，但权限没有生效：${permission.message}`,
+      dirReady, permission, mode: 'file',
+      view: { path, exists: true, state: 'unverified', length: verdict.length, reason: permission.message },
+    }
+  }
   return {
     ok: true, errorKind: '', error: '', dirReady, permission, mode: 'file',
     view: { path, exists: true, state: 'unverified', length: verdict.length, reason: '' },
@@ -331,10 +372,13 @@ export async function writeIfindSecret(
 export async function clearIfindSecret(
   ctx: Context,
   home: string,
-  options: { platform?: string } = {},
+  options: { platform?: string; access: LocalAccessBroker },
 ): Promise<{ ok: boolean; errorKind: 'infrastructure' | ''; error: string; mode: 'host' | 'file' }> {
   const resolved = resolveIfindStore(ctx)
   if (resolved.kind === 'host' && resolved.store !== undefined) {
+    // 宿主凭据服务的删除同样是跨边界动作：未授权时不许动它（否则就等于绕开收据清凭据）。
+    const decision = options.access.authorize({ operation: 'ifind.credential.clear', source: 'panel', workdir: home })
+    if (!decision.ok) return { ok: false, errorKind: 'infrastructure', error: decision.error, mode: 'host' }
     try {
       await resolved.store.delete(IFIND_CREDENTIAL_KEY)
       return { ok: true, errorKind: '', error: '', mode: 'host' }
@@ -348,9 +392,11 @@ export async function clearIfindSecret(
   if (platform === '') {
     return { ok: false, errorKind: 'infrastructure', error: '未知平台，拒绝在没有平台事实的情况下清除凭据', mode: 'file' }
   }
-  const result = await runShell(ctx, removeFileCommand(ifindCredentialPath(home), platform), {
-    workdir: home, timeoutMs: 15_000, escalate: true,
-  })
+  const result = await options.access.runShell(
+    { operation: 'ifind.credential.clear', source: 'panel', workdir: home },
+    removeFileCommand(ifindCredentialPath(home), platform),
+    { timeoutMs: 15_000, summary: 'ifind.credential.clear' },
+  )
   if (!result.ok) {
     return { ok: false, errorKind: 'infrastructure',
       error: `${shellUnavailable(result) ? '清除命令没跑起来：' : '清除失败：'}${text(result.stderr) || text(result.error) || '未知原因'}`.slice(0, 300),

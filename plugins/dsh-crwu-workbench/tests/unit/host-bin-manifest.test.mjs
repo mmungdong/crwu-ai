@@ -195,13 +195,21 @@ test('the real package stages both platforms with a manifest that describes the 
 
 /** 直接跑发布严格模式的自检脚本（可把自带二进制目录指到临时目录）。 */
 async function runStrictPackAssert(binDir) {
+  // ⚠️ `assert-pack.mjs --strict` 会**真的 `npm pack`** 一次 —— 这是套件里第二处驱动打包的测试
+  //（第一处是 `host-package.test.mjs` 的安装回归）。两者并行时会互相踩：前者读整棵包目录，
+  // 后者的 `prepack` 正在重写 `lib/`，于是打印出来的 tarball 清单与被测断言对不上。
+  // 2026-09-29 实测：全量跑偶发红在 "release strict mode fails when bin/ is absent entirely"，
+  // 单独跑该文件 10/10 通过。所以这里也进同一把构建锁（见 `tests/helpers/build-lock.mjs`）。
+  const { withBuildLock } = await import(new URL('../helpers/build-lock.mjs', import.meta.url).href)
   try {
-    const { stdout } = await run(process.execPath, [join(ROOT, 'scripts', 'assert-pack.mjs'), '--strict'], {
-      cwd: ROOT,
-      maxBuffer: 64 * 1024 * 1024,
-      env: { ...process.env, CRWU_BIN_DIR: binDir },
+    return await withBuildLock(async () => {
+      const { stdout } = await run(process.execPath, [join(ROOT, 'scripts', 'assert-pack.mjs'), '--strict'], {
+        cwd: ROOT,
+        maxBuffer: 64 * 1024 * 1024,
+        env: { ...process.env, CRWU_BIN_DIR: binDir },
+      })
+      return { code: 0, output: stdout }
     })
-    return { code: 0, output: stdout }
   } catch (error) {
     return { code: error.code ?? 1, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }
   }

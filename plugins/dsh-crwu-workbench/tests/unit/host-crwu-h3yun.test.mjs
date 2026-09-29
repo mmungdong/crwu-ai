@@ -7,8 +7,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
+const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+const { missingConsent } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
 
-const { escalationAllowed, keychainBlocked, runCrwu, describeFailure } = await import(
+const { crwuOperationOf, keychainBlocked, runCrwu, describeFailure } = await import(
   new URL('src/host/crwu/run.ts', ROOT).href
 )
 const { rowsFromEnvelope, totalFromEnvelope, buildQueryFilter, rowToTask, seqNoFromKey, pickForm } = await import(
@@ -25,36 +27,39 @@ const { parseOssConfig, buildOssConfig, readOssCred, ossConfigPath, resolveConfi
 test('runCrwu refuses anything that is not the crwu binary', async () => {
   const ctx = { get: () => undefined }
   for (const argv of [[], ['sh', '-c', 'ls'], ['crwu2'], ['/usr/bin/crwu']]) {
-    const run = await runCrwu(ctx, argv, { trusted: true })
+    const run = await runCrwu(ctx, argv, { access: makeTestAccess(ctx).access, source: 'panel' })
     assert.equal(run.ok, false)
     assert.match(run.error, /缺少命令|只允许调用 crwu/)
   }
 })
 
-test('runCrwu only escalates whitelisted h3yun subcommands', async () => {
-  // 白名单必须是显式枚举：氚云将来加子命令时默认落在「拒绝」侧。
-  //
-  // `session` 整段放行（2026-09-28 修）：`login` 写钥匙串，而 `status` / `bind` **读**钥匙串 ——
-  // 受限沙箱下读不到就会回 `secret not found in keyring`，那是**假结论**（面板会显示成「未登录」）。
-  // 之前只放行 `login`，于是环境自检那条 `session status` 永远拿不到真值。
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'login']), true)
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'status']), true)
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'session', 'bind']), true)
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'records', 'list']), true)
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'forms', 'search']), true)
-  assert.equal(escalationAllowed(['crwu', 'audit', 'run']), false)
-  assert.equal(escalationAllowed(['crwu', 'h3yun', 'admin']), false)
-  assert.equal(escalationAllowed(['crwu']), false)
+test('B-07/B-08：crwu 子命令 → 本机访问操作的固定映射（钥匙串读取必须提权，表外默认拒绝）', async () => {
+  // 协议 18：提权不再是调用方给的布尔值，而是**子命令自己**的属性。
+  // `session` 整段登记（2026-09-28 修）：`login` 写钥匙串，而 `status` / `bind` **读**钥匙串 ——
+  // 受限沙箱下读不到就会回 `secret not found in keyring`，那是**假结论**（界面会显示成「未登录」）。
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'login']), 'h3yun.session.login')
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'status']), 'h3yun.session.status')
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session', 'bind']), 'h3yun.session.bind')
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'records', 'list']), 'h3yun.records.read')
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'forms', 'search']), 'h3yun.forms.read')
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'files', 'list']), 'h3yun.files.read')
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'file', 'get']), 'h3yun.files.read')
+  // 表外 / 没登记的一律 null → runCrwu 拒绝执行（默认拒绝，新增子命令必须显式登记）。
+  assert.equal(crwuOperationOf(['crwu', 'audit', 'run']), null)
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'admin']), null)
+  assert.equal(crwuOperationOf(['crwu', 'h3yun', 'session']), null)
+  assert.equal(crwuOperationOf(['crwu']), null)
+  assert.equal(crwuOperationOf(['sh', '-c', 'ls']), null)
 })
 
-test('runCrwu rejects an explicit escalation it is not allowed to make', async () => {
+test('runCrwu 拒绝没有登记操作的子命令（形状合法也不行）', async () => {
   const ctx = { get: () => undefined }
-  const run = await runCrwu(ctx, ['crwu', 'audit', 'run'], { trusted: true, escalate: true })
+  const run = await runCrwu(ctx, ['crwu', 'audit', 'run'], { access: makeTestAccess(ctx).access, source: 'panel' })
   assert.equal(run.ok, false)
-  assert.match(run.error, /不允许无沙箱执行/)
+  assert.match(run.error, /还没有登记本机访问操作/)
 })
 
-test('runCrwu 里白名单命令自己声明权限（员工零配置），非白名单给最小权限', async () => {
+test('runCrwu：已允许就逐次声明 danger-full-access；未允许**一个进程都不起**', async () => {
   const specs = []
   const ctx = {
     get: (name) => (name === 'shell'
@@ -66,26 +71,35 @@ test('runCrwu 里白名单命令自己声明权限（员工零配置），非白
         }
       : undefined),
   }
-  // 未授权：白名单命令也**不提权**（授权就是「允许读本机凭据」的同意；没授权时环境自检会硬阻塞）。
-  await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: false, platform: 'darwin-arm64', workdir: '/cases/x' })
-  assert.equal(specs[0].sandboxPolicy, undefined, '未授权不得无沙箱执行')
+  // 未允许本机访问：连命令都不发（旧形态是"发一条不提权的命令"，那会拿到假的「未登录」）。
+  const denied = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], {
+    access: makeTestAccess(ctx, { consent: missingConsent() }).access, source: 'panel',
+    platform: 'darwin-arm64', workdir: '/cases/x',
+  })
+  assert.deepEqual(specs, [], '未允许时不许起进程')
+  assert.equal(denied.ok, false)
+  assert.equal(denied.escalated, false)
+
+  // 已允许：逐次声明所需权限（读钥匙串必须在沙箱外）。
+  await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { access: makeTestAccess(ctx).access, source: 'panel', platform: 'darwin-arm64', workdir: '/cases/x' })
+  assert.deepEqual(specs[0].sandboxPolicy, { mode: 'danger-full-access', workspaceRoot: '/cases/x' })
   assert.equal(specs[0].command, 'crwu h3yun records list')
 
-  // 已授权 + 白名单：声明所需权限（读钥匙串必须在沙箱外）。
+  // 调用方没给 workdir 时，Broker 用**插件已知的会话工作区**兜底（同一个事实源）——
+  // 这仍然是提权执行，只是 workspaceRoot 来自部署事实而不是这一次调用的参数。
   specs.length = 0
-  await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: true, platform: 'darwin-arm64', workdir: '/cases/x' })
-  assert.deepEqual(specs[0].sandboxPolicy, { mode: 'danger-full-access', workspaceRoot: '/cases/x' })
+  const fallback = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { access: makeTestAccess(ctx).access, source: 'panel', platform: 'darwin-arm64' })
+  assert.equal(fallback.ok, true)
+  assert.equal(specs[0].sandboxPolicy?.mode, 'danger-full-access')
 
-  // 非白名单：即使已授权也给最小权限。
+  // 连会话工作区都拿不到时 **fail closed**：DSH 拒绝"没有工作区的提权执行"，
+  // 而退回沙箱执行只会拿到一个假的「未登录」——那正是这一轮要消灭的东西。
   specs.length = 0
-  await runCrwu(ctx, ['crwu', 'version'], { trusted: true, platform: 'darwin-arm64', workdir: '/cases/x' })
-  assert.equal(specs[0].sandboxPolicy, undefined, '非白名单命令即使已授权也不提权（能给最小权限就给最小）')
-
-  // 拿不到会话工作区时不能直接失败（提权请求必须带 workspaceRoot）→ 退回沙箱执行。
-  specs.length = 0
-  const fallback = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: true, platform: 'darwin-arm64' })
-  assert.equal(specs[0].sandboxPolicy, undefined, '没有 workspaceRoot 就退回沙箱')
-  assert.equal(fallback.ok, true, '不能因为拿不到工作区就把命令判失败')
+  const blind = makeTestAccess(ctx, { workdir: '' }).access
+  const noWorkdir = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { access: blind, source: 'panel', platform: 'darwin-arm64' })
+  assert.deepEqual(specs, [], '两个工作目录都拿不到就不发命令')
+  assert.equal(noWorkdir.ok, false)
+  assert.match(noWorkdir.error, /工作目录/)
 })
 
 test('runCrwu quotes arguments and passes the big stdout budget through', async () => {
@@ -101,7 +115,8 @@ test('runCrwu quotes arguments and passes the big stdout budget through', async 
       : undefined),
   }
   await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list', '--filter', "SeqNo Equal '2026-1-X1'"], {
-    trusted: true,
+    access: makeTestAccess(ctx).access,
+    source: 'panel',
     platform: 'darwin-arm64',
     workdir: '/cases/x',
     stdoutMaxBytes: RECORDS_STDOUT_MAX,
@@ -129,12 +144,27 @@ test('runCrwu offers escalation when the keychain blocked a sandboxed run', asyn
         }
       : undefined),
   }
-  const run = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: false, platform: 'darwin-arm64', workdir: '/cases/x' })
+  // 已经允许了本机访问：钥匙串失败就是**真的失败**，不该再劝员工去点一次「允许」。
+  const run = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { access: makeTestAccess(ctx).access, source: 'panel', platform: 'darwin-arm64', workdir: '/cases/x' })
   assert.equal(run.ok, false)
   assert.equal(run.keychainBlocked, true)
-  assert.equal(run.escalateAvailable, true, '界面据此显示「去授权」而不是干瞪眼')
+  assert.equal(run.escalateAvailable, false, '已经允许过就不再提示"去允许"')
+
+  // 还没允许：界面据此显示「去允许」，而且**一个进程都不起**。
+  const specs = []
+  const deniedCtx = {
+    get: (name) => (name === 'shell'
+      ? { resolve: (request) => { specs.push(request); return request }, async execute() { return { result: async () => ({ exitCode: 0, timedOut: false, stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false } }) } } }
+      : undefined),
+  }
+  const denied = await runCrwu(deniedCtx, ['crwu', 'h3yun', 'records', 'list'], {
+    access: makeTestAccess(deniedCtx, { consent: missingConsent() }).access, source: 'panel', platform: 'darwin-arm64', workdir: '/cases/x',
+  })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.escalateAvailable, true, '界面据此显示「去允许」而不是干瞪眼')
+  assert.deepEqual(specs, [], '未允许时不许起进程')
   // 已经记住授权的人不该再被反复打扰（这条是「trusted 只作为优化保留」的落地断言）。
-  const trustedRun = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { trusted: true, platform: 'darwin-arm64', workdir: '/cases/x' })
+  const trustedRun = await runCrwu(ctx, ['crwu', 'h3yun', 'records', 'list'], { access: makeTestAccess(ctx).access, source: 'panel', platform: 'darwin-arm64', workdir: '/cases/x' })
   assert.equal(trustedRun.escalateAvailable, false)
 })
 
@@ -285,7 +315,7 @@ test('readOssCred returns a masked view and never the secret', async () => {
         }
       : undefined),
   }
-  const view = await readOssCred(ctx, '/Users/x')
+  const view = await readOssCred(ctx, '/Users/x', { access: ossAccessOf(ctx) })
   assert.equal(view.exists, true)
   assert.equal(view.endpoint, 'oss-cn-x.aliyuncs.com')
   assert.equal(view.accessKeyIdMasked, 'AKID****7890')
@@ -300,10 +330,10 @@ test('readOssCred reports a missing file without throwing', async () => {
       ? { async resolve(path) { return { targetKey: path, displayPath: path } }, async stat() { return undefined } }
       : undefined),
   }
-  const view = await readOssCred(ctx, '/Users/x')
+  const view = await readOssCred(ctx, '/Users/x', { access: ossAccessOf(ctx) })
   assert.equal(view.exists, false)
   assert.equal(view.path, '/Users/x/.ossutilconfig')
-  const noFs = await readOssCred({ get: () => undefined }, '/Users/x')
+  const noFs = await readOssCred({ get: () => undefined }, '/Users/x', { access: ossAccessOf({ get: () => undefined }) })
   assert.equal(noFs.exists, false)
 })
 
@@ -350,8 +380,13 @@ test('Windows：命令带 PowerShell 调用运算符 `&`（员工实测 ParserEr
       return undefined
     },
   }
-  await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], { trusted: false, platform })
+  await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], { access: makeTestAccess(ctx).access, source: 'panel', platform, workdir: 'C:\\cases' })
   assert.equal(specs.length, 1)
   assert.equal(specs[0].command, `& '${bundled}' 'h3yun' 'session' 'status'`)
   assert.equal(specs[0].command.includes('"'), false, '不得出现 cmd 式双引号')
 })
+
+/** 读 `~/.ossutilconfig` 前必须过 Host 侧门禁（协议 18）：测试里给一个已授权的 Broker。 */
+function ossAccessOf(ctx) {
+  return makeTestAccess(ctx, { home: '/Users/x' }).access
+}

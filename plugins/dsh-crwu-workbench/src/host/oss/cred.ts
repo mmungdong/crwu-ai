@@ -1,4 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
 import { text } from '../../shared/utils/value.ts'
 import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { isWindowsPlatform } from '../platform/detect.ts'
@@ -44,11 +46,34 @@ export interface OssCredView {
   hasSecret: boolean
   hasSts: boolean
   language: string
+  /**
+   * 读不到时的原因（未授权 / 文件不可读）。空串 = 正常读到了（或确实没有这个文件）。
+   *
+   * 未授权与"没有配置"必须分开说：把前者显示成后者，员工会去重新填一份他早就填好的密钥。
+   */
+  reason: string
 }
 
 /** 读取当前 AK 配置的**脱敏视图**；文件不存在时全部为空，不抛错。 */
-export async function readOssCred(ctx: Context, home: string): Promise<OssCredView> {
+export async function readOssCred(
+  ctx: Context,
+  home: string,
+  options: { access: LocalAccessBroker; source?: LocalAccessSource; workdir?: string },
+): Promise<OssCredView> {
   const path = ossConfigPath(home)
+  // **Host 侧门禁**（P-11）：`~/.ossutilconfig` 是本机凭据文件，读它要先过收据。
+  // 界面把入口禁掉只是体验，撤销之后直接调 RPC 也必须读不到任何东西。
+  const decision = options.access.authorize({
+    operation: 'oss.config.read',
+    source: options.source ?? 'panel',
+    workdir: options.workdir ?? home,
+  })
+  if (!decision.ok) {
+    return {
+      path, exists: false, endpoint: '', accessKeyIdMasked: '',
+      hasSecret: false, hasSts: false, language: '', reason: decision.error,
+    }
+  }
   const view: OssCredView = {
     path,
     exists: false,
@@ -57,6 +82,7 @@ export async function readOssCred(ctx: Context, home: string): Promise<OssCredVi
     hasSecret: false,
     hasSts: false,
     language: '',
+    reason: '',
   }
   const fs = fileSystem(ctx)
   if (fs === undefined) return view

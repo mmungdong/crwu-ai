@@ -65,7 +65,9 @@ function isServerType(value: unknown): value is typeof IFIND_SERVER_TYPES[number
 /** 读令牌：位置只来自插件自有凭据存储，读前不做任何技能根搜索。 */
 async function readIfindToken(deps: ToolDeps): Promise<{ token: string; error: string }> {
   const home = await deps.world.home()
-  const result = await readIfindSecret(deps.ctx, home)
+  const result = await readIfindSecret(deps.ctx, home, {
+    access: deps.access, source: 'audit-tool', workdir: home,
+  })
   if (result.ok) return { token: result.secret, error: '' }
   return { token: '', error: `同花顺 iFinD 取数入口未认证：${result.reason}（在环境信息页填写 API-Key 后重试）` }
 }
@@ -145,7 +147,7 @@ export function ifindTool(deps: ToolDeps) {
 
       // ① 读本机凭据必须先获得授权：未授权一律 policy，且**不发任何请求**。
       if (!credentialsTrusted(deps)) {
-        return failure('policy', '读取本机同花顺 iFinD 凭据需要先在面板授权（trustCredentials）')
+        return failure('policy', '读取本机同花顺 iFinD 凭据需要先在面板允许工作台访问本机账号和配置')
       }
       // ② 令牌缺失 → capability-gap：模型应记能力缺口并继续其它检查项。
       const credential = await readIfindToken(deps)

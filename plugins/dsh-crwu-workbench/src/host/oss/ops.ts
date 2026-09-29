@@ -5,10 +5,13 @@ import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import type { EnvManifest, OssSpec } from '../environment/manifest-default.ts'
 import { ossutilMissingMessage, probeOss, resolveOssutil } from '../environment/probe.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
-import { openExternalCommand, privateFileMechanism, shellInvoke } from '../platform/shell.ts'
-import { enforceCredentialPermission } from '../platform/credential-permission.ts'
-import { runShell } from '../shell/run.ts'
+import { openExternalCommand, privateFileMechanism } from '../platform/shell.ts'
+import { credentialPermissionSatisfied, enforceCredentialPermission } from '../platform/credential-permission.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
+import type { OssExecDeps } from './run.ts'
 import { ossConfigPath, readOssCred, type OssCredView } from './cred.ts'
+import { runOssutil } from './run.ts'
 import {
   groupObjects, isResultJson, joinUrl, parseLsEntries, parseLsObjects, parseSignUrl, stripPrefix,
 } from './parse.ts'
@@ -35,6 +38,26 @@ export interface OssDeps {
   workdir: () => Promise<string>
   /** 主目录，用于 resolveOssutil 回退到清单里的安装目标。 */
   home: string
+  /** Broker（协议 18）：每一次 `ossutil` 调用都会读 `~/.ossutilconfig`，所以全部经它。 */
+  access: LocalAccessBroker
+  /**
+   * 这次调用是谁发起的。
+   *
+   * `ossutil` 的每一次调用都必须带上它 —— Broker 按来源判"这个来源配不配做这件事"，
+   * 少了它就只能退回一个默认值，而默认值会让"审核子会话发起面板操作"这种事静默通过。
+   */
+  source: LocalAccessSource
+}
+
+/** 统一的执行入口：把 deps 里的 ctx / access / platform / workdir / source 收成一处。 */
+async function exec(deps: OssDeps): Promise<OssExecDeps> {
+  return {
+    ctx: deps.ctx,
+    access: deps.access,
+    platform: deps.platform,
+    workdir: await shellWorkdir(deps),
+    source: deps.source,
+  }
 }
 
 async function shellWorkdir(deps: OssDeps): Promise<string> {
@@ -99,10 +122,12 @@ export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}
   // 那些元数据是"审核结果有没有重新生成过"的客观依据 —— 加 `--short-format` 等于把它们丢掉。
   const argv = [ossutil, 'ls', `oss://${oss.bucket}/${listedPrefix}/`]
   if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-  const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
-    workdir: await shellWorkdir(deps),
+  const run = await runOssutil(await exec(deps), {
+    operation: 'oss.remote.read',
+    argv,
     timeoutMs: 90_000,
     stdoutMaxBytes: 4 * 1024 * 1024,
+    summary: 'ossutil ls（列举交付件）',
   })
   if (!run.ok) {
     const raw = (text(run.stderr) || text(run.error) || text(run.stdout) || '列举失败').trim()
@@ -152,10 +177,12 @@ export async function ossResult(deps: OssDeps, args: Record<string, unknown>): P
 
   const argv = [ossutil, 'cat', `oss://${oss.bucket}/${key}`]
   if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-  const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
-    workdir: await shellWorkdir(deps),
+  const run = await runOssutil(await exec(deps), {
+    operation: 'oss.remote.read',
+    argv,
     timeoutMs: 60_000,
     stdoutMaxBytes: 8 * 1024 * 1024,
+    summary: 'ossutil cat（读审核结果）',
   })
   if (!run.ok) {
     const raw = (text(run.stderr) || text(run.error) || '读取审核结果失败').trim()
@@ -203,9 +230,11 @@ export async function ossLink(deps: OssDeps, args: Record<string, unknown>): Pro
     const ossutil = lookup.path
     const argv = [ossutil, 'sign', cloud, '--timeout', String(oss.linkTtl)]
     if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-    const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
-      workdir: await shellWorkdir(deps),
+    const run = await runOssutil(await exec(deps), {
+      operation: 'oss.remote.read',
+      argv,
       timeoutMs: 30_000,
+      summary: 'ossutil sign（生成链接）',
     })
     if (!run.ok) return failed((text(run.stderr) || text(run.error) || '签名失败').slice(0, 300))
     url = parseSignUrl(run.stdout)
@@ -215,11 +244,11 @@ export async function ossLink(deps: OssDeps, args: Record<string, unknown>): Pro
   // 链接里带 bearer 签名，能拿到就能看 —— 不能走明文。
   if (url.startsWith('http://')) url = `https://${url.slice('http://'.length)}`
 
-  const opened = await runShell(deps.ctx, openExternalCommand(url, deps.platform), {
-    workdir: await shellWorkdir(deps),
-    timeoutMs: 30_000,
-    escalate: true,
-  })
+  const opened = await deps.access.runShell(
+    { operation: 'system.browser.open', source: 'panel', workdir: await shellWorkdir(deps) },
+    openExternalCommand(url, deps.platform),
+    { timeoutMs: 30_000, summary: 'system.browser.open' },
+  )
   return {
     ok: true,
     error: '',
@@ -278,9 +307,11 @@ export async function uploadArtifacts(
     const argv = [ossutil, 'cp', '-f', localPath, `oss://${oss.bucket}/${objectKey}`]
     if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
     for (const extra of oss.extraArgs) argv.push(extra)
-    const run = await runShell(deps.ctx, shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform), {
-      workdir: await shellWorkdir(deps),
+    const run = await runOssutil(await exec(deps), {
+      operation: 'oss.remote.write',
+      argv,
       timeoutMs: 180_000,
+      summary: 'ossutil cp（上传交付件）',
     })
     results.push({
       kind: file.kind,
@@ -386,12 +417,21 @@ export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>):
     stsToken: text(args.stsToken).trim(),
     endpoint,
   })
-  if (!written.ok) return failed(written.error)
+  if (!written.ok) {
+    // 失败信封要**保留**已经知道的事实（路径 / 操作 / 权限结论）：
+    // 员工据此才知道"文件写在哪、权限为什么没通过"，而不是只看到一句话。
+    return {
+      ok: false, error: written.error, path: written.path, operation: written.operation,
+      permission: written.permission, probe: null, cred: null,
+    }
+  }
 
   // 保存后**立刻**用这份凭据打一次真实请求（只读 ls，走业务前缀）——**不查缓存**：
   // "文件写下去了"不等于"能用"，所以 `ok` 必须由这次探测的真实结果决定。
   const probe = await probeOss(deps.ctx, deps.manifest.oss, deps.platform, {
     workdir: await shellWorkdir(deps),
+    access: deps.access,
+    source: 'panel',
   })
   return {
     // 探测失败 = 这次保存没有成功（凭据已落盘，员工可以改完再存）。
@@ -402,7 +442,7 @@ export async function ossCredSave(deps: OssDeps, args: Record<string, unknown>):
     operation: written.operation,
     permission: written.permission,
     probe: probe as unknown as Record<string, unknown>,
-    cred: await readOssCred(deps.ctx, deps.home),
+    cred: await readOssCred(deps.ctx, deps.home, { access: deps.access, source: deps.source, workdir: await shellWorkdir(deps) }),
   }
 }
 
@@ -419,33 +459,40 @@ async function writeOssCred(
   deps: OssDeps,
   input: { accessKeyId: string; accessKeySecret: string; stsToken: string; endpoint: string },
 ): Promise<WriteCredOutcome> {
-  const fs = fileSystem(deps.ctx)
-  if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用', path: '', operation: '', permission: failedPermission('Host 文件服务不可用', deps.platform) }
   const path = ossConfigPath(deps.home)
   const built = buildConfigContent(input)
   if (!built.ok) return { ok: false, error: built.error, path: '', operation: '', permission: failedPermission(built.error, deps.platform) }
 
-  let operation = ''
-  try {
-    // `~/.ossutilconfig` 在**工作区之外**：员工默认的受限沙箱（workspace-write）下写它会被拦，
-    // 实测报 `cannot write "C:\Users\<用户>\.ossutilconfig": file access denied under
-    // workspace-write mode`（2026-09-28，Windows）。`fs.writeText` 支持逐次声明策略，
-    // 这里与 `ifind/store.ts`、`state/persist.ts` 用同一形态 —— 插件自己的用户目录落盘，
-    // 不是用户数据，也不该指望员工去改 DSH 的启动参数。
-    const outcome = await fs.writeText(await resolveTarget(deps.ctx, path), built.content, undefined, undefined, {
-      mode: 'danger-full-access',
-      workspaceRoot: deps.home,
-    })
-    operation = text(outcome?.operation)
-  } catch (error) {
-    const message = `写入 ${path} 失败：${error instanceof Error ? error.message : String(error)}`
-    return { ok: false, error: message, path: '', operation: '', permission: failedPermission(message, deps.platform) }
+  // `~/.ossutilconfig` 在**工作区之外**：受限沙箱（workspace-write）下写它会被拦 ——
+  // 实测报 `cannot write "…\.ossutilconfig": file access denied under workspace-write mode`
+  // （2026-09-28，Windows）。协议 18 起这件事只有一条路径：Broker 的 `oss.config.write`
+  // （逐次声明策略 + 目标路径逐字比对）。
+  const written = await deps.access.writeText(
+    { operation: 'oss.config.write', source: 'panel', workdir: await shellWorkdir(deps) },
+    { kind: 'oss-config', path },
+    built.content,
+  )
+  if (!written.ok) {
+    return { ok: false, error: `写入 OSS 配置失败：${written.error}`, path: '', operation: '', permission: failedPermission(written.error, deps.platform) }
   }
+  const operation = 'create'
   // 权限结论由 `enforceCredentialPermission` 统一给出（三条结局各有名字，见 shared/types.ts）：
   // Windows 上报 `inherited / windows-acl`，POSIX 上失败或成功都如实说。
-  const permission = await enforceCredentialPermission(deps.ctx, path, deps.platform, {
+  const permission = await enforceCredentialPermission({
+    access: deps.access, operation: 'oss.config.permission', path, platform: deps.platform,
     workdir: await shellWorkdir(deps),
   })
+  // 权限没成立就不算保存成功（P-08/M-04）：POSIX 上必须**回读**为 0600。
+  // 只跑 chmod 不看结果、却回 `ok:true`，会让一次"其实没保护住"的保存被当成成功。
+  if (!credentialPermissionSatisfied(permission)) {
+    return {
+      ok: false,
+      error: `凭据已写入 ${path}，但权限没有生效：${permission.message}`,
+      path,
+      operation,
+      permission,
+    }
+  }
   return {
     ok: true,
     error: '',

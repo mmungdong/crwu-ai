@@ -192,6 +192,12 @@ lib/client.js  第一行是 window.__ModuleLoader__.load({ id: "dsh-crwu-workben
 
 ## 25 个操作的验证账（第 31 轮）
 
+> **这是第 31 轮的历史快照**（当时协议 17、25 个操作）。协议 18 之后的操作清单是 **38 个**
+> （见 `tests/helpers/frozen-inventory.mjs`），新增的 5 个（`local-access-grant` /
+> `local-access-revoke` / `access-diagnostics` / `dws-local-doctor` /
+> `dws-local-permission-repair`）按 `docs/desktop-acceptance-0.0.15.md` 的矩阵验收，
+> 不在这张 25 项的表里。
+
 「搬完了」不止是名字对得上。第 31 轮把每个操作按**四层**过了一遍账，结论是没有任何一个操作是「没人管」的：
 
 | 口径 | 结果 |

@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { WorkbenchConfig } from '../config/config.ts'
 import type { WorldFacts } from '../platform/world.ts'
 import { writeWorkbenchConfig } from '../state/persist.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
 import { trimTrailingSeparators } from '../../shared/utils/local-path.ts'
 import { workspaceView } from '../state/store.ts'
 import type { WorkbenchState } from '../state/types.ts'
@@ -25,6 +26,8 @@ export interface WorkspaceOpsDeps {
   config: WorkbenchConfig
   state: WorkbenchState
   world: WorldFacts
+  /** Broker（协议 18）：工作空间选择也写同一个状态文件，走 `workbench.state.write`。 */
+  access: LocalAccessBroker
 }
 
 /** 供 `ensureWorkspace` 使用的工作空间偏好（清单优先，其次配置）。 */
@@ -66,7 +69,8 @@ export async function pickWorkspace(deps: WorkspaceOpsDeps, args: Record<string,
     deps.state.caseRoot = path
     // **整份落盘**（path + title + id + source）：只存 path 的话，重启后 source 会从
     // 'manual' 变成 'saved'，界面上的标签与「恢复自动识别」按钮都会变样。
-    const saved = await writeWorkbenchConfig(deps.ctx, await deps.world.home(), {
+    const saved = await writeWorkbenchConfig(
+      { ctx: deps.ctx, home: await deps.world.home(), access: deps.access }, {
       workspacePath: path,
       workspaceTitle: title,
       workspaceId: id,
@@ -89,7 +93,8 @@ export async function pickWorkspace(deps: WorkspaceOpsDeps, args: Record<string,
  * 只做第二步的话，用户点完会得到一个「没有工作空间」的状态，而发起审核需要它。
  */
 export async function autoWorkspace(deps: WorkspaceOpsDeps): Promise<WorkspaceSelectionResult> {
-  const persisted = await writeWorkbenchConfig(deps.ctx, await deps.world.home(), {
+  const persisted = await writeWorkbenchConfig(
+    { ctx: deps.ctx, home: await deps.world.home(), access: deps.access }, {
     workspacePath: '',
     workspaceTitle: '',
     workspaceId: '',

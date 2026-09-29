@@ -1,5 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ifindCredentialView, readIfindSecret } from './store.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import type { LocalAccessSource } from '../access/operations.ts'
+import { missingLocalAccessView } from '../access/consent.ts'
 import { defaultIfindTransport, probeIfind, type IfindProbeResult, type IfindTransport } from './mcp.ts'
 import type { IfindCheck } from '../environment/probe.ts'
 
@@ -41,6 +44,15 @@ export interface IfindEnvOptions {
   signal?: AbortSignal
   /** 清单声明的 `ifind.required`（现为 true）；缺省按 true 处理（必需项是当前产品口径）。 */
   required?: boolean
+  /**
+   * Broker（协议 18）：读凭据/打外部取数之前必须过 Host 侧授权门禁。
+   *
+   * 不传时用一个**恒拒绝**的空 Broker：这条链路默认是关的，漏传只会读到"未授权"，
+   * 不会静默放行（fail closed，而不是"没传就当允许"）。
+   */
+  access?: LocalAccessBroker
+  /** 这次校验是谁发起的（默认 `panel`）。 */
+  source?: LocalAccessSource
   /** 「获取 API-Key」的官方入口（从清单带过来，只用于界面上的链接）。 */
   applyUrl?: string
   /** 探测结果缓存（插件实例级）；不传就不缓存。 */
@@ -119,12 +131,38 @@ function checkOf(view: Awaited<ReturnType<typeof ifindCredentialView>>, probe: I
   }
 }
 
+/**
+ * 恒拒绝的空 Broker：**只为"没注入 Broker"这条路径准备**。
+ *
+ * 它让"忘了注入授权判据"变成"读不到凭据"，而不是"静默放行" —— 两个方向的错不对称。
+ */
+function missingAccessBroker(): LocalAccessBroker {
+  const denied = (): { ok: false; error: string; errorClass: 'not-authorized' } =>
+    ({ ok: false, error: '本机访问尚未允许（环境自检没有注入授权判据）', errorClass: 'not-authorized' })
+  return {
+    authorize: denied,
+    async runShell() {
+      return {
+        ok: false, error: '本机访问尚未允许（环境自检没有注入授权判据）', exitCode: null,
+        stdout: '', stderr: '', truncated: false, timedOut: false, aborted: false,
+        sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
+      }
+    },
+    async writeText() { return { ok: false, error: '本机访问尚未允许（环境自检没有注入授权判据）' } },
+    consent: () => missingLocalAccessView(),
+    diagnostics: () => [],
+    lastDiagnostic: () => null,
+  }
+}
+
 export async function ifindEnvCheck(
   ctx: Context,
   home: string,
   options: IfindEnvOptions = {},
 ): Promise<IfindCheck> {
-  const view = await ifindCredentialView(ctx, home)
+  const view = await ifindCredentialView(ctx, home, {
+    access: options.access ?? missingAccessBroker(), source: options.source ?? 'panel', workdir: home,
+  })
   const required = options.required !== false
   const base: IfindCheck = {
     path: view.path,
@@ -151,7 +189,9 @@ export async function ifindEnvCheck(
   if (options.probe === false) return base
 
   // 真探：读一次明文（**只在 Host 内部**），走与取数 Tool 同一份协议实现。
-  const secret = await readIfindSecret(ctx, home)
+  const secret = await readIfindSecret(ctx, home, {
+    access: options.access ?? missingAccessBroker(), source: options.source ?? 'panel', workdir: home,
+  })
   if (!secret.ok) {
     return { ...base, state: secret.state === 'invalid' ? 'invalid' : 'unreachable', errorKind: secret.errorKind, reason: secret.reason }
   }

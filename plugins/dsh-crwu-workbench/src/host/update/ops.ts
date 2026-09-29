@@ -21,6 +21,8 @@ import { UPDATE_OPERATION_NAMES } from '../../shared/consts.ts'
 import { createUpdateChecker } from './check.ts'
 import { createUnavailableManager } from './manager.ts'
 import { pluginUpdateStoreFor } from './persist.ts'
+import type { LocalAccessBroker } from '../access/broker.ts'
+import { missingLocalAccessView } from '../access/consent.ts'
 import { createUpdateService } from './service.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PluginInstallProgress, PluginInstallRequestId } from '@deepseek-ai/dsh-plugin-manager'
@@ -53,6 +55,8 @@ export interface UpdateOpsDeps {
   buildKind: HostBuildKind
   /** 惰性 home provider：`world.home()` 是异步事实，同步的 `apply()` 不能猜。 */
   home: () => Promise<string>
+  /** Broker（协议 18）：更新状态也写同一个状态文件，走 `workbench.state.write`。 */
+  access?: LocalAccessBroker
   now?: () => Date
   newRequestId?: () => PluginInstallRequestId
   /** 测试注入；缺省从 `ctx.get('pluginManager')` 读（可选能力）。 */
@@ -72,11 +76,32 @@ export interface UpdateOperations {
   autoCheck: Promise<void>
 }
 
+/**
+ * 取 Broker。
+ *
+ * 没注入时给一个**拒绝一切写入**的替身：自助更新的状态落盘属于跨边界写，
+ * 没有 Broker 就不该有第二条写路径（宁可安装状态存不住，也不开旁路）。
+ */
+function accessOf(deps: UpdateOpsDeps): LocalAccessBroker {
+  return deps.access ?? {
+    authorize: () => ({ ok: false, error: '未注入本机访问代理', errorClass: 'invalid-source' as const }),
+    runShell: async () => ({
+      ok: false, error: '未注入本机访问代理', exitCode: null, stdout: '', stderr: '',
+      truncated: false, timedOut: false, aborted: false,
+      sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
+    }),
+    writeText: async () => ({ ok: false, error: '未注入本机访问代理' }),
+    consent: () => missingLocalAccessView(),
+    diagnostics: () => [],
+    lastDiagnostic: () => null,
+  }
+}
+
 export function createUpdateOperations(deps: UpdateOpsDeps): UpdateOperations {
   const now = deps.now ?? (() => new Date())
   // Plugin Manager 是**可选**服务：不在 PLUGIN_INJECT 里，缺失也不影响激活。
   const manager = deps.manager ?? (deps.ctx.get('pluginManager') as PluginManagerPort | undefined)
-  const store = deps.store ?? pluginUpdateStoreFor(deps.ctx, deps.home)
+  const store = deps.store ?? pluginUpdateStoreFor(deps.ctx, deps.home, accessOf(deps))
 
   const checker = createUpdateChecker({
     version: deps.version,
