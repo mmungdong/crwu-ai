@@ -741,10 +741,12 @@ test('19. 四个操作的响应里没有 URL、凭据、日志、命令、reques
   }
 })
 
-test('20. 协议号精确为 19（审核 scope 绑定：案例目录 = 边界）', () => {
+test('20. 协议号精确为 21（钉钉登录拆成两阶段）', () => {
   // 18 = 本机访问授权收据 + 授权前零副作用自检；19 = 审核 scope 绑定
-  //（案例目录/根会话 cwd 与沙箱边界都从"工作空间"收紧到"本轮案例目录"，氚云记录查询移出审核能力集）。
-  assert.equal(WORKBENCH_PROTOCOL, 19)
+  //（案例目录/根会话 cwd 与沙箱边界都从"工作空间"收紧到"本轮案例目录"，氚云记录查询移出审核能力集）；
+  // 20 = 新增 `browser-session-bind`（客户端读到 h3_token 后经标准输入交给 CLI 落 OS 凭据存储）；
+  // 21 = 钉钉登录拆成 `dws-login-start` / `dws-login-status`（`dws auth login` 改后台跑）。
+  assert.equal(WORKBENCH_PROTOCOL, 21)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

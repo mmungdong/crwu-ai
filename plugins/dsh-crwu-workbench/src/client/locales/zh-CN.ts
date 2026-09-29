@@ -243,6 +243,43 @@ export const zhCN = {
   envOssReasonNoSecret: '凭据文件里没有 AccessKey Secret',
   envOssOssutilMissing: '插件内置的 ossutil 不可用：这不是凭据问题，是插件包不完整 —— 需要重新安装插件',
   envLoginH3yun: '扫码登录氚云',
+  /**
+   * 内置浏览器登录（协议 20）。文案刻意**只描述状态**：令牌与授权码的值永不进这里，
+   * 状态串会被渲染到员工可见的界面上。
+   */
+  loginBrowserStart: '在内置浏览器里扫码登录',
+  loginBrowserIdle: '未开始',
+  loginBrowserPreparing: '正在准备内置浏览器…',
+  loginBrowserWaiting: '请用钉钉扫窗口里的二维码（这是氚云登录页）',
+  loginBrowserBound: '已绑定氚云会话',
+  loginBrowserCodeSeen: '已收到授权回调，正在换取会话…',
+  loginBrowserTimeout: '等待超时；关掉重试一次即可',
+  loginBrowserError: '内置浏览器登录未完成',
+  loginBrowserUnavailable: '当前界面没有内置浏览器（浏览器版 DSH）。请用系统浏览器完成氚云扫码登录后，再走下面那条回退路径绑定会话。',
+  loginBrowserCodeSeenHint: '授权回调来自 {host}（未记录授权码本身）',
+  /**
+   * 钉钉两阶段登录（协议 21）。`url` / `userCode` 是 Host 从 CLI 输出里**尽力解析**的，
+   * `tail` 才是原文 —— 文案只描述状态，不含任何凭据。
+   */
+  dwsLoginStart: '登录钉钉',
+  dwsLoginStartDevice: '用设备码登录',
+  dwsLoginIdle: '未开始',
+  dwsPhaseRunning: '等待你在浏览器里完成授权…',
+  dwsPhaseOk: '登录成功',
+  dwsPhaseTimeout: '等待超时（可以重试）',
+  dwsPhaseFailed: '登录失败',
+  dwsLoginOpen: '打开授权链接',
+  dwsLoginCopyLink: '复制链接',
+  dwsLoginUserCode: '设备码',
+  dwsLoginCopyCode: '复制设备码',
+  dwsLoginHint: '授权链接会在系统默认浏览器里打开；完成后这里会自动变成「登录成功」。',
+
+  /**
+   * 登录按钮的**前置条件**（2026-09-29 员工实测）：两条登录命令都要写工作区之外的路径 ——
+   * 临时浏览器 profile、`<HOME>/.dws` 的登录态、操作系统凭据存储。文件策略不给时一条都走不通，
+   * 而这一点在前端看不出来（表现只是"浏览器没起来"）。说在点之前，别让员工靠试错发现。
+   */
+  envLoginSandboxHint: '登录要在工作区之外起临时浏览器 / 更新登录态文件。报「拒绝访问」时看面板那句话：说「被文件策略挡下」就把访问模式切到「完全权限」再点一次；说「被这台机器拒绝」就是本机安全软件或临时目录权限的问题，切权限没有用。',
   // 排查详情（维护者看；默认收起）
   envDetailsTitle: '排查详情（维护者看）',
   envDetailsTools: '插件内置组件明细',
@@ -792,7 +829,7 @@ export const zhCN = {
   envCredHardeningFailed: '凭据已保存，但权限没有收紧成功，请检查文件权限。',
   // iFinD 步骤
   envIfindCardTitle: '同花顺 iFinD API-Key',
-  envIfindCardHint: '用于查询外部金融数据。API-Key 由插件保存在本机，页面不回显；每次检查都会真的读取一条测试数据。',
+  envIfindCardHint: '用于查询外部金融数据。API-Key 由插件保存在本机，页面不回显；保存或点击「重新验证」时才会读取一条测试数据，环境检查只读取最近结论。',
   envIfindSecretLabel: '同花顺 iFinD API-Key',
   envIfindSecretPlaceholder: '粘贴你自己的 API-Key（不会回显）',
   envIfindSubmit: '保存并验证',
@@ -893,7 +930,7 @@ export const zhCN = {
   runCardSummary: '中瑞世联工作台：环境自检 → 报告审核（单条）→ 自动上云 → 直接开云端审核意见。',
   relogin: '氚云登录',
   dwsLogin: '钉钉登录',
-  dwsLoginDevice: '设备码登录（浏览器打不开时）',
+  dwsLoginDevice: '设备码登录（无浏览器时）',
   stopAudit: '停止这条审核',
 
   // ── 停止审核的阶段文案（F2，2026-09-29）────────────────────────────────────

@@ -91,6 +91,11 @@ function accessOf(deps: UpdateOpsDeps): LocalAccessBroker {
       sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
     }),
     writeText: async () => ({ ok: false, error: '未注入本机访问代理' }),
+    startShell: async () => ({
+      ok: false,
+      error: '未注入本机访问代理',
+      sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
+    }),
     consent: () => missingLocalAccessView(),
     diagnostics: () => [],
     lastDiagnostic: () => null,

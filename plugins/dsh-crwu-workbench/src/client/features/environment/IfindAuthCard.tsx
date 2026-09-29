@@ -10,7 +10,8 @@ import { credentialPermissionHint } from './credential-permission.ts'
  *
  * ## 与"认证"分开的"能不能取数"
  *
- * 环境校验做的是**真实取数验证**：`initialize` → `tools/list` → **真的 `tools/call` 取一次数据**。
+ * 保存 API-Key 或点击「重新验证」时做的是**真实取数验证**：`initialize` → `tools/list` →
+ * **真的 `tools/call` 取一次数据**；普通环境检查只读取这份已保存的结论。
  * 两截结论分开显示，因为它们对员工意味着完全不同的动作：
  *
  * - **认证失败**（`credential`，401 / 签名错）→ 重填 API-Key；
@@ -48,7 +49,7 @@ export function ifindStateLabel(state: string): string {
 }
 
 /**
- * 状态 → 色调（只有**真的取到数据**才是绿的）。
+ * 状态 → 色调（只有保存或「重新验证」得到的真实取数结论才是绿的）。
  *
  * 「已保存、没验过」与「认证过了但没取到数」都用 `busy`（琥珀）而不是 `bad`：
  * 它们不是故障，是"还没证据" —— 说成红色会让员工以为填错了，而去重填一份本来没问题的 key。

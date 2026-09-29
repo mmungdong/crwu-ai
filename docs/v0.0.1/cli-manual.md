@@ -41,6 +41,11 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 - 会话由 crwu 经浏览器直接读取（cookie 双域 + localStorage/document.cookie
   兜底），**校验有效后才写入**本机 keyring；令牌从不打印、不外传。
 
+> **Windows 临时目录回退**：如果系统 `%TEMP%` 被安全策略按进程拒绝写入，
+> crwu 会自动改用当前用户缓存目录 `%LOCALAPPDATA%\crwu\scan-tmp` 创建一次性的
+> `crwu-scan-*` 浏览器 profile；登录结束后仍会删除该 profile。若该目录也被拒绝，
+> 请检查 Defender/企业安全软件的拦截记录，不要把 JWT 写入工作区文件。
+
 > ⚠️ **AI 宿主沙箱注意**：在受沙箱隔离的 Agent 环境里，`session login` 派生的
 > GUI 浏览器会被沙箱拦截而无法弹出窗口（报 `websocket close 1006`、stderr 含大量
 > file-write 被拒）。应**脱离沙箱 + 前台**运行本命令，并可用
@@ -52,8 +57,18 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 2. 绑定者在本机执行 `crwu h3yun session bind --token '<JWT>'`（JWT 取自已登录
    浏览器的请求头 `Authorization`，`eyJhbGci...` 整串，不带 `Bearer ` 前缀）。
 
-> 安全红线：token 只出现在**本机命令**；绝不写入日志/文件/scheme 输出/聊天/
-> 提交，绝不让 Agent 代看或代贴。需要吊销/换人时先 `session clear` 再重登。
+**优先用 `--token-stdin`**：`--token` 会把 JWT 写进进程命令行（同机其它进程的
+`ps` / 任务管理器看得到），标准输入不会：
+
+```text
+crwu h3yun session bind --token-stdin   # 从管道、密钥管理器或粘贴后结束输入（EOF）交给它
+```
+
+两个来源只能给一个：同时给出 `--token` 与 `--token-stdin` 会被拒绝；`--token-stdin`
+读到空白内容时按「没有令牌」处理；最多读 8 KiB。两条路径都不会回显令牌。
+
+> 安全红线：token 只出现在**本机命令**（且优先走标准输入）；crwu 绝不写入日志/文件/
+> scheme 输出/聊天/提交，绝不让 Agent 代看或代贴。需要吊销/换人时先 `session clear` 再重登。
 
 ## 4. 常用命令速查
 
@@ -62,7 +77,7 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 | 命令 | 说明 |
 |---|---|
 | `crwu h3yun session login` | 员工自助登录：自动开浏览器扫码并绑定（令牌不进对话） |
-| `crwu h3yun session bind --token <jwt>` | 绑定员工网页会话到本机（回退/受信路径） |
+| `crwu h3yun session bind --token-stdin`（或 `--token <jwt>`） | 绑定员工网页会话到本机（回退/受信路径；`--token-stdin` 让令牌不进命令行） |
 - 自动续期：依赖会话的读命令执行前，若剩余 ≤36h 先静默 refresh；已过期则提示
   重新执行 `crwu h3yun session login`
 | `crwu h3yun session status` | 查看绑定身份/引擎/剩余有效期 |
@@ -111,7 +126,7 @@ crwu h3yun session status        # 应显示 engineCode / userId / expiresIn
 
 | 命令 | 说明 |
 |---|---|
-| `crwu h3yun files list --schema <编码> --id <记录ID>` | 列出该记录全部附件（字段/文件名/类型/大小/下载URL） |
+| `crwu h3yun files list --schema <编码> --id <记录ID>` | 列出该记录全部附件（字段/文件名/类型/大小/下载URL）；没有附件时 `data` 为 `[]` |
 | `crwu h3yun file download --schema <编码> --id <记录ID> --out <目录>` | 下载全部附件到本地（原名 + 自动去重） |
 | `crwu h3yun file get --id <FileId> --out <文件路径>` | **只下载单个附件**到指定路径（FileId 来自 `files list`） |
 

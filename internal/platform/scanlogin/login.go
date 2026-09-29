@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -140,6 +141,38 @@ func httpGet(url string, timeout time.Duration) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(response.Body, 1<<20))
 }
 
+// createTempProfile creates the short-lived browser profile used by Capture.
+//
+// Windows security software and enterprise policies can deny a particular
+// executable access to the system TEMP directory even when the interactive
+// user can write there. In that case retry under the user's cache directory,
+// which is still outside the repository and is removed after the login flow.
+// The function takes its filesystem operations as arguments so the fallback
+// policy is testable without requiring a Windows runner.
+func createTempProfile(
+	tempRoot, cacheRoot string,
+	makeTemp func(string, string) (string, error),
+	makeDirAll func(string, os.FileMode) error,
+) (string, error) {
+	profile, err := makeTemp(tempRoot, "crwu-scan-")
+	if err == nil {
+		return profile, nil
+	}
+	if !errors.Is(err, os.ErrPermission) || strings.TrimSpace(cacheRoot) == "" {
+		return "", fmt.Errorf("create temporary browser profile: %w", err)
+	}
+
+	fallbackRoot := filepath.Join(cacheRoot, "crwu", "scan-tmp")
+	if mkdirErr := makeDirAll(fallbackRoot, 0o700); mkdirErr != nil {
+		return "", fmt.Errorf("create fallback browser profile directory: %w (system TEMP failed: %v)", mkdirErr, err)
+	}
+	fallback, fallbackErr := makeTemp(fallbackRoot, "crwu-scan-")
+	if fallbackErr != nil {
+		return "", fmt.Errorf("create fallback browser profile: %w (system TEMP failed: %v)", fallbackErr, err)
+	}
+	return fallback, nil
+}
+
 // Capture opens a browser window, waits for the employee to finish the DingTalk
 // QR scan, and returns the H3Yun session cookie value. The token is only ever
 // held in process memory and returned to the caller.
@@ -166,7 +199,8 @@ func Capture(ctx context.Context, config Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	profile, err := os.MkdirTemp("", "crwu-scan-")
+	cacheRoot, _ := os.UserCacheDir()
+	profile, err := createTempProfile(os.TempDir(), cacheRoot, os.MkdirTemp, os.MkdirAll)
 	if err != nil {
 		return "", err
 	}

@@ -106,11 +106,18 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  * 8：`oss-result` 的摘要新增两组**裁剪字段**（`issues[]`、`reviewComparison.reviewItems[]`），
  *    抽屉的「AI 检出问题」与「已提未改」直接读它们 —— 旧宿主不给时抽屉降级（不显示这两块）。
  *
+ * 20：新增 `browser-session-bind`（内置浏览器扫码登录的凭据出口）。这条是**新的跨进程契约**：
+ *    客户端把从内嵌浏览器页面里读到的 `h3_token` 经它交给 Host，Host 再走
+ *    `crwu h3yun session bind --token-stdin` 落到 OS 凭据存储。旧宿主没有这个操作，
+ *    新界面点下去只会 404 —— 必须靠协议号把「界面是新的、宿主是旧的」喊出来。
+ * 21：钉钉登录拆成 `dws-login-start` / `dws-login-status`（`dws auth login` 改后台跑）。
+ *    旧客户端只知道同步的 `dws-login`：它会在 CLI 还在等浏览器回调时一直阻塞到超时，
+ *    拿到的 URL 也没有用。新契约加进来就要 +1，让旧界面被明确挡住而不是白等 5 分钟。
  * 规则：**每次改动跨进程契约（Host 操作的字段/语义、审核父级这类关键行为）就把这里 +1**，
  * `ping` / `boot` 会带上它；客户端发现不一致就明说「宿主是旧构建，请重启 profile」并停发起审核，
  * 而不是拿旧逻辑干新活。
  */
-export const WORKBENCH_PROTOCOL = 19
+export const WORKBENCH_PROTOCOL = 21
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

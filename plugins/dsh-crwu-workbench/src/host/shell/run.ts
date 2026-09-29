@@ -163,6 +163,110 @@ export async function runShell(
 }
 
 /**
+ * 后台命令句柄：只暴露这一层需要的东西。
+ *
+ * 存在的理由只有一条：钉钉登录（`dws auth login`）要**边跑边把授权 URL 交给界面**。
+ * 前台 `runShell` 只在进程结束时才回来，URL 到界面时用户早就不在等了（CLI 那 5 分钟里
+ * 界面什么都看不到）。DSH 的 `ctx.shell.start(spec)` 正好给这个能力：立即返回句柄、
+ * `readOutput()` 增量读、`kill()` 终止。
+ */
+export interface ShellBackgroundHandle {
+  /** 自上次读取以来的输出增量（**消耗式**：连续两次读不会重复给同一段）。 */
+  read(): { delta: string; lossy: boolean }
+  /** 终止；已经结束返回 false（幂等）。 */
+  kill(): boolean
+  /** 进程结束（从不 reject）。 */
+  done: Promise<void>
+  /** 结束后的退出码；null = 被信号杀或还在跑。 */
+  exitCode(): number | null
+  status(): 'running' | 'completed' | 'killed'
+  /** 结束后才有的沙箱事实（受限执行器才有；不限沙箱的部署是 `undefined`）。 */
+  sandbox(): { mode?: string | undefined; denied?: boolean | undefined; runnerFailed?: boolean | undefined } | undefined
+}
+
+export type ShellStartResult =
+  | { ok: true; handle: ShellBackgroundHandle }
+  | { ok: false; error: string; sandbox: ShellResult['sandbox'] }
+
+/**
+ * 起一条**后台**命令并立刻拿到句柄。
+ *
+ * 与 `runShell` 共用同一段 `resolve()` 逻辑（沙箱策略、请求/解析模式的事实都在那里），
+ * 区别只有两点：
+ * - 用 `onExpiry: 'none'`：**不武装**执行器的默认死线。钉钉登录要等人在浏览器里完成授权，
+ *   默认的 60 秒会把一次正常等待变成超时；超时由调用方自己控制（`kill()`）。
+ * - 只 `execute()`、**不** `result()`：DSH 的契约写得很清楚 ——「前台」是调用方要不要 await
+ *   结果的性质，不是 spawn 的性质。拿住句柄就是后台跑。
+ *
+ * 失败一律是**基础设施**失败（`resolve` / `execute` 抛错）——与「命令跑完了、退出码非 0」
+ * 分开：后者要等 `done` 之后读 `exitCode()`。
+ */
+export async function startShell(
+  ctx: Context,
+  command: string,
+  options: {
+    workdir?: string
+    escalate?: boolean
+    stdoutMaxBytes?: number
+  } = {},
+): Promise<ShellStartResult> {
+  const shell = ctx.get('shell') as ShellExecutor | undefined
+  if (shell === undefined) {
+    return { ok: false, error: 'Host shell 服务不可用', sandbox: NO_SANDBOX_FACTS }
+  }
+
+  const workRoot = options.workdir ?? ''
+  if (options.escalate === true && workRoot === '') {
+    return { ok: false, error: '未知会话工作区，无法申请无沙箱执行', sandbox: NO_SANDBOX_FACTS }
+  }
+
+  const requestedMode = options.escalate === true ? 'danger-full-access' : ''
+  let spec: ShellExecSpec
+  try {
+    spec = shell.resolve({
+      command,
+      ...(workRoot === '' ? {} : { workdir: workRoot }),
+      // 后台进程自己管超时：执行器的默认死线只适合前台命令。
+      onExpiry: 'none',
+      ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
+      ...(options.escalate === true
+        ? { sandboxPolicy: { mode: 'danger-full-access', workspaceRoot: workRoot } }
+        : {}),
+    })
+  } catch (error) {
+    return {
+      ok: false,
+      error: `执行失败：${failureMessage(error)}`,
+      sandbox: { ...NO_SANDBOX_FACTS, requested: requestedMode },
+    }
+  }
+
+  const resolvedMode = text(spec.sandboxPolicy?.mode)
+  const baseSandbox = {
+    requested: requestedMode, resolved: resolvedMode, ran: '', denied: false, runnerFailed: false,
+  }
+  try {
+    const execution = await shell.execute(spec)
+    return {
+      ok: true,
+      handle: {
+        read: () => {
+          const read = execution.readOutput()
+          return { delta: text(read.delta), lossy: read.lossy === true }
+        },
+        kill: () => execution.kill(),
+        done: execution.done,
+        exitCode: () => (typeof execution.exitCode === 'number' ? execution.exitCode : null),
+        status: () => execution.status,
+        sandbox: () => execution.sandbox,
+      },
+    }
+  } catch (error) {
+    return { ok: false, error: `执行失败：${failureMessage(error)}`, sandbox: baseSandbox }
+  }
+}
+
+/**
  * 命令**根本没有执行**（shell 服务缺失、沙箱后端不可用、审批拒绝、`resolve` 抛错）。
  *
  * 依据 DSH 契约（`@deepseek-ai/dsh-shell` 的 `ShellExecution.result` 文档）：

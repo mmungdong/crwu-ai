@@ -39,6 +39,17 @@ export interface WorkspacesService {
   create?: (input: { path: string }) => Promise<PickedWorkspaceView>
 }
 
+/**
+ * 右侧栏浏览器（`@deepseek-ai/dsh-client-ui-sidebar-browser` 注册的 `browser` 标签类型）。
+ *
+ * 只声明我们用到的那一个动词。**标签类型不是必然存在的**：Web profile 默认关闭它
+ * （`disabled: profileContext?.name !== 'desktop'`），旧桌面端也没有这个包 —— 所以
+ * `openTab` 可能抛错，调用方必须能退回系统浏览器（见 `environment/open-url.ts`）。
+ */
+export interface SidebarRightService {
+  openTab?: (kind: string, options: { params?: { url?: string } }) => unknown
+}
+
 export interface LayoutService {
   /** 切换主面板（跳回会话用）；`null` = 回到当前会话的原生对话。 */
   selectPanel?: (panel: string | null) => void
@@ -63,6 +74,7 @@ export interface ClientServices {
   uiWorkspace: UiWorkspaceService | undefined
   workspaces: WorkspacesService | undefined
   layout: LayoutService | undefined
+  sidebarRight: SidebarRightService | undefined
   sessions: SessionsService | undefined
 }
 
@@ -82,6 +94,7 @@ export function readClientServices(ctx: ClientContext): ClientServices {
     get uiWorkspace() { return ctx.get('uiWorkspace') as UiWorkspaceService | undefined },
     get workspaces() { return ctx.get('workspaces') as WorkspacesService | undefined },
     get layout() { return ctx.get('layout') as LayoutService | undefined },
+    get sidebarRight() { return ctx.get('sidebarRight') as SidebarRightService | undefined },
     get sessions() { return ctx.get('sessions') as SessionsService | undefined },
   }
 }

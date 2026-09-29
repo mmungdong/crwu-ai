@@ -22,7 +22,6 @@ const { packageIntegrityPaths } = await import(new URL('src/host/environment/pro
 const { bundledBinaryPath } = await import(new URL('src/host/platform/bin-dir.ts', ROOT).href)
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
 const { ifindCredentialPath } = await import(new URL('src/host/ifind/store.ts', ROOT).href)
-const { createIfindProbeCache } = await import(new URL('src/host/ifind/env.ts', ROOT).href)
 const { makeIfindTransport } = await import(new URL('tests/helpers/ifind-fixture.mjs', ROOT).href)
 const { consentConfigJson, grantedConsent, missingConsent } = await import(new URL('tests/helpers/local-access-fixture.mjs', ROOT).href)
 const { LOCAL_ACCESS_REQUIRED_REASON } = await import(new URL('src/shared/access/types.ts', ROOT).href)
@@ -132,19 +131,44 @@ function healthyContext(patch = {}) {
     files: {
       // OSS AK 与 iFinD SK 都落在**员工自己的**凭据/状态文件里（不是技能目录、不是插件包）。
       '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=SECRET\n',
-      [ifindCredentialPath('/Users/x')]: '{"auth_token":"ifind-token-123456"}',
+      [ifindCredentialPath('/Users/x')]: JSON.stringify({
+        auth_token: 'ifind-token-123456',
+        verification: {
+          ok: true, state: 'authenticated', errorKind: '', error: '', toolCount: 1,
+          toolNames: ['get_stock_summary'], protocolVersion: '2026-09',
+          checkedAt: '2026-09-29T00:00:00.000Z', dataVerified: true,
+          dataTool: 'get_stock_summary', dataSample: '{"ok":true}',
+        },
+      }),
       '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
     },
     ...patch,
   })
 }
 
+function contextWithIfindVerification(verification, patch = {}) {
+  return healthyContext({
+    ...patch,
+    files: {
+      '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=SECRET\n',
+      [ifindCredentialPath('/Users/x')]: JSON.stringify({ auth_token: 'ifind-token-123456', verification }),
+      '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
+    },
+  })
+}
+
+function verificationFrom({ ok = true, state = 'authenticated', errorKind = '', error = '', dataVerified = true } = {}) {
+  return {
+    ok, state, errorKind, error, toolCount: 1, toolNames: ['get_stock_summary'],
+    protocolVersion: '2026-09', checkedAt: '2026-09-29T00:00:00.000Z', dataVerified,
+    dataTool: dataVerified ? 'get_stock_summary' : '', dataSample: dataVerified ? '{"ok":true}' : '',
+  }
+}
+
 /**
  * 默认的 iFinD 传输替身：**认证明明是好的、也真的取到数据**。
  *
- * 为什么必须默认注入：自 2026-09-26 起环境自检**每次都会真的取一次 iFinD 数据**。
- * 不注入替身的话，单测会真的打外部网络（违反"测试不得访问真实外部服务"），
- * 而且会随网络状况时红时绿。
+ * 保存凭据或点击「重新验证」时才会调用它；环境自检只读取已经保存的脱敏结论。
  */
 function ifindOkTransport() {
   return makeIfindTransport({ tools: ['get_stock_summary'] })
@@ -155,7 +179,7 @@ function depsOf(ctx, patch = {}) {
   Object.assign(state, patch.state ?? {})
   return {
     deps: {
-      // iFinD 真探替身（默认就绪）；显式传 `ifindTransport: null` 表示"这一例不探"。
+      // 保留 iFinD 手动验证替身；环境自检不会使用它。
       ifindTransport: patch.ifindTransport === null ? undefined : (patch.ifindTransport ?? ifindOkTransport()),
       ctx, config: { ...CONFIG, ...(patch.config ?? {}) }, state,
       // Broker：自检里每一次跨边界的本机访问都由它判（真 Broker，策略走真实代码）。
@@ -271,7 +295,12 @@ test('iFinD 三类失败分别派给 user / admin / system', async () => {
     ['protocol', 'system', /稍后重新验证/],
   ]
   for (const [call, owner, action] of cases) {
-    const { deps } = depsOf(healthyContext(), { ifindTransport: makeIfindTransport({ tools: ['t'], call }) })
+    const failed = call === 'http401'
+      ? verificationFrom({ ok: false, state: 'invalid', errorKind: 'credential', error: 'API-Key 无效', dataVerified: false })
+      : call === 'http403'
+        ? verificationFrom({ ok: false, state: 'unverified', errorKind: 'entitlement', error: '联系管理员开通同花顺 iFinD 数据权益', dataVerified: false })
+        : verificationFrom({ ok: false, state: 'unreachable', errorKind: 'infrastructure', error: '稍后重新验证', dataVerified: false })
+    const { deps } = depsOf(contextWithIfindVerification(failed), { ifindTransport: makeIfindTransport({ tools: ['t'], call }) })
     const result = await loadEnvironment(deps, {})
     const issue = result.state.issues.find((item) => item.id === 'ifind')
     assert.equal(issue.blocking, true, call)
@@ -282,7 +311,7 @@ test('iFinD 三类失败分别派给 user / admin / system', async () => {
 })
 
 test('iFinD 认证通过但没取到数据：仍然算未通过（不许放行）', async () => {
-  const { deps } = depsOf(healthyContext(), { ifindTransport: makeIfindTransport({ tools: ['t'], call: 'isError' }) })
+  const { deps } = depsOf(contextWithIfindVerification(verificationFrom({ dataVerified: false, errorKind: 'entitlement', error: '权益不足' })), { ifindTransport: makeIfindTransport({ tools: ['t'], call: 'isError' }) })
   const result = await loadEnvironment(deps, {})
   assert.equal(result.external.ok, true, '认证确实是过的')
   assert.equal(result.external.dataVerified, false)
@@ -758,8 +787,7 @@ test('A-03 授权前零副作用：不起凭据子进程、不读凭据文件，
     return value
   }
 
-  // `refresh` + `probeIfind`：这是**最想**去探一次的组合（用户点了「重新检查」）。
-  // 但没允许本机访问时它必须一步都不走。
+  // 即使用户点了「重新检查」并携带旧的 `probeIfind` 参数，未授权时也必须一步都不走。
   const { deps } = depsOf(ctx)
   const result = await loadEnvironment(deps, { refresh: true, probeIfind: true })
 
@@ -885,30 +913,34 @@ test('信任本机凭据后确实没登录，仍然如实报未登录并阻塞',
   assert.ok(result.blocked.some((item) => item.includes('钉钉')), '确认过没登录就要拦')
 })
 
-test('环境校验每次都真的取一次 iFinD 数据；30s 内复用缓存不打上游', async () => {
-  const cache = createIfindProbeCache(30_000)
+test('环境校验只读取已保存的 iFinD 验证结论，普通检查与 refresh 都不打上游', async () => {
   const transport = ifindOkTransport()
-  const first = depsOf(healthyContext(), { ifindTransport: transport })
-  const one = await loadEnvironment({ ...first.deps, ifindProbeCache: cache }, {})
-  assert.equal(one.external.dataVerified, true)
-  const callsAfterFirst = transport.calls.length
-  assert.equal(callsAfterFirst >= 4, true, `至少要有 initialize / initialized / tools/list / tools/call：${String(callsAfterFirst)}`)
+  const first = depsOf(healthyContext({ files: {
+    '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=SECRET\n',
+    [ifindCredentialPath('/Users/x')]: '{"auth_token":"ifind-token-123456"}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
+  } }), { ifindTransport: transport })
+  const one = await loadEnvironment(first.deps, {})
+  assert.equal(one.external.dataVerified, false, '没有手动验证记录时只能是未验证')
+  assert.equal(transport.calls.length, 0, '环境校验不得主动请求 iFinD')
 
-  // 第二次（同凭据）：走缓存 —— 面板反复刷新不该重复打上游。
-  const two = await loadEnvironment({ ...depsOf(healthyContext(), { ifindTransport: transport }).deps, ifindProbeCache: cache }, {})
-  assert.equal(two.external.dataVerified, true)
-  assert.equal(transport.calls.length, callsAfterFirst, 'TTL 内不该再打上游')
-  assert.equal(cache.stats.hits >= 1, true)
-
-  // 显式「重新检查」（refresh）必须绕过缓存，真的再验一次。
-  const three = await loadEnvironment({ ...depsOf(healthyContext(), { ifindTransport: transport }).deps, ifindProbeCache: cache }, { refresh: true })
-  assert.equal(three.external.dataVerified, true)
-  assert.equal(transport.calls.length > callsAfterFirst, true, 'refresh 必须真的重探')
+  const two = await loadEnvironment(depsOf(healthyContext({ files: {
+    '/Users/x/.ossutilconfig': '[Credentials]\nlanguage=CH\naccessKeyID=AKID12345678\naccessKeySecret=SECRET\n',
+    [ifindCredentialPath('/Users/x')]: '{"auth_token":"ifind-token-123456"}',
+    '/Users/x/.dsh/crwu-workbench.json': consentConfigJson(),
+  } }), { ifindTransport: transport }).deps, { refresh: true })
+  assert.equal(two.external.dataVerified, false)
+  assert.equal(transport.calls.length, 0, '点击重新检查环境也不得主动请求 iFinD')
 })
 
 test('iFinD 取数验证失败时：明确归因，且**不**谎报已认证（现在会阻塞）', async () => {
   for (const [call, kind, pattern] of [['isError', 'entitlement', /权益/], ['http401', 'credential', /API-Key/], ['empty', 'infrastructure', /空内容|没有取到/]]) {
-    const deps = depsOf(healthyContext(), { ifindTransport: makeIfindTransport({ tools: ['t'], call }) })
+    const verification = call === 'isError'
+      ? verificationFrom({ dataVerified: false, errorKind: 'entitlement', error: '权益不足' })
+      : call === 'http401'
+        ? verificationFrom({ ok: false, state: 'invalid', errorKind: 'credential', error: 'API-Key 无效', dataVerified: false })
+        : verificationFrom({ dataVerified: false, errorKind: 'infrastructure', error: '没有取到数据', state: 'unreachable' })
+    const deps = depsOf(contextWithIfindVerification(verification), { ifindTransport: makeIfindTransport({ tools: ['t'], call }) })
     const result = await loadEnvironment(deps.deps, {})
     assert.equal(result.external.dataVerified, false, call)
     assert.equal(result.external.errorKind, kind, `${call} → ${result.external.errorKind}`)
@@ -925,7 +957,7 @@ test('iFinD 取数验证失败时：明确归因，且**不**谎报已认证（�
 
 test('认证通过但没取到数据：状态必须说「未验证」，不能显示成已认证', async () => {
   // `isError` 走的是取数阶段：认证（initialize + tools/list）是好的。
-  const deps = depsOf(healthyContext(), { ifindTransport: makeIfindTransport({ tools: ['t'], call: 'isError' }) })
+  const deps = depsOf(contextWithIfindVerification(verificationFrom({ dataVerified: false, errorKind: 'entitlement', error: '权益不足' })), { ifindTransport: makeIfindTransport({ tools: ['t'], call: 'isError' }) })
   const result = await loadEnvironment(deps.deps, {})
   assert.equal(result.state.userSetup.ifind.state, 'unverified')
   assert.match(result.state.userSetup.ifind.reason, /取到数据|重新验证/)

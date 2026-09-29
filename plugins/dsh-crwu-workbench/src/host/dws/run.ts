@@ -190,6 +190,9 @@ export async function runDws(
   const resolved = await requireBundledCommand(ctx, platform, 'dws')
   if (!resolved.ok) return failure(resolved.errorKind, resolved.error, shown)
 
+  // 配置目录用 CLI 自己的默认（`<HOME>/.dws`）：插件**不**再替它决定位置 ——
+  // 曾经为了绕开"某台机器不让 DSH 子进程建目录"固定到插件树，实测证明换目录解决不了问题
+  // （详见 docs/development-notes.md §16），所以那条自指定目录的通道整体下掉。
   const command = shellInvoke(resolved.path, argv.map((item) => text(item)), platform)
   const result: ShellResult = await options.access.runShell(
     { operation, source: options.source, workdir: options.workdir },

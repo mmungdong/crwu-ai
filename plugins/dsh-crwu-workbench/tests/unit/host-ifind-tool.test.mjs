@@ -30,7 +30,7 @@ const { IFIND_PROTOCOL_VERSION, IFIND_SUPPORTED_PROTOCOL_VERSIONS, negotiateProt
         pickProbeTool, readToolsCallResult } =
   await import(new URL('src/host/ifind/mcp.ts', ROOT).href)
 const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
-const { ifindEnvCheck, createIfindProbeCache, credentialFingerprint } =
+const { ifindEnvCheck } =
   await import(new URL('src/host/ifind/env.ts', ROOT).href)
 const { ifindProbe, ifindCredentialSave, ifindCredentialClear, ifindStatus } =
   await import(new URL('src/host/tools/ifind-ops.ts', ROOT).href)
@@ -709,12 +709,16 @@ test('ifind-status：只读文件时如实回 unverified，不许说已认证', 
   assert.equal(status.path, credentialPathOf())
 })
 
-// ── 11. 真实取数验证：环境校验必须真的取一次数据（协议 14）────────────────────
+// ── 11. 真实取数验证：只有用户主动操作才访问远程，环境检查只读结论 ────────
 
 test('环境校验 = 真的取一次数据：成功时 dataVerified=true 并留下脱敏证据', async () => {
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['get_stock_summary'] })
-  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
+  const deps = makeIfindOpsDeps({ fs, transport })
+  const saved = await ifindProbe(deps, {})
+  assert.equal(saved.ok, true)
+  const envTransport = makeIfindTransport({ tools: ['should_not_be_called'] })
+  const check = await ifindEnvCheck(deps.ctx, HOME, { transport: envTransport, access: deps.access })
   assert.equal(check.ok, true)
   assert.equal(check.state, 'authenticated')
   assert.equal(check.dataVerified, true, '真的取到数据才算验证通过')
@@ -724,12 +728,15 @@ test('环境校验 = 真的取一次数据：成功时 dataVerified=true 并留�
   // 三次往返：initialize → initialized → tools/list → tools/call。
   const methods = transport.calls.map((c) => JSON.parse(c.body).method)
   assert.deepEqual(methods, ['initialize', 'notifications/initialized', 'tools/list', 'tools/call'])
+  assert.deepEqual(envTransport.calls, [])
 })
 
 test('取数结果里回显了 API-Key 也要被净化（dataSample 绝不带出凭据）', async () => {
   const fs = makeIfindFs()
-  const transport = makeIfindTransport({ tools: ['t'], callText: '{"v":1}' })
-  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
+  const transport = makeIfindTransport({ tools: ['t'], callText: `{"apiKey":"${TOKEN}","v":1}` })
+  const deps = makeIfindOpsDeps({ fs, transport })
+  await ifindProbe(deps, {})
+  const check = await ifindEnvCheck(deps.ctx, HOME, { access: deps.access })
   assert.equal(check.dataVerified, true)
   assert.equal(check.dataSample.includes(IFIND_TEST_TOKEN), false, `摘要泄露了 API-Key：${check.dataSample}`)
   assert.equal(check.dataSample.includes('Bearer '), false, '摘要不得带 Authorization')
@@ -745,7 +752,9 @@ test('认证通过但取数失败：ok=true（凭据没问题）且 dataVerified
   for (const [call, kind, pattern] of cases) {
     const fs = makeIfindFs()
     const transport = makeIfindTransport({ tools: ['t'], call: call === 'http500' ? 'http' : call })
-    const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
+    const deps = makeIfindOpsDeps({ fs, transport })
+    await ifindProbe(deps, {})
+    const check = await ifindEnvCheck(deps.ctx, HOME, { access: deps.access })
     assert.equal(check.dataVerified, false, call)
     // **凭据确实通过了认证**（会话 + 工具清单都过了）→ `ok:true`；
     // 界面据此说"认证通过，但这次没取到数据"，而不是笼统的"验证失败"。
@@ -760,23 +769,25 @@ test('取数阶段的 401 / 403 也分开归因（不是笼统的"取数失败"�
   for (const [call, kind] of [['http401', 'credential'], ['http403', 'entitlement']]) {
     const fs = makeIfindFs()
     const transport = makeIfindTransport({ tools: ['t'], call })
-    const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }),  })
+    const deps = makeIfindOpsDeps({ fs, transport })
+    await ifindProbe(deps, {})
+    const check = await ifindEnvCheck(deps.ctx, HOME, { access: deps.access })
     assert.equal(check.dataVerified, false, call)
     assert.equal(check.errorKind, kind, `${call} → ${check.errorKind}`)
     assert.match(check.reason, /取数失败/, call)
   }
 })
 
-test('取数阶段取消 → 不算成功，且原因说"已取消"', async () => {
+test('环境检查不会重放手动验证，也不会响应取消信号访问上游', async () => {
   const fs = makeIfindFs()
-  const transport = makeIfindTransport({ tools: ['t'], call: 'ok' })
-  // 第一次调用就取消：initialize 阶段就会走 cancelled 分支。
+  const envTransport = makeIfindTransport({ tools: ['should_not_be_called'] })
+  const ctx = { get: (name) => fs.get(name) }
   const controller = new AbortController()
   controller.abort()
-  const check = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }), signal: controller.signal,  })
+  const check = await ifindEnvCheck(ctx, HOME, { transport: envTransport, access: ifindAccessOf(ctx), signal: controller.signal })
   assert.equal(check.dataVerified, false)
-  assert.equal(check.ok, false)
-  assert.match(check.reason, /取消/)
+  assert.equal(check.state, 'unverified')
+  assert.deepEqual(envTransport.calls, [])
 })
 
 test('pickProbeTool：只挑只读、单参数、无开关的工具；一个都没有时返回 null', () => {
@@ -875,33 +886,24 @@ test('取数摘要走的是**带 token 的**净化器（接线本身也要能被
   assert.equal(/bearer/i.test(serialized), false, `Bearer 形式也要抹掉：${serialized.slice(0, 240)}`)
 })
 
-test('环境校验默认就真探；probe:false 才跳过（这时只回长度，不回"已认证"）', async () => {
+test('环境校验只读最近结论；无手动验证记录时保持 unverified', async () => {
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['t'] })
-  const skipped = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }), probe: false })
+  const skipped = await ifindEnvCheck({ get: (name) => fs.get(name) }, HOME, { transport, access: ifindAccessOf({ get: (name) => fs.get(name) }), probe: true, force: true })
   assert.equal(skipped.state, 'unverified')
   assert.equal(skipped.dataVerified, false)
   assert.deepEqual(transport.calls, [], 'probe:false 时一个请求都不发')
 })
 
-test('探测缓存：30s 内复用（面板反复刷新不打上游）；force 强制重探；指纹随凭据变化', async () => {
-  const cache = createIfindProbeCache(30_000, () => Date.now())
+test('环境检查 refresh 也不打上游；只有 ifind-probe 才会发请求', async () => {
   const fs = makeIfindFs()
   const transport = makeIfindTransport({ tools: ['t'] })
   const ctx = { get: (name) => fs.get(name) }
-  const first = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), cache })
-  assert.equal(first.dataVerified, true)
-  const callsAfterFirst = transport.calls.length
-  // 第二次（同凭据、未 force）→ 走缓存，不新增请求。
-  const second = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), cache })
-  assert.equal(second.dataVerified, true)
-  assert.equal(transport.calls.length, callsAfterFirst, 'TTL 内不该再打上游')
-  // force → 真的重探。
-  await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), cache, force: true })
-  assert.ok(transport.calls.length > callsAfterFirst, 'force 必须绕过缓存')
-  // 指纹：换一份 key 就是另一个 key（旧条目自然失效）。
-  assert.notEqual(credentialFingerprint('a'.repeat(12)), credentialFingerprint('b'.repeat(12)))
-  assert.equal(credentialFingerprint('same-key-123'), credentialFingerprint('same-key-123'))
+  const first = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx) })
+  const second = await ifindEnvCheck(ctx, HOME, { transport, access: ifindAccessOf(ctx), force: true })
+  assert.equal(first.dataVerified, false)
+  assert.equal(second.dataVerified, false)
+  assert.deepEqual(transport.calls, [])
 })
 
 test('缺 API-Key / 未配置时不发请求，也不报"已认证"', async () => {

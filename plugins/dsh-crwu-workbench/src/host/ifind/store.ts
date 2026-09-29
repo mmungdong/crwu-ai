@@ -107,6 +107,8 @@ export interface IfindCredentialView {
   /** 明文长度；没配置是 0。 */
   length: number
   reason: string
+  /** 最近一次用户主动验证的脱敏结论；没有记录时是 unverified。 */
+  verification: IfindVerification
 }
 
 /** Host 可选提供的凭据服务形状（当前 DSH 版本没有；有就走它）。 */
@@ -127,6 +129,56 @@ export function resolveIfindStore(ctx: Context): { kind: 'host' | 'file'; store?
 
 /** 凭据存储的 key（`credentials` 服务用它；文件形态用文件名）。 */
 export const IFIND_CREDENTIAL_KEY = 'crwu-workbench/ifind'
+
+/** 最近一次**用户主动**验证的脱敏结论；它随凭据一起保存，环境自检只读它。 */
+export interface IfindVerification {
+  ok: boolean
+  state: string
+  errorKind: string
+  error: string
+  toolCount: number
+  toolNames: string[]
+  protocolVersion: string
+  checkedAt: string
+  dataVerified: boolean
+  dataTool: string
+  dataSample: string
+}
+
+export function emptyIfindVerification(): IfindVerification {
+  return {
+    ok: false, state: 'unverified', errorKind: '', error: '', toolCount: 0, toolNames: [],
+    protocolVersion: '', checkedAt: '', dataVerified: false, dataTool: '', dataSample: '',
+  }
+}
+
+function verificationOf(raw: unknown): IfindVerification {
+  const empty = emptyIfindVerification()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return empty
+  const value = raw as Record<string, unknown>
+  const states = new Set(['unverified', 'authenticated', 'invalid', 'unreachable'])
+  const state = text(value.state)
+  return {
+    ok: value.ok === true,
+    state: states.has(state) ? state : 'unverified',
+    errorKind: text(value.errorKind),
+    error: text(value.error).slice(0, 500),
+    toolCount: Number.isInteger(value.toolCount) && Number(value.toolCount) >= 0 ? Number(value.toolCount) : 0,
+    toolNames: Array.isArray(value.toolNames) ? value.toolNames.map(text).filter(Boolean).slice(0, 100) : [],
+    protocolVersion: text(value.protocolVersion),
+    checkedAt: text(value.checkedAt),
+    dataVerified: value.dataVerified === true,
+    dataTool: text(value.dataTool),
+    dataSample: text(value.dataSample).slice(0, 300),
+  }
+}
+
+function documentOf(secret: string, verification?: IfindVerification): string {
+  return `${JSON.stringify({
+    [IFIND_CREDENTIAL_FIELD]: secret,
+    ...(verification === undefined ? {} : { verification }),
+  }, null, 2)}\n`
+}
 
 export interface ReadSecretResult {
   ok: boolean
@@ -151,8 +203,10 @@ export async function readIfindSecret(
   options: { access: LocalAccessBroker; source?: LocalAccessSource; workdir?: string },
 ): Promise<ReadSecretResult> {
   const path = ifindCredentialPath(home)
+  const noVerification = emptyIfindVerification()
   const empty = (state: string, errorKind: 'input' | 'infrastructure', reason: string): ReadSecretResult =>
-    ({ ok: false, secret: '', state, errorKind, reason, view: { path, exists: false, state, length: 0, reason } })
+    ({ ok: false, secret: '', state, errorKind, reason,
+      view: { path, exists: false, state, length: 0, reason, verification: noVerification } })
 
   // **Host 侧门禁**（协议 18 · P-11）：界面把按钮禁掉只是体验，RPC 才是边界。
   // 未授权时 provider / fs / credential store **零调用** —— 撤销之后直接调 RPC 也读不到任何东西。
@@ -167,11 +221,18 @@ export async function readIfindSecret(
   if (resolved.kind === 'host' && resolved.store !== undefined) {
     try {
       const raw = await resolved.store.get(IFIND_CREDENTIAL_KEY)
-      const verdict = checkIfindSecret(raw)
+      const parsed = (() => {
+        try { return JSON.parse(raw ?? '') as unknown } catch { return null }
+      })()
+      const record = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : { [IFIND_CREDENTIAL_FIELD]: raw }
+      const verdict = checkIfindSecret(record[IFIND_CREDENTIAL_FIELD])
       if (!verdict.ok) return empty(verdict.errorKind === 'invalid' ? 'invalid' : 'unconfigured', 'input', verdict.reason)
       return {
         ok: true, secret: verdict.value, state: 'unverified', errorKind: '', reason: '',
-        view: { path: `credentials:${IFIND_CREDENTIAL_KEY}`, exists: true, state: 'unverified', length: verdict.length, reason: '' },
+        view: { path: `credentials:${IFIND_CREDENTIAL_KEY}`, exists: true, state: 'unverified', length: verdict.length, reason: '',
+          verification: verificationOf(record.verification) },
       }
     } catch (error) {
       return empty('unreachable', 'infrastructure',
@@ -190,14 +251,14 @@ export async function readIfindSecret(
     if (info?.type !== 'file') {
       const reason = '还没有保存同花顺 iFinD API-Key'
       return { ok: false, secret: '', state: 'unconfigured', errorKind: 'input', reason,
-        view: { path, exists: false, state: 'unconfigured', length: 0, reason } }
+      view: { path, exists: false, state: 'unconfigured', length: 0, reason, verification: noVerification } }
     }
     raw = await fs.readText(target)
   } catch (error) {
     void error
     const reason = '无法读取同花顺 iFinD 凭据文件'
     return { ok: false, secret: '', state: 'unreachable', errorKind: 'infrastructure', reason,
-      view: { path, exists: false, state: 'unreachable', length: 0, reason } }
+      view: { path, exists: false, state: 'unreachable', length: 0, reason, verification: noVerification } }
   }
 
   let parsed: unknown
@@ -207,17 +268,18 @@ export async function readIfindSecret(
     void error
     const reason = '凭据文件不是合法 JSON，请重新保存一次 SK'
     return { ok: false, secret: '', state: 'invalid', errorKind: 'input', reason,
-      view: { path, exists: true, state: 'invalid', length: 0, reason } }
+      view: { path, exists: true, state: 'invalid', length: 0, reason, verification: noVerification } }
   }
   const record = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
   const verdict = checkIfindSecret(record[IFIND_CREDENTIAL_FIELD])
   if (!verdict.ok) {
     return { ok: false, secret: '', state: 'invalid', errorKind: 'input', reason: verdict.reason,
-      view: { path, exists: true, state: 'invalid', length: 0, reason: verdict.reason } }
+      view: { path, exists: true, state: 'invalid', length: 0, reason: verdict.reason, verification: noVerification } }
   }
+  const verification = verificationOf(record.verification)
   return {
     ok: true, secret: verdict.value, state: 'unverified', errorKind: '', reason: '',
-    view: { path, exists: true, state: 'unverified', length: verdict.length, reason: '' },
+    view: { path, exists: true, state: 'unverified', length: verdict.length, reason: '', verification },
   }
 }
 
@@ -273,7 +335,7 @@ function writeFailure(
   return {
     ok: false, errorKind: kind, error, dirReady: false,
     permission: { status: 'failed', mechanism: privateFileMechanism(platform), message: error }, mode: 'file',
-    view: { path, exists: false, state: 'unconfigured', length: 0, reason: error },
+    view: { path, exists: false, state: 'unconfigured', length: 0, reason: error, verification: emptyIfindVerification() },
   }
 }
 
@@ -305,10 +367,10 @@ export async function writeIfindSecret(
     const decision = options.access.authorize({ operation: 'ifind.credential.write', source: 'panel', workdir: home })
     if (!decision.ok) return writeFailure('input', decision.error, path, platform)
     try {
-      await resolved.store.set(IFIND_CREDENTIAL_KEY, verdict.value)
+      await resolved.store.set(IFIND_CREDENTIAL_KEY, documentOf(verdict.value))
       return {
         ok: true, errorKind: '', error: '', dirReady: true, permission: hostStorePermission(), mode: 'host',
-        view: { path: `credentials:${IFIND_CREDENTIAL_KEY}`, exists: true, state: 'unverified', length: verdict.length, reason: '' },
+        view: { path: `credentials:${IFIND_CREDENTIAL_KEY}`, exists: true, state: 'unverified', length: verdict.length, reason: '', verification: emptyIfindVerification() },
       }
     } catch (error) {
       return writeFailure('infrastructure',
@@ -338,7 +400,7 @@ export async function writeIfindSecret(
       `创建插件状态目录失败：${text(mkdirRun.stderr) || text(mkdirRun.error) || dir}`.slice(0, 300), path, platform)
   }
 
-  const body = `${JSON.stringify({ [IFIND_CREDENTIAL_FIELD]: verdict.value }, null, 2)}\n`
+  const body = documentOf(verdict.value)
   const written = await options.access.writeText(
     { operation: 'ifind.credential.write', source: 'panel', workdir: home },
     { kind: 'ifind-credential', path },
@@ -359,13 +421,50 @@ export async function writeIfindSecret(
       ok: false, errorKind: 'policy',
       error: `凭据已写入 ${path}，但权限没有生效：${permission.message}`,
       dirReady, permission, mode: 'file',
-      view: { path, exists: true, state: 'unverified', length: verdict.length, reason: permission.message },
+      view: { path, exists: true, state: 'unverified', length: verdict.length, reason: permission.message, verification: emptyIfindVerification() },
     }
   }
   return {
     ok: true, errorKind: '', error: '', dirReady, permission, mode: 'file',
-    view: { path, exists: true, state: 'unverified', length: verdict.length, reason: '' },
+    view: { path, exists: true, state: 'unverified', length: verdict.length, reason: '', verification: emptyIfindVerification() },
   }
+}
+
+/** 保存一次用户主动探测的脱敏结论；环境自检只读取这份结论，不打远程请求。 */
+export async function persistIfindVerification(
+  ctx: Context,
+  home: string,
+  verification: IfindVerification,
+  options: { platform?: string; access: LocalAccessBroker },
+): Promise<{ ok: boolean; error: string }> {
+  const current = await readIfindSecret(ctx, home, { access: options.access, source: 'panel', workdir: home })
+  if (!current.ok) return { ok: false, error: current.reason || '没有可更新的同花顺 iFinD 凭据' }
+  const resolved = resolveIfindStore(ctx)
+  const body = documentOf(current.secret, verification)
+  if (resolved.kind === 'host' && resolved.store !== undefined) {
+    const decision = options.access.authorize({ operation: 'ifind.credential.write', source: 'panel', workdir: home })
+    if (!decision.ok) return { ok: false, error: decision.error }
+    try {
+      await resolved.store.set(IFIND_CREDENTIAL_KEY, body)
+      return { ok: true, error: '' }
+    } catch (error) {
+      return { ok: false, error: `保存 iFinD 验证结论失败：${error instanceof Error ? error.message : String(error)}` }
+    }
+  }
+  const written = await options.access.writeText(
+    { operation: 'ifind.credential.write', source: 'panel', workdir: home },
+    { kind: 'ifind-credential', path: ifindCredentialPath(home) },
+    body,
+  )
+  if (!written.ok) return { ok: false, error: `保存 iFinD 验证结论失败：${written.error}` }
+  const platform = text(options.platform)
+  if (platform !== '') {
+    const permission = await enforceCredentialPermission({
+      access: options.access, operation: 'ifind.credential.permission', path: ifindCredentialPath(home), platform, workdir: home,
+    })
+    if (!credentialPermissionSatisfied(permission)) return { ok: false, error: `保存 iFinD 验证结论失败：${permission.message}` }
+  }
+  return { ok: true, error: '' }
 }
 
 /** 清除 SK。**UI 必须二次确认**（这是不可撤销的：清掉之后要重新向管理员申请/回填）。 */

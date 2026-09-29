@@ -207,8 +207,12 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    * 这两条命令会开浏览器、等人扫码（宿主侧超时 5 分钟），所以：成功也要给一句话，
    * 失败必须带原因，CLI 打到 stdout 的 URL / 设备码 / 提示原样带出来 —— 浏览器打不开时，
    * 那串 URL 就是员工唯一能自己走下去的路。
+   *
+   * `sandboxBlocked` 是 **Host 的归因事实**（登录必须写工作区之外的路径）：为真时
+   * `error` 里已经是一句人话 + 下一步动作，这里不再追加 stdout 尾巴 —— 那只会是一句
+   * 「正在打开浏览器窗口…」，把真正的动作挤到看不见。
    */
-  const runLogin = React.useCallback(async (label: string, call: () => Promise<{ ok: boolean; error?: string; timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>) => {
+  const runLogin = React.useCallback(async (label: string, call: () => Promise<{ ok: boolean; error?: string; timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean }>) => {
     setLoginMessage(`${label}：正在等待浏览器授权…（最多 5 分钟）`)
     try {
       const result = await call()
@@ -217,8 +221,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       if (result.ok) lines.push(`${label}：命令已执行完成，请刷新查看结果。`)
       else if (result.timedOut === true) lines.push(`${label}：等待超时（5 分钟）。若浏览器没有自动打开，请重试或改用设备码登录。`)
       else lines.push(`${label}失败：${result.error || result.stderrTail || '未知原因'}`)
-      const detail = (result.stdoutTail ?? '').trim() || (result.stderrTail ?? '').trim()
-      if (detail !== '') lines.push(detail)
+      if (result.sandboxBlocked !== true) {
+        const detail = (result.stdoutTail ?? '').trim() || (result.stderrTail ?? '').trim()
+        if (detail !== '') lines.push(detail)
+      }
       setLoginMessage(lines.join('\n'))
     } catch (cause) {
       if (mounted.current) setLoginMessage(`${label}失败：${describe(cause)}`)
@@ -627,8 +633,15 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     checkedAt={snapshot.checkedAt}
     onRefresh={recheck}
     onRelogin={() => { void runLogin('氚云登录', workbenchApi.relogin) }}
+    // 内置浏览器扫码登录（协议 20）：客户端只把令牌送出去；绑定与环境刷新都由 Host 的结论驱动
+    // （卡片成功后会回调 `onRefresh` → `recheck`）。
+    onBindH3yunToken={(token) => workbenchApi.h3yunSessionBind({ token })}
     onDwsLogin={() => { void runLogin('钉钉登录', () => workbenchApi.dwsLogin({})) }}
     onDwsLoginDevice={() => { void runLogin('钉钉设备码登录', () => workbenchApi.dwsLogin({ device: true })) }}
+    // 钉钉两阶段（协议 21）：起后台 `dws auth login` 并轮询快照；URL/设备码由卡片呈现，
+    // 「打开 / 复制」在卡片里就地完成，成功后再刷新环境结论。
+    onDwsLoginStart={(args) => workbenchApi.dwsLoginStart(args)}
+    onDwsLoginStatus={() => workbenchApi.dwsLoginStatus()}
     loginMessage={loginMessage}
     // 拦截说明**直接读统一导航层记下来的结论**（`gate` + `pendingTarget` + `gateReason`）：
     // 侧栏点子项被拦回来的那一刻就要说清"本来要去哪、为什么没进去"，

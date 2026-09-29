@@ -201,6 +201,30 @@ func TestRecordsWithoutFilterOmitsFilter(t *testing.T) {
 	}
 }
 
+func TestFilesReturnsEmptyArrayWhenRecordHasNoAttachments(t *testing.T) {
+	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
+	client := &fakeClient{records: json.RawMessage(`{"returnData":[{"ObjectId":"id1","Name":"普通字段"}]}`)}
+	service := testService(store, client)
+
+	files, err := service.Files(context.Background(), "Syx1", "id1")
+	if err != nil {
+		t.Fatalf("Files() error = %v", err)
+	}
+	if files == nil {
+		t.Fatal("Files() returned nil; CLI JSON must encode an empty array, not null")
+	}
+	if len(files) != 0 {
+		t.Fatalf("Files() returned unexpected attachments: %#v", files)
+	}
+	encoded, err := json.Marshal(map[string]any{"ok": true, "data": files})
+	if err != nil {
+		t.Fatalf("marshal files response: %v", err)
+	}
+	if string(encoded) != `{"data":[],"ok":true}` {
+		t.Fatalf("files response = %s, want data=[]", encoded)
+	}
+}
+
 func TestDownloadOneWritesFile(t *testing.T) {
 	store := &fakeStore{exists: true, session: h3yuncreds.Session{Token: "t", EngineCode: "e"}}
 	service := testService(store, &fakeClient{})

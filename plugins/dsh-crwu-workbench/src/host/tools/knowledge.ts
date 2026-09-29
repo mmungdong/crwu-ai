@@ -297,7 +297,8 @@ export function knowledgeTools(deps: ToolDeps) {
 
       for (const space of spaces) {
         const tree = await readTree(ctx, platform, {
-          workdir: caseDir, access: deps.access, source: 'audit-tool', ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+          workdir: caseDir, access: deps.access, source: 'audit-tool',
+          ...(exec.signal === undefined ? {} : { signal: exec.signal }),
         }, space.workspaceId)
         nodes += treeStats(tree.roots).total
         complete = complete && tree.failures.length === 0 && !tree.truncated
@@ -338,7 +339,8 @@ export function knowledgeTools(deps: ToolDeps) {
             ? ['doc', '+export', '--node', hit.node.nodeId, '--export-format', 'markdown', '--output', relative, '--format', 'json']
             : ['drive', '+download', '--node', hit.node.nodeId, '--output', relative, '--format', 'json']
           const run = await dwsJson(ctx, platform, argv, {
-            workdir: knowledgeDir, access: deps.access, source: 'audit-tool', ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+            workdir: knowledgeDir, access: deps.access, source: 'audit-tool',
+            ...(exec.signal === undefined ? {} : { signal: exec.signal }),
           })
           if (!run.ok) {
             manifest.push({ ...entry, status: 'failed', reason: run.error })

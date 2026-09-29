@@ -26,14 +26,16 @@ import { maybeAutoUpload } from '../oss/auto.ts'
 import { ossCredSave, ossIndex, ossLink, ossResult, ossUpload, type OssDeps } from '../oss/ops.ts'
 import { reportFiles } from '../report/files.ts'
 import { createUploadWatch } from '../oss/watch.ts'
-import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
+import {
+  bindH3yunSession, clipboard, createDwsLoginRegistry, dwsLogin, openPath, ossCred, relogin, sessionStatus,
+  type DwsLoginRegistry,
+} from '../system/ops.ts'
 import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { dwsLocalDoctor, dwsLocalPermissionRepair, hasAttributableDwsFailure } from '../dws/local.ts'
 import { loadEnvironment } from '../environment/ops.ts'
 import { createCapabilityGate, guardOperation } from '../environment/gate.ts'
 import { ifindCredentialClear, ifindCredentialSave, ifindProbe, ifindStatus, type IfindOpsDeps } from '../tools/ifind-ops.ts'
-import { createIfindProbeCache } from '../ifind/env.ts'
 import { ifindCredentialView } from '../ifind/store.ts'
 import { missingAuditTools } from '../tools/register.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
@@ -82,13 +84,6 @@ function sessionDelegation(ctx: Context, id: string): DelegationView {
 export interface CoreDeps {
   ifindTransport?: IfindTransport
   ifindTimeoutMs?: number
-  /**
-   * iFinD 探测缓存（插件实例级）：
-   * - 不传时每个 `createCoreOperations()` 自建一份（**同一个插件实例共用**，
-   *   所以面板反复刷新不会重复打上游）；
-   * - 传 `null` 表示不缓存（单测里想看每次调用都真探）。
-   */
-  ifindProbeCache?: import('../ifind/env.ts').IfindProbeCache | null
   auditTools?: (options: { refresh: boolean }) => Promise<{ missing: string[]; checked: boolean }>
   /**
    * Task 4 的四个自助更新操作（由 `update/ops.ts` 组装）。
@@ -97,6 +92,13 @@ export interface CoreDeps {
    * 操作表推导，避免"声明一份、实现一份"漂移（clipboard 那次就是这么踩的）。
    */
   update?: OperationMap
+  /**
+   * 钉钉登录会话（协议 21）：`dws auth login` 改成后台跑 + 两阶段轮询。
+   *
+   * 由 `apply()` 创建并持有（它握着后台进程与定时器，模块级单例会在卸载后残留进程）。
+   * 没注入时这里自建一个 —— 但那样卸载就没人 dispose，所以生产路径一定要注入。
+   */
+  dwsLogins?: DwsLoginRegistry
 }
 
 export interface HostResolvers {
@@ -119,6 +121,12 @@ export function createCoreOperations(
   resolvers: HostResolvers,
   extra: CoreDeps = {},
 ): OperationMap {
+  /**
+   * 钉钉登录会话：注入优先；没注入就自建一个（自建的那个卸载时没人 dispose，
+   * 所以生产路径由 `apply()` 注入并通过 `ctx.effect` 收尾）。
+   */
+  const dwsLogins = extra.dwsLogins ?? createDwsLoginRegistry()
+
   /**
    * OSS 操作的依赖。
    *
@@ -162,7 +170,7 @@ export function createCoreOperations(
    * 共用是刻意的：门禁必须与界面看到的是**同一份事实**；各跑一套的结果是
    * 「界面说没配好、Host 放行」或者反过来（见 `environment/gate.ts`）。
    */
-  const loadEnv = async (options: { refresh: boolean; probeIfind?: boolean }): Promise<Record<string, unknown>> => {
+  const loadEnv = async (options: { refresh: boolean }): Promise<Record<string, unknown>> => {
     const [platform, home] = [await world.platform(), await world.home()]
     return await loadEnvironment(
       // 「我是谁」跟着自检一起拿（见 identity 的注释）：自检本来就要问一次钉钉登录态。
@@ -177,13 +185,9 @@ export function createCoreOperations(
         ...(extra.auditTools === undefined
           ? { auditTools: async () => ({ missing: missingAuditTools(ctx, undefined), checked: true }) }
           : { auditTools: extra.auditTools }),
-        ...(extra.ifindTransport === undefined ? {} : { ifindTransport: extra.ifindTransport }),
-        ...(probeCache === undefined ? {} : { ifindProbeCache: probeCache }),
       },
       {
         ...(options.refresh ? { refresh: true } : {}),
-        // `probeIfind` 只由界面在「保存 SK 之后」与「重新验证」时传：默认不主动打外部网络。
-        ...(options.probeIfind === true ? { probeIfind: true } : {}),
       },
     ) as unknown as Record<string, unknown>
   }
@@ -196,10 +200,6 @@ export function createCoreOperations(
     const state = result.state as import('../../shared/environment/model.ts').EnvironmentStateView | undefined
     return state ?? null
   })
-  // 探测结果缓存：同一个插件实例共用一份（30s TTL），保存 / 清除凭据后由指纹自然失效。
-  const probeCache = extra.ifindProbeCache === null
-    ? undefined
-    : (extra.ifindProbeCache ?? createIfindProbeCache())
   const ifindDeps: IfindOpsDeps = {
     ctx,
     access: resolvers.access,
@@ -282,6 +282,10 @@ export function createCoreOperations(
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
           'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
+          // 协议 20：内置浏览器扫码登录的凭据出口（客户端读到 h3_token 后经 stdin 交给 CLI）。
+          'browser-session-bind',
+          // 协议 21：钉钉登录改成后台跑 + 两阶段（URL/设备码在命令还在等回调时就能给界面）。
+          'dws-login-start', 'dws-login-status',
           // 协议 18 · 子项目 D：DWS 本机目录的只读体检与最小权限修复。
           'dws-local-doctor', 'dws-local-permission-repair',
           // 协议 16：自助更新四个操作（安装目标由 Host 自己授权，调用方只能传空参数）。
@@ -379,7 +383,6 @@ export function createCoreOperations(
     },
     env: async (args) => await loadEnv({
       refresh: args.refresh === true,
-      ...(args.probeIfind === true ? { probeIfind: true } : {}),
     }),
 
     pending: async (args) => {
@@ -491,7 +494,7 @@ export function createCoreOperations(
     ),
     // 登录成功 = 登录态事实变了：作废快照，下一次自检才能看到真结论。
     relogin: async () => {
-      const result = await relogin({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() })
+      const result = await relogin({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() }, await world.home())
       gate.invalidate()
       return result
     },
@@ -531,11 +534,41 @@ export function createCoreOperations(
       const result = await dwsLogin(
         { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
         args,
+        await world.home(),
       )
       gate.invalidate()
       return result
     },
+
+    /**
+     * 钉钉登录（协议 21）：起一条**后台**的 `dws auth login` 并立刻给第一份快照。
+     *
+     * 与上面的 `dws-login`（同步等结束）并存：老路径保留给回退与对照，新界面走这一对。
+     * 快照里的 `url` / `userCode` 是**尽力解析**的结果，`tail` 才是原文 —— 界面两者都给。
+     */
+    'dws-login-start': async (args) => await dwsLogins.start(
+      { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
+      args,
+      await world.home(),
+    ),
+    'dws-login-status': async () => dwsLogins.status(),
     session: async () => await sessionStatus({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() }),
+
+    /**
+     * **氚云网页会话绑定**（协议 20）：内置浏览器扫码链路的唯一凭据出口。
+     *
+     * 只接受 `{ token }`；令牌经**标准输入**交给 `crwu h3yun session bind --token-stdin`，
+     * 不进 argv、不落盘、不回显；失败只回 CLI 的一句话（见 `bindH3yunSession`）。
+     * 绑定成功会改变环境结论，所以照 `dws-login` 的办法作废环境快照。
+     */
+    'browser-session-bind': async (args) => {
+      const result = await bindH3yunSession(
+        { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
+        args,
+      )
+      if (result.ok) gate.invalidate()
+      return result
+    },
     'oss-cred': async () => await ossCred(
       { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
       await world.home(),
@@ -560,7 +593,7 @@ export function createCoreOperations(
     }),
 
     // ⑥ 外部数据（iFinD）的凭据生命周期。**不是模型可见的 Tool**：界面把 SK 交给 Host，
-    // Host 校验 → 写盘（0600）→ 收紧权限 → 立刻真实探测；返回值只有状态与脱敏摘要。
+    // Host 校验 → 写盘（0600）→ 收紧权限 → 立刻真实探测并保存脱敏结论；返回值只有状态与脱敏摘要。
     // 这三条也顺手作废能力快照：凭据变了，之前那份环境结论就不再可信。
     'ifind-status': async () => {
       const status = await ifindStatus(ifindDeps)

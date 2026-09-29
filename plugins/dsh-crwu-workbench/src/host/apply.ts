@@ -13,6 +13,7 @@ import { createCoreOperations } from './ops/core.ts'
 import { createUpdateOperations } from './update/ops.ts'
 import { createWorldFacts } from './platform/world.ts'
 import { localAccessGranted } from './access/consent.ts'
+import { createDwsLoginRegistry } from './system/ops.ts'
 import { createWorkbenchState } from './state/store.ts'
 import { createLocalAccessBroker } from './access/broker.ts'
 import { workbenchConfigPath } from './state/persist.ts'
@@ -80,13 +81,17 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     home: () => world.home(),
     access,
   })
+  // 钉钉登录会话（协议 21）：它握着后台进程与定时器，必须按插件实例持有并在卸载时收尾 ——
+  // 残留就是「看不见的进程还占着 ~/.dws 的登录态锁」，下一次登录会莫名其妙失败。
+  const dwsLogins = createDwsLoginRegistry()
+  ctx.effect(() => () => { void dwsLogins.dispose() }, 'crwu-workbench: dws login sessions')
   const operations = createCoreOperations(
     ctx,
     config,
     state,
     world,
     { form, python, access },
-    { update: update.operations },
+    { update: update.operations, dwsLogins },
   )
   ctx.effect(() => registerRpcRoute(ctx, operations), 'crwu-workbench: rpc route')
   ctx.logger?.info?.('中瑞世联工作台 Host 半（包形态骨架）已装配 %o', {

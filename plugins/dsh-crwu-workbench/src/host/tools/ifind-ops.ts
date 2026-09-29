@@ -1,6 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { LocalAccessBroker } from '../access/broker.ts'
-import { clearIfindSecret, ifindCredentialView, readIfindSecret, writeIfindSecret } from '../ifind/store.ts'
+import {
+  clearIfindSecret, emptyIfindVerification, ifindCredentialView, persistIfindVerification,
+  readIfindSecret, writeIfindSecret, type IfindVerification,
+} from '../ifind/store.ts'
 import type { CredentialPermission } from '../../shared/types.ts'
 import { defaultIfindTransport, probeIfind, IFIND_SERVER_TYPES, type IfindServerType, type IfindTransport } from '../ifind/mcp.ts'
 
@@ -87,23 +90,48 @@ function probeViewOf(result: Awaited<ReturnType<typeof probeIfind>>): IfindProbe
   }
 }
 
+function verificationOfProbe(result: Awaited<ReturnType<typeof probeIfind>>): IfindVerification {
+  return {
+    ok: result.ok,
+    state: result.state,
+    errorKind: result.errorKind,
+    error: result.error,
+    toolCount: result.toolCount,
+    toolNames: result.toolNames,
+    protocolVersion: result.protocolVersion,
+    checkedAt: result.checkedAt,
+    dataVerified: result.dataVerified === true,
+    dataTool: result.dataTool,
+    dataSample: result.dataSample,
+  }
+}
+
+function probeFailure(error: string): IfindProbeView {
+  return {
+    ok: false, state: 'unreachable', errorKind: 'infrastructure', error,
+    toolCount: 0, toolNames: [], protocolVersion: '', checkedAt: new Date().toISOString(),
+    dataVerified: false, dataTool: '', dataSample: '',
+  }
+}
+
 /** 当前凭据的脱敏视图（不发任何网络请求）。 */
 export async function ifindStatus(deps: IfindOpsDeps): Promise<IfindProbeView & { path: string }> {
   const home = await deps.home()
   const view = await ifindCredentialView(deps.ctx, home, { access: deps.access, source: 'panel', workdir: home })
+  const verification = view.verification ?? emptyIfindVerification()
+  const hasVerification = verification.checkedAt !== ''
   return {
-    ok: view.exists && view.state !== 'invalid',
-    // 只读文件是**不**足以说「已认证」的：这里如实回 `unverified`，认证结论只能来自真实探测。
-    state: view.state,
-    errorKind: view.exists ? '' : 'unconfigured',
-    error: view.reason,
-    toolCount: 0,
-    toolNames: [],
-    protocolVersion: '',
-    checkedAt: '',
-    dataVerified: false,
-    dataTool: '',
-    dataSample: '',
+    ok: hasVerification ? verification.ok : view.exists && view.state !== 'invalid',
+    state: hasVerification ? verification.state : view.state,
+    errorKind: hasVerification ? verification.errorKind : (view.exists ? '' : 'unconfigured'),
+    error: hasVerification ? verification.error : view.reason,
+    toolCount: hasVerification ? verification.toolCount : 0,
+    toolNames: hasVerification ? verification.toolNames : [],
+    protocolVersion: hasVerification ? verification.protocolVersion : '',
+    checkedAt: hasVerification ? verification.checkedAt : '',
+    dataVerified: hasVerification ? verification.dataVerified : false,
+    dataTool: hasVerification ? verification.dataTool : '',
+    dataSample: hasVerification ? verification.dataSample : '',
     path: view.path,
   }
 }
@@ -132,16 +160,20 @@ export async function ifindCredentialSave(
   const probe = await probeIfind(deps.transport ?? defaultIfindTransport(), await readSecretFor(deps), {
     ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
   })
+  const persisted = await persistIfindVerification(deps.ctx, home, verificationOfProbe(probe), { platform, access: deps.access })
+  const resultProbe = persisted.ok ? probeViewOf(probe) : probeFailure(persisted.error)
   return {
-    ok: true,
-    error: written.permission.status === 'failed'
-      ? `凭据已保存，但权限没有收紧到 0600：${written.permission.message}`
-      : '',
-    errorKind: '',
-    view: { ...written.view, state: probe.state },
+    ok: persisted.ok,
+    error: persisted.ok
+      ? (written.permission.status === 'failed'
+        ? `凭据已保存，但权限没有收紧到 0600：${written.permission.message}`
+        : '')
+      : persisted.error,
+    errorKind: persisted.ok ? '' : 'infrastructure',
+    view: { ...written.view, state: resultProbe.state },
     permission: written.permission,
     mode: written.mode,
-    probe: probeViewOf(probe),
+    probe: resultProbe,
   }
 }
 
@@ -180,7 +212,10 @@ export async function ifindProbe(deps: IfindOpsDeps, args: Record<string, unknow
     ...(isServerType(serverType) ? { serverType } : {}),
     ...(signal === undefined ? {} : { signal }),
   })
-  return { ...probeViewOf(probe), path: view.path }
+  const persisted = await persistIfindVerification(deps.ctx, home, verificationOfProbe(probe), {
+    platform: await deps.platform(), access: deps.access,
+  })
+  return { ...(persisted.ok ? probeViewOf(probe) : probeFailure(persisted.error)), path: view.path }
 }
 
 /** 读明文（只给探测用；**不导出到线协议**）。 */

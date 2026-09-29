@@ -142,6 +142,7 @@ type fakeWeb struct {
 	lastSize    int
 	lastFileID  string
 	lastOutPath string
+	lastToken   string
 }
 
 func (f *fakeWeb) EnsureFresh(context.Context) error {
@@ -152,10 +153,13 @@ func (f *fakeWeb) EnsureFresh(context.Context) error {
 func (f *fakeWeb) Login(_ context.Context, onStatus func(string)) (h3yunweb.Session, error) {
 	return f.session, f.err
 }
-func (f *fakeWeb) Bind(context.Context, string) (h3yunweb.Session, error) { return f.session, f.err }
-func (f *fakeWeb) Status(context.Context) (h3yunweb.Session, error)       { return f.session, f.err }
-func (f *fakeWeb) Clear(context.Context) error                            { return f.err }
-func (f *fakeWeb) Refresh(context.Context) (h3yunweb.Session, error)      { return f.session, f.err }
+func (f *fakeWeb) Bind(_ context.Context, token string) (h3yunweb.Session, error) {
+	f.lastToken = token
+	return f.session, f.err
+}
+func (f *fakeWeb) Status(context.Context) (h3yunweb.Session, error)  { return f.session, f.err }
+func (f *fakeWeb) Clear(context.Context) error                       { return f.err }
+func (f *fakeWeb) Refresh(context.Context) (h3yunweb.Session, error) { return f.session, f.err }
 func (f *fakeWeb) Apps(_ context.Context, keyword string) (json.RawMessage, error) {
 	f.lastKw = keyword
 	if f.err != nil {
@@ -279,6 +283,72 @@ func TestRequiredFlagReportsError(t *testing.T) {
 	code, _, stderr := runCLI(depsWith(nil, web), "h3yun", "session", "bind")
 	if code == 0 || !strings.Contains(stderr, "--token") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+}
+
+func runCLIWithStdin(deps Dependencies, stdin string, args ...string) (int, string, string) {
+	var stdout, stderr bytes.Buffer
+	code := RunWithIO(args, strings.NewReader(stdin), &stdout, &stderr, deps)
+	return code, stdout.String(), stderr.String()
+}
+
+// The point of --token-stdin: the JWT reaches the service but never appears in
+// the process arguments or in anything the caller can observe.
+func TestSessionBindReadsTokenFromStdin(t *testing.T) {
+	const token = "eyJhbGciOiJIUzI1NiJ9.eyJlbmdpbmVjb2RlIjoiZW5nLTEifQ.signature"
+	web := &fakeWeb{session: h3yunweb.Session{EngineCode: "eng-1", UserID: "u1", ExpiresAt: time.Now().Add(time.Hour)}}
+
+	code, stdout, stderr := runCLIWithStdin(depsWith(nil, web), "  "+token+"\n", "h3yun", "session", "bind", "--token-stdin")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+	if strings.TrimSpace(web.lastToken) != token {
+		t.Fatalf("service received %q", web.lastToken)
+	}
+	if strings.Contains(stdout, token) || strings.Contains(stderr, token) {
+		t.Fatalf("token leaked: stdout=%q stderr=%q", stdout, stderr)
+	}
+	if !strings.Contains(stdout, `"ok":true`) {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestSessionBindStdinTokenNeverAppearsInOutput(t *testing.T) {
+	const token = "eyJhbGciOiJIUzI1NiJ9.eyJlbmdpbmVjb2RlIjoiZW5nLTEifQ.signature"
+	web := &fakeWeb{err: errors.New("the session token has already expired; scan again at h3yun.com")}
+
+	code, stdout, stderr := runCLIWithStdin(depsWith(nil, web), token, "h3yun", "session", "bind", "--token-stdin")
+	if code == 0 {
+		t.Fatal("expected failure")
+	}
+	if strings.Contains(stdout, token) || strings.Contains(stderr, token) {
+		t.Fatalf("token leaked on the failure path: stdout=%q stderr=%q", stdout, stderr)
+	}
+	if web.lastToken != token {
+		t.Fatalf("service received %q", web.lastToken)
+	}
+}
+
+func TestSessionBindRejectsBothTokenSources(t *testing.T) {
+	web := &fakeWeb{}
+	code, _, stderr := runCLIWithStdin(depsWith(nil, web), "from-stdin", "h3yun", "session", "bind",
+		"--token", "from-flag", "--token-stdin")
+	if code == 0 || !strings.Contains(stderr, "not both") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+	if web.lastToken != "" {
+		t.Fatalf("service was called with %q", web.lastToken)
+	}
+}
+
+func TestSessionBindEmptyStdinFails(t *testing.T) {
+	web := &fakeWeb{}
+	code, _, stderr := runCLIWithStdin(depsWith(nil, web), "   \n", "h3yun", "session", "bind", "--token-stdin")
+	if code == 0 || !strings.Contains(stderr, "--token-stdin") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+	if web.lastToken != "" {
+		t.Fatalf("service was called with %q", web.lastToken)
 	}
 }
 

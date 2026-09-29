@@ -39,6 +39,7 @@ export type LocalAccessOperation =
   | 'h3yun.session.status'
   | 'h3yun.session.login'
   | 'h3yun.session.bind'
+  | 'h3yun.session.refresh'
   | 'h3yun.forms.read'
   | 'h3yun.records.read'
   | 'h3yun.files.read'
@@ -110,6 +111,7 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'h3yun.session.status',
   'h3yun.session.login',
   'h3yun.session.bind',
+  'h3yun.session.refresh',
   'h3yun.forms.read',
   'h3yun.records.read',
   'h3yun.files.read',
@@ -176,6 +178,11 @@ export const LOCAL_ACCESS_OPERATIONS = {
   },
   'h3yun.session.bind': {
     capability: 'h3yun-credential-store', transport: 'shell', privileged: true, allowedSources: PANEL,
+  },
+  // 主动续期（面板打开时顺手做一次）：同样要读钥匙串并回写，所以是特权 + 只给面板。
+  'h3yun.session.refresh': {
+    capability: 'h3yun-credential-store', transport: 'shell', privileged: true,
+    allowedSources: PANEL_OR_BACKGROUND,
   },
   'h3yun.forms.read': {
     capability: 'h3yun-credential-store', transport: 'shell', privileged: true, allowedSources: EVERY_SOURCE,

@@ -14,7 +14,7 @@ import {
   probePackageIntegrity, probeOss,
   type IfindCheck, type PackageIntegrityCheck, type ServiceCheck,
 } from '../environment/probe.ts'
-import { ifindEnvCheck, type IfindProbeCache } from '../ifind/env.ts'
+import { ifindEnvCheck } from '../ifind/env.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
 import { buildEnvironmentState, checkErrorOf, PACKAGE_BLOCKER, RUNTIME_BLOCKER } from './state.ts'
 // 兼容再导出：`blocked` 的这两条文案以前从这里导出，宿主测试与诊断脚本仍按这个名字引用。
@@ -180,16 +180,8 @@ export interface EnvDeps {
    * 拿不到 Agent 就报一个员工看不懂的阻塞项；真正的硬门禁在 `audit-start` 与能力预检里。
    */
   auditTools?: (options: { refresh: boolean }) => Promise<{ missing: string[]; checked: boolean }>
-  /**
-   * iFinD 的真实校验传输（测试替身用）。
-   *
-   * **默认就验**（`host/ifind/env.ts`：每次环境校验都真的取一次数据）；`refresh: true`
-   * （界面「重新检查」）会**绕过 30s 缓存**再验一次。缓存只用来兜住面板的反复刷新，
-   * 不是"默认不探"——那是 2026-09-26 之前的旧口径。
-   */
+  /** 保留给旧调用方的测试替身；环境自检不会使用它，也不会访问 iFinD。 */
   ifindTransport?: IfindTransport
-  /** iFinD 探测结果的短 TTL 缓存（插件实例级）；不传就不缓存。 */
-  ifindProbeCache?: IfindProbeCache
 }
 
 /**
@@ -281,24 +273,16 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   const packageIntegrity = await probePackageIntegrity(ctx, manifest, platform)
   // ③ DSH 自带运行时：`refresh` 由界面「重新自检」传 true（刷新运行时缓存）。
   const runtime = await probePythonRuntime(deps, manifest, args.refresh === true)
-  // ⑥ 外部数据：凭据在插件状态目录（五态）。**每次环境校验都真的验一次**
-  // （initialize + tools/list + 真取一次数据）；`refresh`（用户点「重新检查」）绕过 30s 缓存。
-  //
-  // **未授权时一次都不探**（协议 18，§A2）：`ifindEnvCheck` 会读凭据文件、还会真打一次外部取数。
-  // 这两件事都属于「本机账号与配置」的范围，没授权时既不该发生，也没有可信结论 ——
-  // 硬探一遍只会得到「未配置」这种假结论（文件权限不足读不到），把员工指去填一份他早就填过的密钥。
+  // ⑥ 外部数据：凭据在插件状态目录（五态）。环境自检只读取最近一次用户主动验证的脱敏结论，
+  // 普通检查、refresh、切换模块都不主动访问 iFinD。
+  // 未授权时仍不读凭据文件；授权后仅做本地读取，不会触发远程探测。
   const external = granted
     ? await ifindEnvCheck(ctx, home, {
-      probe: true,
-      // 读凭据/打外部取数之前由**读函数自己**再过一次门禁（Host 侧边界，不是界面禁用）。
       access: deps.access,
       source: 'panel',
-      force: args.refresh === true || args.probeIfind === true,
       // 必需与否只由清单一处决定（现为 true）：未通过就是阻塞项。
       required: manifest.ifind.required === true,
       applyUrl: manifest.ifind.applyUrl,
-      ...(deps.ifindTransport === undefined ? {} : { transport: deps.ifindTransport }),
-      ...(deps.ifindProbeCache === undefined ? {} : { cache: deps.ifindProbeCache }),
     })
     : skippedIfindCheck(manifest)
   const services: ServiceCheck[] = []

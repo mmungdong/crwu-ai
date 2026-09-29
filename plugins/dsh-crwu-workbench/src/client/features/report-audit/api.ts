@@ -191,6 +191,25 @@ export interface SimpleResult {
  * 更新那四个方法来自 `features/update/api.ts`（`UpdateApi`）——门面在这里**组合**，
  * 操作名只有一份（`UPDATE_METHOD_OPERATION`），不在这里再手写字符串。
  */
+/**
+ * 钉钉登录的一份快照（协议 21）。
+ *
+ * `url` / `userCode` 是**尽力解析**的结果（`dws` 只保证人类可读输出），
+ * `tail` 是 CLI 原文 —— 界面两个都给，解析不出来也不影响流程。
+ */
+export interface DwsLoginSnapshotView {
+  phase: 'running' | 'ok' | 'failed' | 'timeout'
+  ok: boolean
+  device: boolean
+  url: string
+  userCode: string
+  tail: string
+  error: string
+  timedOut: boolean
+  sandboxBlocked: boolean
+  advice: string
+}
+
 export interface WorkbenchApi extends UpdateApi {
   boot: () => Promise<BootResult>
   /** `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存。 */
@@ -241,14 +260,39 @@ export interface WorkbenchApi extends UpdateApi {
    * 服务端还会再判一次：结论必须是"本机文件权限问题"，且所有者是当前账户。
    */
   dwsLocalPermissionRepair: (args: { confirm: true }) => Promise<DwsLocalRepairView>
-  relogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
-  dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string }>
+  /**
+   * 登录结果。
+   *
+   * `sandboxBlocked` / `advice` 是 **Host 给的归因事实**（可选字段）：登录必须写工作区之外的
+   * 路径（临时浏览器 profile / `<HOME>/.dws` 的登录态），被文件策略挡住时 `error` 里已经
+   * 是一句人话加下一步动作。客户端**不许**自己按错误文本去猜沙箱问题 —— 那会与 Host 的判据漂移。
+   */
+  relogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean; advice?: string }>
+  dwsLogin: (args?: { device?: boolean }) => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean; advice?: string }>
+  /**
+   * 绑定氚云网页会话（协议 20）：**内置浏览器扫码链路的唯一凭据出口**。
+   *
+   * 客户端在面板内嵌的 lease 浏览器里读到 `h3_token` 之后**立刻**调它；Host 经标准输入把它
+   * 交给 `crwu h3yun session bind --token-stdin`，落到 OS 凭据存储。令牌不落盘、不回显、
+   * 不进日志；失败只回 CLI 的一句话（见 Host 侧 `bindH3yunSession`）。
+   */
+  h3yunSessionBind: (args: { token: string }) => Promise<SimpleResult & { session: { userId: string; expiresAt: string; expiresIn: string } | null }>
+  /**
+   * 钉钉登录（协议 21）：起一次登录并拿第一份快照。
+   *
+   * `dws auth login` 要等人扫码/授权，5 分钟才结束 —— 旧接口只能同步等它，URL 到界面时
+   * 用户早已不在等。所以拆成 start/status：这里立刻回来；`url` / `userCode` 是**尽力解析**
+   * 的结果，`tail` 才是 CLI 原文，界面两者都给。
+   */
+  dwsLoginStart: (args?: { device?: boolean }) => Promise<DwsLoginSnapshotView>
+  /** 轮询登录快照；从没起过返回 `null`。 */
+  dwsLoginStatus: () => Promise<DwsLoginSnapshotView | null>
   clipboard: (args: { text: string }) => Promise<SimpleResult>
   openPath: (args: { path: string }) => Promise<SimpleResult & { path: string }>
   crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number }) => Promise<Record<string, unknown>>
   /** iFinD 凭据的脱敏状态（**没有明文**）。 */
   ifindStatus: () => Promise<IfindStatusResult>
-  /** 保存 SK：Host 校验 → 写盘（0600）→ 收紧权限 → **立刻真实探测**。 */
+  /** 保存 API-Key：Host 校验 → 写盘（0600）→ 收紧权限 → **立刻真实探测并保存结论**。 */
   ifindCredentialSave: (args: { secret: string }) => Promise<IfindSaveResult>
   /** 清除 API-Key（不可撤销，界面必须二次确认）。 */
   ifindCredentialClear: (args: { confirm: boolean }) => Promise<{ ok: boolean; error: string; cleared: boolean; path: string }>
@@ -340,6 +384,9 @@ export const workbenchApi: WorkbenchApi = {
   dwsLocalPermissionRepair: (args) => call('dws-local-permission-repair', args),
   relogin: () => call('relogin'),
   dwsLogin: (args) => call('dws-login', args),
+  h3yunSessionBind: (args) => call('browser-session-bind', args),
+  dwsLoginStart: (args) => call('dws-login-start', args),
+  dwsLoginStatus: () => call('dws-login-status'),
   clipboard: (args) => call('clipboard', args),
   openPath: (args) => call('open-path', args),
   crwu: (args) => call('crwu', args),
@@ -382,6 +429,9 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   dwsLocalPermissionRepair: 'dws-local-permission-repair',
   relogin: 'relogin',
   dwsLogin: 'dws-login',
+  h3yunSessionBind: 'browser-session-bind',
+  dwsLoginStart: 'dws-login-start',
+  dwsLoginStatus: 'dws-login-status',
   clipboard: 'clipboard',
   openPath: 'open-path',
   crwu: 'crwu',

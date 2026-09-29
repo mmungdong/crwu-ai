@@ -3,12 +3,15 @@ import { Badge, Button, Chip, LoadingBar, Meter, Notice, Spinner, StatusDot } fr
 import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../components/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
-import { headlineOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
+import { headlineOf, workbenchApi, type DwsLoginSnapshotView, type EnvResult } from '../report-audit/api.ts'
 import type { AccessDiagnosticView, DwsLocalDoctorView, DwsLocalRepairView } from '../../../shared/types.ts'
 import type { SetupItemView } from '../../../shared/environment/model.ts'
 import { WorkspaceCard } from '../workbench/WorkspaceCard.tsx'
 import type { ClientServices } from '../workbench/services.ts'
 import { IfindAuthCard } from './IfindAuthCard.tsx'
+import { H3yunBrowserLogin } from './H3yunBrowserLogin.tsx'
+import { DwsLoginCard } from './DwsLoginCard.tsx'
+import { openUrlWithBuiltinFirst } from './open-url.ts'
 import { DwsLocalCard } from './DwsLocalCard.tsx'
 import { LocalAccessConsentCard } from './LocalAccessConsentCard.tsx'
 import { consentGranted, consentOf } from './local-access.ts'
@@ -59,12 +62,25 @@ export interface EnvironmentPaneProps {
   busy: boolean
   /** 最近一次成功自检的时刻（ISO 串）；空串表示还不知道。 */
   checkedAt?: string
-  /** 重新检查环境（会刷新宿主侧缓存，并强制重跑真实外部验证）。 */
+  /** 重新检查环境（只刷新本地环境结论，不会主动重跑 iFinD 远程验证）。 */
   onRefresh: () => void
   onRelogin: () => void
   onDwsLogin: () => void
+  /**
+   * 把内置浏览器里读到的氚云会话令牌交给 Host（协议 20）。
+   *
+   * **可选**：没给就不渲染那张卡片（例如别的宿主形态）。令牌在这里只过一次手：
+   * 卡片不做任何本地判断、不落任何存储，Host 的结论才是判据。
+   */
+  onBindH3yunToken?: (token: string) => Promise<{ ok: boolean; error: string }>
   /** 设备码登录：浏览器打不开 / 远程无头时的退路（`dws auth login --device`）。 */
   onDwsLoginDevice?: () => void
+  /**
+   * 钉钉登录两阶段（协议 21）。**可选**：没给就不渲染那张卡片（旧宿主 / 别的形态）。
+   * `start` 立刻回快照，`status` 轮询到终态。
+   */
+  onDwsLoginStart?: (args: { device: boolean }) => Promise<DwsLoginSnapshotView>
+  onDwsLoginStatus?: () => Promise<DwsLoginSnapshotView | null>
   /** 最近一次登录的结果（成功、失败原因、CLI 打印的 URL 或设备码）；空串 = 还没点过。 */
   loginMessage?: string
   /** 被门禁拦住时的界面状态：`running` 正在检查、`blocked` 检查没过。 */
@@ -350,8 +366,8 @@ function StatusSummary(props: {
 }): React.ReactElement {
   const head = headlineOf(props.env)
   const ok = head.status === 'ready' && head.proceed
-  // OSS 的探测结果里没有独立时间戳，但 `probeOss` **每次自检都真跑**（没有缓存），
-  // 所以"这次自检的时刻"（store 在应答落地时记的 `checkedAt`）就是它的真实验证时刻。
+  // OSS 的探测结果里没有独立时间戳，所以"这次自检的时刻"（store 在应答落地时记的 `checkedAt`）
+  // 仍可作为 OSS 事实时间；iFinD 的 checkedAt 则来自最近一次用户主动验证。
   const verifiedAt = lastVerifiedAt(props.env, props.checkedAt ?? '')
   // 同一必检项可能同时产生 global / external-data 两条诊断 issue（例如 iFinD）。
   // 顶部数量必须跟 N/N 的必检项口径一致，不能把诊断作用域当成待配置项重复计数。
@@ -504,17 +520,44 @@ function AccountsStep(props: EnvironmentPaneProps & {
         <Button label={zhCN.envLoginH3yun} small disabled={!authorized} onClick={props.onRelogin} />
       </div>}
     />
+    {/* 内置浏览器登录（协议 20）：优先路径 —— 面板里就地起一个宿主的浏览器视图，
+        扫码后插件自己从页面 cookie 读到 h3_token 并交给 CLI。上面那颗按钮是 CLI 自己
+        拉起浏览器的老路径，Windows 上会被机器策略挡住，保留作回退。 */}
+    {props.onBindH3yunToken === undefined
+      ? null
+      : <H3yunBrowserLogin
+          enabled={authorized}
+          onBind={props.onBindH3yunToken}
+          onDone={props.onRefresh}
+        />}
     <SetupRow
       id={props.env.services.find((service) => service.id === 'dingtalk')?.label ?? '钉钉认证'}
       item={props.env.state?.userSetup.dingtalk ?? { state: 'unknown', value: '', reason: '', required: true }}
       extra={<div className={C.layerActions}>
         <Button label={zhCN.dwsLogin} small disabled={!authorized} onClick={props.onDwsLogin} />
-        {/* 默认那条会开浏览器等回调；浏览器起不来时设备码是唯一走得通的路。 */}
+        {/* 默认那条会开浏览器等回调；无浏览器（SSH / 无头）时设备码才走得通。
+            ⚠️ 它**不是**"沙箱挡住浏览器"的退路：设备码同样要抢 `~/.dws` 的登录态锁。 */}
         {props.onDwsLoginDevice === undefined
           ? null
           : <Button label={zhCN.dwsLoginDevice} small disabled={!authorized} onClick={props.onDwsLoginDevice} />}
       </div>}
     />
+    {/* 钉钉两阶段登录（协议 21）：起后台 `dws auth login`，把授权 URL / 设备码摆出来，
+        再轮询到终态。上面那两颗是"同步等 5 分钟"的老路径，保留作回退与对照。 */}
+    {props.onDwsLoginStart === undefined || props.onDwsLoginStatus === undefined
+      ? null
+      : <DwsLoginCard
+          enabled={authorized}
+          onStart={props.onDwsLoginStart}
+          onStatus={props.onDwsLoginStatus}
+          onOpenUrl={(url) => { openExternal(props.services, url) }}
+          onCopy={(text) => { void copyToClipboard(text) }}
+          onDone={props.onRefresh}
+        />}
+    {/* 登录的**前置条件**要说在点之前：这两条命令都要写工作区之外的路径
+        （临时浏览器 profile / `~/.dws` 的登录态 / 操作系统凭据存储），
+        文件策略不给就一条都走不通 —— 员工不该靠试错去发现这件事。 */}
+    <div className={C.muted}>{zhCN.envLoginSandboxHint}</div>
     {props.loginMessage === undefined || props.loginMessage === ''
       ? null
       : <div className={C.itemFix} style={{ whiteSpace: 'pre-wrap' }}>{props.loginMessage}</div>}
@@ -613,6 +656,29 @@ function DeveloperDiagnostics(props: {
         </section>
       : null}
   </div>
+}
+
+/**
+ * 打开外链：**优先 DSH 内置浏览器**（右侧栏 browser 标签），拿不到才退回系统浏览器。
+ *
+ * 2026-09-29 用户指出钉钉登录"还是用的外置浏览器" —— 根因就是这里原来直接 `window.open`，
+ * 而桌面端会把它转成系统浏览器。判据与降级都收在 `open-url.ts` 里（可单测）。
+ */
+function openExternal(services: ClientServices, url: string): void {
+  openUrlWithBuiltinFirst(services, url)
+}
+
+/** 复制文本：优先浏览器剪贴板，失败退回宿主剪贴板 RPC（与诊断区的做法一致）。 */
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText !== undefined) {
+      await navigator.clipboard.writeText(text)
+      return
+    }
+  } catch (error) {
+    void error
+  }
+  await workbenchApi.clipboard({ text })
 }
 
 export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement {

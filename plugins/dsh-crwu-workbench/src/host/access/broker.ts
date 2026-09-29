@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { ShellResult } from '../shell/run.ts'
-import { runShell } from '../shell/run.ts'
+import type { ShellBackgroundHandle, ShellResult, ShellStartResult } from '../shell/run.ts'
+import { runShell, startShell } from '../shell/run.ts'
+import { text } from '../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import type { LocalAccessConsentView } from '../../shared/access/types.ts'
 import {
@@ -98,6 +99,14 @@ export interface LocalAccessBroker {
   authorize(call: LocalAccessCall): LocalAccessDecision
   /** 按操作描述执行一条**已由域执行器校验过形状**的命令。 */
   runShell(call: LocalAccessCall, command: string, options?: BrokerShellOptions): Promise<ShellResult>
+  /**
+   * 起一条**后台**命令并立刻拿回句柄（不等待它结束）。
+   *
+   * 授权、来源、提权与诊断记录的判据与 {@link runShell} **完全同一条路** ——
+   * 「前台/后台」只是调用方要不要 await 结果，不是两种权限。生命周期归调用方：
+   * 自己 `kill()`，或等 `done`；`done` 之后再记诊断（前台那次是在返回前记的）。
+   */
+  startShell(call: LocalAccessCall, command: string, options?: BrokerShellOptions): Promise<ShellStartResult>
   /** 写一个**目标种类与路径都必须对得上**的凭据 / 状态文件。 */
   writeText(call: LocalAccessCall, target: BrokerFsTarget, content: string): Promise<BrokerFsResult>
   /** 当前授权收据的视图（诊断与界面共用一个事实）。 */
@@ -268,6 +277,56 @@ export function createLocalAccessBroker(deps: LocalAccessBrokerDeps): LocalAcces
       record({ ...call, ...(options.summary === undefined ? {} : { summary: options.summary }) },
         verdict, facts, processStartedOf({ sandbox: facts, error: result.error }), lockRelatedIn(failureText))
       return result
+    },
+
+    /**
+     * 后台命令：授权与提权判据与 `runShell` 逐条相同，只是不等待它结束。
+     *
+     * 诊断在 `done` 之后补记 —— 沙箱事实要等进程落定才有，而**记的是结构化布尔值**，
+     * 不是原文（原文只在 `runShell` 的分类器里用，这里连原文都不取）。
+     */
+    async startShell(call, command, options = {}) {
+      const descriptor = localAccessDescriptorOf(call.operation)
+      if (descriptor !== undefined && descriptor.transport !== 'shell') {
+        return {
+          ok: false,
+          error: `${call.operation} 不是 shell 操作（transport=${descriptor.transport}）`,
+          sandbox: noSandboxFacts(),
+        }
+      }
+      const workdir = call.workdir ?? options.workdir ?? await deps.workdir()
+      const decision = authorize({ ...call, ...(workdir === '' ? {} : { workdir }) })
+      if (!decision.ok) return { ok: false, error: decision.error, sandbox: noSandboxFacts() }
+
+      const started = await startShell(deps.ctx, command, {
+        ...(workdir === '' ? {} : { workdir }),
+        ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
+        escalate: decision.sandboxPolicy !== undefined,
+      })
+      if (!started.ok) return started
+
+      const handle = started.handle
+      const declaredMode = decision.sandboxPolicy === undefined ? '' : 'danger-full-access'
+      const summary = options.summary
+      void handle.done.then(async () => {
+        const info = handle.sandbox()
+        const facts = {
+          requested: declaredMode,
+          resolved: declaredMode,
+          ran: text(info?.mode),
+          denied: info?.denied === true,
+          runnerFailed: info?.runnerFailed === true,
+        }
+        const verdict = classifyAccessFailure({
+          platform: await deps.platform(),
+          sandbox: facts,
+          error: '',
+          exitCode: handle.exitCode(),
+          text: '',
+        })
+        record({ ...call, ...(summary === undefined ? {} : { summary }) }, verdict, facts, true, false)
+      }).catch(() => undefined)
+      return started
     },
 
     async writeText(call, target, content) {

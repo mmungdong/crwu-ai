@@ -7,6 +7,51 @@
 > 条目格式：`日期 · 类型 · 标题`，类型沿用 Angular 词表（feat / fix / refactor /
 > docs / chore），正文写明**影响命令**与关键说明。
 
+## 2026-09-29 · feat · `h3yun session bind` 支持从标准输入读令牌（`--token-stdin`）
+
+- **影响命令**：`crwu h3yun session bind`（新增 `--token-stdin`），`--token` 行为不变。
+- **背景**：`--token <jwt>` 会把会话 JWT 放进进程命令行，同机其它进程的 `ps` / 任务管理器
+  看得到；免浏览器的回退路径要由宿主插件代为调用时，不该把凭据暴露在 argv 里。
+- **行为**：`--token` 与 `--token-stdin` **只能给一个**（同时给出即拒绝，且**零调用**服务）；
+  `--token-stdin` 从标准输入读取，空白内容按「没有令牌」处理，最多读 8 KiB（超限报错，
+  不截断、不落任何文件）。两条路径都不回显令牌：失败文案、`scheme` 与 JSON 输出都不含令牌；
+  服务端仍会剥掉 `Bearer ` 前缀并校验过期时间。
+- **报错文案**：不带任何令牌来源时由 `required flag --token is missing` 改为
+  `required flag --token or --token-stdin is missing`。
+- **配套**：`internal/transport/cli` 新增 `RunWithIO(args, stdin, stdout, stderr, deps)`
+  作为标准输入接缝（`RunWithDependencies` 行为不变，仍用 `os.Stdin`）；新增 4 条单测
+  （stdin 送达服务、失败路径不泄漏令牌、两个来源互斥、空 stdin），并逐条注入缺陷证伪过。
+- **手册**：`docs/v0.0.1/cli-manual.md` §3 回退与 §4 速查表已同步。
+
+## 2026-09-29 · fix(plugin) · 登录失败归因分两支 + 登录临时目录由插件指定（插件 `dsh-crwu-workbench` 0.0.17）
+
+- **影响**：工作台面板的「扫码登录氚云」「钉钉登录」（`relogin` / `dws-login` 两个 Host 操作），
+  以及 DSH 未能放行时的报错文案。**不改 DSH 的文件策略，也不改提权判据**。
+- **临时目录**：登录命令不再依赖系统 TEMP —— 先建 `<home>/.dsh/crwu-workbench/auth-tmp`，
+  再把 `TMPDIR`/`TMP`/`TEMP` 指过去（PowerShell 用 `$env:TMP=…`）。原因：员工机器上
+  `%TEMP%` 与 `%LOCALAPPDATA%` 都被这台机器拒绝建目录，而插件状态目录可写。不动 `LOCALAPPDATA`。
+- **归因**：分两支输出 —— 结构化事实说降级/拒绝 → 「被文件策略挡在工作区之外」（动作：切「完全权限」）；
+  事实干净却仍 `Access is denied` → 「被这台机器拒绝（不是 DSH 的文件策略）」（动作：查本机安全软件/
+  临时目录权限，氚云改用 `crwu h3yun session bind --token`，钉钉先试设备码）。
+- **配套**：`runCrwu` 新增可选 `scratchDir`；面板「账号连接」前置说明改口径；设备码按钮回到
+  「无浏览器时」并说明它同样要写 `<HOME>/.dws`。
+
+---
+
+## 2026-09-29 · fix · Windows 扫码登录临时目录回退
+
+- **影响命令**：`crwu h3yun session login`。
+- 当 Windows 系统 `%TEMP%` 对 `crwu.exe` 返回 `Access is denied` 时，改用当前用户缓存目录
+  `%LOCALAPPDATA%\crwu\scan-tmp\crwu-scan-*` 创建临时浏览器 profile；默认 TEMP 成功时行为不变。
+- 只在权限错误时触发回退，其他磁盘/路径错误原样返回；回退目录仍在登录结束时删除，令牌继续只写本机 OS 凭据存储。
+
+---
+
+## 2026-09-29 · fix · `h3yun files list` 空附件统一返回数组
+
+- **影响命令**：`crwu h3yun files list --schema <编码> --id <记录ID>`。
+- 记录没有附件时，成功响应的 `data` 现在稳定为 `[]`，不再编码成 `null`，避免审核输入快照把空附件误判为协议形状错误。
+
 ---
 
 ## 2026-09-25 · fix(plugin) · 审核启动的报告定位交接 + DSH 自带 Python + 环境页分层（插件 `dsh-crwu-workbench` 0.0.8）

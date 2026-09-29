@@ -66,7 +66,8 @@ export function crwuOperationOf(argv: readonly string[]): LocalAccessOperation |
   const sub = text(argv[2])
   if (sub === 'session') {
     const action = text(argv[3])
-    if (action === 'status' || action === 'login' || action === 'bind') return `h3yun.session.${action}`
+    // `refresh` 也是会话管理动作：面板打开时的主动续期走它（CLI 侧的自动续期不覆盖 status）。
+    if (action === 'status' || action === 'login' || action === 'bind' || action === 'refresh') return `h3yun.session.${action}`
     return null
   }
   return CRWU_OPERATION_BY_SUBCOMMAND[sub] ?? null
@@ -107,6 +108,14 @@ export interface CrwuOptions {
   access: LocalAccessBroker
   /** 这次调用是谁发起的。 */
   source: LocalAccessSource
+  /**
+   * 通过**标准输入**交给命令的文本（例如 `h3yun session bind --token-stdin` 的会话令牌）。
+   *
+   * 存在的理由只有一条：凭据不进命令行。argv 会被同机其它进程的 `ps` / 任务管理器看到，
+   * 也会进 shell 的错误文案；标准输入不会。命令的 argv 形状不变，调用方自己负责把
+   * 「会读 stdin」的那条参数（`--token-stdin`）拼进 `argv`。
+   */
+  stdinText?: string
 }
 
 /** 执行一条 crwu 命令。 */
@@ -134,14 +143,17 @@ export async function runCrwu(ctx: Context, argv: readonly string[], options: Cr
   // 按钮点了没有任何反应。`shellInvoke` 负责 Windows 上的调用运算符 `&`。
   const resolved = await resolveBundledCommand(ctx, platform, 'crwu')
 
+  // 临时目录也用系统默认：插件不再替 CLI 决定 TMPDIR/TEMP（自指定目录那条通道已整体下掉，见 §16）。
+  const command = shellInvoke(resolved, clean.slice(1), platform)
   const result: ShellResult = await options.access.runShell(
     { operation, source: options.source, ...(options.workdir === undefined ? {} : { workdir: options.workdir }) },
-    shellInvoke(resolved, clean.slice(1), platform),
+    command,
     {
       ...(options.workdir === undefined ? {} : { workdir: options.workdir }),
       timeoutMs: options.timeoutMs ?? 60_000,
       ...(options.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: options.stdoutMaxBytes }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.stdinText === undefined ? {} : { stdinText: options.stdinText }),
       summary: describeCrwuCommand(clean),
     },
   )

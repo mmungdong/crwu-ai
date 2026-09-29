@@ -54,6 +54,12 @@ export const FROZEN_OPERATIONS = [
   // 第 37~38 个：DWS 本机目录的只读体检与最小权限修复（协议 18 · 子项目 D）。
   'dws-local-doctor',
   'dws-local-permission-repair',
+  // 第 39 个：内置浏览器扫码登录的凭据出口（协议 20）。客户端从内嵌浏览器页面里读到
+  // `h3_token` 后经它交给 Host，Host 再走 `crwu h3yun session bind --token-stdin`。
+  'browser-session-bind',
+  // 第 40~41 个：钉钉登录的两阶段（协议 21）。`dws auth login` 要在等人扫码时就把
+  // 授权 URL / 设备码交出来，所以拆成 start（起后台进程）与 status（轮询快照）。
+  'dws-login-start', 'dws-login-status',
 ]
 
 /** 宿主操作的条数。 */

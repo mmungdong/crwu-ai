@@ -699,6 +699,25 @@ SK 由 Host 从**插件状态目录**读取（模型不可见，见 §4.7），T
    客户端看不到 `lockRelated` 这类结构化事实，猜出来的一定与 Host 不一致（要么亮着被拒、要么灰着却能体检）。
    修复路径同理：体检自己拒绝了，就**原样转述它的原因**，不要换成"目录不存在"那种更笼统的话
    —— 那会把"最近一次失败是沙箱拦下的，改权限没用"说成"请先登录一次"，把员工指错方向。
+14. **登录必须写工作区之外，所以它的归因比通用规则更强一条**（G 段，2026-09-29）：
+   `crwu h3yun session login` 要写临时浏览器 profile（`$TMPDIR`/`%TEMP%\crwu-scan-*`）、
+   `dws auth login`（含 `--device`）要先抢 `<HOME>/.dws/.data.lock`，两者收尾都要写操作系统凭据存储。
+   判据在 `src/host/system/login-failure.ts`：`runnerFailed` → 提权被降级（`requested !== resolved`）
+   → `denied` / 实际跑在受限模式 → **原文点名了登录必须写的工作区外目标且带拒绝字样**。
+   ⚠️ 第 ④ 条是 `shell/run.ts` 的 `sandboxDenialNote()`「事实干净就不猜文本」的**唯一例外**
+   （目标集合已知），**不许**把它推广成通用规则；**目标词与拒绝字样必须同时命中** ——
+   否则 `secret not found in keyring` 这种"真没条目 / 钥匙串被锁"会被说成权限问题。
+   两条登录都返回 `sandboxBlocked` + `advice`，`error` 是"一句人话 + 下一步 + **保留**的原始报错"；
+   客户端只渲染 Host 给的事实，不许按错误文本自己推断。**设备码不是"浏览器打不开"时的退路**
+   （它同样要抢 `~/.dws` 的锁），按钮文案与归因文案都必须说清这一点。
+   ⚠️ 归因必须分**两支**（`LoginAdvice.policyBlocked`）：结构化事实说降级/拒绝 → 让人切「完全权限」；
+   **事实干净却照样 `Access is denied` → 是这台机器在拒，必须明说"切权限没有用"** 并给退路
+   （氚云 `h3yun session bind --token`、钉钉先试设备码）。把两支合成一句"请切完全权限"就是误导
+   —— 2026-09-29 实测：诊断里三个模式都是 `danger-full-access`，面板却让人去切权限。
+   ⚠️ 登录的**临时目录由插件指定**（`system/auth-scratch.ts` → `<home>/.dsh/crwu-workbench/auth-tmp`
+   + 命令内建目录并指 `TMPDIR`/`TMP`/`TEMP`）：依据是员工机器上系统 TEMP 与用户缓存目录都被拒、
+   而插件状态目录可写。**不许动 `LOCALAPPDATA`**（Chromium 自己的组件目录走系统默认）；
+   主目录未知时原样返回命令，不伪造。
 
 界面侧（`client/features/environment/DwsLocalCard.tsx`）只有一条交互规则：
 **修复按钮只在确诊"本机文件权限问题"时渲染**，并且要**二次确认**（改权限与"允许读本机凭据"

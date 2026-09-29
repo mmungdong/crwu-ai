@@ -366,7 +366,9 @@ func (s *Service) Files(ctx context.Context, schemaCode, objectID string) ([]Att
 	if err := json.Unmarshal(rows[0], &row); err != nil {
 		return nil, err
 	}
-	var out []Attachment
+	// Keep the JSON contract stable for callers: a record with no attachment
+	// fields is an empty list, not a nil slice that encodes as `null`.
+	out := make([]Attachment, 0)
 	for field, raw := range row {
 		if field == "" || field == "ObjectId" {
 			continue

@@ -6,6 +6,7 @@
 /.worktrees/
 /.superpowers/
 
+/.npm-cache/
 .env
 .env.*
 !.env.example

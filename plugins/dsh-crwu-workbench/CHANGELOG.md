@@ -7,7 +7,102 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.25 · 2026-09-29 · refactor · 下掉"插件自指定目录"：配置与临时目录都用默认
+
+### refactor · `DWS_CONFIG_DIR` 与 `TMPDIR/TEMP/TMP` 两条自指定通道整体移除
+
+- 删除 `src/host/dws/config-dir.ts` 与 `src/host/system/auth-scratch.ts`，以及各调用点的目录注入
+  （`dws/run.ts`、`system/ops.ts`、`crwu/run.ts` 的 `scratchDir`、`ops/core.ts`、`apply.ts`、
+  体检/身份/环境自检/审核 Tool）。
+- 登录命令回到 CLI 默认形状：`crwu h3yun session login`、`dws auth login [--device]` 原样执行，
+  配置目录用 `<HOME>/.dws`、临时目录用系统 TEMP —— 与员工自己终端里的用法一致，状态只有一处。
+- **为什么下掉**（三次对照，见 `docs/development-notes.md` §16）：同一个 `dws.exe` 在员工自己的
+  PowerShell 里能建 `~/.dws`、能打印授权链接；换成插件目录后**仍然**建不出目录；手工预建好目录后
+  **仍然**打不开 `.data.lock`；**以管理员身份运行 DSH 一次通过**，而普通权限下连已存在的锁都打不开
+  —— 拦的是这台机器对 `dws.exe` 的按程序/按父进程访问控制，换目录解决不了，只留下"两套状态"的代价。
+- 归因文案相应补一句「插件已经不再自指定目录，全部回到 CLI 默认」，两条可执行路径不变
+  （以管理员身份完成登录 / 让管理员按程序放行随包发布的 `dws.exe`）。
+
+## package · 0.0.24 · 2026-09-29 · fix · 归因补上复验结论：提权**不是一次性步骤**，影响面不止登录
+
+### fix · 别再让人以为"提权登一次以后就好了"
+
+- 员工复验：提权那次登录成功之后，**用普通权限重启 DSH 依旧打不开已存在的锁**
+  （`creating config dir for lock` / `opening lock file`）→ 非提权运行时 `dws` 连打开已有文件都被拒。
+- 归因文案补两句：① **不是一次性步骤**（非提权每次都会被拒）；② **影响面不止登录** ——
+  同一台机器上凡是依赖 `dws` 的功能（知识库下载、钉钉归档与通知）同样需要提权才能用。
+- 两条长期正解不变：让 IT 按程序放行随插件发布的 `dws.exe`（放行后恢复普通权限运行），
+  或在放行前以提权方式使用 DSH。
+
+## package · 0.0.23 · 2026-09-29 · fix · 登录失败归因纠正：这台机器上**提权才有效**，换目录无效
+
+### fix · 不再把员工指向"切访问模式"
+
+- 0.0.22 的归因里写着「切权限不会有用」—— 前半段（切【DSH 访问模式】没用）是对的，
+  但它被写成了"切权限一律没用"，而员工当场实测：**以管理员身份运行 DSH 后一次通过**。
+  两条实测事实必须分开说，否则会把下一个人指到错方向。
+- 现在机器支的文案改为：说清事实（请求与实际都已是 `danger-full-access`）+
+  给出两条可执行路径（**以管理员身份运行 DSH 完成一次登录**；长期让 IT 按程序放行 `dws.exe`）+
+  明确写出「**换目录也没用**」（主目录根、插件状态目录、手工预建的插件目录三个位置都试过）+
+  「设备码登录同样要创建这个锁文件，不是绕过办法」。
+- 提权那次登录的凭据写进**员工本人**的操作系统凭据存储（同账户、只是令牌提权），
+  因此受管机器上"提权做一次性登录"是可接受处置。
+- 测试用 `doesNotMatch` / `match` 双向钉住这两点，并逐条用缺陷注入证伪。
+
+## package · 0.0.22 · 2026-09-29 · fix · `dws` 配置目录固定用插件自己的目录（协议 22）
+
+### fix · 钉钉登录不再依赖 `<HOME>/.dws`（那台机器上 DSH 的子进程建不出来）
+
+- 员工 Windows 实测：`creating config dir for lock: mkdir C:\Users\<你>\.dws: Access is denied`，
+  而 DSH 的诊断里三种模式全是 `danger-full-access` —— 与 DSH 的文件策略无关。
+- 证据链（详见 `docs/development-notes.md` §16）：① 同一个 `dws.exe` 在员工自己的 PowerShell 里
+  能建 `~/.dws` 并打印授权链接；② **`~/.dws` 已存在也照样报同一个错** —— Windows 的
+  `CreateDirectory` 先查父目录创建权再查目标是否存在，所以这是**令牌访问范围**问题，不是缺目录；
+  ③ DSH 放行它自己的目录树（插件状态文件与登录临时目录都是插件在 DSH 里建的）；
+  ④ 全新空目录里 `auth status` 仍 `authenticated:true` → **token 在操作系统凭据存储里，换目录不丢登录态**。
+- 现在所有 dws 调用**一律显式**带 `DWS_CONFIG_DIR=<HOME>/.dsh/crwu-workbench/dws-home`
+  （显式写进命令，不再赌进程有没有继承环境变量）。
+- **刻意不做**探针、不做"失败后换目录"、不做重试：登录是有副作用的交互，不能靠重试兜；
+  而只读的 `auth status` 在只读路径上可能不碰锁，拿它当判据实测会漏判。
+- 代价如实说：员工自己终端里的 `dws` 与插件用不同配置目录（锁/日志分开；
+  多组织时"当前组织"可能要各选一次）。
+
+## package · 0.0.19 · 2026-09-29 · feat · 两个登录都改走内置浏览器（协议 20 / 21）
+
+### feat · 氚云：面板内嵌 lease 浏览器扫码，读到 h3_token 就交给 CLI 落 OS 凭据存储
+
+- 环境页新增「在内置浏览器里扫码登录」：插件在桌面端自建一个宿主的 lease guest
+  （`dshDesktop.browser.acquire` → `<webview partition src="about:blank#<lease>">` → `dom-ready` 后导航），
+  扫码后从页面 `document.cookie` 读 `h3_token`，**立刻**经新增操作 `browser-session-bind`（协议 20）
+  交给 `crwu h3yun session bind --token-stdin`。令牌不进命令行、不落盘、不回显、不进日志。
+- 拿不到内置浏览器（Web profile / 旧桌面端）时卡片禁用并给出回退说明；CLI 自己拉浏览器的老路径保留。
+- E1 探针实测（桌面端 0.2.0-rc.2，macOS，钉钉扫码一次）：lease 桥可用、`<webview>` 可附着、
+  `executeJavaScript` 可读 `document.cookie`、`h3_token` 是未过期 JWT（约 48h）、
+  导航里出现 `www.h3yun.com/entry/login/corp?code=` 回调、`release` 干净。
+  备通道（抓 `?code=` 由 Host 换取）已观测到，暂不启用。
+
+### feat · 钉钉：`dws auth login` 改成后台跑 + 两阶段（协议 21）
+
+- 旧形态是同步等 5 分钟再回 stdout 尾巴 —— 授权 URL 到界面时用户早已不在等。现在
+  `dws-login-start` 起后台进程并立刻回快照，`dws-login-status` 轮询；界面先把**动作**摆出来
+  （打开授权链接 / 复制设备码），再给 CLI 原文。解析是尽力而为，`tail` 始终是原文。
+- **打开在 DSH 内置浏览器**（右侧栏 browser 标签，`openTab`），拿不到服务 / 标签类型未启用 /
+  异步失败才退回系统浏览器 —— 裸 `window.open` 在桌面端等于"跳到 DSH 外面"。
+- 正在跑时再 start 不会起第二个进程（两个 `dws` 会抢同一个 `~/.dws` 锁）；
+  5 分钟到点杀掉并如实报超时；插件卸载时杀掉仍在跑的进程。
+- 副作用：所有操作数与协议号随之 +1（41 个操作 / 协议 21），冻结清单与 facade 已同步。
+
+### chore · 新增后台执行通道
+
+- `src/host/shell/run.ts` 的 `startShell` + Broker 的 `startShell`：与前台同一条授权/提权判据，
+  用 `execute()` 但不 await `result()`，请求带 `onExpiry: 'none'`。
+
 ## package · 0.0.18 · 2026-09-29 · chore · 把 DSH 0.2 线的验证矩阵推进到 `0.2.0-rc.2`
+
+### fix · iFinD 环境检查改为只读用户主动验证结论
+
+- 保存 API-Key 或点击「重新验证」时完成一次真实取数，并把脱敏结论随凭据保存。
+- 普通环境检查、刷新和能力门禁只读取最近结论，不再主动请求 iFinD 远程服务。
 
 桌面端 DSH 已升到 `0.2.0-rc.2`。**业务代码零改动** —— 逐包比对证明这条线内没有 API 漂移，
 要补的是"声明支持"与"真的验过"之间的差：仓库原先只在矩阵里验到 `0.2.0-rc.1`。
@@ -41,6 +136,109 @@
 **验证**：`npm run check`（含 `version:check` / `config:check` / `skills:check` /
 `skills:cli-guard` / `dws:check` / `typecheck` / 全量单测 / `build` / `smoke:built`）、
 `npm run pack:assert`，以及 `npm run compat:dsh`（0.1.7-rc.2 与 0.2.0-rc.2 两条线各真装一遍）。
+
+## package · 0.0.17 · 2026-09-29 · fix · 登录失败归因分两支 + 登录临时目录由插件指定
+
+员工在 Windows 上点「扫码登录氚云 / 钉钉登录」持续失败。开发者诊断给出的结构化事实是
+`req = res = ran = danger-full-access`、`denied=false`、`runnerFailed=false`、`started=true` ——
+**DSH 没有拦这次调用**；原文却是
+
+```
+create fallback browser profile directory: mkdir C:\Users\51019\AppData\Local\crwu: Access is denied.
+(system TEMP failed: mkdir C:\Users\51019\AppData\Local\Temp\crwu-scan-556823159: Access is denied.)
+```
+
+两条路径都在 `AppData\Local` 下、都被拒，而同一时刻 `dws auth status` 是 ok（`~/.dws` 可写）。
+本版据此做两件事，都只动插件侧：
+
+1. **登录的临时目录改由插件指定**（`src/host/system/auth-scratch.ts`）：先建
+   `<home>/.dsh/crwu-workbench/auth-tmp`，再把 `TMPDIR`/`TMP`/`TEMP` 指过去
+   （POSIX `mkdir -p … && TMPDIR=… <cmd>`；PowerShell `New-Item -Force …; $env:TMP=…; & <cmd>`）。
+   依据是员工机器上的事实：系统 TEMP 与用户缓存目录都被拒，而插件状态目录（`<home>/.dsh/…`）可写。
+   **不动 `LOCALAPPDATA`**（Chromium 自己的组件目录仍走系统默认）；主目录未知时原样返回命令，不伪造。
+   `runCrwu` 增加可选 `scratchDir`（只有会就地起浏览器的那条命令用）。
+2. **归因分两支，不许合成一句**（`LoginAdvice.policyBlocked`）：结构化事实说降级 / 拒绝 / 实际受限
+   → 「被文件策略挡在工作区之外」，动作是切「完全权限」；**事实干净却照样 `Access is denied`
+   → 「被这台机器拒绝（不是 DSH 的文件策略）」**，明说"切权限不会有用"，并给退路
+   （氚云 `crwu h3yun session bind --token`、钉钉先试「设备码登录（无浏览器时）」）。
+   上一版把两支合成一句"请切完全权限" —— 员工按提示切了，而日志证明根本不是策略问题（误导）。
+3. 面板「账号连接」的前置说明同步改口径，并回到"设备码登录（**无浏览器时**）"
+   （它不是"沙箱挡浏览器"的退路：同样要抢 `<HOME>/.dws` 的锁）。
+
+**已证伪**：把两支合成策略支 → 5 条变红；把 scratch 的 env 前缀去掉（只建目录不指过去）→ 2 条变红。
+
+### ① 登录失败归因：两支分开，不许合成一句
+
+**症状**：员工第一次用（Windows 与 macOS 都报）时，点「扫码登录氚云」「钉钉登录」浏览器起不来；
+面板给的却是 CLI 的原话 —— 氚云 `mkdir C:\…\Temp\crwu-scan-1799287186: Access is denied.`
+（看着像 crwu 坏了）、钉钉 `acquiring file lock: …\.dws\.data.lock: Access is denied.`
+（看着像 dws 自己的 bug）。
+
+**根因（两条入口同一条边界）**：登录**必须写工作区之外的路径** ——
+
+| 入口 | 必须写的东西 |
+| --- | --- |
+| `crwu h3yun session login` | `$TMPDIR`/`%TEMP%` 下的临时浏览器 profile（`crwu-scan-*`），再经 CDP 读会话 |
+| `dws auth login`（含 `--device`） | `<HOME>/.dws/.data.lock`（拿登录态之前先抢文件锁） |
+| 两者收尾 | 操作系统凭据存储（钥匙串 / Credential Manager） |
+
+宿主按完全访问跑、操作系统的 ACL/受限令牌仍然拒绝时报的就是上面那两句；受限沙箱下浏览器即使
+起来了也会在几毫秒内 renderer 崩溃（CDP 只回 `close 1006` / `Target crashed`）。
+
+- **新增纯函数判据** `src/host/system/login-failure.ts`：`loginFailureAdvice()` / `describeLoginAdvice()`。
+  顺序是「结构化事实优先，文本最后」：① `runnerFailed` → ② 提权被降级（`requested !== resolved`）
+  → ③ `denied === true` 或实际跑在受限模式 → ④ **事实干净但原文点名了登录必须写的工作区外目标
+  且带拒绝字样**（Windows 实测就是这一形态）。
+- **第 ④ 条是 `sandboxDenialNote()` 的唯一例外**，判据本身变强了：目标不是"任意路径"，而是登录
+  流程必须写的那几个已知目标。**目标词与拒绝字样必须同时命中** —— 只命中一个不归因（否则
+  `secret not found in keyring` 这种"真没条目 / 钥匙串被锁"会被说成"去切完全权限"）。
+- **`dwsLogin` 以前完全不做归因**（只有 `runDws` 做），现在两条登录都返回 `sandboxBlocked` + `advice`，
+  并把「在输入框下方的访问模式里选「完全权限」再点一次」写进 `error`，**原始报错保留**在末尾。
+- **设备码不再是"退路"**：它同样要抢 `~/.dws` 的锁，所以按钮文案改回「设备码登录（无浏览器时）」，
+  归因文案里明说"在这个模式下也走不通"。
+- **界面**：「账号连接」页在登录按钮下方**先说前置条件**（`envLoginSandboxHint`）；
+  被归因时不再追加 stdout 尾巴（否则那句「正在打开浏览器窗口…」会把真正的动作挤掉）。
+
+**已证伪**：把第 ④ 条整段关掉 → 7 条变红；把「目标词」那一半去掉（只认拒绝字样）→
+误报用例变红。`cp` 还原后转绿。
+
+### ② 登录的临时目录由插件指定（不再依赖系统 TEMP）
+
+员工在 Windows 上用 0.0.15/0.0.16 再报一次，原文是**两条路径都被拒**：
+
+```
+create fallback browser profile directory: mkdir C:\Users\51019\AppData\Local\crwu: Access is denied.
+(system TEMP failed: mkdir C:\Users\51019\AppData\Local\Temp\crwu-scan-556823159: Access is denied.)
+```
+
+而同一时刻开发者诊断里 `h3yun.session.login` 是
+`req = res = ran = danger-full-access`、`denied=false`、`runnerFailed=false`、`started=true` ——
+**DSH 没有拦它**，`%TEMP%` 与用户缓存目录却都被这台机器拒绝。两处修正：
+
+1. **临时目录改由插件指定**（`src/host/system/auth-scratch.ts`）：登录命令先建
+   `<home>/.dsh/crwu-workbench/auth-tmp`，再把 `TMPDIR`/`TMP`/`TEMP` 指过去
+   （POSIX `mkdir -p … && TMPDIR=… <cmd>`；PowerShell `New-Item -Force …; $env:TMP=…; …; & <cmd>`）。
+   依据是**这台机器自己的事实**：系统 TEMP 与缓存目录都被拒，而插件状态目录（`<home>/.dsh/…`）
+   是它一直在写的地方。**不动 `LOCALAPPDATA`**（Chromium 自己的组件目录仍走系统默认）；
+   主目录未知时**原样返回命令**，不伪造一个没建出来的目录。
+   `runCrwu` 增加可选的 `scratchDir`（只有会就地起浏览器的那条命令用）。
+2. **归因分两支，不许合成一句**：`LoginAdvice.policyBlocked`。
+   - `true`（结构化事实：降级 / 拒绝 / 实际受限 / runner 挂）→「被文件策略挡在工作区之外」，
+     动作是切「完全权限」；
+   - `false`（事实干净、原文点名登录必须写的目标且带拒绝字样）→「**被这台机器拒绝**（不是 DSH 的
+     文件策略）」，明确写「切权限不会有用」，并给退路：氚云用 `crwu h3yun session bind --token`、
+     钉钉先试「设备码登录（无浏览器时）」。
+
+   上一版把两支合成了一句"请切完全权限"——员工按提示切了，而日志证明根本不是策略问题（**误导**）。
+
+**已证伪**：把两支合成策略支 → 5 条变红；把 scratch 的 env 前缀去掉（只建目录不指过去）→ 2 条变红。
+
+## package · 0.0.16 · 2026-09-29 · fix · Windows 氚云扫码临时目录回退
+
+- 随包 `crwu.exe` 的 `h3yun session login` 在系统 `%TEMP%` 被 Windows 安全策略拒绝时，
+  自动回退到 `%LOCALAPPDATA%\crwu\scan-tmp\crwu-scan-*`；登录结束仍清理临时 profile。
+- 回退只针对权限错误，且不改变 OS 凭据存储边界；若用户缓存目录也被拒绝，保留两段错误供
+  Defender/企业安全软件排查。
 
 ## package · 0.0.15 · 2026-09-28
 

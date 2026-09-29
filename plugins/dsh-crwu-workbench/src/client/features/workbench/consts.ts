@@ -453,6 +453,14 @@ export const WORKBENCH_CLASSES = {
   kv: 'crwu-audit-kv',
   kvKey: 'crwu-audit-kv-key',
   kvValue: 'crwu-audit-kv-value',
+  /**
+   * 氚云「内置浏览器扫码登录」的访客区（真正承载 `<webview>` 的容器）。
+   *
+   * 未开始时高度为 0（不在页面上留一块空白）；`-on` 才给尺寸与描边 —— 尺寸必须写死，
+   * 否则 webview 会在每次状态变化时跟着容器抖动。
+   */
+  loginStage: 'crwu-audit-login-stage',
+  loginStageOn: 'crwu-audit-login-stage-on',
 } as const
 
 /** 版本 / dev 小标签的语义类：tone → 类名（侧栏入口与面板头部共用同一套）。 */
@@ -2215,4 +2223,20 @@ body[data-ds-dark-theme] .crwu-audit-root {
 @media (prefers-reduced-motion: reduce) {
   .crwu-audit-update-dialog-backdrop, .crwu-audit-update-dialog { animation: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   22. 氚云内置浏览器登录（访客区）
+   ────────────────────────────────────────────────────────────────────
+   真正承载宿主 webview 元素的容器。两条硬规则：
+   - 未开始时高度为 0：卡片不该在环境页上永远留一块空白；
+   - 展开后尺寸写死：webview 的布局由宿主渲染，容器一抖它就跟着抖。
+   样式只能落在容器与 visitor 元素上 —— 访客内部的页面不属于我们。
+   ════════════════════════════════════════════════════════════════════ */
+.crwu-audit-login-stage { height: 0; overflow: hidden; }
+.crwu-audit-login-stage-on {
+  height: 460px; margin-top: var(--crwu-space-3);
+  border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-md);
+  overflow: hidden; background: var(--crwu-surface);
+}
+.crwu-audit-login-stage-on webview { width: 100%; height: 100%; }
 `

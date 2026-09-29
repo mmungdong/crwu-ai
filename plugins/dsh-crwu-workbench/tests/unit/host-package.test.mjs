@@ -328,7 +328,10 @@ test('ping and boot answer with the state the panel needs to render', async () =
   // 协议 19：**审核 scope 绑定**（案例目录/根会话 cwd 与沙箱边界从"工作空间"收紧到"本轮案例目录"，
   // 氚云记录查询移出审核子会话能力集）。两者都是跨进程契约，ping 与 boot 必须报同一代 ——
   // 否则「界面新、宿主旧」只能在用户操作到那一步时才暴露（旧宿主仍按工作空间级边界跑审核）。
-  assert.equal(WORKBENCH_PROTOCOL, 19, '审核 scope 绑定（案例目录=边界）后协议必须 +1')
+  // 协议 20：新增 `browser-session-bind`（内置浏览器扫码登录的凭据出口）；
+  // 协议 21：钉钉登录拆成 `dws-login-start` / `dws-login-status`。新操作同样是跨进程契约，
+  // 旧宿主没有它 —— 靠协议号拦在门外，才不会表现成「点一下 404」。
+  assert.equal(WORKBENCH_PROTOCOL, 21, '钉钉登录拆成两阶段后协议必须 +1')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -421,7 +424,11 @@ test('the Host half still registers the frozen inventory of operations', async (
   // 而不是 404「未知 op」），所以它是 +2 而不是「替换」。
   // 35 → 36：`access-diagnostics`（协议 18 · B3 的本机访问诊断，只读、脱敏）。
   // 36 → 38：DWS 本机目录的只读体检 + 最小权限修复（协议 18 · 子项目 D）。
-  assert.equal(FROZEN_OPERATION_COUNT, 38)
+  // 38 → 39：`browser-session-bind`（协议 20）——内置浏览器扫码后把 `h3_token` 经标准输入
+  // 交给 CLI 落 OS 凭据存储。
+  // 39 → 41：`dws-login-start` / `dws-login-status`（协议 21）——钉钉登录改成后台跑 + 两阶段，
+  // URL/设备码在 CLI 还在等回调时就能给界面。
+  assert.equal(FROZEN_OPERATION_COUNT, 41)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {

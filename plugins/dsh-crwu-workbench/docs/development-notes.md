@@ -149,15 +149,14 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 6. 真机上点一下（依赖 `shell` / `fs` / `subagents` / `slots` / `webServer` 或真实外部行为的，
    替身证明不了）。
 
-当前操作清单 = **30 个**（`ping` / `boot` / `env` / `pending` / 审核生命周期 / OSS /
-iFinD 凭据四条 / 零碎操作…）。名字与数量只在 `tests/helpers/frozen-inventory.mjs` 写一份 ——
-各测试各写一个裸数字的结果是：加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
+当前操作清单与条数**只在 `tests/helpers/frozen-inventory.mjs` 写一份** —— 别在文档里写死数字
+（本文件历史上同时写过 30 与 29 两个互相矛盾的值，就是这么来的）。各测试各写一个裸数字的结果是：
+加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
 
-**协议号当前 = 15**（13：`env` 增加 `state` 统一环境模型、iFinD 凭据改由插件 Host 保管（五态 +
-真实探测）、导航门禁上提到统一导航层；14：**删除 `install-prompt` 操作**；15：**iFinD 从可选改为必需项**
-—— `ifind.required=true`、未通过即阻塞（双 scope）、`externalData` 不再恒为 true，
-OSS 探测结果新增结构化 `errorKind` 与 `target`）。
-当前操作清单 = **29 个**，见 §11.3。
+**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前 = 20，
+20 是新增 `browser-session-bind`）。历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
+14：删除 `install-prompt`；15：iFinD 改为必需项；18：本机访问授权收据 + 诊断 + DWS 本机目录体检；
+19：审核 scope 收紧到本轮案例目录；20：内置浏览器扫码的凭据出口）写在那个常量的注释里。
 
 ## 8. 本地开发循环与两道人工关卡
 
@@ -201,7 +200,7 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 | 只有某一层技能全不见（如 `dws` 层），日志干净 | 补丁只注册了上层 `skills/`，而 DSH 对每个根只扫一层 | 一层一个 `customSkillDirs` 条目（§3）；`host-skills-patch.test.mjs` 会红 |
 | **升级 DSH 后插件装上了、界面里什么都没有，启动日志干净** | **0.1.7 起 peer 是硬门禁**：`peerDependencies` 的 `@deepseek-ai/dsh*` 与 `getDshRuntimeVersion()` 不匹配 → 整个 bundle 被当作不可读**跳过**，记进 `skippedBundles` | peer 必须覆盖**每一条我们支持的 DSH 线**，一条线一个 `^` 区间用 `\|\|` 并列（本包写 `^0.1.7-rc.2 \|\| ^0.2.0-rc.1`）；**加线之前先把两条线的 `@deepseek-ai/dsh-*` tarball 逐文件 diff 过**，只改区间不做比对等于赌。应急时用 profile 的 `compatibility.json` 精确豁免。判据是 peer，**不是** `engines.dsh` |
 | 升级 DSH 到同一条线里的新 rc（例如桌面端自动升到 `0.2.0-rc.2`），想确认插件还支持 | 插件声明的区间（`^0.2.0-rc.1`）本来就覆盖整条 0.2.0 线，**先别急着改代码**；要的是把新版本纳入验证矩阵 | ① 逐包比对：`npm pack` 两条 rc 的全部 `@deepseek-ai/dsh-*`，解包后逐文件 diff。0.2.0-rc.1 → 0.2.0-rc.2 的实测结论：16 个包**所有 `.d.ts` 零差异**，13 个只有 `package.json` 版本号变化，另 3 个只有运行时代码小改动（`dsh-subagent` 多一条 `user-question-reply` typert 声明、`dsh-client-ui-renderer` 加一个 `useMemo`、`dsh-client-ui-sidebar` 去掉品牌按钮外层 `Tooltip`）→ 业务代码零改动；② 把代表版本换进 `scripts/check-dsh-compat.mjs` 的 `RUNTIMES` 与 `tests/unit/host-package.test.mjs` 的 `SUPPORTED_DSH_RUNTIMES`（**一条线一个代表版本**，同线后续 rc/正式版由区间语义覆盖）；③ `devDependencies` 跟着挪到该线（`^0.2.0-rc.2`），否则 `npm run typecheck` 验的还是旧线；④ 把结论写进 `CHANGELOG.md` 与本节 |
-| 插件管理器弹「`dsh-crwu-workbench@0.0.13` 与 DSH `0.2.0-rc.1` 不兼容（要求 …），请安装与当前 DSH 兼容的插件版本」，或装上了却被禁用 | `^0.1.7-rc.2` 的语义是 `>=0.1.7-rc.2 <0.2.0-0`，**不含** `0.2.0-rc.1`；而 Windows 那台机器已经升到 DSH 0.2.0-rc.1（本机 macOS 桌面端还是 0.1.7-rc.2，所以本机看不出来） | 与上一条同一个修法（加一条 `\|\| ^0.2.0-rc.1`）。**别用 `>=0.1.7-rc.2 <0.3.0` 图省事** —— 会顺带放行没验证过的 0.3 线。0.1.7-rc.2 → 0.2.0-rc.1 的逐包比对结论：7 个 peer 里 5 个字节相同，`dsh-client-ui-sidebar` 只多 1 行埋点、`dsh-client-ui-layout` 只多一段 Windows 标题栏 CSS |
+| 插件管理器弹「`dsh-crwu-workbench@0.0.13` 与 DSH `0.2.0-rc.1` 不兼容（要求 …），请安装与当前 DSH 兼容的插件版本」，或装上了却被禁用 | `^0.1.7-rc.2` 的语义是 `>=0.1.7-rc.2 <0.2.0-0`，**不含** `0.2.0-rc.1`；而 Windows 那台机器已经升到 DSH 0.2.0-rc.1（当时本机 macOS 桌面端还是 0.1.7-rc.2，所以本机看不出来） | 与上一条同一个修法（加一条 `\|\| ^0.2.0-rc.1`）。**别用 `>=0.1.7-rc.2 <0.3.0` 图省事** —— 会顺带放行没验证过的 0.3 线。0.1.7-rc.2 → 0.2.0-rc.1 的逐包比对结论：7 个 peer 里 5 个字节相同，`dsh-client-ui-sidebar` 只多 1 行埋点、`dsh-client-ui-layout` 只多一段 Windows 标题栏 CSS |
 | 加宽 peer 之后，`npm install`（新鲜解析，没有 lock）在**本仓自己**报 `ERESOLVE`：`peer @deepseek-ai/dsh-fs@0.2.0-rc.1 from @deepseek-ai/dsh-skill-filesystem@0.2.0-rc.1` 撞上 devDep 的 `0.1.7-rc.2` | npm 的 peer 自动安装会为「只有 peer、树里没有具体实例」的包去解析**最新**匹配版本，而新线里有些包把 `peerDependencies` 写成**精确版本** | 把**全部 7 个 peer** 也写进 `devDependencies`（哪怕并不 import）：树里有了实例，npm 就钉在我们开发所对的那条线上。**接收方不受影响** —— profile 的 pnpm 配了 `autoInstallPeers: false`，`@deepseek-ai/dsh-*` 从来不由包管理器安装（DSH 运行时自己提供）。`host-package.test.mjs` 那条真装 tarball 的回归会拦住这个 |
 | 所有命令都失败，报 `shell.execute is not a function`（或 `run is not a function`） | 0.1.7 的 shell 契约变更：`ShellExecutor.run(spec)` → `execute(spec)` + 句柄的 `result()` | 改 `src/host/shell/run.ts`；**测试替身也要一起改**，否则单测里每个 shell 调用都会静默变成「执行失败」 |
 | 想让员工零安装（把 `crwu`/`dws`/`ossutil` 放进插件 `bin/`，指望 DSH 挂上 PATH） | **DSH 没有这个机制**：`dsh-package-manifest` 不认 `bin` 字段、`dsh-bash-local` 的 `Config` 无 env/PATH、`dsh-shell-env` 只收 `DSH_*` 键（前缀校验抛错）、`.env` 明确拒绝 `PATH` | 插件按平台自己解析包内绝对路径（`src/host/platform/bin-dir.ts`）；**再加一条 export 到 PATH**（见下条） |
@@ -341,6 +340,7 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 | | 抽屉/浮层里的菜单项点了没反应（脚本里 `getByRole('button', { name })` 超时） | 菜单项挂的是 `role="menuitem"`，可访问角色不是 button | 用类名 + 文案定位（`.crwu-audit-float-item` + hasText）；`install/browser-check.mjs` 里已经踩过两次 |
 | 用户报「界面颜色不对」，但自己本地看是对的 | 主题是**服务端设置**（`~/.dsh/settings.yaml` 的 `ui-theme.preference`），用户切到 dark 之后整页观感全变（主操作会从深色实心翻成近白实心） | 改配色先在**当前真实主题**下量一遍：读 `~/.dsh/settings.yaml` 或用浏览器会话里 `document.body.hasAttribute('data-ds-dark-theme')` 确认，不要默认浅色 |
 | Windows 上环境页「氚云员工会话」「钉钉认证」两行一起红，报 `表达式或语句中包含意外的标记"h3yun"` / `ParserError` / `UnexpectedToken`（macOS 上一切正常） | 拼命令时按 `cmd.exe` 的规矩办事，而 **DSH 在 Windows 挂的执行器是 PowerShell**（`@deepseek-ai/dsh-pwsh-local` 把整条命令当**一个 argv 元素**交给 `pwsh -Command`）。于是在 PowerShell 里「引号包住可执行文件」是**字符串表达式**、不是命令调用，紧随其后的第一个参数就成了意外标记。同一类错还有 `chmod`（Windows 根本没有这个命令）、`rm -f`（`-f` 在 `Remove-Item` 上同时匹配 `-Force` 与 `-Filter`）、`mkdir -p`（靠参数名缩写） | ① 命令位置一律走 `shellInvoke(exe, args, platform)`（`environment/probe.ts`），它只在 Windows 补调用运算符 `&`；**参数位置**用 `shellQuote`，Windows 走 PowerShell 单引号字面量（双引号会插值 `$`）；② 平台方言跟着**同一个 `platform` 键**走，不要读 `process.platform`（否则 Windows CI 上跑 stubbed `darwin-arm64` 的用例也会被加上 `&`）；③ POSIX-only 命令按平台分支（`ifind/store.ts` / `oss/ops.ts` 已有样例）。`host-shell-fs.test.mjs` 有一条静态守卫盯着「模板以 `${shellQuote(` 开头」与「`argv.map(…shellQuote…).join(' ')`」这两种会复发的写法 |
+| **首次使用点「扫码登录氚云 / 钉钉登录」浏览器起不来**，面板给的是 `mkdir …\Temp\crwu-scan-…: Access is denied.` 或 `acquiring file lock: …\.dws\.data.lock: Access is denied.`（看着像 CLI 自己坏了） | 登录**必须写工作区之外**：氚云的临时浏览器 profile（`$TMPDIR`/`%TEMP%\crwu-scan-*`，再经 CDP 读会话）、钉钉的 `<HOME>/.dws/.data.lock`（拿登录态前先抢锁）、以及两者收尾的操作系统凭据存储。宿主按完全访问跑、操作系统的 ACL/受限令牌仍然拒绝时就是这两句；受限沙箱下浏览器起来了也会在几毫秒内 renderer 崩溃（CDP 只回 `close 1006` / `Target crashed`）。**设备码登录不是退路**：它同样要抢 `~/.dws` 的锁 | 归因只看结构化事实**加一条**登录专用的文本判据：`src/host/system/login-failure.ts` 的 `loginFailureAdvice()` —— 顺序是 `runnerFailed` → 提权被降级 → `denied`/实际受限 → 「点名了登录必须写的工作区外目标 **且** 带拒绝字样」。它由 `dwsLogin` / `relogin` 填进 `error` 与 `sandboxBlocked`，界面据此说"把访问模式切到「完全权限」再点一次"，**原始报错保留**。⚠️ 这是 `sandboxDenialNote()`「事实干净就不猜文本」的**唯一例外**，理由是目标集合已知（别把它推广成通用规则）；**目标词与拒绝字样必须同时命中**，否则 `secret not found in keyring` 这种"真没条目 / 钥匙串被锁"会被说成权限问题。⚠️ 还分**两支**（`policyBlocked`）：事实说降级/拒绝 → 让人切「完全权限」；**事实干净却仍被拒 → 是这台机器在拒，必须说"切权限没有用"**（2026-09-29 实测：三个模式都是完全访问，第一版却在让人去切权限）。登录的临时目录也改由插件指定（`<home>/.dsh/crwu-workbench/auth-tmp`，见 `system/auth-scratch.ts`），不再依赖系统 TEMP |
 
 ## 11.1 环境领域模型与统一门禁（2026-09-26）
 
@@ -401,10 +401,10 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
   `resolveIfindStore()` 一处。**不再读 `~/.agents/skills/…/mcp_config.json`**。
 - 空值 / 占位符 / 首尾空白 / 换行在**写盘之前**拒绝；明文只有 `readIfindSecret` 一个出口且只给
   Host 内部；面向界面与模型的视图**只有长度**。
-- 界面上叫 **API-Key**（不是"SK"）。**每次环境校验都真的取一次数据**
+- 界面上叫 **API-Key**（不是"SK"）。保存或点击「重新验证」时才真的取一次数据；环境校验只读最近结论
   （`initialize` → `tools/list` → `tools/call`）：`ok`（认证）与 `dataVerified`（取数）是两个结论，
   认证过了但没取到数据时状态是 `unverified` + 明确的 `errorKind`，**不许显示成「已认证」**。
-  面板反复刷新由 30s TTL 缓存兜住（按凭据指纹作键），「重新检查」传 `force` 绕过缓存。
+  环境页的反复刷新与「重新检查」都不再访问 iFinD；只有用户主动保存或点击「重新验证」才更新这份结论。
   试取工具由 `pickProbeTool` 从真实 `inputSchema` 挑（只读、必填 ≤ 1、无开关参数），写/批量类不碰。
 - 保存后**立刻真实探测**（同上，含取数）；失败归因**四个阶段一致**（`classifyFailure`）：
   先看 401/403 再看消息指纹。401 → `credential`、
@@ -494,3 +494,202 @@ OSS 探测结果新增结构化 `errorKind` 与 `target`）。
 机器能验的部分全在 CI；「干净 Windows 用户配置装插件 → 选工作空间 → 建案例 → 跑审核 → 回传」
 只能在真实 Windows 上做，清单与脱敏日志模板见
 [`windows-acceptance.md`](windows-acceptance.md)。
+
+## 14. 内置浏览器登录（钉钉 / 氚云，2026-09-29 调研定稿）
+
+背景：Windows 上 `crwu h3yun session login` 要自己拉起一个带 CDP 的 Chromium，机器策略与 ACL 会拒它
+（真实报错见 `src/host/system/auth-scratch.ts` 顶部）。目标是两个登录都改走 **DSH 桌面内置浏览器**，
+并回答「员工扫码后凭证存到哪里」。
+
+### 14.1 DSH 侧只有三条入口，能力边界完全不同
+
+| 入口 | 是什么 | 插件能拿到什么 | 用在哪 |
+| --- | --- | --- | --- |
+| `ctx.sidebarRight.openTab('browser', { params: { url } })` | 右侧栏浏览器标签（Desktop = Electron `<webview>`；Web = 沙箱 iframe，且 Web profile 默认关闭） | 只能「开给人看」。**没有**读页面 / 执行 JS / 读 Cookie / 导航完成事件的接口 | 钉钉登录：把授权 URL 打开给人完成 |
+| 客户端 `window.open(url)` | Desktop 由主进程 `setWindowOpenHandler` 转 `shell.openExternal` → 系统默认浏览器 | 同上（开完插件一无所知） | 兜底：内置浏览器不可用时 |
+| `globalThis.dshDesktop.browser` | Desktop preload 暴露的 lease 桥：`acquire(workspace)` → `{ lease, partition }`、`release(lease)`、`onOpenRequested(lease, cb)` | **可以自建 `<webview>`**（主进程只认 `src="about:blank#<lease>"` + 匹配 partition，并会重写 webPreferences），从而用 webview 自己的 `executeJavaScript` 读页面 | 氚云登录：必须把 cookie 读出来 |
+
+三条要点，缺一条就会静默失败：
+
+1. 第三条是 **DSH 桌面壳的内部契约**（0.2.0-rc.2 实测形态），不是公开插件 API。必须 feature-detect
+   （`dshDesktop?.browser` 存在才走），拿不到就整体降级到 `window.open`，不许假设它在。
+2. 每个 lease **只能 attach 一次**；必须先在 `about:blank#<lease>` 上 `dom-ready` 再导航，
+   否则主进程会把 guest 关掉（`did-attach-webview` → `dom-ready` 校验 URL）。
+3. guest 的权限 / 下载 / 原生弹窗一律被拒；页面的 `window.open` 会以 `onOpenRequested` 事件回到插件
+   —— 不接管就等于丢弹窗。
+
+### 14.2 氚云：二维码必须由「接回调的那个浏览器」显示
+
+只读 GET 实测（2026-09-29，均为氚云登录页自己的接口）：
+
+- `/v1/login/dingtalk/scanurl` 返回一个钉钉 `sns_authorize` 授权地址：**H3Yun 自己的钉钉应用** +
+  `redirect_uri=https://www.h3yun.com/entry/login/corp`。
+- 扫码确认发生在**手机端**，`code` 被送到那个 `redirect_uri` —— 也就是**显示二维码的那个浏览器**。
+  所以「服务端镜像扫码、直接拿会话」不可行（与 `docs/v0.0.1/design-h3yun-auth.md` 的结论一致）：
+  **必须有浏览器，但可以是内置浏览器。**
+- `/v1/login/dingtalk/scan?code=<临时授权码>` 是换取会话的接口：喂 dummy code 得到业务错误
+  （「不存在的临时授权码」），说明它**不依赖任何浏览器 cookie / state**，可以脱离浏览器调用。
+
+### 14.3 凭证落点（唯一答案）
+
+| 登录 | 谁写 | 写到哪里 | 插件角色 |
+| --- | --- | --- | --- |
+| 钉钉 | `dws auth login` 自己 | `~/.dws` + OS 凭据存储 | 只给 URL / 看状态，**全程不接触凭证** |
+| 氚云 | `crwu h3yun session bind` | OS 凭据存储（service `crwu-h3yun` / account `current`） | 只在内存里过一手并立刻交出去；不落盘、不回显、不进日志/诊断/对话 |
+
+- **插件绝不代写 keyring**：那要复刻 `go-keyring` 的编码约定，并破坏 `internal/platform/h3yuncreds`
+  这条唯一 seam（根 `AGENTS.md` 的凭据口径）。
+- `bind` 目前只能 `--token <jwt>`，JWT 会出现在进程命令行（本机 `ps` 可见）。建议给它加
+  `--token-stdin`（Broker 已支持 `stdinText`），插件走 stdin，命令行保持干净。
+- 绑定成功后**续期免浏览器**：`session refresh` + CLI 中间件在剩余 ≤36h 时静默续期。
+
+### 14.4 氚云凭证回传通道：主 / 备 / 兜底
+
+| 优先级 | 通道 | 依赖 | 定稿依据 |
+| --- | --- | --- | --- |
+| 主 | 面板内嵌 lease 浏览器打开氚云登录页 → 轮询 `document.cookie` 的 `h3_token` → `crwu h3yun session bind` | 桌面内部桥 | 氚云**自己的代码**：登录成功处理用 `CookieStorage.set(ACCESS_TOKEN_KEY, token, 48)` 写 cookie（登录 chunk），请求拦截器又用 `CookieStorage.get(ACCESS_TOKEN_KEY)` 拼 `Authorization: Bearer`（app.js）→ `h3_token` **不可能是 HttpOnly**，`document.cookie` 一定读得到 |
+| 备 | 监听 webview 导航抓到 `?code=` → Host 调 `/v1/login/dingtalk/scan?code=…` → `session bind` | 同一个桥 + 未公开 Web 接口 | 该接口实测无状态；对 cookie 可读性免疫。注意 code 是一次性的、页面可能先消费掉，只在主通道读不到时启用 |
+| 兜底 | 现有 CLI CDP 登录 / 面板粘贴 JWT（`session bind`） | 无 | 原子能力，保留不动 |
+
+⚠️ **「备」通道已按维护者决定（2026-09-29）取消，不要照上表去实现它。** 理由：它存在的唯一前提是
+「主通道读不到 cookie」，而 E1 实测证明 `h3_token` 就是 JS 可读的 cookie（见 14.5）——前提被证伪；
+再加上它依赖未公开接口、且 code 是一次性的（页面通常先消费掉），收益小于风险。
+客户端**保留**对 `?code=` 回调的**观测**（`authCodeLocationOf` 只回主机与路径、不记值），
+仅用于失败归因；`browser-session-bind` 只接受会话令牌，不接受 code。
+
+### 14.5 端到端确认（E1 探针）：**已跑通（2026-09-29，桌面端 0.2.0-rc.2）**
+
+探针**不进版本库**（放 `plugins/dsh-crwu-workbench/.cache/`，已被 `.gitignore`）：
+`e1-browser-lease-probe.js`（客户端探针）+ `e1-control-server.mjs`（本地控制页）。
+本机打包版在 macOS 上**没有可用的 DevTools 入口**（菜单项 `visible: false`、自动打开只对未打包的
+`development` 生效、F12 不触发），所以实际跑法是：完全退出后从终端以
+`--remote-debugging-port=9222` 启动，再用 CDP `Runtime.evaluate` 把探针注入主窗口。
+
+实测结论（`__crwuE1.verdict`，用钉钉扫码一次）：
+
+| 观测项 | 实测值 | 结论 |
+| --- | --- | --- |
+| `bridgePresent` / `leaseAcquired` / `attached` / `domReady` | `true` | `dshDesktop.browser` lease 桥在主窗口可用，自建 `<webview>` 能附着 |
+| `executeJavaScriptWorks` | `true` | 能在 guest 里执行 JS |
+| 同页标定（在 `https://www.h3yun.com` 上） | `cookie: true`、`localStorage: true` | 读取器可用（写一个普通 cookie 立刻读回） |
+| `tokenReadable` / `tokenSource` / `tokenIsJwt` | `true` / `cookie` / `true` | **主通道成立**：扫码后 `h3_token` 就在 `document.cookie` 里，且是 JWT |
+| `tokenExpiresAt` | 约 48 小时后 | 与前端 `CookieStorage.set(..., 48)` 的 48h 一致 |
+| `sawAuthCode` / `authCodeLocation` | `true` / `www.h3yun.com/entry/login/corp` | **备通道也真实存在**：导航里确实出现带 `?code=` 的回调 |
+| `popups` | `[]` | 登录流程不需要弹窗，`onOpenRequested` 不接管也不会丢东西 |
+| `released` | `true` | `bridge.release(lease)` 干净销毁 guest（8 秒内确认） |
+
+- A 段（本地控制页）那次没成：控制页服务跑在沙箱里，Electron 进程连不上它（`chrome-error://chromewebdata/`）。
+  A 段要证的事已由「`executeJavaScriptWorks` + 氚云页同页标定」覆盖，**下次不要再依赖那个本地控制页**。
+- 因此 §14.4 的「主」通道不再是「未确认」：**主通道已验证**，备通道也已观测到。
+- **实现已落地（协议 20）**：Host 侧 `browser-session-bind`（`src/host/system/ops.ts` 的
+  `bindH3yunSession` + `ops/core.ts` 的入口，操作名不许带数字，所以不叫 `h3yun-session-bind`），
+  客户端侧 `features/environment/login-browser.ts`（lease + `<webview>` 驱动，DOM 与时钟注入以便单测）
+  + `H3yunBrowserLogin.tsx`（环境页卡片）。令牌经 `runCrwu` 的 `stdinText` 走
+  `crwu h3yun session bind --token-stdin`（CLI 侧支持见 `docs/v0.0.1/CHANGELOG.md`），**不进命令行**；
+  未授权 / 无内置浏览器（Web profile）时卡片禁用并给出回退说明。
+
+## 15. 钉钉登录的两阶段（协议 21）
+
+`dws auth login` 默认是 OAuth loopback：**先起 127.0.0.1 监听、打印授权 URL，再等人完成授权**
+（5 分钟）。旧形态是同步等它结束才把 stdout 尾巴交给界面 —— URL 到界面时用户早已不在等，
+CLI 那边也超时了。所以拆成两阶段。
+
+### 15.1 三个部件，一条路径
+
+| 部件 | 位置 | 要点 |
+| --- | --- | --- |
+| 后台执行 | `src/host/shell/run.ts` 的 `startShell` + `src/host/access/broker.ts` 的 `startShell` | 用 `execute()` **但不 await `result()`**（DSH 的契约：「前台」是调用方要不要 await 结果，不是 spawn 的性质）。请求带 `onExpiry: 'none'` —— 执行器的默认死线只适合前台命令，会把一次正常等待变成超时 |
+| 登录会话 | `src/host/system/ops.ts` 的 `createDwsLoginRegistry()` | 句柄**挂在会话对象上**（不许用模块级变量：第二次登录会把第一次串掉）；`start` 立刻回快照，`status` 读快照；5 分钟上限到点 `kill()` |
+| 界面 | `src/client/features/environment/DwsLoginCard.tsx` | 先把**动作**摆出来（打开授权链接 / 复制设备码），再给 CLI 原文；`running` 时轮询，进入终态停止，成功**只通知一次**刷新 |
+
+#### 打开方式：内置浏览器优先，系统浏览器兜底
+
+授权 URL **不**用裸 `window.open`：桌面端会把它转成 `shell.openExternal` → **系统浏览器**，
+员工看到窗口跳出 DSH（2026-09-29 用户当场指出"钉钉登录还是用的外置浏览器"）。
+`environment/open-url.ts` 的 `openUrlWithBuiltinFirst()` 先走
+`ctx.get('sidebarRight').openTab('browser', { params: { url } })`（右侧栏浏览器标签），
+拿不到服务、或标签类型未启用（Web profile 默认关闭它）、或实现返回的 promise 失败时，
+**才**退回 `window.open`。
+
+为什么用 `ctx.get` 而不是 peer 依赖 + `inject`：`browser` 标签类型不是必然存在的，
+把它写成硬依赖会让插件在 Web profile 上激活失败 —— 而"打不开就退回系统浏览器"才是正确降级。
+
+解析（`parseDwsAuthorization`）是**尽力而为**：`url` 取第一个 `http(s)://…` 并去掉尾部标点，
+`userCode` 认「连字符大写码」与「标签后跟码」两种写法。解析不出来不影响流程 —— `tail` 始终是原文。
+
+### 15.2 由缺陷注入抓到的两个真问题（别再犯）
+
+1. **`settle()` 必须先清定时器再判状态**。它会被 `done` 与轮询同时触发，早退时若不清定时器，
+   轮询 interval 会永远留在事件循环里（2026-09-29 证伪时整条测试进程退不出来）。
+   清理必须幂等、且不依赖 `phase`。
+2. **`onDone` 要一次性**：终态可能被轮询与状态更新重复看到（替身不跑 effect 清理时更明显），
+   用 ref 守卫「一次登录只刷一次环境」。
+
+另外：**正在跑的时候再 `start` 不许起第二个进程** —— 两个 `dws` 会抢同一个 `~/.dws` 的锁，
+第二个必然以 `Access is denied` 失败，而那个报错会被误读成"权限问题"。
+
+## 16. 不再替 CLI 指定目录（2026-09-29 决定）
+
+**决定：`dws` 的配置目录与登录的临时目录都用各自默认值，插件不再自指定。**
+
+- `DWS_CONFIG_DIR` 这条通道**整体下掉**（`src/host/dws/config-dir.ts` 已删除，所有调用点不再传目录）；
+- `TMPDIR`/`TEMP`/`TMP` 那条通道同样下掉（`src/host/system/auth-scratch.ts` 已删除；
+  `runCrwu` 的 `scratchDir` 选项一并移除）；
+- 登录命令因此回到 CLI 的默认形状：`crwu h3yun session login`、`dws auth login [--device]` 原样执行。
+
+### 16.1 为什么曾经要自指定（当时的证据）
+
+- 员工 Windows 上出现过 `mkdir C:\Users\51019\AppData\Local\crwu: Access is denied`（`crwu` 建临时
+  browser profile 失败，系统 TEMP 与用户缓存目录都被拒）→ 于是把临时目录改到插件状态目录；
+- 钉钉出现 `acquiring file lock: creating config dir for lock: mkdir C:\Users\51019\.dws: Access is denied`
+  → 于是把 `dws` 配置目录也改到插件状态目录。
+
+### 16.2 为什么最后全部下掉（三次对照，缺一条都会停在错误结论上）
+
+| # | 事实 | 来源 |
+| --- | --- | --- |
+| 1 | 同一个用户、同一个 `dws.exe`，**在自己的 PowerShell 里**能建 `~/.dws`、能打印授权链接 | 员工实测 |
+| 2 | 把配置目录换到插件树（`~/.dsh/crwu-workbench/dws-home`）后，`dws` **仍然**建不出目录 | 员工实测 |
+| 3 | 手工把该目录预建好，`dws` **仍然**打不开里面的 `.data.lock` | 员工实测 |
+| 4 | **以管理员身份运行 DSH** 后一次通过；再用普通权限重启，**已存在的锁也照样打不开** | 员工实测 |
+| 5 | DSH 的子进程（PowerShell）能在同一棵树里建目录（`auth-tmp` 就是它建的），而 `dws.exe` 不能 | 员工实测 |
+
+结论：**拦的是"这台机器按程序/按父进程对 `dws.exe` 的访问控制"，不是路径、不是 ACL、也不是 DSH 的文件策略**
+（诊断里三种模式都已是 `danger-full-access`）。补充一条 Windows 语义，它是理解 #2/#3 的关键：
+`CreateDirectory` **先查"对父目录有没有创建子项权限"，再查目标是否存在**，所以令牌没有创建权时，
+**目录在不在都回 `Access is denied`**。
+
+既然换位置不解决问题，自指定目录就只剩下代价（员工自己终端里的 `dws` 与插件用两套状态、
+多组织"当前组织"可能要各选一次），因此**整体下掉**。
+
+### 16.3 现在的口径（三条，别再走回头路）
+
+1. **插件不自指定目录**：配置目录、临时目录都用 CLI/系统默认 —— 与员工自己终端里的用法一致，
+   状态只有一处；
+2. **不做探针、不做回退、不重试**：登录是有副作用的交互（可能已经开始扫码/授权），
+   把第一次进程丢掉再起一个在语义上就是错的；而且只读命令（如 `auth status`）可能压根不碰锁，
+   拿它当判据实测会漏判；
+3. **失败就如实报告**：文案给出两条可执行路径（**以管理员身份运行 DSH 完成登录** /
+   **让管理员按程序放行随插件发布的 `dws.exe`**），并写明"换目录没用""设备码不是绕过办法"。
+   判据与文案在 `src/host/system/login-failure.ts`（两支：策略支 vs 机器支，见 §16.4）。
+
+### 16.4 影响面（不止登录）
+
+同一台机器上，凡是依赖 `dws` 的功能都需要提权或放行后才可用：
+知识库下载（`crwu_audit_knowledge_materialize`）、钉钉归档与通知
+（`crwu_audit_dingtalk_archive` / `notify_self`）、组织/身份解析。
+
+### 16.5 要恢复"自指定目录"需要什么证据
+
+只有当**目标位置确实可写、而 CLI 默认位置不可写**同时成立，并且**不依赖重试**时才值得再考虑。
+本轮已经证明：在受管/受限机器上，两者往往一起被拒（#2/#3），而真正的原因是按程序拦截（#4）——
+所以再次引入自指定目录之前，先把 #4 那类对照做一遍。
+
+### 16.6 顺带确认的两件事（供后来者）
+
+- **凭据不在配置目录里**：`dws doctor --json` 显示 `keychain: 当前平台使用本地加密凭据后端`
+  （service `dws-cli`），token 存在**用户级的本地加密后端**（所以 `cmdkey /list` 看不到、
+  配置目录里也只有 `.data.lock` / `logs/` / `profiles.json`）。这解释了"提权那次直接通过"：
+  同一个 Windows 用户（提权只是令牌提权）都能解密凭据，缺的只是**写锁与日志的文件权限**。
+- **不要就地升级随包二进制**：插件自带的 `dws` 按 `bin/manifest.json` 校验，
+  在插件目录里跑 `dws upgrade` 会让自检报"插件包不完整"，且下次插件升级会覆盖回去。

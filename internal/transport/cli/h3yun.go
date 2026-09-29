@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -13,6 +14,14 @@ import (
 	"github.com/mmungdong/crwu-ai/internal/app/h3yunops"
 	"github.com/mmungdong/crwu-ai/internal/app/h3yunweb"
 )
+
+// maxSessionTokenBytes bounds what `--token-stdin` will read.
+//
+// A H3Yun session JWT is a few kilobytes at most; the bound exists so a mistyped
+// pipe (for example `--token-stdin < some-huge-file`) fails with a clear message
+// instead of buffering an arbitrary file into memory. The limit is generous
+// enough that a legitimate token can never hit it.
+const maxSessionTokenBytes = 8 * 1024
 
 // H3YunOpsService is the agent-gateway (h3pat) capability.
 type H3YunOpsService interface {
@@ -175,16 +184,37 @@ func newSessionCommand(web H3YunWebService, examples map[string][]schemeExample)
 			return writeJSON(cmd.OutOrStdout(), map[string]any{"ok": true, "data": sessionSummary(session)})
 		}))
 	session.AddCommand(buildLeaf("bind", "Bind the employee's H3Yun web session token to this machine.",
-		"Fallback / trusted-binder path: pass the session JWT obtained after a QR login.",
-		"  crwu h3yun session bind --token <jwt>", examples, "h3yun session bind",
-		func(command *cobra.Command) { command.Flags().String("token", "", "H3Yun web session JWT") },
+		"Fallback / trusted-binder path: pass the session JWT obtained after a QR login. Prefer --token-stdin, which keeps the JWT out of the process arguments; feed it on standard input (pipe, password manager, or paste followed by end-of-input).",
+		"  crwu h3yun session bind --token-stdin\n  crwu h3yun session bind --token <jwt>", examples, "h3yun session bind",
+		func(command *cobra.Command) {
+			command.Flags().String("token", "", "H3Yun web session JWT")
+			command.Flags().Bool("token-stdin", false, "Read the H3Yun web session JWT from standard input")
+		},
 		func(cmd *cobra.Command, _ []string) error {
 			if web == nil {
 				return errors.New("H3Yun session service is unavailable")
 			}
 			token, _ := cmd.Flags().GetString("token")
+			fromStdin, _ := cmd.Flags().GetBool("token-stdin")
+			switch {
+			case fromStdin && strings.TrimSpace(token) != "":
+				return errors.New("pass either --token or --token-stdin, not both")
+			case fromStdin:
+				// Read one byte past the limit so an oversized input is
+				// distinguishable from an exactly-at-the-limit one.
+				data, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxSessionTokenBytes+1))
+				if err != nil {
+					// The reader's error text never contains what was read.
+					return fmt.Errorf("read the session token from standard input: %w", err)
+				}
+				if len(data) > maxSessionTokenBytes {
+					return fmt.Errorf("standard input exceeds the %d byte session token limit", maxSessionTokenBytes)
+				}
+				token = string(data)
+			}
+			// The service trims surrounding whitespace and a leading "Bearer ".
 			if strings.TrimSpace(token) == "" {
-				return errors.New("required flag --token is missing")
+				return errors.New("required flag --token or --token-stdin is missing")
 			}
 			session, err := web.Bind(cmd.Context(), token)
 			if err != nil {

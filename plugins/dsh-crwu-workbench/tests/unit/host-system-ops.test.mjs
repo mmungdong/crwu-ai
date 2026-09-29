@@ -10,9 +10,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
-const { makeTestAccess } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+const { makeTestAccess, TEST_HOME } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
 
-const { clipboard, openPath, dwsLogin, relogin, sessionStatus, ossCred } = await import(
+const { clipboard, openPath, dwsLogin, relogin, sessionStatus, ossCred, bindH3yunSession } = await import(
   new URL('src/host/system/ops.ts', ROOT).href
 )
 const { sessionView, isExpired, parseSessionOutput } = await import(new URL('src/host/h3yun/session.ts', ROOT).href)
@@ -46,6 +46,8 @@ function makeCtx({ shell, inside = () => true, files = {}, dirs = [] } = {}) {
               signal: null, timedOut: out.timedOut === true, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout ?? '', truncated: false },
               stderr: { text: out.stderr ?? '', truncated: false },
+              // 沙箱事实按**服务形状**透传（`{ mode, denied, runnerFailed }`）；不给就是不上沙箱。
+              ...(out.sandbox === undefined ? {} : { sandbox: out.sandbox }),
             }) }
           },
         }
@@ -222,7 +224,7 @@ test('every escalated command carries a working directory', async () => {
   const deps = depsOf(ctx)
   await clipboard(deps, { text: 'x' })
   await openPath(deps, { path: '/cases/a.html' })
-  await dwsLogin(deps, {})
+  await dwsLogin(deps, {}, TEST_HOME)
   for (const spec of ctx.specs) {
     assert.equal(spec.sandboxPolicy?.mode, 'danger-full-access', `${spec.command} 应当在沙箱外执行`)
     assert.equal(spec.sandboxPolicy.workspaceRoot, '/cases/session', `${spec.command} 的提权必须绑工作区`)
@@ -233,30 +235,145 @@ test('every escalated command carries a working directory', async () => {
 
 test('dwsLogin passes --device only when asked and reports the tails', async () => {
   const ctx = makeCtx({ shell: () => ({ stdout: 'x'.repeat(900) + 'TAIL', stderr: 'err' }) })
-  const result = await dwsLogin(depsOf(ctx), { device: true })
+  const result = await dwsLogin(depsOf(ctx), { device: true }, TEST_HOME)
   assert.equal(result.ok, true)
   assert.match(ctx.commands[0], /dws auth login --device/)
   assert.equal(result.stdoutTail.endsWith('TAIL'), true)
   assert.ok(result.stdoutTail.length <= 600, '只回尾部，避免把整段输出塞进响应')
 
   const plain = makeCtx({ shell: () => ({ stdout: '' }) })
-  await dwsLogin(depsOf(plain), {})
+  await dwsLogin(depsOf(plain), {}, TEST_HOME)
   assert.equal(plain.commands[0].includes('--device'), false)
 })
 
 test('dwsLogin surfaces a timeout instead of a silent failure', async () => {
   const ctx = makeCtx({ shell: () => ({ exitCode: null, timedOut: true, stderr: 'timeout' }) })
-  const result = await dwsLogin(depsOf(ctx), {})
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
   assert.equal(result.ok, false)
   assert.equal(result.timedOut, true)
 })
 
 test('relogin runs the whitelisted crwu session login and parses the session', async () => {
   const ctx = makeCtx({ shell: () => ({ stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) }) })
-  const result = await relogin(depsOf(ctx))
+  const result = await relogin(depsOf(ctx), TEST_HOME)
   assert.equal(result.ok, true)
-  assert.match(ctx.commands[0], /^crwu h3yun session login/)
+  // 现在命令前面还有"建 scratch 目录 + 指临时目录"这一段，所以用 includes 而不是行首匹配。
+  assert.match(ctx.commands[0], /crwu h3yun session login/)
   assert.equal(result.session.userId, 'u1')
+  // 成功时不许出现归因文案（否则界面会把一次成功显示成沙箱问题）。
+  assert.equal(result.sandboxBlocked, false)
+  assert.equal(result.error, '')
+})
+
+// ── 内置浏览器扫码的凭据出口（协议 20）──────────────────────────────────────
+
+const SAMPLE_JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJlbmdpbmVjb2RlIjoiZW5nLTEifQ.signature'
+
+test('browser-session-bind 把令牌走标准输入，绝不进命令行', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: JSON.stringify({ ok: true, data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z', expiresIn: '48h' } }) }) })
+  const result = await bindH3yunSession(depsOf(ctx), { token: SAMPLE_JWT })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.session?.userId, 'u1')
+  assert.equal(ctx.commands.length, 1)
+  // ① 命令形状：读标准输入的那条参数，而不是 `--token <jwt>`。
+  assert.match(ctx.commands[0], /h3yun session bind --token-stdin/)
+  // ② 令牌绝不进命令行（同机 `ps` / 任务管理器看不到）。
+  assert.equal(ctx.commands[0].includes(SAMPLE_JWT), false)
+  // ③ 令牌确实经 stdin 交给命令。
+  assert.equal(ctx.specs[0].stdin, SAMPLE_JWT)
+  // ④ 提权仍然由操作身份决定（`h3yun.session.bind` 是特权操作，必须有工作目录）。
+  assert.equal(ctx.specs[0].sandboxPolicy?.mode, 'danger-full-access')
+  assert.equal(ctx.specs[0].sandboxPolicy?.workspaceRoot, '/cases/session')
+  // ⑤ 返回值里没有令牌（界面拿到的只能是一个结论）。
+  assert.equal(JSON.stringify(result).includes(SAMPLE_JWT), false)
+})
+
+test('browser-session-bind 对空令牌与带换行的令牌零调用', async () => {
+  for (const token of ['', '   ', `${SAMPLE_JWT}\n`]) {
+    const ctx = makeCtx({ shell: () => ({ stdout: '{}' }) })
+    const result = await bindH3yunSession(depsOf(ctx), { token })
+    assert.equal(result.ok, false, `${JSON.stringify(token)} 必须被拒`)
+    assert.equal(ctx.commands.length, 0, `${JSON.stringify(token)} 不该起任何进程`)
+    assert.equal(result.session, null)
+    assert.equal(JSON.stringify(result).includes(SAMPLE_JWT), false)
+  }
+})
+
+test('browser-session-bind 失败时只回 CLI 的一句话，不带令牌', async () => {
+  const ctx = makeCtx({ shell: () => ({ exitCode: 1, stderr: 'the session token has already expired; scan again at h3yun.com' }) })
+  const result = await bindH3yunSession(depsOf(ctx), { token: SAMPLE_JWT })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /already expired/)
+  assert.equal(result.session, null)
+  assert.equal(JSON.stringify(result).includes(SAMPLE_JWT), false)
+})
+
+test('登录命令不再替 CLI 指定任何目录（临时目录与配置目录都用默认）', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: '' }) })
+  await relogin(depsOf(ctx), TEST_HOME)
+  const command = ctx.commands[0]
+  // 2026-09-29 决定：自指定目录那条通道整体下掉 —— 换目录解决不了"机器按程序拦子进程"的问题
+  // （三个位置都试过，见 docs/development-notes.md §16），所以命令形状回到 CLI 默认：
+  // 既不写 TMPDIR/TEMP，也不写 DWS_CONFIG_DIR。
+  assert.equal(command.includes('TMPDIR'), false)
+  assert.equal(command.includes('TEMP='), false)
+  assert.equal(command.includes('DWS_CONFIG_DIR'), false)
+  assert.match(command, /crwu h3yun session login/)
+})
+
+test('relogin：策略允许但机器拒绝时，不许叫人去切权限', async () => {
+  // 2026-09-29 Windows 实测原文：宿主按完全访问跑（诊断里 requested=resolved=ran=danger-full-access、
+  // denied=false），这台机器仍然拒绝临时 profile 目录。这一支**切权限没有用**，必须说清。
+  const ctx = makeCtx({
+    shell: () => ({ exitCode: 1, stderr: 'mkdir C:\\Users\\51019\\AppData\\Local\\Temp\\crwu-scan-1799287186: Access is denied.' }),
+  })
+  const result = await relogin(depsOf(ctx), TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.sandboxBlocked, true)
+  assert.match(result.error, /被这台机器拒绝/)
+  // 实测：切【DSH 访问模式】没用，但**提权**有用 —— 文案必须给提权这条路，且不许再叫去切访问模式。
+  assert.match(result.error, /以管理员身份运行/)
+  assert.doesNotMatch(result.error, /选「完全权限」/)
+  // 原始报错要留着：丢掉原因比多一句话更难查。
+  assert.match(result.error, /crwu-scan-1799287186/)
+})
+
+test('relogin：提权被降级时才让他去切「完全权限」', async () => {
+  // 结构化事实说降级：这一支切权限**才**有用。宿主替身按服务形状回 sandbox 事实。
+  const ctx = makeCtx({
+    // 服务形状：`mode` 是**实际**跑的模式；请求的 danger-full-access 由 runShell 自己拼进 resolved。
+    shell: () => ({ exitCode: 1, stderr: '', sandbox: { mode: 'workspace-write', denied: false, runnerFailed: false } }),
+  })
+  const result = await relogin(depsOf(ctx), TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.match(result.error, /被文件策略挡在工作区之外/)
+  assert.match(result.error, /完全权限/)
+})
+
+test('dwsLogin attributes the .dws lock denial instead of echoing the CLI', async () => {
+  const ctx = makeCtx({
+    shell: () => ({
+      exitCode: 2,
+      stderr: '{"error":{"category":"auth","code":2,"message":"acquiring file lock: opening lock file: open C:\\\\Users\\\\51019\\\\.dws\\\\.data.lock: Access is denied."}}',
+    }),
+  })
+  const result = await dwsLogin(depsOf(ctx), { device: true }, TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.sandboxBlocked, true)
+  assert.match(result.error, /被这台机器拒绝/)
+  // 设备码那条要抢同一个锁：动作里必须点明它**不是**绕过办法。
+  assert.match(result.advice, /设备码登录/)
+  assert.match(result.advice, /不是绕过办法/)
+})
+
+test('dwsLogin keeps a genuine business failure as-is (no sandbox claim)', async () => {
+  const ctx = makeCtx({ shell: () => ({ exitCode: 1, stderr: 'no supported browser found; install Chrome/Edge or set CRWU_BROWSER' }) })
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.sandboxBlocked, false)
+  assert.equal(result.advice, '')
+  assert.match(result.error, /no supported browser found/)
 })
 
 test('sessionStatus reports the failure reason when crwu cannot answer', async () => {

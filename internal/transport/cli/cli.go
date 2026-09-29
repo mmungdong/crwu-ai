@@ -30,7 +30,20 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // RunWithDependencies executes the CLI using application services assembled by
 // the process entry point.
 func RunWithDependencies(args []string, stdout, stderr io.Writer, configured Dependencies) int {
+	return RunWithIO(args, os.Stdin, stdout, stderr, configured)
+}
+
+// RunWithIO executes the CLI with an explicit standard input.
+//
+// Why the reader is a parameter instead of an implicit `os.Stdin`: the one
+// command that consumes standard input is `crwu h3yun session bind
+// --token-stdin`, and its whole point is that the session token never appears
+// in the process arguments. A test can only prove that contract by feeding a
+// known token through this seam and asserting both the service argument and the
+// absence of the token in everything the caller can observe.
+func RunWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer, configured Dependencies) int {
 	root := newRootCommand(configured)
+	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.SetArgs(args)
