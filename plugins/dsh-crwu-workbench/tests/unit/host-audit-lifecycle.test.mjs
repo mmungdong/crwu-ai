@@ -745,6 +745,29 @@ test('DSH Python 不可用时在创建子代理之前终止（不许退回系统
   assert.equal(state.activeChildId, '')
 })
 
+test('沙箱起不了进程时，门禁第一句不许说成「脚本运行时不可用」', async () => {
+  // 2026-09-30 真机闭合：受限沙箱里 `0xC0000142`，控制探测（纯 PowerShell）同样失败 ——
+  // 那是部署侧的沙箱后端问题，重装运行时 / 改 Python 路径都没有用。
+  const { deps, state } = startDeps({
+    state: { parentSessionId: 'parent-1' },
+    python: {
+      cached: () => null,
+      check: async () => ({
+        ok: false, state: 'failed', unresolved: false, blockedBySandbox: true,
+        path: '', versionText: '', distributions: {}, missingPackages: [],
+        error: '进程在能跑起来之前就退出了（exitCode 3221225794 = 0xC0000142 STATUS_DLL_INIT_FAILED）',
+        source: 'stub',
+      }),
+    },
+  })
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /受限沙箱起不了任何进程/)
+  assert.match(result.error, /0xC0000142/)
+  assert.doesNotMatch(result.error, /DSH 脚本运行时不可用/)
+  assert.equal(state.activeChildId, '')
+})
+
 test('宿主**没问到**运行时（unresolved）不再拒绝启动：交给子会话自己解析', async () => {
   // 2026-09-29 员工实测：宿主（启动/自检）没有会话作用域 → 那个工具必报错。
   // 「没问到」不等于「缺失」：子会话有作用域，能在那里解析出来，所以不该卡在启动。

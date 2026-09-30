@@ -9,7 +9,7 @@ import {
   type LocalAccessConsentRecord,
   type LocalAccessConsentView,
 } from '../../shared/access/types.ts'
-import { readWorkbenchConfigResult, writeWorkbenchConfig } from '../state/persist.ts'
+import { readWorkbenchConfigResult, writeWorkbenchConfig, type ConfigReadReason } from '../state/persist.ts'
 import type { LocalAccessBroker } from './broker.ts'
 
 /**
@@ -22,8 +22,11 @@ import type { LocalAccessBroker } from './broker.ts'
  *    界面还说是成功的。现在写盘失败就是 `ok:false` + 内存仍是未授权。
  * 2. **撤销失败也要立刻 fail closed**。撤销是**收紧**权限，写盘失败时反而不能"当没撤"
  *    ——否则员工撤销完还在被读凭据。内存立即关掉，状态标 `persist-failed` 并如实报错。
- * 3. **读盘永不抛错**。状态文件坏了不该让面板打不开（与 `persist.ts` 同一条口径）：
- *    解析不出来就是 `missing`，走一次授权即可恢复。
+ * 3. **读盘永不抛错，但也不许把"读不出来"说成"没有授权"**。状态文件坏了不该让面板打不开
+ *    （与 `persist.ts` 同一条口径）—— 可是读失败与"从没授权过"是**两句不同的话**：
+ *    前者重新允许一次也修不好（写盘同样是读-改-写），把它显示成「需要授权」就是把员工
+ *    送进"授权成功、界面永远停在需要授权"的循环。所以读不出来一律 `unreadable`，
+ *    `missing` 只留给"真的没有收据"（2026-09-30 复查）。
  *
  * ## 工作台自己的状态文件是**唯一的**提权写例外
  *
@@ -42,6 +45,11 @@ const OUTDATED_REASON = '授权范围已更新：请按上面的清单重新允�
 const LEGACY_REASON = '这是旧版本留下的授权（只覆盖读取本机凭据）：授权范围已更新，请重新允许一次'
 const REVOKED_REASON = '已撤销授权：本机账号与配置的访问已关闭，需要时再允许一次'
 const GRANT_FAILED_REASON = '授权没能写入磁盘：本次运行仍未获得本机访问权限'
+const READ_FAILED_REASON = '读不出授权收据（宿主读盘失败）：这不是「没有授权」，重新允许一次也不会改变它。请把这条原因发给维护者。'
+const NO_HOME_REASON = '读不出授权收据（探测不到本机主目录）：这不是「没有授权」，重新允许一次也不会改变它。请把这条原因发给维护者。'
+const NO_FS_REASON = '读不出授权收据（宿主文件服务不可用）：这不是「没有授权」，重新允许一次也不会改变它。请把这条原因发给维护者。'
+const NOT_A_FILE_REASON = '读不出授权收据（那个位置不是一个普通文件）：这不是「没有授权」，重新允许一次也不会改变它。请把这条原因发给维护者。'
+const CORRUPT_REASON = '授权收据文件损坏（内容解析不出来）：在上面点一次「允许并继续」即可重建它。'
 const PERSIST_FAILED_REASON = '撤销没能写入磁盘：本次运行已经关闭访问，重启后请再撤销一次'
 const UNKNOWN_SCHEMA_REASON = '授权记录来自其它版本的插件：请按当前范围重新允许一次'
 const UNKNOWN_CAPABILITY_REASON = '授权记录里有本版不认识的能力项：请按当前范围重新允许一次'
@@ -56,6 +64,32 @@ export function missingLocalAccessView(reason = ''): LocalAccessConsentView {
     capabilities: [],
     reason,
   }
+}
+
+/**
+ * **读不出来**视图（`unreadable`）。
+ *
+ * 与 `missing` 分开是这一态存在的全部理由：磁盘上完全可能躺着一份合法收据，只是这一次
+ * 读它失败了。界面据此说"读不出来 + 为什么"，而不是"需要授权 + 再点一次"。
+ */
+export function unreadableLocalAccessView(reason: string): LocalAccessConsentView {
+  return {
+    state: 'unreadable',
+    schemaVersion: 0,
+    requiredSchemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
+    grantedAt: '',
+    capabilities: [],
+    reason,
+  }
+}
+
+/** 读盘失败的原因 → 界面原文。逐类分开，且**都不许说成「没有授权」**。 */
+export function unreadableReasonOf(reason: ConfigReadReason): string {
+  if (reason === 'corrupt') return CORRUPT_REASON
+  if (reason === 'no-home') return NO_HOME_REASON
+  if (reason === 'no-fs') return NO_FS_REASON
+  if (reason === 'not-a-file') return NOT_A_FILE_REASON
+  return READ_FAILED_REASON
 }
 
 /** 已授权视图。 */
@@ -181,9 +215,10 @@ export interface ConsentOutcome {
 /** 读一次磁盘上的收据（不抛错）。 */
 export async function readLocalAccessConsent(deps: LocalAccessConsentDeps): Promise<LocalAccessConsentView> {
   const result = await readWorkbenchConfigResult(deps.ctx, deps.home)
-  // 读失败**不**等于「没有授权」：把读失败当成未授权会让人重新授权一次（无害），
-  // 反过来把读失败当成已授权才是危险的。所以这里 fail closed 到 `missing`。
-  if (!result.ok) return missingLocalAccessView()
+  // 读失败**不**等于「没有授权」：反过来把读失败当成已授权才是危险的，所以这里 fail closed。
+  // 但 fail closed **不等于含糊**：折叠成 `missing` 就是那条"授权成功、界面永远停在需要授权"
+  // 的循环（2026-09-30 复查）—— 读不出来就如实说读不出来。
+  if (!result.ok || result.reason === 'corrupt') return unreadableLocalAccessView(unreadableReasonOf(result.reason))
   return localAccessViewOf(result.value)
 }
 
@@ -247,8 +282,8 @@ function rejectGrantRequest(deps: LocalAccessConsentDeps, error: string): Consen
  * 又在传了 `state` 时把它落实。`persist-failed` 这一态还有第二重保护：
  * `syncLocalAccessConsent` 拒绝用磁盘上的 `granted` 覆盖它（见那里的注释）。
  */
-function refuseGrant(deps: LocalAccessConsentDeps, error: string): ConsentOutcome {
-  const view: LocalAccessConsentView = {
+function persistFailedLocalAccessView(): LocalAccessConsentView {
+  return {
     state: 'persist-failed',
     schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
     requiredSchemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
@@ -256,6 +291,13 @@ function refuseGrant(deps: LocalAccessConsentDeps, error: string): ConsentOutcom
     capabilities: [],
     reason: GRANT_FAILED_REASON,
   }
+}
+
+function refuseGrant(
+  deps: LocalAccessConsentDeps,
+  error: string,
+  view: LocalAccessConsentView = persistFailedLocalAccessView(),
+): ConsentOutcome {
   if (deps.state !== undefined) deps.state.localAccess = view
   return { ok: false, error, consent: view }
 }
@@ -278,6 +320,14 @@ export async function grantLocalAccess(
       error: `授权范围与当前版本的固定清单不一致，拒绝授予（需要在界面上按清单整体允许一次）。`,
       consent: rejectGrantRequest(deps, '授权范围与固定清单不一致：本次请求不产生任何影响。').consent,
     }
+  }
+  // **写盘是读-改-写**：读不出来就写不进去（`writeWorkbenchConfig` 会拒绝覆盖没读到的字段）。
+  // 这条前置检查把笼统的"授权没能写入磁盘"换成一句能定位的话 —— 读失败时那句会让人去查
+  // 磁盘空间，而真正的问题在读取通道；同时它让活状态停在 `unreadable` 而不是 `persist-failed`。
+  const before = await readWorkbenchConfigResult(deps.ctx, deps.home)
+  if (!before.ok) {
+    const reason = unreadableReasonOf(before.reason)
+    return refuseGrant(deps, `${reason}（授权没能完成：读不到也就写不进去，磁盘上的文件保持原样。）`, unreadableLocalAccessView(reason))
   }
   const grantedAt = new Date().toISOString()
   const record: LocalAccessConsentRecord = {

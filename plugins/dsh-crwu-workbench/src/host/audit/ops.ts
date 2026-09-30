@@ -198,6 +198,7 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
   state.startingKey = key
   try {
     const seqNo = text(args.seqNo)
+    const platform = await deps.world.platform()
     const previous = state.audits[key]
 
     // 硬门禁一：别的报告正在跑时拒绝；同一条报告走后面的「重启」。
@@ -226,7 +227,7 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       // 只读探测的 cwd 用一个确定存在的目录（会话 cwd）：拿工作空间自己当 cwd 时，
       // "目录不存在"与"沙箱没放行"会塌成同一个结论。
       probeWorkdir: await deps.world.workdir(),
-      platform: await deps.world.platform(),
+      platform,
     })
     if (!madeCase.ok) {
       return failed(`创建案例目录失败：${caseDir}（${madeCase.error}）`, { errorKind: madeCase.errorKind })
@@ -273,7 +274,14 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     if (!python.ok && python.unresolved !== true) {
       // **确实缺失**（载荷没有 python / 路径不可用 / 缺必需包）→ 拒绝启动：
       // 子代理否则会退回系统解释器（缺 openpyxl，结果不可信）。
-      return failed(`DSH 脚本运行时不可用，已终止本次审核：${python.error || python.state}`)
+      //
+      // ⚠️ 但「受限沙箱起不了进程」**不是**「运行时不可用」（2026-09-30 真机：控制探测证明
+      // 连 pwsh 自己都起不来）。两者处置完全不同，所以门禁的**第一句**必须跟着事实走 ——
+      // 否则维护者会去重装运行时，而真正要修的是部署侧的沙箱后端。
+      const headline = python.blockedBySandbox
+        ? '本机受限沙箱起不了任何进程（部署侧问题），已终止本次审核'
+        : 'DSH 脚本运行时不可用，已终止本次审核'
+      return failed(`${headline}：${python.error || python.state}`)
     }
     // `unresolved`（宿主这次**没问到**：工具调用失败/超时/报错，常见于宿主没有会话作用域）
     // **不再拒绝启动** —— 子会话本身有 agent 作用域，能在那里把运行时解析出来；
@@ -392,6 +400,7 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
         oss: normalizeOss(manifest.oss, manifest.oss),
         isRetry,
         attemptId,
+        platform,
         // 没问到就交空值 → 提示词换成「由子会话自己解析」那一段（不许去找系统解释器）。
         python: python.ok ? { path: python.path, versionText: python.versionText, distributions: python.distributions } : null,
         snapshot: {

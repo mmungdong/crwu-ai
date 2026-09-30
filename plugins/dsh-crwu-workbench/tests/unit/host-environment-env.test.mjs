@@ -600,6 +600,30 @@ test('the local-access receipt is echoed so the panel can render the consent car
   assert.equal(DEFAULT_MANIFEST.workspace.preferTitle, '中瑞世联工作空间')
 })
 
+test('收据读不出来：面板看到的是「授权状态读不出来」，不是「需要授权」', async () => {
+  // 现场（2026-09-30 复查）：磁盘上那份收据合法，只是读它这一步失败了（内容损坏 / 位置不是
+  // 普通文件 / 主目录探不到 / fs 不可用）。旧实现把这一态折叠成 `missing`，界面于是显示
+  // 「需要授权」并让员工再授权一次 —— 而读失败时写盘（同样是读-改-写）根本落不了盘。
+  const ctx = healthyContext({ files: { '/Users/x/.dsh/crwu-workbench.json': '{oops' } })
+  const { deps } = depsOf(ctx)
+  const result = await loadEnvironment(deps, {})
+
+  assert.equal(result.localAccess.state, 'unreadable')
+  assert.equal(result.state.userSetup.credentialsConsent.state, 'invalid', '这不是员工能修的"未配置"')
+  for (const id of ['h3yun', 'dingtalk']) {
+    const service = result.services.find((item) => item.id === id)
+    assert.equal(service.state, '授权状态读不出来', id)
+    assert.match(service.detail, /重建/, id)
+  }
+  // 凭据类占位项也要如实：不许给"允许一次就能修好"的假承诺。
+  assert.equal(result.state.userSetup.h3yun.reason.includes('重建'), true)
+  const issue = result.state.issues.find((item) => item.id === 'consent-unreadable')
+  assert.ok(issue, 'issue 必须指名这是读盘问题')
+  assert.equal(issue.owner, 'system', '读盘失败不是员工能修的')
+  assert.equal(result.blocked.some((item) => item.includes('允许工作台访问本机账号和配置')), false,
+    '读不出来时不该给"允许一次就能修好"的假承诺')
+})
+
 test('钉钉探测：未授权就说需要授权（绝不谎报未登录）；授权后带无沙箱策略去拿真结论', async () => {
   const ctx = healthyContext()
   const specs = []

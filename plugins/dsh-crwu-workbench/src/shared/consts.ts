@@ -136,8 +136,14 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    **跨案例隔离改由案例 scope 承担**（`requireAuditScope` 按本轮 `casePath` 精确相等）。
  *    必须 +1 的理由：旧宿主的根 cwd/边界是案例目录 —— 与"审核记录属于哪个案例"无关了，
  *    但侧栏归类与沙箱事实都不同，不能混着一代用。
+ * 25：**「授权收据读不出来」从「需要授权」里分出来**（2026-09-30）。`env.localAccess.state`
+ *    新增 `unreadable`：收据读盘失败（宿主文件服务不可用 / 探测不到主目录 / 位置不是普通文件 /
+ *    读抛错）或文件内容损坏时用它，`missing` 只表示"真的没有收据"。必须 +1 的理由：
+ *    旧客户端读到 `unreadable` 会当成 `missing` 显示「需要授权」并把员工指向"再授权一次"——
+ *    而读失败时写盘同样是读-改-写，根本落不了盘，员工会陷在"授权成功、界面永远停在需要授权"里。
+ *    这正是这一代要断掉的那句话。
  */
-export const WORKBENCH_PROTOCOL = 24
+export const WORKBENCH_PROTOCOL = 25
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

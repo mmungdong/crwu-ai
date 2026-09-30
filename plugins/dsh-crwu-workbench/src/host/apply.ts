@@ -75,7 +75,12 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   const discussionScopes = createDiscussionScopeRegistry()
   // 自研审核链路的全部业务能力都以结构化 Tool 交付（`crwu_*`）。注册进 DSH 的注册表，
   // schema 自动进 system prompt，并走同一条审批/沙箱/取消 pipeline。
-  ctx.effect(() => registerCrwuTools(ctx, { ctx, config, state, world, form, access, discussionScopes }), 'crwu-workbench: tools')
+  ctx.effect(() => registerCrwuTools(ctx, {
+    ctx, config, state, world, form, access, discussionScopes,
+    // 与审核启动、环境自检共用同一个 Python 解析器（同一份缓存）：`crwu_run_python_script`
+    // 绝不自己去猜解释器。
+    python,
+  }), 'crwu-workbench: tools')
   // 自助更新（Task 4）：每个插件实例一套检查器 / 持久化 / 安装服务。
   // 这里只装配 —— 恢复与后台自动检查都在它内部启动，**不 await**（registry 故障、
   // Plugin Manager 缺失或检查挂起都不得挡住插件激活或下面的路由注册）。

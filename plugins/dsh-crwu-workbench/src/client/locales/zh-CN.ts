@@ -803,6 +803,8 @@ export const zhCN = {
   envConsentRevoke: '撤销授权',
   envConsentRevoked: '已撤销：本机账号与配置的访问已关闭，账号连接与审核功能不可用。',
   envConsentPersistFailed: '撤销没能写入磁盘：本次运行已经关闭访问，重启后请再撤销一次。',
+  envConsentUnreadable: '授权状态读不出来',
+  envConsentUnreadableNote: '本机授权收据读不出来：这不是「没有授权」，重新允许一次也不会改变它。请把上面这条原因发给维护者。',
   envConsentPersistFailedGrant: '授权没能写入磁盘，所以本次没有获得任何本机访问权限：请检查磁盘空间或文件权限后重试。',
   envConsentSchemaMismatch: '界面与宿主的权限说明版本不一致：请完全退出并重新打开 DeepSeek Harness，'
     + '再在「账号连接」里按新的范围允许一次。',

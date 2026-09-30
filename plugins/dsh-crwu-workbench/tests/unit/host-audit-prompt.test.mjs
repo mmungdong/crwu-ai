@@ -126,6 +126,21 @@ test('脚本运行时：指令只给 DSH 自带 Python 的绝对路径，并禁�
   }
 })
 
+test('Windows 子代理脚本使用临时文件捕获原生 Python 输出，macOS 默认提示不变', () => {
+  const win = auditPrompt(task({ platform: 'win32-x64' }))
+  assert.equal(win.includes('## 脚本运行时：只用 DSH 自带的 Python'), true)
+  assert.equal(win.includes('Windows 子代理脚本执行兼容层（必须照做）'), true)
+  assert.equal(win.includes('function Invoke-DshPython'), true)
+  assert.equal(win.includes('ReadAllBytes($crwuStdout)'), true)
+  // 与 Host 侧 `capturePowerShellNativeCommand` 必须同一条口径：文本层显式钉成 UTF-8 并剥掉
+  // BOM，否则 Windows PowerShell 5.1 上被捕获的 JSON 会变成 UTF-16LE 而读不出来。
+  assert.equal(win.includes("$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'"), true)
+  assert.equal(win.includes('所有审核技能脚本（包括子代理自己运行的材料准备、复核与交付脚本）'), true)
+
+  const mac = auditPrompt(task())
+  assert.equal(mac.includes('Windows 子代理脚本执行兼容层'), false)
+})
+
 test('没有快照时指令明确「不要自己去发现表单」，而不是留空', () => {
   const text = auditPrompt(task({ snapshot: null }))
   assert.equal(text.includes('## 输入快照缺失'), true)

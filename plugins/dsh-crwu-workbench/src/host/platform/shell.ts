@@ -78,6 +78,109 @@ export function shellInvoke(executable: string, args: readonly string[], platfor
   return shellDialect(platform) === 'powershell' ? `& ${parts.join(' ')}` : parts.join(' ')
 }
 
+/**
+ * 拼一条「可执行文件 + 参数」的命令，并在 Windows 上绕开 ACL sandbox 的
+ * native-child piped-stdio 缺陷。
+ *
+ * Windows 的受限 PowerShell 可以正常启动，但它启动的 native 子进程若直接继承
+ * DSH 的 stdout/stderr pipe，部分系统会在 DLL 初始化阶段以 0xC0000142 退出。
+ * 先把子进程的两个流落到 DSH 提供的临时目录，再由外层 PowerShell 把字节原样
+ * 转发回 DSH，既保留 stdout/stderr 与退出码，也不改变 workspace-write 边界。
+ * POSIX 不需要这层包装，保持与 shellInvoke 完全相同的命令形状。
+ *
+ * ⚠️ **只在真跑受限沙箱时才用**（见 {@link nativeCaptureNeeded}）：这层捕获必须经过
+ * PowerShell 的**文本层**，而文本层不保证逐字节。提权调用根本没有那个 DLL 初始化缺陷，
+ * 套上去只会白白损失字节 —— 2026-09-30 的凭据回归就是这么来的。
+ */
+export function capturePowerShellNativeCommand(command: string): string {
+  // `shellInvoke()` is the only producer of this shape (`& 'path' ...`).  Do not
+  // wrap arbitrary PowerShell scripts: cmdlets and pure PowerShell pipelines do
+  // not create the restricted-token native-child failure we are working around.
+  if (!/^\s*&\s+'/.test(command)) return command
+  return [
+    '& {',
+    // `>` 走的是 PowerShell 的**文本层**（`Out-File`）：Windows PowerShell 5.1 的默认编码是
+    // UTF-16LE（pwsh 7 是 UTF-8 无 BOM）。把那些字节原样转回 DSH，CLI 的 JSON 就成了
+    // `{\0"\0…` —— 解析失败，界面显示「未绑定 / 未知」。所以这一层必须显式钉成 UTF-8，
+    // 再把 5.1 会加上的 BOM 从**字节**里剥掉（不靠上层猜）。
+    "  $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'",
+    '  $crwuStdout = [System.IO.Path]::GetTempFileName()',
+    '  $crwuStderr = [System.IO.Path]::GetTempFileName()',
+    '  try {',
+    // ⚠️ 三个句柄都要断：兼容层的全部前提是"native 子进程不继承 DSH 的管道句柄"，
+    // 而早先只重定向了 stdout/stderr —— stdin 仍然是 DSH 的管道。`$null |` 让 pwsh 自己
+    // 建一根空管道给子进程（立刻 EOF），于是子进程一个 DSH 的句柄都不继承。
+    `    $null | ${command} > $crwuStdout 2> $crwuStderr`,
+    '    $crwuExitCode = $LASTEXITCODE',
+    '    if ([System.IO.File]::Exists($crwuStdout)) {',
+    '      $crwuBytes = [System.IO.File]::ReadAllBytes($crwuStdout)',
+    '      if ($crwuBytes.Length -gt 3 -and $crwuBytes[0] -eq 0xEF -and $crwuBytes[1] -eq 0xBB -and $crwuBytes[2] -eq 0xBF) {',
+    '        $crwuBytes = $crwuBytes[3..($crwuBytes.Length - 1)]',
+    '      }',
+    '      [Console]::OpenStandardOutput().Write($crwuBytes, 0, $crwuBytes.Length)',
+    '    }',
+    '    if ([System.IO.File]::Exists($crwuStderr)) {',
+    '      $crwuBytes = [System.IO.File]::ReadAllBytes($crwuStderr)',
+    '      if ($crwuBytes.Length -gt 3 -and $crwuBytes[0] -eq 0xEF -and $crwuBytes[1] -eq 0xBB -and $crwuBytes[2] -eq 0xBF) {',
+    '        $crwuBytes = $crwuBytes[3..($crwuBytes.Length - 1)]',
+    '      }',
+    '      [Console]::OpenStandardError().Write($crwuBytes, 0, $crwuBytes.Length)',
+    '    }',
+    '    exit $crwuExitCode',
+    '  } finally {',
+    '    Remove-Item -LiteralPath $crwuStdout, $crwuStderr -Force -ErrorAction SilentlyContinue',
+    '  }',
+    '}',
+  ].join('\n')
+}
+
+/**
+ * 这次调用**要不要**上那层临时文件捕获。
+ *
+ * 判据只有一条：**这一次是不是真跑在受限沙箱里**。
+ *
+ * `dsh-pwsh-sandbox` 的 `execute()` 对 `danger-full-access` 直接 `super.execute()` ——
+ * **不套 restricted-token runner**。也就是说 0xC0000142 那个缺陷的前提
+ * （受限令牌下 native 子进程继承 DSH 的管道句柄）在提权调用里**根本不存在**；
+ * 而捕获要走 PowerShell 的文本层（`>` → `Out-File`），会把子进程的字节改掉：
+ * Windows PowerShell 5.1 默认写 UTF-16LE，CLI 的 JSON 于是变成 `{\0"\0…`，
+ * 插件解析失败 → 界面显示「未绑定 / 未知」，也就是"扫了码也读不到凭据"。
+ *
+ * **2026-09-30 真机回归**：早先这层捕获按命令形状无条件套上，于是所有特权命令
+ * （`crwu h3yun session status` / `dws auth status` / `ossutil …` 全都是 `danger-full-access`）
+ * 也被套了进去 —— 同一台 Windows 上 `main` 能读凭据、这个分支读不到。
+ * CI 用的是 pwsh 7（默认 UTF-8 无 BOM）且只断言纯 ASCII 载荷，所以两边都绿。
+ *
+ * 空串（没声明策略）算**受限**：那会落到执行器的部署默认（`workspace-write`），
+ * 缺陷同样存在，捕获同样必要。
+ */
+export function nativeCaptureNeeded(declaredMode: string): boolean {
+  return declaredMode !== 'danger-full-access'
+}
+
+/**
+ * **Windows 原生子进程输出采集的唯一入口**：命令形状与沙箱模式一起判。
+ *
+ * 插件里每一条「可执行文件 + 参数」的命令（`crwu` / `dws` / `ossutil` / DSH Python）都经由
+ * `ctx.shell` 的那个 seam 走到这里，所以"统一走文件捕获执行器"这件事只有这一处判据 ——
+ * 调用点不需要、也不允许自己决定要不要捕获。
+ *
+ * 两件事一起判，缺一不可：
+ * - **形状**（{@link capturePowerShellNativeCommand}）：只有 `shellInvoke()` 产出的
+ *   `& 'exe' args` 才会命中那个缺陷；cmdlet 脚本与 POSIX 命令原样返回；
+ * - **沙箱模式**（{@link nativeCaptureNeeded}）：只有真跑受限沙箱的调用才需要它。
+ *   提权（`danger-full-access`）不做 confinement，缺陷不存在，而捕获会经过 PowerShell 的
+ *   文本层改掉字节 —— 凭据类命令全是提权的，套上去就等于读不到凭据。
+ */
+export function windowsCaptureCommand(command: string, declaredMode: string): string {
+  return nativeCaptureNeeded(declaredMode) ? capturePowerShellNativeCommand(command) : command
+}
+
+/** Convenience form for callers that already have an executable and argv. */
+export function shellInvokeCaptured(executable: string, args: readonly string[], platform: string): string {
+  return capturePowerShellNativeCommand(shellInvoke(executable, args, platform))
+}
+
 /** 幂等建目录（`mkdir -p` 的等价物）。 */
 export function mkdirCommand(path: string, platform: string): string {
   return shellDialect(platform) === 'powershell'

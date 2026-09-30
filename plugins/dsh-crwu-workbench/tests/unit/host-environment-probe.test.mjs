@@ -426,6 +426,9 @@ test('Windows 上探测命令是可执行的 PowerShell：以 `&` 开头、路�
   await probeOss(ctxOf(packagedFs({ platform: 'win32-x64' }), shell.ctx), oss, 'win32-x64')
   const command = shell.calls[0] ?? ''
   assert.equal(command.startsWith('& '), true, `必须补调用运算符，否则 PowerShell 报 ParserError：${command}`)
+  // ⚠️ 这是**提权**探测（`oss.remote.read` → `danger-full-access`），所以**不套**那层临时文件
+  // 捕获 —— 捕获要经过 PowerShell 的文本层、会把 CLI 的字节改掉（见 `nativeCaptureNeeded`）。
+  // 命令形状因此与 `main` 一致：native 子进程直接继承 DSH 的管道句柄。
   assert.match(command, /^& '.*ossutil\.exe' 'ls' 'oss:\/\/b\/crwu\/audit\/' '--endpoint' 'oss-cn-x\.aliyuncs\.com' '--limited-num' '1'$/)
   assert.equal(command.includes('"'), false, '不得出现 cmd 式双引号')
 })
@@ -435,7 +438,9 @@ test('Windows 上清单给的探测模板同样补调用运算符，且每个占
   const oss = { ...DEFAULT_MANIFEST.oss, prefix: 'my audit', bucket: 'bkt', endpoint: 'oss-cn-x.aliyuncs.com', enabled: true, probeCommand: '{ossutil} ls oss://{bucket}/{prefix}/ --endpoint {endpoint}' }
   await probeOss(ctxOf(packagedFs({ platform: 'win32-x64' }), shell.ctx), oss, 'win32-x64')
   const command = shell.calls[0] ?? ''
+  // 提权探测不套捕获（同上），所以 `{ossutil}` 仍然落在命令位置、形状与 `main` 一致。
   assert.equal(command.startsWith("& '"), true, `模板里的 {ossutil} 就是命令位置：${command}`)
+  assert.equal(command.includes("oss://'bkt'/'my audit/'/"), true, command)
   // 每个占位符的值都按平台引用成字面量：旧实现把动态值裸拼进去，一个空格就能改写命令结构。
   // （占位符夹在词中间时，引用后的片段与裸文本相邻拼接，两个方言都把整段当一个参数。）
   assert.equal(command.endsWith("--endpoint 'oss-cn-x.aliyuncs.com'"), true, command)

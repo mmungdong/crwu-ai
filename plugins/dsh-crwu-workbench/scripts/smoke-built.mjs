@@ -183,8 +183,9 @@ export async function smokeHost() {
   assert.match(String(materialPayload.error), /sessionId/)
   assert.equal(materialPayload.caseDir, '', '被拒时不回任何路径')
 
-  // 「允许」在**没有文件服务**的环境里必然落盘失败 —— 这正是"写盘失败不许放行"的现场。
-  // 从真实产物驱动一次，确认回的是关闭态（`persist-failed`）而不是磁盘上的旧授权。
+  // 「允许」在**没有文件服务**的环境里必然失败 —— 这正是"读不出来就一个字都不许改"的现场。
+  // 从真实产物驱动一次，确认回的是关闭态（`unreadable`：读失败发生在写之前，**不是**"落盘失败"，
+  // 后者会把人引去查磁盘空间）而不是磁盘上的旧授权。
   const grant = fakeExchange({
     op: 'local-access-grant',
     args: { schemaVersion: 1, capabilities: [
@@ -193,9 +194,10 @@ export async function smokeHost() {
   })
   await routes[0].handler(grant.req, grant.res)
   const grantPayload = JSON.parse(grant.response.body)
-  assert.equal(grantPayload.ok, false, '没有文件服务时落盘必然失败')
-  assert.notEqual(grantPayload.consent?.state, 'granted', '写盘失败绝不许回 granted')
-  assert.equal(grantPayload.consent?.state, 'persist-failed')
+  assert.equal(grantPayload.ok, false, '没有文件服务时读不出来（写盘同样是读-改-写，也就写不进去）')
+  assert.notEqual(grantPayload.consent?.state, 'granted', '失败绝不许回 granted')
+  assert.equal(grantPayload.consent?.state, 'unreadable')
+  assert.match(String(grantPayload.error), /不是「没有授权」/, '原因必须说清它不是"没有授权"')
   assert.deepEqual(grantPayload.consent?.capabilities, [])
 
   // 授权与体检两个操作也必须在产物里（这里只证明"登记了、参数被收窄"，不真跑它们：

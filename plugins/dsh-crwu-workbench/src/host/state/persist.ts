@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { FileSystem, FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
 import { text } from '../../shared/utils/value.ts'
 import { joinLocalPath } from '../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
@@ -28,36 +29,105 @@ export function workbenchConfigPath(home: string): string {
  * 为什么要区分「读成功但文件不存在」和「读失败」：写盘是读-改-写，把**读失败**当成空配置，
  * 就等于用只有本次补丁的对象去覆盖别人的字段 —— 实测踩过：一次 transient 的 stat 失败会让
  * `workspacePath` 被静默抹掉，用户下次进来发现工作空间「自己变了」。
+ *
+ * ## `reason` 为什么必须存在（2026-09-30 复查）
+ *
+ * 旧实现只有 `ok` 这一个布尔，于是**四种完全不同的事实**在调用方眼里长得一模一样：
+ * 文件不存在、位置不是普通文件、读盘抛错、JSON 解析不出来。授权收据的读取正是栽在这里 ——
+ * 「读不出来」被折叠成「没有授权」，界面显示「需要授权」，把员工指向"再授权一次"；
+ * 而读失败时写盘（同样是读-改-写）根本落不了盘，那是一个永远修不好的动作。
+ * 所以每一种事实在这里都有一个名字，`access/consent.ts` 据此把
+ * `missing`（真的没有收据）与 `unreadable`（读不出来）分成两句话。
  */
+export type ConfigReadReason =
+  /** 读到并解析成功。 */
+  | 'ok'
+  /** 文件不存在。**不是错误**：首次打开、以及写盘前的空配置都走这条。 */
+  | 'absent'
+  /**
+   * 文件存在、内容解析不出来（损坏 / 被手工改过 / 被别的程序覆盖）。
+   *
+   * 与读失败的差别是**可恢复**：内容已经没有任何字段可保全，允许读-改-写把它重建成一份
+   * 可用文件（`ok` 仍是 `true`，所以不会有"读不了 → 不让写"的死循环）。授权层据此说
+   * "收据文件损坏、重新允许一次即可重建"，而不是"没有授权"。
+   */
+  | 'corrupt'
+  /** Host 文件服务不可用。 */
+  | 'no-fs'
+  /** 主目录未知 —— 绝不退化成相对路径（见下面 `readWorkbenchConfigResult` 的注释）。 */
+  | 'no-home'
+  /** 位置存在但不是普通文件（目录 / 设备 / 其它）。 */
+  | 'not-a-file'
+  /** 解析路径 / stat / 读文本抛错。 */
+  | 'resolve'
+  | 'stat'
+  | 'read'
+
 export interface ConfigRead {
-  /** false = 这次读**没有**成功（fs 不可用 / stat 或读抛出），调用方不得据此覆盖写。 */
+  /**
+   * false = 这次读**没有**成功（fs 不可用 / 主目录未知 / 路径解析或 stat 或读抛出 /
+   * 不是普通文件）。调用方**不得**据此覆盖写：那会把没读到的字段一起抹掉。
+   */
   ok: boolean
   value: Record<string, unknown>
+  /** 这一份配置是怎么来的。`ok` 只回答"能不能覆盖写"，`reason` 回答"到底发生了什么"。 */
+  reason: ConfigReadReason
 }
 
+/**
+ * UTF-8 BOM。
+ *
+ * `JSON.parse` 见到 U+FEFF 会**直接抛错**，而在这里抛错会被读成"没有授权"（正是要断掉的那条）。
+ * DSH 自带的本地 fs 用 `TextDecoder` 解码，默认就剥掉 BOM，所以这一条是**防御性**的：
+ * fs 后端并不保证都这么做，而"文件里多了三个字节"不该等于"从没授权过"。
+ */
+const UTF8_BOM = '\uFEFF'
+
 export async function readWorkbenchConfigResult(ctx: Context, home: string): Promise<ConfigRead> {
+  // ⚠️ **主目录未知时不许拼 `~/.dsh/crwu-workbench.json`**：`ctx.fs.resolve()` 不展开 `~`，
+  // 那条路径会被当成**相对于会话 cwd** 的 `./~/.dsh/crwu-workbench.json` —— 那里永远没有文件，
+  // 于是"主目录探不到"会伪装成"从没授权过"，员工被送去再授权一次（而写盘同样落不了）。
+  if (home === '') return { ok: false, value: {}, reason: 'no-home' }
   const fs = fileSystem(ctx)
-  if (fs === undefined) return { ok: false, value: {} }
+  if (fs === undefined) return { ok: false, value: {}, reason: 'no-fs' }
+  let target: FsTarget
   try {
-    const target = await resolveTarget(ctx, workbenchConfigPath(home))
-    const info = await fs.stat(target)
-    // 文件不存在 = 空配置（可以写）；这与「读失败」是两件事。
-    if (info?.type !== 'file') return { ok: true, value: {} }
-    const raw = await fs.readText(target)
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(raw)
-    } catch (error) {
-      // 内容坏掉当作空配置：此时本来就没有任何字段可保全，允许写回一个可用文件，
-      // 否则插件会永远卡在「读不了 → 不让写」的死循环里。
-      void error
-      return { ok: true, value: {} }
-    }
-    return { ok: true, value: parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {} }
+    target = await resolveTarget(ctx, workbenchConfigPath(home))
   } catch (error) {
     void error
-    return { ok: false, value: {} }
+    return { ok: false, value: {}, reason: 'resolve' }
   }
+  let info: FsInfo | undefined
+  try {
+    info = await fs.stat(target)
+  } catch (error) {
+    void error
+    return { ok: false, value: {}, reason: 'stat' }
+  }
+  // 文件不存在 = 空配置（可以写）；这与「读失败」是两件事。
+  if (info === undefined) return { ok: true, value: {}, reason: 'absent' }
+  // 存在但不是普通文件：**不是**"没有配置"。当成空配置去写，就等于拿一个读失败换一次覆盖写。
+  if (info.type !== 'file') return { ok: false, value: {}, reason: 'not-a-file' }
+  let raw: string
+  try {
+    raw = await fs.readText(target)
+  } catch (error) {
+    void error
+    return { ok: false, value: {}, reason: 'read' }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw.startsWith(UTF8_BOM) ? raw.slice(1) : raw)
+  } catch (error) {
+    // 内容坏掉当作空配置：此时本来就没有任何字段可保全，允许写回一个可用文件，
+    // 否则插件会永远卡在「读不了 → 不让写」的死循环里。理由是 `corrupt`，不是 `absent`。
+    void error
+    return { ok: true, value: {}, reason: 'corrupt' }
+  }
+  const value = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {}
+  return { ok: true, value, reason: 'ok' }
 }
 
 /** 读取配置；文件不存在、不是 JSON、fs 不可用都返回空对象。 */

@@ -220,6 +220,11 @@ function consentItem(consent: LocalAccessConsentView): SetupItemView {
   if (consent.state === 'missing') {
     return item('unconfigured', '', '还没有允许工作台访问本机账号和配置')
   }
+  // **读不出来不是"没配置"**：`unconfigured` 的语义是"员工点一下就能修"，而读盘失败不是
+  // 员工能修的事 —— 归 `invalid`，原因逐字来自宿主（对应的 issue owner 是 system）。
+  if (consent.state === 'unreadable') {
+    return item('invalid', '', consent.reason || '本机授权收据读不出来')
+  }
   return item('unconfigured', '', consent.reason || '需要重新允许一次')
 }
 
@@ -230,19 +235,30 @@ function consentItem(consent: LocalAccessConsentView): SetupItemView {
  * 原因一律 `LOCAL_ACCESS_REQUIRED_REASON`。这样即使上游实现被改坏、真去探了一遍并带回
  * 「未登录 / 密钥错误 / 未找到」，界面上也不可能出现那些**假结论**。
  */
-function consentBlockedItem(required: boolean): SetupItemView {
+function consentBlockedItem(consent: LocalAccessConsentView, required: boolean): SetupItemView {
+  // 同上：收据读不出来时不许给"允许一次就能修好"的假承诺，状态与原因都要如实。
+  if (consent.state === 'unreadable' || consent.state === 'persist-failed') {
+    return item('invalid', '', consent.reason || LOCAL_ACCESS_REQUIRED_REASON, required)
+  }
   return item('unconfigured', '', LOCAL_ACCESS_REQUIRED_REASON, required)
 }
 
-/** 未授权时唯一的那条 issue：员工要做的事只有一件 —— 允许一次。 */
+/**
+ * 授权没通过时唯一的那条 issue —— 但要**指名这是谁的活**。
+ *
+ * `owner: 'user'` = 员工点一下就能修（没授权 / 范围变了 / 主动撤销过）；
+ * `owner: 'system'` = 读盘问题，员工点多少次都修不好（`unreadable`），必须把原因交给维护者。
+ */
 function consentIssue(consent: LocalAccessConsentView): {
   id: string
+  owner: 'user' | 'system'
   action: string
   message: string
 } {
   if (consent.state === 'missing') {
     return {
       id: 'consent',
+      owner: 'user',
       action: '允许工作台访问本机账号和配置',
       message: '还没有允许工作台访问本机账号和配置：允许之后才能读氚云会话、钉钉登录态、'
         + 'OSS 配置与 iFinD API-Key。没允许时读到的「未登录」不可信，所以插件不做猜测。',
@@ -251,6 +267,7 @@ function consentIssue(consent: LocalAccessConsentView): {
   if (consent.state === 'revoked') {
     return {
       id: 'consent-revoked',
+      owner: 'user',
       action: '重新允许工作台访问本机账号和配置',
       message: '已撤销对本机账号和配置的访问：需要时在「账号连接」里重新允许一次。',
     }
@@ -258,12 +275,23 @@ function consentIssue(consent: LocalAccessConsentView): {
   if (consent.state === 'persist-failed') {
     return {
       id: 'consent-persist-failed',
+      owner: 'user',
       action: '重新允许一次',
       message: consent.reason || '撤消失败：本机访问已关闭，但需要再撤销一次才能写入磁盘。',
     }
   }
+  // **读不出来**：不许说成"需要重新允许一次"—— 那条路走不通（写盘同样是读-改-写）。
+  if (consent.state === 'unreadable') {
+    return {
+      id: 'consent-unreadable',
+      owner: 'system',
+      action: '把这条原因发给维护者（不是重新授权）',
+      message: consent.reason || '读不出本机授权收据：这不是「没有授权」，重新允许一次也不会改变它。',
+    }
+  }
   return {
     id: 'consent-outdated',
+    owner: 'user',
     action: '按新的范围重新允许一次',
     message: consent.reason || '授权范围已更新：请按新的范围重新允许一次。',
   }
@@ -299,7 +327,7 @@ function buildIssues(input: EnvironmentInput): EnvironmentIssueView[] {
   const granted = input.localAccess.state === 'granted'
   if (!granted) {
     const issue = consentIssue(input.localAccess)
-    push(issue.id, 'user', true, 'global', issue.action, issue.message)
+    push(issue.id, issue.owner, true, 'global', issue.action, issue.message)
   }
   if (input.packageIntegrity.ok !== true) {
     push('package', 'system', true, 'global', '重新安装插件或联系管理员',
@@ -388,10 +416,10 @@ export function buildEnvironmentState(input: EnvironmentInput): EnvironmentState
     credentialsConsent: consentItem(input.localAccess),
     // 四项凭据类事实在未授权时**一律**是「需要先允许」：上面那些探测根本没发生，
     // 拿它们的结果（或"没有结果"）当结论都会指向错误的处置。
-    h3yun: granted ? serviceItem(input.h3yun) : consentBlockedItem(input.h3yun.required === true),
-    dingtalk: granted ? serviceItem(input.dingtalk) : consentBlockedItem(input.dingtalk.required === true),
-    aliyunOss: granted ? ossItem(input) : consentBlockedItem(input.oss.probe.required === true),
-    ifind: granted ? ifindItem(input) : consentBlockedItem(input.ifind.required === true),
+    h3yun: granted ? serviceItem(input.h3yun) : consentBlockedItem(input.localAccess, input.h3yun.required === true),
+    dingtalk: granted ? serviceItem(input.dingtalk) : consentBlockedItem(input.localAccess, input.dingtalk.required === true),
+    aliyunOss: granted ? ossItem(input) : consentBlockedItem(input.localAccess, input.oss.probe.required === true),
+    ifind: granted ? ifindItem(input) : consentBlockedItem(input.localAccess, input.ifind.required === true),
   }
   const systemHealth = {
     packageIntegrity: packageItem(input.packageIntegrity),

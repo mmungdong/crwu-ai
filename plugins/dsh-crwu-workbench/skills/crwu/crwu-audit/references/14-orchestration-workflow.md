@@ -39,6 +39,55 @@
 Windows 上审核链路的命令全部由插件的平台适配器生成（`src/host/platform/shell.ts`），
 技能正文里的命令只用于人工复现与排障。
 
+### 1.2 Windows 子代理脚本的 stdout/stderr 兼容层
+
+**首选：用 `crwu_run_python_script` 工具跑技能脚本。** 只提交 `caseDir`、案例目录内的脚本
+相对路径与参数，由 Host 统一做 Windows 原生命令的输出采集、退出码、超时与临时文件清理
+（它跑在与 `tool-pwsh` 同一条受沙箱约束的执行入口上，还会把请求/实际的沙箱模式带回来）。
+**只有那个 Tool 不可用**（返回 `capability-gap` / 未注册）时，才走下面的退路。
+
+主审核在 DSH 子代理中执行时，`tool-pwsh` 也会经过 `workspace-write` 的受限 PowerShell。
+在 Windows 上，原生 Python 直接继承该执行器的 stdout/stderr pipe 可能在 DLL 初始化阶段以
+`0xC0000142` 退出，即使 Python 路径和包都存在。退路是在当前 Tool 命令中定义并使用下面的
+包装器；它把两个流临时落盘，再按原始字节转回，并保留退出码：
+
+```powershell
+function Invoke-DshPython {
+  param([string]$PythonPath, [string[]]$Arguments)
+  # `>` 走 PowerShell 的文本层：Windows PowerShell 5.1 默认写 UTF-16LE，会把脚本的 JSON
+  # 输出变成 `{\0"\0…`。显式钉成 UTF-8，再把 5.1 会加上的 BOM 从字节里剥掉。
+  $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
+  $crwuStdout = [System.IO.Path]::GetTempFileName()
+  $crwuStderr = [System.IO.Path]::GetTempFileName()
+  try {
+    # 三个句柄都要断：只重定向 stdout/stderr 时，stdin 仍然是 DSH 的管道。
+    $null | & $PythonPath @Arguments > $crwuStdout 2> $crwuStderr
+    $crwuExitCode = $LASTEXITCODE
+    if ([System.IO.File]::Exists($crwuStdout)) {
+      $crwuBytes = [System.IO.File]::ReadAllBytes($crwuStdout)
+      if ($crwuBytes.Length -gt 3 -and $crwuBytes[0] -eq 0xEF -and $crwuBytes[1] -eq 0xBB -and $crwuBytes[2] -eq 0xBF) {
+        $crwuBytes = $crwuBytes[3..($crwuBytes.Length - 1)]
+      }
+      [Console]::OpenStandardOutput().Write($crwuBytes, 0, $crwuBytes.Length)
+    }
+    if ([System.IO.File]::Exists($crwuStderr)) {
+      $crwuBytes = [System.IO.File]::ReadAllBytes($crwuStderr)
+      if ($crwuBytes.Length -gt 3 -and $crwuBytes[0] -eq 0xEF -and $crwuBytes[1] -eq 0xBB -and $crwuBytes[2] -eq 0xBF) {
+        $crwuBytes = $crwuBytes[3..($crwuBytes.Length - 1)]
+      }
+      [Console]::OpenStandardError().Write($crwuBytes, 0, $crwuBytes.Length)
+    }
+    exit $crwuExitCode
+  } finally {
+    Remove-Item -LiteralPath $crwuStdout, $crwuStderr -Force -ErrorAction SilentlyContinue
+  }
+}
+Invoke-DshPython '<load_workspace_dependencies 返回的绝对 Python 路径>' @('scripts/prepare_materials.py', '--case', '<案例目录>')
+```
+
+这条兼容层只针对 Windows 子代理脚本；macOS / Linux 仍按上面的 POSIX 命令直接执行。
+不能因为包装器失败就改用系统解释器、搜索 PATH 或取消 `workspace-write`。
+
 ## 2. 路由流程（步骤 1–15）
 
 1. **消费 Host 已准备的输入快照（不要再定位、不要重复取数）**：报告已由 Host 按精确 ObjectId 定位并取数一次，结果落在案例目录的 `输入快照/` 下——完整记录 `报告记录.json`、附件清单 `附件清单.json`、元数据 `快照元数据.json`。`schemaCode` 是 Host 的基础设施状态：**核验记录事实一律以 `报告记录.json` 为准**，不要提交、不要猜测 `schemaCode`，也不要再调 `records list` / 搜表单 / 重新取记录。仅在启动指令明确说明「输入快照缺失」时，才允许**一次**兜底：调 `crwu_h3yun_record_get({objectId,caseDir})`（它由 Host 自己解析 `schemaCode`）。附件元数据直接读 `附件清单.json`（字段：附件字段、文件名、类型、大小、`fileId`）并分类；只有快照缺失时才对同一 `objectId` 调一次 `crwu_h3yun_files_list({objectId,caseDir})`；附件名只用于隔离决策和待抽验提示。（工具**不返回**带会话鉴权的下载 URL，也不需要。）

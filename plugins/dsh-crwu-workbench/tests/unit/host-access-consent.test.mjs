@@ -18,8 +18,10 @@ import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
 
-const { localAccessViewOf, grantLocalAccess, revokeLocalAccess, syncLocalAccessConsent, localAccessGranted, missingLocalAccessView } =
-  await import(new URL('src/host/access/consent.ts', ROOT).href)
+const {
+  localAccessViewOf, grantLocalAccess, revokeLocalAccess, syncLocalAccessConsent,
+  localAccessGranted, missingLocalAccessView, readLocalAccessConsent,
+} = await import(new URL('src/host/access/consent.ts', ROOT).href)
 const {
   LOCAL_ACCESS_CAPABILITIES, LOCAL_ACCESS_SCHEMA_VERSION, isCanonicalLocalAccessRequest,
 } = await import(new URL('src/shared/access/types.ts', ROOT).href)
@@ -141,6 +143,87 @@ test('missingLocalAccessView 是 fail-closed 初值：missing、无能力、版�
   assert.equal(view.requiredSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(localAccessGranted(view), false)
   assert.equal(localAccessGranted(undefined), false, 'undefined（旧状态对象）也必须按未授权处理')
+})
+
+// ── 读不出来 ≠ 没有授权（2026-09-30 复查） ───────────────────────────────────
+
+/** 五种「收据读不出来」的现场（真机上的每一种都真发生过，只是以前全被折叠成 missing）。 */
+function readFailureCtx(kind) {
+  const base = (patch) => ({
+    get: () => ({
+      async resolve(path) { return { targetKey: path, displayPath: path } },
+      async stat() { return { type: 'file' } },
+      async readText() { return '{}' },
+      ...patch,
+    }),
+  })
+  if (kind === 'no-fs') return { get: () => undefined }
+  if (kind === 'stat') return base({ async stat() { throw new Error('boom') } })
+  if (kind === 'read') return base({ async readText() { throw new Error('EIO') } })
+  if (kind === 'resolve') return base({ async resolve() { throw new Error('bad path') } })
+  return base({ async stat() { return { type: 'directory' } } })
+}
+
+test('B-01：读不出来是 unreadable，**不是** missing（否则界面把员工指去"再授权一次"）', async () => {
+  for (const kind of ['no-fs', 'stat', 'read', 'resolve', 'not-a-file']) {
+    const ctx = readFailureCtx(kind)
+    const view = await readLocalAccessConsent({ ctx, home: '/Users/x', access: makeTestAccess(ctx).access })
+    assert.equal(view.state, 'unreadable', kind)
+    assert.deepEqual(view.capabilities, [], `${kind}：读不出来时一个能力都不给`)
+    assert.equal(localAccessGranted(view), false, kind)
+    // 原因必须**明说**它不等于"没有授权"：否则员工还是会去再授权一次。
+    assert.match(view.reason, /不是「没有授权」/, kind)
+  }
+
+  // 内容损坏：同样是 unreadable，但它**可以**靠重新允许一次重建。
+  const corrupt = memoryCtx()
+  corrupt.files['/Users/x/.dsh/crwu-workbench.json'] = '{oops'
+  const corruptView = await readLocalAccessConsent({
+    ctx: corrupt.ctx, home: '/Users/x', access: makeTestAccess(corrupt.ctx).access,
+  })
+  assert.equal(corruptView.state, 'unreadable')
+  assert.match(corruptView.reason, /重建/)
+
+  // 主目录未知：**绝不**退化成 `~/.dsh/…` 那条相对路径（它会伪装成"从没授权过"）。
+  const noHomeMem = memoryCtx()
+  const noHome = await readLocalAccessConsent({
+    ctx: noHomeMem.ctx, home: '', access: makeTestAccess(noHomeMem.ctx).access,
+  })
+  assert.equal(noHome.state, 'unreadable')
+  assert.match(noHome.reason, /主目录/)
+})
+
+test('B-02：读失败时 grant 既不许动磁盘、也不许报成"落盘失败"（活状态是 unreadable）', async () => {
+  // ① 内容损坏：可以重建 —— 重新允许一次必须真的修好它。
+  const corrupt = memoryCtx()
+  corrupt.files['/Users/x/.dsh/crwu-workbench.json'] = '{oops'
+  const rebuilt = await grantLocalAccess(
+    { ctx: corrupt.ctx, home: '/Users/x', access: makeTestAccess(corrupt.ctx).access },
+    { schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION, capabilities: [...LOCAL_ACCESS_CAPABILITIES] },
+  )
+  assert.equal(rebuilt.ok, true, rebuilt.error)
+  assert.equal(rebuilt.consent.state, 'granted')
+
+  // ② 真读失败：写盘是读-改-写，读不到就写不进去 —— ok:false、磁盘一字不动、活状态是 unreadable。
+  const broken = memoryCtx()
+  const before = JSON.stringify({ workspacePath: '/cases/keep-me' })
+  broken.files['/Users/x/.dsh/crwu-workbench.json'] = before
+  const originalGet = broken.ctx.get
+  broken.ctx.get = (name) => {
+    const value = originalGet(name)
+    if (name !== 'fs' || value === undefined) return value
+    return { ...value, async stat() { throw new Error('boom') } }
+  }
+  const refused = await grantLocalAccess(
+    { ctx: broken.ctx, home: '/Users/x', access: makeTestAccess(broken.ctx).access, state: broken.state },
+    { schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION, capabilities: [...LOCAL_ACCESS_CAPABILITIES] },
+  )
+  assert.equal(refused.ok, false)
+  assert.equal(refused.consent.state, 'unreadable', '读失败不是"落盘失败"：混淆会让人去查磁盘空间')
+  assert.equal(broken.state.localAccess.state, 'unreadable', '活状态也要落在 unreadable')
+  assert.match(refused.error, /不是「没有授权」/)
+  assert.equal(broken.files['/Users/x/.dsh/crwu-workbench.json'], before, '读不到就一个字都不许改')
+  assert.deepEqual(broken.writes, [], '一次写入都不该发生')
 })
 
 // ── 迁移：先落盘后放行 / 撤销失败也 fail closed ──────────────────────────────
@@ -416,15 +499,18 @@ test('P1 · 撤销写盘失败之后，一次**失败**的「重新允许」不�
   assert.equal(localAccessGranted(state.localAccess), false)
 })
 
-test('读盘失败（fs 服务缺失）按未授权处理：fail closed，不抛错', async () => {
+test('读盘失败（fs 服务缺失）按未授权处理：fail closed，不抛错，且说清是"读不出来"', async () => {
   const ctx = { get: () => undefined }
   const granted = await grantLocalAccess({ ctx, home: '/Users/x', access: makeTestAccess(ctx).access }, {
     schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION,
     capabilities: [...LOCAL_ACCESS_CAPABILITIES],
   })
   assert.equal(granted.ok, false)
-  // fs 不可用 = 落不了盘 = 本次运行没有授权；**不是**"磁盘上原来什么样就返回什么样"。
-  assert.equal(granted.consent.state, 'persist-failed')
+  // fs 不可用 = 既读不回来、也落不了盘 = 本次运行没有授权；**不是**"磁盘上原来什么样就返回什么样"。
+  // 状态是 `unreadable`（读失败）而**不是** `persist-failed`（写失败）：后者是"写完才失败"的现场，
+  // 那里磁盘上常常还留着撤销之前那份 `granted`；这里的失败发生在读到任何东西之前。
+  assert.equal(granted.consent.state, 'unreadable')
+  assert.match(granted.error, /不是「没有授权」/)
   assert.equal(localAccessGranted(granted.consent), false)
 })
 

@@ -50,6 +50,8 @@ export function capabilityLabel(capability: LocalAccessCapability): string {
 export function consentChipText(consent: LocalAccessConsentView): string {
   if (consent.state === 'granted') return zhCN.envItemOk
   if (consent.state === 'revoked') return zhCN.envConsentRevoke
+  // 读不出来**不许**显示成"未配置"：那是把员工指向一个修不好它的动作。
+  if (consent.state === 'unreadable') return zhCN.envConsentUnreadable
   return zhCN.envItemMissing
 }
 
@@ -58,6 +60,9 @@ function consentNote(consent: LocalAccessConsentView): string {
   if (consent.state === 'revoked') return zhCN.envConsentRevoked
   if (consent.state === 'persist-failed') return zhCN.envConsentPersistFailed
   if (consent.state === 'outdated') return consent.reason || zhCN.envConsentOutdated
+  // 读不出来时**不**显示"首次使用请允许一次"那段介绍：原因（逐字来自宿主）才是员工要看的，
+  // 而且它会说清"再允许一次也不会改变它"。
+  if (consent.state === 'unreadable') return consent.reason || zhCN.envConsentUnreadableNote
   return zhCN.envConsentIntro
 }
 

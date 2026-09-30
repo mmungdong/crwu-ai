@@ -170,12 +170,13 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 （本文件历史上同时写过 30 与 29 两个互相矛盾的值，就是这么来的）。各测试各写一个裸数字的结果是：
 加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
 
-**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前 = 23，
-23 是**新增** `discussion-material-open`：报告讨论会话的受限材料范围）。
+**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前 = 25，
+25 是**把「授权收据读不出来」从「需要授权」里分出来**：`localAccess.state` 新增 `unreadable`，
+见 §21）。
 历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
 14：删除 `install-prompt`；15：iFinD 改为必需项；18：本机访问授权收据 + 诊断 + DWS 本机目录体检；
 19：审核 scope 收紧到本轮案例目录；20：内置浏览器扫码的凭据出口；21：钉钉登录两阶段；
-22：删掉上面三条登录操作）
+22：删掉上面三条登录操作；23：讨论会话的受限材料范围；24：审核根绑到已选工作空间）
 写在那个常量的注释里。
 
 ## 8. 本地开发循环与两道人工关卡
@@ -929,3 +930,115 @@ DSH Runtime: （未设置） ·  · DSH 自带运行时（load_workspace_depende
   「未配置」、不报红、不堆说明。
 - ⚠️ 星号计数断言要限定在**步骤导航**子树里（`data-crwu-env-stepnav`）：面板标题上还有一枚"当前这一步"
   的星号，对整棵树数数会数出 4 而不是 3。
+
+## 21. 「授权收据读不出来」不许显示成「需要授权」（2026-09-30 · 协议 25）
+
+**现场**：用户报「修复了 GitHub 上那个已知问题之后，Windows 上找不到氚云和钉钉的凭据了」。
+「账号连接」里那两行都显示「需要授权」，而磁盘上的 `~/.dsh/crwu-workbench.json` 里躺着一份
+**合法**收据（`schemaVersion: 1` + 逐字同序的五项能力）—— 也就是"授权明明成功过"。
+
+**先纠正一条推断**（它当时看起来很顺，所以值得记下来）：这不是"读被沙箱拒了"。
+DSH 的 `dsh-fs-sandbox` 只在 `writeText` / `editText` 上做可写根围栏，源码原话是
+
+> Reads pass through untouched: every mode permits reading.
+
+本机实测也印证：会话策略是 `workspace-write`（工作区在 `~/code/github/mungdong/crwu-ai`）时读
+工作区之外的 `~/.dsh/crwu-workbench.json` 一切正常，`env.localAccess.state` 就是 `granted`。
+而且 `ctx.fs` 的**读接口根本没有逐次策略参数**（只有 `writeText` / `editText` 有），所以
+"读要与写对称地声明 `danger-full-access`"这句话在这里无从落地 —— 也不需要。
+
+**真正的缺陷是"事实被折叠"**：`ConfigRead` 只有一个 `ok` 布尔，于是五种完全不同的事实
+（文件不存在 / 位置不是普通文件 / 路径解析失败 / stat 或读抛错 / 内容解析不出来）在授权层眼里
+长得一样，全被写成 `missing`；界面再把 `missing` 显示成「需要授权」，把员工指向"再授权一次"——
+而写盘同样是读-改-写，读不出来时它**根本落不了盘**：员工于是陷在"授权成功、界面永远停在
+需要授权"里，且每一步看起来都是成功的。
+
+**改法（三层各一件事）**：
+1. `state/persist.ts`：`ConfigRead` 带上 `reason`（`ok` / `absent` / `corrupt` / `no-fs` /
+   `no-home` / `not-a-file` / `resolve` / `stat` / `read`）。`ok` 只回答"能不能覆盖写"
+   （`corrupt` 仍然可以 —— 内容已经无可保全，必须允许重建，否则死循环），`reason` 回答
+   "到底发生了什么"。
+2. `access/consent.ts`：`missing` 只留给"真的没有收据"；读失败与内容损坏一律
+   `unreadable` + 一句**明说"这不是「没有授权」"**的原因。授权路径在写盘前先读一次，
+   读不到就 `ok:false` + `unreadable` + **一个字都不改磁盘**（不再报成"落盘失败"把人引去查磁盘空间）。
+3. `environment/ops.ts` + `state.ts` + 授权卡：`unreadable` 时那两行显示「授权状态读不出来 + 原因」，
+   `credentialsConsent` 归 `invalid`，issue 的 owner 归 `system`（"把这条原因发给维护者，不是重新授权"），
+   授权卡不再显示"首次使用请允许一次"那段介绍。
+
+**顺带修掉的两个"读法"陷阱**：
+- `home === ''` 时先前的兜底是拼字面量 `~/.dsh/crwu-workbench.json`，而 `ctx.fs.resolve()` **不展开
+  `~`** —— 它会被当成相对于会话 cwd 的 `./~/.dsh/…`：那里永远没有文件，"主目录探不到"于是伪装成
+  "从没授权过"。现在直接是 `no-home`。
+- `JSON.parse` 见到 UTF-8 BOM 会抛错，而在这里抛错会被折叠成"没有授权"。现在解析前先剥 BOM ——
+  这一条是**防御性**的：DSH 自带的本地 fs 用 `TextDecoder`，默认就剥 BOM，但 fs 后端并不保证
+  都这么做。
+
+**这条要记住的通用口径**：**"读不出来"与"没有"是两句不同的话**。凡是把一个 `ok` 布尔喂给界面
+当结论的地方，都要先问一遍"这里其实有几种事实"。
+
+## 22. 那层「Windows 原生命令捕获」只属于受限沙箱（2026-09-30）
+
+**现场**：用户报"同一台 Windows 上 `main` 能读到氚云与钉钉凭据，`codex/windows-pwsh-capture`
+分支读不到 —— 扫了码也不行"。这条二分法把范围压到了这个分支唯一改过执行路径的地方：
+`runShell` / `startShell` 的最终 seam 上加的 `capturePowerShellNativeCommand`。
+
+**根因**：那层捕获是按**命令形状**（`& '…'`）无条件套上的，而它要解决的是**受限沙箱**下
+native 子进程继承 DSH 管道句柄时的 DLL 初始化失败（0xC0000142）。但
+`dsh-pwsh-sandbox` 的 `execute()` 第一句就是：
+
+```js
+if (mode === "danger-full-access") return …super.execute(spec)…
+```
+
+—— 提权调用**根本不套 restricted-token runner**，那个缺陷的前提不存在。于是所有提权命令
+（`crwu h3yun session status` / `dws auth status` / `ossutil …`）都被套上了捕获，而捕获
+必须经过 PowerShell 的**文本层**（`>` → `Out-File`）：
+
+| 路径 | 字节怎么走 |
+| --- | --- |
+| 不套捕获（= `main`） | native 子进程**直接继承** DSH 的管道句柄 → 原始 UTF-8 字节进收集器 |
+| 套捕获（= 回归） | 子进程 → 临时文件（`Out-File` 编码）→ `ReadAllBytes` → `OpenStandardOutput()` |
+
+Windows PowerShell 5.1 的 `Out-File` 默认是 **UTF-16LE**（pwsh 7 才是 UTF-8 无 BOM），
+于是 CLI 的 JSON 成了 `{\0"\0…`，插件解析失败 → 「未绑定 / 未知 / 未登录」。
+**"扫码了却读不到"的症状，源头是编码，不是凭据。**
+
+**修法**：
+1. `nativeCaptureNeeded(mode)`：只有**非** `danger-full-access` 才捕获（没声明策略 = 落到执行器
+   部署默认 `workspace-write`，仍要捕获）。提权调用回到 `main` 的形状。
+2. 仍然使用捕获的地方（受限沙箱里的 Python）把文本层钉死：显式
+   `$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'`，并在转发前把字节里的 UTF-8 BOM
+   剥掉（5.1 的 `utf8` 会加 BOM，pwsh 7 不会）。
+3. 补一条**非 ASCII JSON 逐字节往返**的真 shell 用例：原先那条只喂 `out` / `err` 两个纯 ASCII
+   单词，用的又是 pwsh 7 —— 文本层把字节改掉它也是绿的。
+
+### 22.1 第三层：把子代理的脚本执行收进 Host（`crwu_run_python_script`）
+
+§22 修的是**插件自己**发起的命令；但审核技能脚本是**子代理**跑的，走的是 DSH 的
+`tool-pwsh` —— 插件在 `runShell` 里的那道 seam 覆盖不到它。而两者**是同一套 Windows sandbox**
+（`dsh-pwsh-sandbox` 注册为 `ctx.shell`），所以子代理自己拼 `& 'python.exe' script.py`
+照样命中同一个缺陷。提示词里那份 `Invoke-DshPython` 只是"请照做"——不保证被执行，也不带
+退出码、超时、清理与沙箱事实。
+
+所以加了 Host Tool `crwu_run_python_script`（宿主操作 `python.script.run`，来源只给
+`audit-tool`、**不提权**）：
+
+- 模型只提交 `caseDir` / `script`（**案例目录内**的相对路径）/ `scriptArgs`；
+  绝对路径、`..`、空串一律拒绝（`joinLocalPath` 负责平台分隔符）；
+- 参数逐个作为 argv 传给 `shellInvoke`，不经过任何 shell 解析；
+- 解释器来自与审核启动**同一个** `PythonRuntimeResolver`（同一份缓存），解析不到就如实回
+  `capability-gap`，绝不换系统解释器；
+- 命令经 `LocalAccessBroker` 走到**同一条 `ctx.shell` seam** —— 于是它自动拿到
+  `windowsCaptureCommand` 那层**只在受限沙箱生效**的临时文件捕获。这就是"不提权"的用处：
+  越界不需要 `danger-full-access`，而留在受限沙箱里正是那层补丁生效的前提。
+- 返回里带 `exitCode` / `stdout` / `stderr` / `truncated` / `timedOut` 与
+  `sandbox{requested,resolved,ran,denied,runnerFailed}`，以及本次用的 Python 路径与版本。
+
+**这条要记住的**：**"请照做"不是契约**。凡是"必须按某个形状执行才能绕过平台缺陷"的要求，
+只写在提示词里就等于没写；把它做成 Host Tool（或 Host 侧的 seam）才是可验证、可回归的形态。
+
+**两条要记住的**：
+- **受限沙箱的补丁只能装在受限沙箱这条路上**。"这个缺陷只在 A 条件下出现"必须写成代码里的
+  条件，而不是写在注释里然后无条件套上去 —— 无条件套上去的代价是把 B 条件下本来正确的路径改坏。
+- **凡是经过 PowerShell 文本层的转发都不是逐字节的**（编码、BOM、行尾都可能变）。要么不走文本层
+  （让子进程直接继承句柄），要么显式把编码钉死并在边界上校验。

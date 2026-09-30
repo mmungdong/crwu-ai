@@ -30,7 +30,7 @@ const {
   chmodCommand, currentUidCommand, grantModifyAclCommand, mkdirCommand, pathWritableCommand,
   homeProbeCommand, lockProbeCommand, parseLockProbe, privateFileCommand, readFileModeCommand,
   removeFileCommand,
-  shellInvoke, shellQuote, statOwnerModeCommand,
+  shellInvoke, shellQuote, capturePowerShellNativeCommand, nativeCaptureNeeded, statOwnerModeCommand,
   windowsAclVerdictCommand, windowsModifyProbeCommand,
 } = await import(new URL('../../src/host/platform/shell.ts', import.meta.url).href)
 const { text } = await import(new URL('../../src/shared/utils/value.ts', import.meta.url).href)
@@ -91,6 +91,38 @@ for (const provider of PROVIDERS) {
         const result = provider.run(command)
         assert.equal(result.status, 0, `命令没跑起来：${command}\n${result.stderr ?? ''}`)
         assert.match(String(result.stdout), /^v\d+\./, '拿到的应当是 node 的版本号')
+      })
+
+      await t.test('workspace-write 兼容层：native stdout/stderr 经临时文件转发且保留退出码', () => {
+        const command = capturePowerShellNativeCommand(shellInvoke(
+          sandbox.executable,
+          ['-e', 'process.stdout.write("out");process.stderr.write("err");process.exitCode=7'],
+          provider.platform,
+        ))
+        const result = provider.run(command)
+        assert.equal(result.status, 7, `退出码未保留：${result.stderr ?? ''}`)
+        assert.equal(String(result.stdout), 'out', 'stdout 未按原始字节转发')
+        assert.equal(String(result.stderr), 'err', 'stderr 未按原始字节转发')
+      })
+
+      await t.test('workspace-write 兼容层：非 ASCII JSON 必须逐字节往返（文本层会改字节）', () => {
+        // 这条是 2026-09-30 凭据回归的守卫：捕获要经过 PowerShell 的文本层，而 Windows
+        // PowerShell 5.1 默认写 UTF-16LE —— 只断言纯 ASCII 载荷的话，字节被改掉也照样绿，
+        // 而真机上的 CLI 输出是带中文的 JSON。
+        const payload = '{"msg":"中文 ok","n":7}'
+        const command = capturePowerShellNativeCommand(shellInvoke(
+          sandbox.executable,
+          ['-e', `process.stdout.write(${JSON.stringify(payload)})`],
+          provider.platform,
+        ))
+        const result = provider.run(command)
+        assert.equal(result.status, 0, `命令没跑起来：${result.stderr ?? ''}`)
+        assert.equal(String(result.stdout), payload, 'JSON 文本必须逐字节往返')
+      })
+
+      await t.test('那层捕获只属于受限沙箱：提权调用不套（danger-full-access 不 confinement）', () => {
+        assert.equal(nativeCaptureNeeded('danger-full-access'), false)
+        assert.equal(nativeCaptureNeeded('workspace-write'), true)
       })
 
       await t.test('参数原样往返：空格 / 单引号 / $ / 反引号 / 方括号 / 中文 / 分号都不被解释', () => {

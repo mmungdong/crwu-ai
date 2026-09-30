@@ -247,7 +247,24 @@ function makeForm({ code = 'FORM-1', name = '报告审核', fails = false } = {}
   }
 }
 
-function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64', discussionScopes } = {}) {
+/**
+ * DSH 自带 Python 解析器的替身：这里只回答"存在一个可执行的绝对路径"。
+ *
+ * 真实判据（能不能跑、包全不全）由 `host-runtime-python.test.mjs` 盯着；这条 Tool 要证的是
+ * **它用不用同一个解析器、拿不到时会不会改成系统解释器**。
+ */
+const PYTHON_STUB = {
+  async check() {
+    return {
+      ok: true, unresolved: false, state: 'ok', path: '/dsh/python/bin/python3', versionText: '3.12.4',
+      distributions: { openpyxl: '3.1.5' }, missingPackages: [], error: '',
+      source: 'DSH 自带运行时（load_workspace_dependencies）',
+    }
+  },
+  cached() { return null },
+}
+
+function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64', discussionScopes, python } = {}) {
   const theState = state ?? makeState()
   const theFs = fs ?? makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/knowledge`] })
   const theShell = shell ?? makeShell(() => shellOk('{}'))
@@ -267,6 +284,7 @@ function makeDeps({ fs, shell, tools, state, form, platform = 'darwin-arm64', di
       access,
       form: theForm.resolver,
       discussionScopes: scopes,
+      python: python ?? PYTHON_STUB,
       world: {
         platform: async () => platform,
         home: async () => '/Users/x',
@@ -336,6 +354,73 @@ test('registerCrwuTools registers exactly the nine business tools and unregister
   assert.deepEqual([...registry.definitions.keys()].sort(), [...CRWU_BUSINESS_TOOLS].sort())
   dispose()
   assert.deepEqual([...registry.definitions.keys()], [], '插件卸载时必须完整注销')
+})
+
+test('crwu_run_python_script：技能脚本的执行收进 Host，参数逐个走 argv', async () => {
+  // 现场：模型可见的 pwsh 工具与插件的 `ctx.shell` 是**同一套** Windows sandbox，
+  // 所以子代理自己拼 `& 'python.exe' script.py` 会命中受限沙箱下 native 子进程的管道缺陷。
+  // 这条 Tool 把执行收进 Host：同一条 seam、同一层（只在受限沙箱生效的）临时文件捕获。
+  // `withAuditScope` 是**改写**传入的 state 并回 childId（不是回一个新 state）。
+  const state = makeState()
+  withAuditScope(state)
+  const { deps, registry, shell } = makeDeps({ state })
+  registerCrwuTools(deps.ctx, deps)
+  const tricky = '$(rm -rf /)'
+  const result = await registry.execute(scopedExec(TOOL_NAMES.runPythonScript, {
+    caseDir: CASE_DIR, script: 'scripts/review.py', scriptArgs: ['--case', CASE_DIR, tricky],
+  }, new AbortController().signal))
+
+  assert.equal(result.value.ok, true, JSON.stringify(result.value))
+  assert.equal(result.value.scriptPath, `${CASE_DIR}/scripts/review.py`)
+  assert.deepEqual(result.value.argv, [`${CASE_DIR}/scripts/review.py`, '--case', CASE_DIR, tricky])
+  // 参数只走 argv：命令里那个形状奇怪的值必须被**引用成字面量**，不许变成命令替换。
+  const command = String(shell.commands[0] ?? '')
+  assert.equal(command.includes(`'${tricky}'`), true, command)
+  assert.equal(command.includes('/dsh/python/bin/python3'), true, '必须用解析出来的 DSH Python')
+  // **不提权**：脚本在案例目录内，边界由调用方会话给出。
+  assert.equal(result.value.sandbox.requested, '', '案例内的脚本执行不提权')
+})
+
+test('crwu_run_python_script：只接受案例目录内的相对路径（绝对路径 / .. / 空串一律拒绝）', async () => {
+  const state = makeState()
+  withAuditScope(state)
+  const { deps, registry, shell } = makeDeps({ state })
+  registerCrwuTools(deps.ctx, deps)
+  const run = (script) => registry.execute(
+    scopedExec(TOOL_NAMES.runPythonScript, { caseDir: CASE_DIR, script }, new AbortController().signal),
+  )
+  for (const bad of ['/etc/passwd', '..\\..\\Windows\\system32\\cmd.exe', 'a/../../b.py', '']) {
+    const result = await run(bad)
+    assert.equal(result.value.ok, false, bad)
+    assert.equal(result.value.errorKind, 'input', bad)
+  }
+  assert.deepEqual(shell.commands, [], '被拒的调用一个进程都不许起')
+})
+
+test('crwu_run_python_script：DSH Python 不可用时如实报能力缺口，不换系统解释器', async () => {
+  const state = makeState()
+  withAuditScope(state)
+  const { deps, registry, shell } = makeDeps({
+    state,
+    python: {
+      async check() {
+        return {
+          ok: false, unresolved: false, state: 'capability-gap', path: '', versionText: '',
+          distributions: {}, missingPackages: [], error: 'load_workspace_dependencies 没有返回 python 路径',
+          source: 'DSH 自带运行时（load_workspace_dependencies）',
+        }
+      },
+      cached() { return null },
+    },
+  })
+  registerCrwuTools(deps.ctx, deps)
+  const result = await registry.execute(scopedExec(TOOL_NAMES.runPythonScript, {
+    caseDir: CASE_DIR, script: 'scripts/review.py',
+  }, new AbortController().signal))
+  assert.equal(result.value.ok, false)
+  assert.equal(result.value.errorKind, 'capability-gap')
+  assert.match(result.value.error, /DSH 自带 Python/)
+  assert.deepEqual(shell.commands, [], '解析不到运行时就不许起任何进程')
 })
 
 test('registerCrwuTools refuses to run without the tools service instead of silently skipping', () => {

@@ -104,25 +104,60 @@ function serviceRequired(manifest: EnvManifest, id: string, fallback: boolean): 
 }
 
 /**
+ * **授权总闸**的界面事实：`state` 与原因**逐态分开**。
+ *
+ * `trustedCredentials === false` 有两个完全不同的事实来源，旧实现把它们都说成「需要授权」：
+ * ① 真的没有收据（`missing` / `outdated` / `revoked`）—— 员工点一下就能修；
+ * ② **收据读不出来**（`unreadable` / `persist-failed`）—— 再点一次修不好，必须如实报原因。
+ * 把 ② 说成 ① 就是把员工送进"授权成功、界面永远停在需要授权"的循环（2026-09-30 复查）。
+ *
+ * `reason` 为空串表示"就是 ①"，各调用点用自己那句更具体的话（氚云与钉钉要员工做的事不同）。
+ */
+function credentialGate(consent: LocalAccessConsentView): { granted: boolean; state: string; reason: string } {
+  if (consent.state === 'granted') return { granted: true, state: '', reason: '' }
+  if (consent.state === 'unreadable' || consent.state === 'persist-failed') {
+    return {
+      granted: false,
+      state: '授权状态读不出来',
+      reason: consent.reason || '读不出本机授权收据：这不是「没有授权」，重新允许一次也不会改变它。',
+    }
+  }
+  return { granted: false, state: '需要授权', reason: '' }
+}
+
+/**
  * **未授权时的占位事实**：不是「探测失败」，而是「还没有被允许去看」。
  *
- * `state` 用 `需要授权`（`serviceItem()` 会把它映射成 `unconfigured`）、`detail` 用全仓统一的
- * 那一句原因 —— 于是界面绝不会出现「未登录 / 密钥错误 / 未找到」。这三个词在未授权时都是
+ * `state` 与 `detail` 由 {@link credentialGate} 逐态给出（真的没授权 vs 收据读不出来）。
+ * 于是界面绝不会出现「未登录 / 密钥错误 / 未找到」—— 这三个词在未授权时都是
  * **未经探测的假结论**，而员工真正要做的只是先授权。
  */
-function skippedServiceCheck(id: string, label: string, required: boolean): ServiceCheck {
-  return { id, label, required, ok: false, state: '需要授权', detail: LOCAL_ACCESS_REQUIRED_REASON, errorKind: '' }
+function skippedServiceCheck(
+  id: string,
+  label: string,
+  required: boolean,
+  gate: { state: string; reason: string },
+): ServiceCheck {
+  return {
+    id,
+    label,
+    required,
+    ok: false,
+    state: gate.state,
+    detail: gate.reason === '' ? LOCAL_ACCESS_REQUIRED_REASON : gate.reason,
+    errorKind: '',
+  }
 }
 
 /** 同上，iFinD 版本的占位（**不读凭据文件、不打网络**，所以路径与样本都是空串）。 */
-function skippedIfindCheck(manifest: EnvManifest): IfindCheck {
+function skippedIfindCheck(manifest: EnvManifest, gate: { state: string; reason: string }): IfindCheck {
   return {
     path: '',
     required: manifest.ifind.required === true,
     ok: false,
     state: 'unconfigured',
     errorKind: '',
-    reason: LOCAL_ACCESS_REQUIRED_REASON,
+    reason: gate.reason === '' ? LOCAL_ACCESS_REQUIRED_REASON : gate.reason,
     tokenLength: 0,
     checkedAt: '',
     toolCount: 0,
@@ -180,6 +215,8 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   // 把它显示出来会把员工指去重新扫码或换密钥。
   const localAccess = await syncLocalAccessConsent({ ctx, home, state, access: deps.access })
   const granted = localAccess.state === 'granted'
+  // 「没授权」与「收据读不出来」在界面上必须是两句话：前者员工点一下就能修，后者点多少次都修不好。
+  const gate = credentialGate(localAccess)
   await ensureWorkspace(ctx, home, state, {
     preferTitle: config.preferWorkspaceTitle,
     preferPath: manifest.workspace.preferPath,
@@ -198,7 +235,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
       required: manifest.ifind.required === true,
       applyUrl: manifest.ifind.applyUrl,
     })
-    : skippedIfindCheck(manifest)
+    : skippedIfindCheck(manifest, gate)
   const services: ServiceCheck[] = []
 
   // 氚云会话：只有 crwu 能回答，所以直接问它。
@@ -208,7 +245,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   // `read H3Yun session from operating system credential store: secret not found in keyring` ——
   // 那是**假结论**，面板照着显示就成了「未登录」，把人指去重新扫码。
   // 之前这里无条件跑一遍：既是假的结论，又因为提权白名单漏了 `session status` 而永远拿不到真值。
-  const trustedCredentials = granted
+  const trustedCredentials = gate.granted
   const sessionRun = trustedCredentials
     ? await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], {
       workdir: await deps.sessionRoot(),
@@ -241,12 +278,12 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     // 四种「不是正常」的原因必须分开：未授权（员工点一下就行）≠ 命令没跑起来（沙箱/审批）
     // ≠ 真的没绑定 ≠ 已过期。合并就会把前两种显示成「未登录」。
     state: sessionRun === null
-      ? '需要授权'
+      ? gate.state
       : (shellUnavailable(sessionRun)
         ? '探测失败'
         : (sessionData === null ? '未绑定' : (expired ? '已过期' : '正常'))),
     detail: sessionRun === null
-      ? '还没授权读取本机凭据 —— 未授权时读到的「未登录」不可信，插件不做猜测'
+      ? (gate.reason === '' ? '还没授权读取本机凭据 —— 未授权时读到的「未登录」不可信，插件不做猜测' : gate.reason)
       : (sessionData === null
         ? (text(sessionRun.stderr) || sessionRun.error || '未取得会话状态')
         : `userId ${text(sessionData.userId)} · 到期 ${text(sessionData.expiresAt)}`),
@@ -294,12 +331,14 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
     required: serviceRequired(manifest, 'dingtalk', true),
     ok: dwsAuthed,
     state: !trustedCredentials
-      ? '需要授权'
+      ? gate.state
       : (dwsUnconfirmed
         ? '本机凭据读取被拦住'
         : (dwsDoc === null ? '未知' : (dwsAuthed ? '已登录' : '未登录'))),
     detail: !trustedCredentials
-      ? '还没授权读取本机凭据：授权后本插件才能读钉钉登录态、拉氚云待办与回传结果。在 ④ 登录与凭据授权 里勾选「信任本插件读取本机凭据」——只需授权一次，长期有效。'
+      ? (gate.reason === ''
+        ? '还没授权读取本机凭据：授权后本插件才能读钉钉登录态、拉氚云待办与回传结果。在 ④ 登录与凭据授权 里勾选「信任本插件读取本机凭据」——只需授权一次，长期有效。'
+        : gate.reason)
       : (dwsUnconfirmed
         ? `读本机凭据的命令没跑起来：${text(dwsRun?.error) || '未知原因'}。这不是「没登录」—— 你已经授权，仍被拦住说明是 DSH 的沙箱/审批策略在挡，请让部署方放行本插件读取钥匙串。`
         : (dwsDoc?.message === undefined ? (text(dwsRun?.stderr) || text(dwsRun?.error)) : text(dwsDoc.message))),
@@ -315,7 +354,7 @@ export async function loadEnvironment(deps: EnvDeps, args: Record<string, unknow
   // `readOssCred` 更是直接读这个文件。未授权时给出的「未配置 / AK 无效」都不是事实。
   const ossProbe = granted
     ? await probeOss(ctx, oss, platform, { access: deps.access })
-    : skippedServiceCheck('oss', '阿里云 OSS（AK 权限）', serviceRequired(manifest, 'oss', true))
+    : skippedServiceCheck('oss', '阿里云 OSS（AK 权限）', serviceRequired(manifest, 'oss', true), gate)
   const delivery = {
     oss: {
       enabled: oss.enabled,

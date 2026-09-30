@@ -202,3 +202,17 @@ test('Host 回的失败原因原样展示（写盘失败不许被吞掉）', () 
   const { text } = cardTree(missingConsent(), { error: zhCN.envConsentPersistFailedGrant })
   assert.equal(text.includes(zhCN.envConsentPersistFailedGrant), true)
 })
+
+test('B-03：收据读不出来就说"读不出来"，不许显示成「未配置 / 需要授权」', () => {
+  const reason = '读不出授权收据（宿主文件服务不可用）：这不是「没有授权」，重新允许一次也不会改变它。'
+  const unreadable = { ...missingConsent(), state: 'unreadable', reason }
+  assert.equal(consentGranted({ localAccess: unreadable }), false)
+  // **不**自动把员工送到授权卡上当作"他还没同意"：他点一次"允许"也修不好（写盘同样是读-改-写）。
+  assert.equal(consentNeedsDecision(unreadable), false)
+  assert.equal(consentChipText(unreadable), zhCN.envConsentUnreadable)
+  assert.equal(consentChipText(unreadable) !== zhCN.envItemMissing, true)
+  const { text } = cardTree(unreadable)
+  assert.equal(text.includes(reason), true, '宿主给的原因必须原样展示')
+  assert.equal(text.includes(zhCN.envItemMissing), false, '不许显示成「未配置」')
+  assert.equal(text.includes(zhCN.envConsentIntro), false, '不许显示"首次使用请允许一次"那段介绍')
+})

@@ -14,9 +14,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
-const { createPythonRuntimeResolver, pythonVersionOf, distributionsOf, REQUIRED_PYTHON_PACKAGES } = await import(
-  new URL('src/host/runtime/python.ts', ROOT).href
-)
+const {
+  createPythonRuntimeResolver, pythonVersionOf, distributionsOf, REQUIRED_PYTHON_PACKAGES,
+  looksLikeProcessStartFailure, pythonStartFailureReason, DLL_INIT_FAILED,
+} = await import(new URL('src/host/runtime/python.ts', ROOT).href)
 
 const PYTHON = '/dsh/runtimes/primary/dependencies/python/bin/python3'
 
@@ -56,12 +57,22 @@ function makeHarness(options = {}) {
           resolve: (request) => request,
           async execute(spec) {
             shellCommands.push(spec.command)
+            // 版本探测是唯一一条带 python 路径的命令；其余（控制探测）走 `control*` 那一组。
+            const isVersionProbe = String(spec.command).includes(PYTHON)
             return {
-              result: async () => ({
-                exitCode: options.versionExit ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
-                stdout: { text: options.versionStdout ?? '3.12.4\n', truncated: false },
-                stderr: { text: '', truncated: false },
-              }),
+              result: async () => (isVersionProbe
+                ? {
+                    exitCode: options.versionExit ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
+                    stdout: { text: options.versionStdout ?? '3.12.4\n', truncated: false },
+                    stderr: { text: '', truncated: false },
+                    ...(options.versionSandbox === undefined ? {} : { sandbox: options.versionSandbox }),
+                  }
+                : {
+                    exitCode: options.controlExit ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1000,
+                    stdout: { text: options.controlStdout ?? 'crwu-python-probe\n', truncated: false },
+                    stderr: { text: '', truncated: false },
+                    ...(options.controlSandbox === undefined ? {} : { sandbox: options.controlSandbox }),
+                  }),
             }
           },
         }
@@ -136,6 +147,64 @@ test('返回的路径必须真的是文件，并且真的能执行出版本', as
   const broken = await cannotRun.resolver.check()
   assert.equal(broken.state, 'failed')
   assert.match(broken.error, /无法执行/)
+})
+
+test('版本探测失败要带上结构化事实：exitCode / 沙箱模式 / 是否被拒 / 执行器起不来', async () => {
+  // Windows 受限沙箱里的 `0xC0000142`（native 子进程继承管道）与"Python 没装"处置完全不同，
+  // 只报一句"无法执行"会把两件事混起来。这几个字段是 DSH 给的**结构化**事实，不靠文本猜。
+  const denied = makeHarness({
+    versionExit: 1, versionStdout: '',
+    versionSandbox: { mode: 'workspace-write', denied: true, runnerFailed: false },
+  })
+  const d = await denied.resolver.check()
+  assert.equal(d.state, 'failed')
+  assert.match(d.error, /exitCode 1/)
+  assert.match(d.error, /workspace-write/)
+  assert.match(d.error, /沙箱拒绝/)
+
+  const runner = makeHarness({
+    versionExit: 2, versionStdout: '',
+    versionSandbox: { mode: 'read-only', denied: false, runnerFailed: true },
+  })
+  const r = await runner.resolver.check()
+  assert.match(r.error, /read-only/)
+  assert.match(r.error, /执行器未启动/)
+})
+
+test('受限沙箱里进程起不来：跑一次控制探测，把「沙箱后端坏了」与「子进程句柄有毛病」分开', async () => {
+  // 真机现场（2026-09-30）：`exitCode 3221225794 · 沙箱 执行器默认 → workspace-write`，stderr 空。
+  // DSH 把它当成一次普通的非零退出（denied / runnerFailed 都是 false），所以必须自己再问一句。
+  assert.equal(looksLikeProcessStartFailure({ exitCode: DLL_INIT_FAILED, sandbox: { denied: false, runnerFailed: false } }), true)
+  assert.equal(looksLikeProcessStartFailure({ exitCode: -1073741502, sandbox: {} }), true, 'int32 视图也要认')
+  assert.equal(looksLikeProcessStartFailure({ exitCode: 1, sandbox: {} }), false)
+  assert.equal(looksLikeProcessStartFailure({ exitCode: 0, sandbox: { denied: true } }), true)
+
+  // ② 控制探测也失败 → 是沙箱后端的问题，不是「Python 不可用」。
+  const sandboxDown = makeHarness({
+    versionExit: DLL_INIT_FAILED, versionStdout: '',
+    versionSandbox: { mode: 'workspace-write', denied: false, runnerFailed: false },
+    controlExit: DLL_INIT_FAILED, controlStdout: '',
+    controlSandbox: { mode: 'workspace-write', denied: false, runnerFailed: false },
+  })
+  const down = await sandboxDown.resolver.check()
+  assert.equal(down.state, 'failed')
+  assert.match(down.error, /0xC0000142/)
+  assert.match(down.error, /控制探测（纯 PowerShell 命令）\*\*同样失败\*\*/)
+  assert.match(down.error, /不是「DSH Python 不可用」/)
+  assert.equal(down.blockedBySandbox, true, '控制探测也失败 = 沙箱后端起不了进程')
+  assert.equal(sandboxDown.shellCommands.length, 2, '版本探测 + 一次控制探测')
+  assert.match(String(sandboxDown.shellCommands[1]), /Write-Output/, '控制探测必须是纯 PowerShell 命令')
+
+  // ③ 控制探测成功 → pwsh 自己能跑，问题在那层捕获（子进程仍在继承句柄）。
+  const childOnly = makeHarness({
+    versionExit: DLL_INIT_FAILED, versionStdout: '',
+    versionSandbox: { mode: 'workspace-write', denied: false, runnerFailed: false },
+    controlExit: 0,
+  })
+  const child = await childOnly.resolver.check()
+  assert.match(child.error, /控制探测（纯 PowerShell 命令）\*\*成功\*\*/)
+  assert.match(child.error, /临时文件捕获兼容层/)
+  assert.equal(child.blockedBySandbox, false, '控制探测成功 = 不是沙箱整体坏了')
 })
 
 test('缺 openpyxl：报 missing-package（含包名），且失败不进缓存、下次可重试', async () => {

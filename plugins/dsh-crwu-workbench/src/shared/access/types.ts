@@ -62,9 +62,18 @@ export type LocalAccessCapability = (typeof LOCAL_ACCESS_CAPABILITIES)[number]
  * - `outdated`：问过，但那是上一版范围（含旧版 `trustCredentials:true`）—— 要说清「范围变了」；
  * - `revoked`：员工主动撤销 —— 不许再自动弹一次「要不要允许」，要等他点。
  *
- * `persist-failed` 只在**撤销**路径出现：内存里已经关掉（fail closed），但收据没能写进磁盘。
+ * `persist-failed` 在**撤销**路径出现：内存里已经关掉（fail closed），但收据没能写进磁盘；
+ * 在**授权**路径上也用它表示"写盘没能完成"（那时 `reason` 是落盘失败的原因）。
+ *
+ * `unreadable`：**收据读不出来**（磁盘上完全可能躺着一份合法的授权）。它与 `missing` 必须分开：
+ * - `missing` = 真的没有收据 → 员工点一下「允许」就能修；
+ * - `unreadable` = 读盘失败 / 位置不是普通文件 / 主目录探不到 / 内容损坏 → 再点一次**修不好**
+ *   （写盘同样是读-改-写），而把它说成「没有授权」就是把员工送进
+ *   "授权成功、界面永远停在需要授权"的循环（2026-09-30 复查）。
+ *   内容损坏（`corrupt`）也归这一态：那确实能靠重新允许一次**重建**，但那不是"从没授权过"。
  */
-export type LocalAccessConsentState = 'missing' | 'outdated' | 'granted' | 'revoked' | 'persist-failed'
+export type LocalAccessConsentState =
+  | 'missing' | 'outdated' | 'granted' | 'revoked' | 'persist-failed' | 'unreadable'
 
 /** 落盘形态（`localAccessConsent` 键）。 */
 export interface LocalAccessConsentRecord {

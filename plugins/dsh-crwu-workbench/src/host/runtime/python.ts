@@ -42,6 +42,14 @@ export interface PythonRuntimeView {
    * 这一支由环境模型渲染成非阻塞项，真正的拦阻留在 `audit-start`（那条带审核根 agent）。
    */
   unresolved: boolean
+  /**
+   * **受限沙箱起不了进程**（不是"运行时缺失"）。
+   *
+   * 判据是「版本探测像进程启动失败」**且**「控制探测（纯 PowerShell）同样失败」——
+   * 2026-09-30 真机就是这么闭合的：`0xC0000142` 下连 pwsh 自己都起不来。
+   * 调用方（`audit-start` 的门禁）据此选句子：两者处置完全不同，不许混。
+   */
+  blockedBySandbox: boolean
   state: PythonRuntimeState
   /** 绝对路径；拿不到时为空串。**不回显**给模型的任何提示词都用它。 */
   path: string
@@ -67,6 +75,59 @@ export interface PythonRuntimeResolver {
 }
 
 export const PYTHON_RUNTIME_SOURCE = 'DSH 自带运行时（load_workspace_dependencies）'
+
+/** `STATUS_DLL_INIT_FAILED`（0xC0000142）：受限令牌下进程初始化失败的固定指纹。 */
+export const DLL_INIT_FAILED = 3221225794
+
+/**
+ * 这次失败像不像「进程在能跑起来之前就死了」。
+ *
+ * ⚠️ 判据不能只看 `denied` / `runnerFailed`：DSH 把 `0xC0000142` 当成一次**普通的非零退出**，
+ * 那两个布尔都还是 false。同一个数在无符号视图里是 3221225794、在 int32 里是 -1073741502，两个都认。
+ */
+export function looksLikeProcessStartFailure(probe: {
+  exitCode?: number | null
+  sandbox?: { denied?: boolean; runnerFailed?: boolean }
+}): boolean {
+  if (probe.sandbox?.denied === true || probe.sandbox?.runnerFailed === true) return true
+  return probe.exitCode === DLL_INIT_FAILED || probe.exitCode === -1073741502
+}
+
+/**
+ * 「受限沙箱里进程起不来」时给操作员的结论（**纯函数**，逐条有测试）。
+ *
+ * 为什么值得为它跑一次控制探测：这两种现场的处置**完全不同**，而它们的表现原来一模一样
+ * （都只是"没有版本输出"）：
+ *
+ * - **控制探测也失败** → 本机的受限沙箱**连 pwsh 自己都起不来**：DSH 的沙箱后端
+ *   （ACL restricted-token runner）的问题。这不是「DSH Python 不可用」—— 换运行时、
+ *   重装包、改 Python 路径都没用；
+ * - **控制探测成功** → pwsh 自己能跑，只有它拉起的 native 子进程在初始化阶段退出：
+ *   那层临时文件捕获兼容层在本机还不够（子进程仍在继承不该继承的句柄）。
+ */
+export function pythonStartFailureReason(
+  facts: { exitCode: number | null; requested: string; resolved: string; ran: string; denied: boolean; runnerFailed: boolean },
+  control: { ok: boolean; exitCode: number | null; ran: string } | null,
+): string {
+  const code = facts.exitCode === null ? 'null' : String(facts.exitCode)
+  const mode = `请求 ${facts.requested || '执行器默认'} · 实际 ${facts.ran || facts.resolved || '未知'}`
+  const controlText = control === null
+    ? '控制探测没有跑'
+    : (control.ok
+      ? `控制探测（纯 PowerShell 命令）**成功**（实际 ${control.ran || '未知'}）`
+      : `控制探测（纯 PowerShell 命令）**同样失败**（exitCode ${control.exitCode === null ? 'null' : String(control.exitCode)}）`)
+  const verdict = control !== null && control.ok
+    ? 'pwsh 自己能跑，只有它拉起的 native 子进程在初始化阶段退出：那层临时文件捕获兼容层在本机还不够，'
+      + '（新的构建已把 stdin 也断开，若仍复现就是沙箱 runner 层面的问题）。'
+    : '连 pwsh 自己都起不来：这是本机沙箱后端（ACL restricted-token runner）的问题，'
+      + '**不是「DSH Python 不可用」**，换运行时 / 重装包都没有用。'
+  return `进程在能跑起来之前就退出了（exitCode ${code} = 0xC0000142 STATUS_DLL_INIT_FAILED · ${mode}）。`
+    + `${controlText}：${verdict}`
+    + '处置：这是**部署侧**的问题（DSH 版本 / 沙箱 runner / ACL 授权），不是插件能绕的 —— '
+    + '插件把审核根钉死在 `workspace-write` + `approval: never`（无人值守审核没有审批通道），'
+    + '并且在 auto / 完全权限的父会话下**拒绝**发起审核，所以"切完全权限"不是可用退路。'
+    + '把上面这行结构化事实交给部署方核对受限沙箱后端即可（DSH 本该报沙箱不可用，而不是把它当普通非零退出）。'
+}
 
 interface ToolOutcome {
   isError: boolean
@@ -105,7 +166,8 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
   let cache: PythonRuntimeView | null = null
 
   const failed = (state: PythonRuntimeState, error: string, unresolved = false): PythonRuntimeView => ({
-    ok: false, state, unresolved, path: '', versionText: '', distributions: {}, missingPackages: [], error,
+    ok: false, state, unresolved, blockedBySandbox: false,
+    path: '', versionText: '', distributions: {}, missingPackages: [], error,
     source: PYTHON_RUNTIME_SOURCE,
   })
 
@@ -174,7 +236,34 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
       })
       const versionText = pythonVersionOf(`${text(probe.stdout)}\n${text(probe.stderr)}`)
       if (!probe.ok || versionText === '') {
-        return failed('failed', `DSH Python 无法执行：${text(probe.stderr) || text(probe.error) || '没有版本输出'}`)
+        // 失败时把**结构化事实**一起带上：退出码、请求与实际跑在哪个沙箱模式、是否被沙箱拒绝、
+        // 执行器本身是否没能起来。只报一句"无法执行"会让 Windows 受限沙箱里的
+        // `0xC0000142`（native 子进程继承管道，见 `windowsCaptureCommand`）看起来像"Python 没装"，
+        // 而这两件事的处置完全不同（换运行时 vs 换采集方式）。归因只许用 DSH 给的字段，不猜文本。
+        const facts = probe.sandbox
+        const mode = `${facts.requested || '执行器默认'} → ${facts.ran || facts.resolved || '未知'}`
+        const detail = `DSH Python 无法执行：${text(probe.stderr) || text(probe.error) || '没有版本输出'}`
+          + `（exitCode ${probe.exitCode === null ? 'null' : String(probe.exitCode)} · 沙箱 ${mode}`
+          + `${facts.denied ? ' · 沙箱拒绝' : ''}${facts.runnerFailed ? ' · 执行器未启动' : ''}）`
+        // 「进程在跑起来之前就死了」时再问一句"那 pwsh 自己呢"：只有控制探测能把
+        // "沙箱后端坏了" 与 "native 子进程的句柄有毛病" 分开（见 `pythonStartFailureReason`）。
+        if (!looksLikeProcessStartFailure(probe)) return failed('failed', detail)
+        const control = await runShell(ctx, "Write-Output 'crwu-python-probe'", {
+          workdir: await deps.world.workdir(),
+          timeoutMs: 20_000,
+        })
+        ctx.logger?.warn?.('crwu-workbench: DSH Python 探测在受限沙箱里起不来 %o', {
+          exitCode: probe.exitCode, mode, denied: facts.denied, runnerFailed: facts.runnerFailed,
+          controlOk: control.ok, controlExitCode: control.exitCode, controlRan: text(control.sandbox?.ran),
+        })
+        const reason = pythonStartFailureReason(
+          { ...facts, exitCode: probe.exitCode },
+          { ok: control.ok, exitCode: control.exitCode, ran: text(control.sandbox?.ran) },
+        )
+        // 控制探测**也**以同一个启动失败指纹挂掉 ⇒ 沙箱后端起不了任何进程（部署侧问题），
+        // 与"运行时缺失 / 缺包"是两件事，必须分开带出去。
+        const blockedBySandbox = !control.ok && looksLikeProcessStartFailure(control)
+        return { ...failed('failed', `${detail}\n${reason}`), blockedBySandbox }
       }
 
       const distributions = distributionsOf(value.pythonDistributions)
@@ -182,6 +271,7 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
       const view: PythonRuntimeView = {
         ok: missingPackages.length === 0,
         unresolved: false,
+        blockedBySandbox: false,
         state: missingPackages.length === 0 ? 'ok' : 'missing-package',
         path: python,
         versionText,

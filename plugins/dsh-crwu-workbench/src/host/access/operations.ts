@@ -79,6 +79,7 @@ export type LocalAccessOperation =
   | 'system.case-file.read'
   | 'system.case-file.write'
   | 'system.workspace-directory.read'
+  | 'python.script.run'
 
 export interface LocalAccessDescriptor {
   /**
@@ -154,6 +155,7 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'system.case-file.read',
   'system.case-file.write',
   'system.workspace-directory.read',
+  'python.script.run',
 ] as const satisfies readonly LocalAccessOperation[]
 
 const PANEL: readonly LocalAccessSource[] = ['panel']
@@ -318,6 +320,18 @@ export const LOCAL_ACCESS_OPERATIONS = {
   'system.workspace-directory.read': {
     capability: 'system-integration', transport: 'shell', privileged: true,
     allowedSources: [...AUDIT_SOURCES, 'panel'],
+  },
+  // 审核子代理跑**本轮案例目录内**的技能脚本（DSH 自带 Python）。
+  //
+  // **不提权**：脚本在案例目录里，而案例目录就在会话 cwd（工作空间）之内 —— 边界之内不需要
+  // `danger-full-access`。反过来正是这条"不提权"让命令**落在受限沙箱里**，于是
+  // `windowsCaptureCommand` 会给它套上那层临时文件捕获：Windows 的 restricted-token runner
+  // 下 native 子进程直接继承管道句柄会 `0xC0000142` / `EACCES`，而模型可见的 pwsh 工具与
+  // 这里的 `ctx.shell` 是同一套 sandbox —— 所以子代理自己拼 `& 'python.exe' script.py` 会踩同一个坑。
+  // 来源只给 `audit-tool`：审核子会话的脚本，面板与宿主后台都不该借这条跑任意脚本。
+  'python.script.run': {
+    capability: 'system-integration', transport: 'shell', privileged: false,
+    allowedSources: ['audit-tool'],
   },
 } as const satisfies Record<LocalAccessOperation, LocalAccessDescriptor>
 

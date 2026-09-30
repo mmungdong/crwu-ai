@@ -7,9 +7,138 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.37 · 2026-09-30 · fix · 沙箱起不了进程不再被说成「脚本运行时不可用」
+
+真机闭环（0.0.36 的控制探测跑出来的）：
+
+```text
+控制探测（纯 PowerShell 命令）**同样失败**（exitCode 3221225794）
+→ 连 pwsh 自己都起不来：本机沙箱后端（ACL restricted-token runner）的问题
+```
+
+也就是说这台机器的 `workspace-write` 下**任何进程都跑不起来**，插件的输出采集兼容层
+（子进程重定向）在原理上就不可能生效 —— 做重定向的那个 pwsh 自己都没起来。
+
+- `PythonRuntimeView` 新增 `blockedBySandbox`：启动失败指纹命中**且控制探测同样失败**时为 true。
+- `audit-start` 的门禁第一句据此分流：沙箱坏 → 「本机受限沙箱起不了任何进程（部署侧问题）」；
+  真的缺运行时 / 缺包 → 仍然是「DSH 脚本运行时不可用」。两者处置完全不同，不许混成一句。
+
+## package · 0.0.36 · 2026-09-30 · fix · 受限沙箱里"进程起不来"不再被说成「DSH Python 不可用」
+
+真机现场（Windows，0.0.35 打出来的结构化事实就成了判据）：
+
+```text
+DSH 脚本运行时不可用，已终止本次审核：DSH Python 无法执行：没有版本输出
+（exitCode 3221225794 · 沙箱 执行器默认 → workspace-write）
+```
+
+`3221225794 = 0xC0000142 = STATUS_DLL_INIT_FAILED`，而 `denied` / `runnerFailed` 都还是
+false —— DSH 把它当成一次**普通的非零退出**。于是"沙箱里进程起不来"被说成了"Python 不可用"，
+两种处置完全不同的现场长得一模一样。
+
+- 新增 `looksLikeProcessStartFailure()`（认 0xC0000142，无符号与 int32 两种视图）+
+  **控制探测**：命中该指纹时再跑一条**纯 PowerShell** 命令，据此把两件事分开并给出处置 ——
+  ① 控制探测也失败 ⇒ 本机沙箱后端（ACL restricted-token runner）连 pwsh 都起不来，
+  **不是**「DSH Python 不可用」，换运行时没用；② 控制探测成功 ⇒ 只有 native 子进程在初始化阶段退出，
+  是那层捕获兼容层还不够。结论进 `runtime.error`，结构化事实进日志。
+  给出的处置走**部署侧**（DSH 版本 / 沙箱 runner / ACL）—— 插件把审核根钉死在 `workspace-write`
+  + `approval: never`，且在 auto / 完全权限的父会话下拒绝发起审核，所以"切完全权限"不是退路。
+- 捕获层补上**第三个句柄**：早先只重定向 stdout/stderr，stdin 仍然继承 DSH 的管道 ——
+  而这层兼容层的全部前提是"子进程一个 DSH 句柄都不继承"。现在内层命令写成
+  `$null | & 'exe' args > out 2> err`（pwsh 自己建一根空管道给子进程，立刻 EOF）。
+  Host 侧、子代理提示词与技能文档三处同步。
+
+## package · 0.0.35 · 2026-09-30 · fix · Windows 原生命令捕获收口 + 技能脚本执行进 Host（协议 25）
+
+### feat · `crwu_run_python_script`：把技能脚本的执行收进 Host（协议 25）
+
+子代理原先自己拼 `& 'python.exe' script.py`，而**模型可见的 pwsh 工具与插件的 `ctx.shell`
+是同一套 Windows sandbox** —— 于是子代理的 Python 调用照样命中受限沙箱下 native 子进程的
+管道缺陷（`0xC0000142` / `EACCES`）。提示词里那份 `Invoke-DshPython` 只是"请照做"，
+不保证被执行，也不带退出码与沙箱事实。
+
+- 新增 Host Tool `crwu_run_python_script`（宿主操作 `python.script.run`：来源只给 `audit-tool`、
+  **不提权**）。模型只提交 `caseDir` / `script`（**案例目录内**的相对路径）/ `scriptArgs`：
+  路径由 Host 用 `joinLocalPath` 拼，绝对路径、`..`、空串一律拒绝；参数逐个作为 argv 传入，
+  不经过任何 shell 解析。
+- 命令经**同一条 `ctx.shell` seam** 出去，所以自动拿到 `windowsCaptureCommand` 那层
+  **只在受限沙箱生效**的临时文件捕获 —— 无需模型照做，也无需第二套执行通道。
+- 返回里带 `exitCode` / `stdout` / `stderr` / `truncated` / `timedOut` 与
+  `sandbox{requested,resolved,ran,denied,runnerFailed}`，以及本次用的 Python 路径与版本；
+  DSH Python 解析不到时如实回 `capability-gap`，**绝不**改成系统解释器。
+- 审核指令改为**首选**这个 Tool，原来的 PowerShell 包装器降级成"Tool 不可用时的退路"。
+
+### fix · Windows 原生命令捕获收敛成唯一入口 + 探测失败带结构化事实
+
+- 新增 `windowsCaptureCommand(command, mode)`：**形状**（只有 `shellInvoke()` 产出的
+  `& 'exe' args` 才命中那个缺陷）与**沙箱模式**（只有真跑受限沙箱才需要捕获）一起判。
+  `crwu` / `dws` / `ossutil` / DSH Python 的每一条命令都经由 `ctx.shell` 那个 seam 走到它，
+  调用点不需要、也不允许自己决定要不要捕获 —— "统一走文件捕获执行器"只有这一处判据。
+- DSH Python 版本探测失败时把**结构化事实**一起带进错误：`exitCode`、请求与实际的沙箱模式、
+  是否被沙箱拒绝、执行器是否没能启动。Windows 受限沙箱的 `0xC0000142` 与"Python 没装"
+  处置完全不同（换采集方式 vs 换运行时），只报一句"无法执行"会把两件事混起来。
+
+### fix · Windows 原生命令捕获不再套在提权调用上（凭据读不到的真因）
+
+现场（用户报）：**同一台 Windows 上 `main` 能读到氚云与钉钉凭据，这个分支读不到** ——
+扫了码也不行，面板显示「未绑定 / 未知 / 未登录」，看起来像"凭据没写进去"。
+
+- **根因**：`capturePowerShellNativeCommand` 是按**命令形状**（`& '…'`）无条件套上去的，可它
+  解决的是**受限沙箱**下的 native-child DLL 初始化失败（0xC0000142）。而 `dsh-pwsh-sandbox`
+  的 `execute()` 对 `danger-full-access` 直接 `super.execute()`、**不套 restricted-token runner**
+  —— 那个前提根本不存在。于是所有**提权**命令（`crwu h3yun session status` /
+  `dws auth status` / `dws doctor` / `ossutil …`，全都是 `danger-full-access`）也被套上了，
+  而捕获必须经过 PowerShell 的**文本层**（`>` → `Out-File`）：Windows PowerShell 5.1 默认写
+  UTF-16LE，CLI 的 JSON 就成了 `{\0"\0…`，解析失败 → 「未绑定 / 未知」。
+  不套捕获时 native 子进程**直接继承 DSH 的管道句柄**，原始字节原样过去，不经过任何编码
+  —— 这正是 `main` 的形状。
+- **为什么 CI 没拦住**：`tests/windows/powershell-contract.test.mjs` 的 Windows provider 用的是
+  **pwsh 7**（默认 UTF-8 无 BOM），而且只断言纯 ASCII 载荷 —— 两个条件恰好把这个缺陷挡在视野外。
+  现在补了一条**非 ASCII JSON 逐字节往返**的真 shell 用例，并把「文本层显式钉成 UTF-8 +
+  从字节里剥 BOM」写进两个包装器（Host 侧 + 子代理提示词里那份），让它们即使在 5.1 上也不改字节。
+- **修法**：新增 `nativeCaptureNeeded(mode)` —— 只有**非** `danger-full-access`（真跑受限沙箱，
+  或没声明策略而落到执行器部署默认）才上捕获。提权调用回到 `main` 的命令形状。
+
+### fix · 「授权收据读不出来」不再显示成「需要授权」（协议 24 → 25）
+
+现场（「授权成功、界面永远停在需要授权」，2026-09-30 复查）：磁盘上的
+`~/.dsh/crwu-workbench.json` 里躺着一份**合法**收据（`schemaVersion: 1` + 逐字同序的五项能力），
+而「账号连接」里的氚云与钉钉两行都显示「需要授权」，插件因此拒绝一切本机凭据访问。
+
+- **先纠正一条推断**：这不是"读被沙箱拒了"。DSH 的 `dsh-fs-sandbox` 只在 `writeText` /
+  `editText` 上做可写根围栏，源码原话是 *"Reads pass through untouched: every mode permits
+  reading."* —— 本地实测也印证：会话策略 `workspace-write`（工作区在仓库下）时读
+  `~/.dsh/crwu-workbench.json` 一切正常，`env.localAccess.state` 就是 `granted`。
+  所以"读收据要与写对称地声明提权"并不是这里缺的那一块（fs 的读接口也**没有**逐次策略参数）。
+- **真正的缺陷**：`ConfigRead` 只有一个 `ok` 布尔，于是**五种完全不同的事实**在授权层眼里
+  长得一样 —— 文件不存在、位置不是普通文件、路径解析 / stat / 读文本抛错、内容解析不出来。
+  它们全被折叠成 `missing`，界面于是显示「需要授权」并把员工指向"再授权一次"；而读失败时
+  写盘（同样是读-改-写）根本落不了盘。现在逐种都有名字（`absent` / `corrupt` / `no-fs` /
+  `no-home` / `not-a-file` / `resolve` / `stat` / `read`），授权层把 **`missing`（真的没有
+  收据）** 与 **`unreadable`（读不出来）** 分成两句话。
+- 主目录未知时不再拼 `~/.dsh/crwu-workbench.json` 这个字面量：`ctx.fs.resolve()` 不展开 `~`，
+  它会变成**相对于会话 cwd** 的路径，于是"主目录探不到"会伪装成"从没授权过"。
+- 解析前先剥掉 UTF-8 BOM（**防御性**）：`JSON.parse` 见到 U+FEFF 会直接抛错，而在这里抛错
+  会被折叠成"没有授权"。DSH 自带的本地 fs 用 `TextDecoder`（默认剥 BOM），但 fs 后端并不
+  保证都这么做。
+- `env` / 界面：`localAccess.state` 新增 `unreadable`；氚云、钉钉、OSS、iFinD 的占位事实从
+  「需要授权」改为「授权状态读不出来 + 宿主给的原因」，`credentialsConsent` 归 `invalid`，
+  issue 的 owner 归 `system`（"把这条原因发给维护者，不是重新授权"）；授权卡不再对被读不出来的
+  收据显示"首次使用请允许一次"那段介绍。协议 +1 的理由就是这条：旧客户端读到 `unreadable`
+  会当成 `missing`，把员工送回那条走不通的路。
+
+### fix · Windows `workspace-write` 下宿主与审核子代理的 Python 原生命令兼容
+
+- Host 的统一 `ctx.shell` 执行入口现在只对 Windows PowerShell 原生命令启用临时文件捕获，
+  再按原始 stdout/stderr 字节转发并保留退出码；macOS / Linux 命令字符串保持不变。
+- 审核子代理提示词和 `crwu-audit` 编排契约增加同一套 `Invoke-DshPython` 包装器，材料准备、
+  复核与交付脚本不再直接继承受限 PowerShell 的管道句柄。
+- 该修复不放宽 `workspace-write`，也不回退系统 Python；Windows 原生 PowerShell 合同继续由
+  `tests/windows/powershell-contract.test.mjs` 在 Windows CI 验证。
+
 ## package · 0.0.34 · 2026-09-30 · fix · 审核根绑到已选工作空间 + 快照写入带会话策略（协议 24）
 
-### fix · 审核会话落在「未分组」而不是「中瑞世联工作空间」（用户报的第四个故障）
+
 
 现场：点「AI 审核」后，侧栏里新会话出现在**未分组**下，而不是环境信息里选定的工作空间下。
 

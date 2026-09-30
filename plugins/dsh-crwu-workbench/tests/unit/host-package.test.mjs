@@ -337,7 +337,7 @@ test('ping and boot answer with the state the panel needs to render', async () =
   // 协议 24：审核根的 cwd/沙箱边界改成**已选工作空间**（DSH 的边界 = 会话 cwd，
   // 而挂到工作空间下要求 cwd 逐字等于工作空间路径 —— 否则审核会话永远落「未分组」）。
   // 旧宿主按"案例目录"建根，两代的会话归类与沙箱事实都不同，必须靠协议号分开。
-  assert.equal(WORKBENCH_PROTOCOL, 24, '审核根绑定口径变化后协议必须 +1')
+  assert.equal(WORKBENCH_PROTOCOL, 25, '授权态新增 unreadable 后协议必须 +1')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -913,8 +913,11 @@ test('an installed tarball can actually be installed and imported', async () => 
     // 以前这里写 9，加进 iFinD 之后真实值是 10，而测试照样"通过"过一次（说明没人看注释）。
     assert.equal(toolCount, String(FROZEN_AUDIT_TOOL_COUNT),
       `装出来的包必须把 ${String(FROZEN_AUDIT_TOOL_COUNT)} 个 CRWU 工具注册进真实注册表`)
-    assert.equal(toolCount, '10', '必需工具集当前是 10 个（含 crwu_audit_ifind_query）')
+    // ⚠️ 这里**不再**写死裸数字：上面那条已经与 `FROZEN_AUDIT_TOOLS` 对账，
+    // 而写死的那一行曾经"10 个"通过了整整一代（加进 `crwu_run_python_script` 之后才红）——
+    // 它红得有价值，所以直接删掉、只留对账 + 逐条点名。
     assert.ok(FROZEN_AUDIT_TOOLS.includes('crwu_audit_ifind_query'))
+    assert.ok(FROZEN_AUDIT_TOOLS.includes('crwu_run_python_script'), '技能脚本执行入口必须在注册面里')
   } finally {
     await rm(workdir, { recursive: true, force: true })
   }

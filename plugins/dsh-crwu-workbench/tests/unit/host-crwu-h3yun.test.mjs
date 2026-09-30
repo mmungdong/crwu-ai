@@ -384,7 +384,11 @@ test('Windows：命令带 PowerShell 调用运算符 `&`（员工实测 ParserEr
   }
   await runCrwu(ctx, ['crwu', 'h3yun', 'session', 'status'], { access: makeTestAccess(ctx).access, source: 'panel', platform, workdir: 'C:\\cases' })
   assert.equal(specs.length, 1)
+  // ⚠️ 这条命令是**提权**的（`h3yun.session.status` → `danger-full-access`），所以**不许**被套上
+  // 那层临时文件捕获：捕获要经过 PowerShell 的文本层（Windows PowerShell 5.1 默认 UTF-16LE），
+  // CLI 的 JSON 会被改成 `{\0"\0…` 而读不出来 —— 2026-09-30 真机"扫了码也读不到凭据"就是这个形状。
   assert.equal(specs[0].command, `& '${bundled}' 'h3yun' 'session' 'status'`)
+  assert.equal(specs[0].command.includes('$crwuStdout'), false, '提权命令不套捕获：原始字节直接走管道')
   assert.equal(specs[0].command.includes('"'), false, '不得出现 cmd 式双引号')
 })
 

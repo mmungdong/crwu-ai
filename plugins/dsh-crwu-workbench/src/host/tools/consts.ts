@@ -75,6 +75,9 @@ export const CRWU_BUSINESS_TOOLS = [
   ...REQUIRED_AUDIT_TOOLS,
   'crwu_h3yun_record_get',
   'crwu_h3yun_files_list',
+  // 技能脚本的执行入口（2026-09-30）。**注册面**里有它，但它不进 `REQUIRED_AUDIT_TOOLS`：
+  // 审核能不能启动不该取决于"脚本执行工具在不在"，而要用它的时候自然会用。
+  'crwu_run_python_script',
 ] as const
 
 export const TOOL_NAMES = {
@@ -88,6 +91,7 @@ export const TOOL_NAMES = {
   ossPublish: 'crwu_audit_oss_publish',
   dingtalkArchive: 'crwu_audit_dingtalk_archive',
   dingtalkNotifySelf: 'crwu_audit_dingtalk_notify_self',
+  runPythonScript: 'crwu_run_python_script',
 } as const
 
 /** 自研审核链路随包发布的三个二进制。 */

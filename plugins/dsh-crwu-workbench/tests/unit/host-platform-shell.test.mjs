@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
  */
 const ROOT = new URL('../../', import.meta.url)
 const {
-  shellDialect, shellQuote, shellInvoke, mkdirCommand, removeFileCommand,
+  shellDialect, shellQuote, shellInvoke, shellInvokeCaptured, capturePowerShellNativeCommand, nativeCaptureNeeded, windowsCaptureCommand, mkdirCommand, removeFileCommand,
   openExternalCommand, clipboardCommand, homeProbeCommand, privateFileCommand,
 } = await import(new URL('src/host/platform/shell.ts', ROOT).href)
 
@@ -68,6 +68,54 @@ test('shellInvoke：Windows 补调用运算符 `&`，POSIX 绝不加', () => {
   assert.equal(shellInvoke('/opt/my tools/ossutil', ['ls'], LINUX), "'/opt/my tools/ossutil' ls")
   assert.equal(shellInvoke('/usr/bin/crwu', [], MAC), '/usr/bin/crwu')
   assert.equal(shellInvoke('crwu.exe', [], WIN), "& 'crwu.exe'")
+})
+
+test('shellInvokeCaptured：只在 Windows 为 native 子进程改用临时文件捕获', () => {
+  const win = shellInvokeCaptured('C:\\Program Files\\CRWU\\crwu.exe', ['h3yun', 'session', 'status'], WIN)
+  assert.match(win, /^& \{\n/)
+  assert.match(win, /& 'C:\\Program Files\\CRWU\\crwu.exe' 'h3yun' 'session' 'status' > \$crwuStdout 2> \$crwuStderr/)
+  assert.match(win, /ReadAllBytes\(\$crwuStdout\)/)
+  assert.match(win, /OpenStandardError\(\)/)
+  assert.match(win, /exit \$crwuExitCode/)
+  assert.match(win, /Remove-Item -LiteralPath \$crwuStdout, \$crwuStderr/)
+  assert.equal(shellInvokeCaptured('/usr/bin/crwu', ['h3yun'], MAC), '/usr/bin/crwu h3yun')
+  assert.equal(shellInvokeCaptured('/usr/bin/crwu', ['h3yun'], LINUX), '/usr/bin/crwu h3yun')
+})
+
+test('capturePowerShellNativeCommand：只包装 shellInvoke 形状，不改 cmdlet 脚本', () => {
+  const native = capturePowerShellNativeCommand("& 'C:\\Python\\python.exe' -c 'print(1)'")
+  assert.match(native, /^& \{\n/)
+  assert.match(native, /ReadAllBytes\(\$crwuStdout\)/)
+  // 捕获要经过 PowerShell 的文本层，而文本层不是逐字节的（5.1 默认 UTF-16LE）——
+  // 所以显式钉住编码，并把 5.1 会加上的 BOM 从字节里剥掉。
+  assert.match(native, /\$PSDefaultParameterValues\['Out-File:Encoding'\] = 'utf8'/)
+  assert.match(native, /0xEF -and \$crwuBytes\[1\] -eq 0xBB/)
+  // 三个句柄都要断：只重定向 stdout/stderr 时 stdin 仍是 DSH 的管道（兼容层的前提是"一个句柄都不继承"）。
+  assert.match(native, /\$null \| & 'C:\\Python\\python\.exe'/)
+  assert.equal(capturePowerShellNativeCommand("Write-Output 'ok'"), "Write-Output 'ok'")
+  assert.equal(capturePowerShellNativeCommand('/usr/bin/python3 -V'), '/usr/bin/python3 -V')
+})
+
+test('windowsCaptureCommand：形状与沙箱模式一起判，而且是唯一入口', () => {
+  const command = shellInvoke('C:\\bin\\crwu.exe', ['h3yun', 'session', 'status'], WIN)
+  // 提权：没有 confinement → 缺陷不存在 → 原样返回（原始字节直接走管道）。
+  assert.equal(windowsCaptureCommand(command, 'danger-full-access'), command)
+  // 受限沙箱：这层捕获就是那条缺陷的补丁。
+  assert.match(windowsCaptureCommand(command, 'workspace-write'), /^& \{\n/)
+  assert.match(windowsCaptureCommand(command, ''), /^& \{\n/, '没声明策略 = 执行器默认（受限）')
+  // 形状不对（cmdlet 脚本 / POSIX 命令）任何模式下都不改。
+  assert.equal(windowsCaptureCommand("Write-Output 'ok'", 'workspace-write'), "Write-Output 'ok'")
+  assert.equal(windowsCaptureCommand('/usr/bin/python3 -V', 'workspace-write'), '/usr/bin/python3 -V')
+})
+
+test('nativeCaptureNeeded：只有真跑受限沙箱才需要那层捕获（提权不做 confinement）', () => {
+  // `dsh-pwsh-sandbox` 的 `execute()` 对 danger-full-access 直接 super.execute()、
+  // 不套 restricted-token runner —— 0xC0000142 的前提不存在，而捕获会改字节。
+  // 凭据类命令**全是**提权的，所以这一条就是"读不到凭据"那个回归的判据。
+  assert.equal(nativeCaptureNeeded('danger-full-access'), false)
+  assert.equal(nativeCaptureNeeded('workspace-write'), true)
+  assert.equal(nativeCaptureNeeded('read-only'), true)
+  assert.equal(nativeCaptureNeeded(''), true, '没声明策略 = 执行器部署默认（受限），仍然要捕获')
 })
 
 test('mkdirCommand 在两个平台都幂等', () => {

@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ShellExecSpec, ShellExecutor } from '@deepseek-ai/dsh-shell'
 import { finiteNumber, text } from '../../shared/utils/value.ts'
+import { windowsCaptureCommand } from '../platform/shell.ts'
 
 /**
  * 一次 shell 运行的结果。
@@ -131,8 +132,20 @@ export async function runShell(
   const requestedMode = declared === undefined ? '' : declared.mode
   let spec: ShellExecSpec
   try {
+    // On Windows DSH's restricted PowerShell can start, but a native child
+    // inheriting its stdout/stderr pipe may fail during DLL initialization
+    // (0xC0000142).  `shellInvoke()` commands are recognized by their leading
+    // PowerShell call operator; cmdlet-only scripts are left byte-for-byte
+    // unchanged.  Keeping this at the final ctx.shell seam also covers host
+    // calls made by the audit child through the LocalAccessBroker.
+    //
+    // ⚠️ **只在真跑受限沙箱时才上捕获**（`nativeCaptureNeeded`）：`danger-full-access` 不做任何
+    // confinement，那个 DLL 初始化缺陷的前提不存在；而捕获要走 PowerShell 的文本层，会把
+    // CLI 的字节改掉 —— 凭据类命令全是提权的，套上去就等于读不到凭据
+    // （2026-09-30 真机回归：同一台 Windows 上 main 能读、这个分支读不到）。
+    const effectiveCommand = windowsCaptureCommand(command, requestedMode)
     spec = shell.resolve({
-      command,
+      command: effectiveCommand,
       ...(workRoot === '' ? {} : { workdir: workRoot }),
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       stdoutMaxBytes: options.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX_BYTES,
@@ -242,8 +255,10 @@ export async function startShell(
   const requestedMode = declared === undefined ? '' : declared.mode
   let spec: ShellExecSpec
   try {
+    // 与前台同一条判据（见上面的注释）：提权调用不套捕获。
+    const effectiveCommand = windowsCaptureCommand(command, requestedMode)
     spec = shell.resolve({
-      command,
+      command: effectiveCommand,
       ...(workRoot === '' ? {} : { workdir: workRoot }),
       // 后台进程自己管超时：执行器的默认死线只适合前台命令。
       onExpiry: 'none',

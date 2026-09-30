@@ -1175,7 +1175,7 @@ test('适配：installThroughManager 固定 spec/options，并把抛错收敛成
 test('适配：createPluginUpdateStore 的读/写/清除都返回稳定结果', async () => {
   const written = []
   const store = createPluginUpdateStore({
-    readConfig: async () => ({ ok: true, value: { pluginUpdate: { phase: 'installing', fromVersion: '0.0.11', targetVersion: '0.0.12', startedAt: NOW } } }),
+    readConfig: async () => ({ ok: true, value: { pluginUpdate: { phase: 'installing', fromVersion: '0.0.11', targetVersion: '0.0.12', startedAt: NOW } }, reason: 'ok' }),
     writeConfig: async (patch) => {
       written.push(patch)
       return true
@@ -1191,7 +1191,7 @@ test('适配：createPluginUpdateStore 的读/写/清除都返回稳定结果', 
 
   // 读失败 / 写抛错都不抛给调用方（service 据此 fail closed）。
   const broken = createPluginUpdateStore({
-    readConfig: async () => ({ ok: false, value: {} }),
+    readConfig: async () => ({ ok: false, value: {}, reason: 'read' }),
     writeConfig: async () => {
       throw new Error('boom')
     },

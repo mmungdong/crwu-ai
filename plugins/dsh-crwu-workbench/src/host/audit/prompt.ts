@@ -2,6 +2,7 @@ import { text as asText } from '../../shared/utils/value.ts'
 import type { OssSpec } from '../environment/manifest-default.ts'
 import { REQUIRED_AUDIT_TOOLS } from '../tools/consts.ts'
 import { caseDirOf } from '../../shared/utils/case-dir.ts'
+import { shellDialect } from '../platform/shell.ts'
 
 /**
  * 审核指令全文（交给子会话 / crwu-audit 技能的作业指令）。
@@ -62,6 +63,8 @@ export interface AuditPromptTask {
   snapshot?: AuditInputSnapshot | null
   /** 已解析的 DSH Python；为空表示没解析成功（同样不该启动）。 */
   python?: AuditPythonRuntime | null
+  /** Host platform, used only to add the Windows child-script bridge. */
+  platform?: string
 }
 
 interface LegacyTask {
@@ -74,6 +77,7 @@ interface LegacyTask {
   attemptId?: unknown
   snapshot?: unknown
   python?: unknown
+  platform?: unknown
 }
 
 /** 工具清单那一段：名字逐字来自 `tools/consts.ts`，避免两处漂移。 */
@@ -151,14 +155,57 @@ function snapshotSection(task: LegacyTask, snapshot: AuditInputSnapshot): string
  * 一个允许的绝对路径，来自 DSH 自带的 workspace runtime（`load_workspace_dependencies`）。
  * 禁止 `command -v` / `which` / `find` / 裸 `python3`，也禁止静默降级。
  */
-function pythonSection(runtime: AuditPythonRuntime): string[] {
+function windowsPythonBridge(path: string | null): string[] {
+  return [
+    '**首选 `crwu_run_python_script` 工具跑技能脚本**：只提交 `caseDir`、案例目录内的脚本相对路径与参数，由 Host 统一做 Windows 原生命令的输出采集、退出码、超时与清理 —— 它跑在同一条受沙箱约束的执行入口上，还会把请求/实际的沙箱模式带回来。**只有那个 Tool 不可用**（返回 `capability-gap` / 未注册）时，才用下面的包装器自己跑：',
+    '',
+    '**Windows 子代理脚本执行兼容层（必须照做）**（仅在 `crwu_run_python_script` 不可用时）：DSH 的 `workspace-write` PowerShell 在直接捕获原生子进程的 stdout/stderr 时，可能在进程初始化阶段失败。**不要直接调用上面的 Python 路径**；每次运行技能脚本都先用下面这个 PowerShell 包装器，把两个流落到临时文件，再原样转回当前 Tool：',
+    '',
+    '```powershell',
+    'function Invoke-DshPython {',
+    '  param([string]$PythonPath, [string[]]$Arguments)',
+    // 与 Host 侧 `capturePowerShellNativeCommand` **同一条口径**：`>` 走 PowerShell 的文本层，
+    // 5.1 默认 UTF-16LE —— 不钉住编码的话，脚本输出里的中文 JSON 会被读成乱码。
+    "  $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'",
+    '  $crwuStdout = [System.IO.Path]::GetTempFileName()',
+    '  $crwuStderr = [System.IO.Path]::GetTempFileName()',
+    '  try {',
+    '    $null | & $PythonPath @Arguments > $crwuStdout 2> $crwuStderr',
+    '    $crwuExitCode = $LASTEXITCODE',
+    '    if ([System.IO.File]::Exists($crwuStdout)) {',
+    '      $crwuBytes = [System.IO.File]::ReadAllBytes($crwuStdout)',
+    '      if ($crwuBytes.Length -gt 3 -and $crwuBytes[0] -eq 0xEF -and $crwuBytes[1] -eq 0xBB -and $crwuBytes[2] -eq 0xBF) {',
+    '        $crwuBytes = $crwuBytes[3..($crwuBytes.Length - 1)]',
+    '      }',
+    '      [Console]::OpenStandardOutput().Write($crwuBytes, 0, $crwuBytes.Length)',
+    '    }',
+    '    if ([System.IO.File]::Exists($crwuStderr)) {',
+    '      $crwuBytes = [System.IO.File]::ReadAllBytes($crwuStderr)',
+    '      if ($crwuBytes.Length -gt 3 -and $crwuBytes[0] -eq 0xEF -and $crwuBytes[1] -eq 0xBB -and $crwuBytes[2] -eq 0xBF) {',
+    '        $crwuBytes = $crwuBytes[3..($crwuBytes.Length - 1)]',
+    '      }',
+    '      [Console]::OpenStandardError().Write($crwuBytes, 0, $crwuBytes.Length)',
+    '    }',
+    '    exit $crwuExitCode',
+    '  } finally {',
+    '    Rem' + 'ove-Item -LiteralPath $crwuStdout, $crwuStderr -Force -ErrorAction Silent' + 'lyContinue',
+    '  }',
+    '}',
+    '```',
+    '',
+    '所有审核技能脚本（包括子代理自己运行的材料准备、复核与交付脚本）都用 Invoke-DshPython -PythonPath ' + (path ?? '<load_workspace_dependencies 返回的绝对 Python 路径>') + ' @(<脚本参数>) 调用；脚本失败必须保留其原始退出码并立即停止，不得改用系统解释器或绕过这个包装器。',
+    '',
+  ]
+}
+
+function pythonSection(runtime: AuditPythonRuntime, platform: string): string[] {
   const packages = Object.entries(runtime.distributions)
     .filter(([name, version]) => name !== '' && version !== '')
     .sort(([left], [right]) => left.localeCompare(right))
     .slice(0, 12)
     .map(([name, version]) => name + ' ' + version)
     .join(' · ')
-  return [
+  const section = [
     '## 脚本运行时：只用 DSH 自带的 Python',
     '',
     '- 唯一允许的 Python 绝对路径：`' + runtime.path + '`（版本 ' + runtime.versionText + '）',
@@ -173,6 +220,7 @@ function pythonSection(runtime: AuditPythonRuntime): string[] {
     '3. **禁止**静默降级到系统自带的解释器：它没有审核脚本需要的包，结果不可信。上面那个路径不可用（不存在 / 执行失败 / 缺包）时**立即停止**并汇报「capability gap：DSH Python 不可用」。',
     '',
   ]
+  return shellDialect(platform) === 'powershell' ? [...section, ...windowsPythonBridge(runtime.path)] : section
 }
 
 /**
@@ -183,8 +231,8 @@ function pythonSection(runtime: AuditPythonRuntime): string[] {
  * 没有会话上下文，调同一个工具只会拿到工具报错（2026-09-29 员工机器实测）。
  * 所以这不是放宽口径，而是把「从哪拿」交给有能力拿到的那一层，并明确禁止任何查找与降级。
  */
-function pythonUnresolvedSection(): string[] {
-  return [
+function pythonUnresolvedSection(platform: string): string[] {
+  const section = [
     '## 脚本运行时：由你在本会话里解析 DSH 自带 Python',
     '',
     '- 宿主这次**没能问到**运行时（它在没有会话作用域时调不到那个工具）—— **这不等于运行时缺失**。',
@@ -193,6 +241,8 @@ function pythonUnresolvedSection(): string[] {
     '- 工具返回里没有 `python`、或它不是可执行文件、或缺 `openpyxl` → **立即停止**并汇报「capability gap：DSH Python 不可用」，不要继续跑脚本。',
     '',
   ]
+  return shellDialect(platform)
+    === 'powershell' ? [...section, ...windowsPythonBridge(null)] : section
 }
 
 function legacyAuditPrompt(task: LegacyTask) {
@@ -216,11 +266,12 @@ function legacyAuditPrompt(task: LegacyTask) {
     L.push('Host 没有为本次审核准备输入快照。**不要**自己去发现表单、列记录或在案例目录里找材料：直接停止并汇报「输入快照缺失」。')
     L.push('')
   }
+  const platform = asText(task.platform)
   const python = pythonOf(task.python)
-  if (python !== null) L.push(...pythonSection(python))
+  if (python !== null) L.push(...pythonSection(python, platform))
   // 宿主**没问到**运行时（启动/自检阶段没有会话作用域）时的替代指令：让子会话自己解析。
   // 这不是「去找解释器」—— 那个工具是唯一允许的来源，它返回的绝对路径是唯一允许的解释器。
-  else L.push(...pythonUnresolvedSection())
+  else L.push(...pythonUnresolvedSection(platform))
   if (caseDir) {
     // 协议 19 起：审核根的 cwd **就是本案例目录**，沙箱边界（`workspace-write.workspaceRoot`）
     // 也是它 —— 子会话继承这两者，所以"可写范围"在指令里必须说成案例目录，

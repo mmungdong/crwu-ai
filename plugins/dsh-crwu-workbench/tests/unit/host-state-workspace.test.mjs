@@ -10,7 +10,7 @@ import test from 'node:test'
 
 const ROOT = new URL('../../', import.meta.url)
 
-const { readWorkbenchConfig, writeWorkbenchConfig, workbenchConfigPath } = await import(
+const { readWorkbenchConfig, readWorkbenchConfigResult, writeWorkbenchConfig, workbenchConfigPath } = await import(
   new URL('src/host/state/persist.ts', ROOT).href
 )
 const { normalizeAudit, persistableAudits, persistAudits, persistAuditRoot, ensureRegistry } = await import(
@@ -102,6 +102,53 @@ test('readWorkbenchConfig tolerates missing file, bad JSON and missing fs', asyn
 
   // fs 不可用时返回空对象：这个文件坏了不该让整个面板打不开。
   assert.deepEqual(await readWorkbenchConfig({ get: () => undefined }, '/Users/x'), {})
+})
+
+test('读盘事实逐种分开：不存在 / 不是普通文件 / 内容坏掉 / BOM / fs 不可用 / 主目录未知', async () => {
+  // 这几种事实在旧实现里**长得一模一样**（都只是一句"空配置"），于是"授权收据读不出来"
+  // 被折叠成"没有授权"，界面把员工指去再授权一次 —— 而读失败时写盘同样落不了盘。
+  const absent = memoryFs()
+  assert.deepEqual(await readWorkbenchConfigResult(absent.ctx, '/Users/x'), { ok: true, value: {}, reason: 'absent' })
+
+  const directory = memoryFs({}, ['/Users/x/.dsh/crwu-workbench.json'])
+  assert.deepEqual(await readWorkbenchConfigResult(directory.ctx, '/Users/x'),
+    { ok: false, value: {}, reason: 'not-a-file' }, '目录上的"配置"不许被当成空配置覆盖写')
+
+  const corrupt = memoryFs({ '/Users/x/.dsh/crwu-workbench.json': '{oops' })
+  assert.deepEqual(await readWorkbenchConfigResult(corrupt.ctx, '/Users/x'),
+    { ok: true, value: {}, reason: 'corrupt' }, '损坏仍允许重写（否则永远卡在"读不了 → 不让写"）')
+
+  // BOM 不该把收据读成"没有授权"（防御：不同 fs 后端对 BOM 的处理不一致，而 `JSON.parse`
+  // 见到 U+FEFF 会直接抛错）。
+  const bom = memoryFs({ '/Users/x/.dsh/crwu-workbench.json': '\uFEFF{"activeKey":"k1"}' })
+  const fromBom = await readWorkbenchConfigResult(bom.ctx, '/Users/x')
+  assert.equal(fromBom.reason, 'ok')
+  assert.equal(fromBom.value.activeKey, 'k1')
+
+  assert.deepEqual(await readWorkbenchConfigResult({ get: () => undefined }, '/Users/x'),
+    { ok: false, value: {}, reason: 'no-fs' })
+  // 主目录未知时**绝不**退化成 `~/.dsh/…` 那条相对路径（它会伪装成"从没授权过"）。
+  assert.deepEqual(await readWorkbenchConfigResult(memoryFs().ctx, ''),
+    { ok: false, value: {}, reason: 'no-home' })
+})
+
+test('stat / readText 抛错分别是 stat 与 read（分类不许混成一个"读失败"）', async () => {
+  const statThrows = {
+    get: () => ({
+      async resolve(path) { return { targetKey: path, displayPath: path } },
+      async stat() { throw new Error('boom') },
+      async readText() { return '{}' },
+    }),
+  }
+  assert.equal((await readWorkbenchConfigResult(statThrows, '/Users/x')).reason, 'stat')
+  const readThrows = {
+    get: () => ({
+      async resolve(path) { return { targetKey: path, displayPath: path } },
+      async stat() { return { type: 'file' } },
+      async readText() { throw new Error('EIO') },
+    }),
+  }
+  assert.equal((await readWorkbenchConfigResult(readThrows, '/Users/x')).reason, 'read')
 })
 
 test('writeWorkbenchConfig merges instead of overwriting', async () => {

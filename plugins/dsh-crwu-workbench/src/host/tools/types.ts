@@ -9,6 +9,7 @@ import type { H3yunFormResolver } from '../h3yun/form.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { DiscussionScopeRegistry } from '../audit/discussion-scope.ts'
+import type { PythonRuntimeResolver } from '../runtime/python.ts'
 
 /**
  * 所有 CRWU Tool 的共享依赖。
@@ -49,6 +50,15 @@ export interface ToolDeps {
    * 它必须由 `apply()` 创建并随插件生命周期释放（模块级会跨实例串味）。
    */
   discussionScopes: DiscussionScopeRegistry
+  /**
+   * DSH 自带 Python 的**实例级**解析器（`crwu_run_python_script` 用它）。
+   *
+   * 与审核启动、环境自检共用同一个实例，所以"哪一份 Python"只有一处判据、也只解析一次。
+   * 可选只是为了不让只关心别的 Tool 的测试夹具被迫造一个运行时：**生产形态一定传**
+   * （`apply.ts` 与 Broker 同处装配），缺了只会让那一个 Tool 如实回 `capability-gap`，
+   * 绝不允许因此改去用系统解释器。
+   */
+  python?: PythonRuntimeResolver
 }
 
 /**

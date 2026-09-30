@@ -69,6 +69,27 @@ test('runShell reports success only for exit code zero', async () => {
   })
 })
 
+test('runShell 在最终 ctx.shell seam 为受限沙箱的 PowerShell native child 启用捕获包装', async () => {
+  const shell = fakeShell({ result: OK_RESULT })
+  await runShell(fakeContext({ shell: shell.service }), "& 'C:\\Python\\python.exe' -V")
+  assert.match(shell.resolved[0].command, /^& \{\n/)
+  assert.match(shell.resolved[0].command, /ReadAllBytes\(\$crwuStdout\)/)
+
+  const cmdletShell = fakeShell({ result: OK_RESULT })
+  await runShell(fakeContext({ shell: cmdletShell.service }), "Write-Output 'ok'")
+  assert.equal(cmdletShell.resolved[0].command, "Write-Output 'ok'")
+
+  // ⚠️ **提权调用不许套捕获**（2026-09-30 真机回归）：`danger-full-access` 不做 confinement，
+  // 那个 DLL 初始化缺陷不存在；而捕获会把 CLI 的字节过一遍 PowerShell 的文本层 ——
+  // 凭据类命令全是提权的，套上去就等于读不到凭据（同一台 Windows 上 main 能读、这个分支不能）。
+  const escalated = fakeShell({ result: OK_RESULT })
+  await runShell(fakeContext({ shell: escalated.service }), "& 'C:\\bin\\crwu.exe' h3yun session status",
+    { escalate: true, workdir: '/cases/x' })
+  assert.equal(escalated.resolved[0].command, "& 'C:\\bin\\crwu.exe' h3yun session status",
+    '提权命令必须保持 main 的形状：原始字节直接走管道')
+  assert.equal(escalated.resolved[0].sandboxPolicy?.mode, 'danger-full-access')
+})
+
 test('runShell 收下 DSH 的沙箱事实：请求 / 解析 / 实际 / 是否被拒', async () => {
   // 这是 2026-09-28 之后归因沙箱拒绝的**唯一可靠依据**（比认错误文本强）：
   // 员工报「授权了还是不行」时，这几个字段直接回答「请求了什么、实际跑在什么下、有没有被拒」。
