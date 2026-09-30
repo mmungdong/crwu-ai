@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Button, Card } from '../../components/primitives.tsx'
+import { Button, Card, Notice } from '../../components/primitives.tsx'
 import { WORKBENCH_CLASSES as C } from './consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { workbenchApi } from '../report-audit/api.ts'
@@ -15,6 +15,12 @@ import type { TaskRow } from '../../../shared/types.ts'
  *
  * 文案与 legacy 一致：明确技能名、两阶段流程、以及三个定位字段（ObjectId / SeqNo / 项目名），
  * 其中 ObjectId 缺失时要提示用 SeqNo 精确定位。
+ *
+ * **权限提醒必须在提示词之前**（2026-09-30 用户口径）：手工兜底跑在**员工自己的会话**里，
+ * 那条会话的沙箱边界是它自己的工作目录，而案例目录、报告材料、本机凭据都在边界之外 ——
+ * 不把权限切成「完全权限」，粘贴后第一步就会失败。只说一句「打开完全权限」等于没说：
+ * 员工不知道这个开关在哪，所以这里把控件名、选项名、确认弹窗的勾选、以及一条命令行的
+ * 等价做法逐条写出来（文案在 `locales` 的 `handoffFullAccess*`）。
  */
 
 export interface HandoffProps {
@@ -52,6 +58,13 @@ export function Handoff(props: HandoffProps): React.ReactElement {
 
   return <Card title={zhCN.handoffTitle}>
     <div className={C.muted}>{zhCN.handoffHint}</div>
+    {/* 权限提醒排在提示词**之前**：顺序反了，员工会先粘一遍、失败一次，再回头找原因。 */}
+    <Notice tone="warn">
+      <div><strong>{zhCN.handoffFullAccessTitle}</strong></div>
+      {zhCN.handoffFullAccessSteps.map((step) => <div key={step}>{step}</div>)}
+      <div className={C.muted}>{zhCN.handoffFullAccessWhy}</div>
+      <div className={C.muted}>{zhCN.handoffFullAccessScope}</div>
+    </Notice>
     <pre className={C.result}>{prompt}</pre>
     <div className={C.row}>
       <Button label={props.copied ? zhCN.copied : zhCN.handoffCopy} small onClick={copy} />

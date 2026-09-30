@@ -2064,6 +2064,32 @@ test('the handoff card offers a copy button and reports it was copied', async ()
   delete globalThis.navigator
 })
 
+test('the handoff card tells the user exactly how to switch the session to full access', async () => {
+  // 用户口径（2026-09-30）：手工兜底跑在员工自己的会话里，必须先把它切成「完全权限」，
+  // 而员工大多不知道这个开关在哪 —— 只说一句「打开完全权限」等于没说。所以控件名、选项名、
+  // 确认弹窗里的勾选、以及一条命令行的等价做法都要在卡片里逐条写出来。
+  const { Handoff } = await import(new URL('src/client/features/workbench/Handoff.tsx', ROOT).href)
+  const { tree } = render(Handoff, {
+    task: { id: 'o', seqNo: 's', name: 'n', project: 'p' }, copied: false, onCopied: () => {},
+  })
+  const text = textOf(tree)
+  for (const needed of [
+    zhCN.handoffFullAccessTitle,
+    '访问模式',                 // 控件名（DSH 客户端的实际文案）
+    '完全权限',                 // 选项名
+    '确认启用完全权限？',        // 确认弹窗标题
+    '我已了解风险，并愿意继续',   // 弹窗里的确认勾选
+    '/permission danger-full-access', // 命令行等价做法
+  ]) {
+    assert.ok(text.includes(needed), `权限提醒里必须出现「${needed}」：${text}`)
+  }
+  // 顺序也是判据：提醒必须排在提示词**之前**（先粘后改权限 = 白跑一轮）。
+  assert.ok(
+    text.indexOf(zhCN.handoffFullAccessTitle) < text.indexOf(zhCN.handoffIntro),
+    '权限提醒要排在提示词前面',
+  )
+})
+
 test('the report page shows the handoff block only when a start failed', async () => {
   stubOps({})
   const { ReportPane } = await import(new URL('src/client/features/report-audit/ReportPane.tsx', ROOT).href)
@@ -2082,8 +2108,13 @@ test('the report page shows the handoff block only when a start failed', async (
   }
   const quiet = render(ReportPane, { ...base, state: { ...base.state, handoff: null } })
   assert.equal(textOf(quiet.tree).includes(zhCN.handoffTitle), false, '成功时不该出现兜底块')
+  // 「完全权限」提醒是**兜底块的一部分**：没有失败时不许出现在报告页上（审核子会话按设计
+  // 固定在 workspace-write，平时看到这句会让员工以为每次都要切完全权限）。
+  assert.equal(textOf(quiet.tree).includes(zhCN.handoffFullAccessTitle), false, '没有失败时不该出现权限提醒')
   const shown = render(ReportPane, { ...base, state: { ...base.state, handoff: { id: 'o', seqNo: 's', name: 'n', project: 'p', ...{} } } })
-  assert.equal(textOf(shown.tree).includes(zhCN.handoffTitle), true)
+  const shownText = textOf(shown.tree)
+  assert.equal(shownText.includes(zhCN.handoffTitle), true)
+  assert.equal(shownText.includes(zhCN.handoffFullAccessTitle), true, '兜底块里必须有权限提醒')
 })
 
 // ── ⑤ 安装提示词块与 ④ iFinD 卡片 ───────────────────────────────────────────
@@ -2098,6 +2129,9 @@ test('环境页不再有「复制安装提示词」入口（那套做法已删�
     for (const gone of ['复制安装提示词', '安装提示词', '重新生成', '复制提示词']) {
       assert.equal(text.includes(gone), false, `环境页不该再出现「${gone}」`)
     }
+    // 手工兜底的「完全权限」提醒**只属于那张兜底卡**（用户 2026-09-30 口径：只加在那一处）：
+    // 环境页出现它，员工会以为平时也要把权限切到完全权限。
+    assert.equal(text.includes(zhCN.handoffFullAccessTitle), false, '环境页不该出现手工兜底的权限提醒')
   }
 })
 
