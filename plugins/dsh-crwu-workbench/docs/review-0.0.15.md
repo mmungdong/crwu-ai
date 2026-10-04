@@ -1,5 +1,9 @@
 # 0.0.15 复审指引（给复审者用的一页清单）
 
+> [!NOTE]
+> **状态：历史快照（插件 0.0.15）。** 本文保留该版本的复审证据，不代表当前版本或操作口径。现行入口见
+> [`README.md`](../README.md) 和 [`releasing.md`](releasing.md)。
+
 这份文档**只服务于两件事**：让复审更快，让真机验证更省时间。判据口径仍以
 [`../AGENTS.md`](../AGENTS.md) 为准，人工验收记录在
 [`desktop-acceptance-0.0.15.md`](desktop-acceptance-0.0.15.md)。

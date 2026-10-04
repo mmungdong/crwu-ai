@@ -1,5 +1,9 @@
 # DWS Source and Download Contract Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-08).** This completed plan is retained as implementation evidence,
+> not current operating guidance. Start from [`README.md`](../../../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make DingTalk the only knowledge-body source, remove local/offline and full-library mirror semantics, and support single-file plus directory entries in every audit download manifest.

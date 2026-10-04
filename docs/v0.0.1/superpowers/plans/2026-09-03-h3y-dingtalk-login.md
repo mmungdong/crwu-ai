@@ -1,5 +1,9 @@
 # H3Yun DingTalk Login Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-03).** This completed plan is retained as implementation evidence,
+> not current operating guidance. Start from [`README.md`](../../../../README.md).
+
 **Goal:** Deliver the smallest end-to-end `crwu h3y login` flow that authenticates
 an employee through DingTalk, returns an explicit employee identity, and stores
 only a CRWU session in the operating system credential store.

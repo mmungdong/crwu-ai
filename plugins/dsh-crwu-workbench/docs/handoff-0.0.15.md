@@ -1,5 +1,9 @@
 # 交接：dsh-crwu-workbench 0.0.15（未发版）
 
+> [!NOTE]
+> **状态：历史快照（插件 0.0.15）。** 本文保留当时的交接记录，不代表当前版本或操作口径。现行入口见
+> [`README.md`](../README.md) 和 [`releasing.md`](releasing.md)。
+
 > 这份文档是**工作交接**，不是交付件。`docs/` 不在 `package.json` 的 `files` 里，
 > 进包清单与任何门禁都不受影响；正式提交前可以删掉它。
 

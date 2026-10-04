@@ -2,7 +2,7 @@
 
 > 维护纪律（见 `AGENTS.md`）：**每次 CLI 功能新增 / 变更 / 删除**（命令、参数、
 > 环境变量、输出契约、通道行为），必须在本文档**追加**一条纪要，并同步更新
-> [`docs/cli-manual.md`](cli-manual.md)（Agent 使用说明书）。
+> [`cli-manual.md`](cli-manual.md)（Agent 使用说明书）。
 >
 > 条目格式：`日期 · 类型 · 标题`，类型沿用 Angular 词表（feat / fix / refactor /
 > docs / chore），正文写明**影响命令**与关键说明。

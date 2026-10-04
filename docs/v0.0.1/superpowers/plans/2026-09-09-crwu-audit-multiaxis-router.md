@@ -1,5 +1,9 @@
 # crwu-audit Multi-Axis Router Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-09).** This completed plan is retained as implementation evidence,
+> not current operating guidance. Start from [`README.md`](../../../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the L1/L2 asset-scenario routing tree with an evidence-backed multi-label router that loads the union of scope, asset, business, method, overlay, and public audit skills.

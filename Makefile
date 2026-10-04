@@ -1,5 +1,8 @@
+PLUGIN    ?= dsh-crwu-workbench
 GO        ?= go
+NPM       ?= npm
 VERSION   ?= 0.0.1
+override NPM_REGISTRY := https://registry.npmjs.org
 COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -27,7 +30,6 @@ WINDOWS_ARCH ?= amd64
 # 那条路连同只读 Bucket 一起下掉了：员工设备的安装行为不该依赖一个远端对象，
 # 而且那个地址谁都能换 —— 少一个远端数据源就少一条可被远程改写的通道。
 # **发布纪律仍然有效**：同一个版本号只发一次（npm 的不可变版本号天然守住这条，别手工 `npm publish`）。
-PLUGIN        ?= dsh-crwu-workbench
 PLUGIN_DIR    := $(CURDIR)/plugins/$(PLUGIN)
 # npm 包的 tarball 名跟着 `package.json` 的 name 走（不一定等于插件目录名），所以从包里取。
 PLUGIN_PKG_NAME ?= $(shell node -p "require('$(PLUGIN_DIR)/package.json').name" 2>/dev/null)
@@ -35,15 +37,10 @@ PLUGIN_VERSION ?= $(shell node -p "require('$(PLUGIN_DIR)/package.json').version
 DIST_DIR      := $(CURDIR)/dist
 PLUGIN_TGZ    := $(DIST_DIR)/$(PLUGIN_PKG_NAME)-$(PLUGIN_VERSION).tgz
 
-# 技能装到非 DSH 宿主时用：`make skills-install AGENT_DIR=~/.agents/skills`。
-# 收哪些技能只由目录布局决定：**任何含 SKILL.md 的目录都算一个技能**，不管它在哪一层
-# （插件层 `plugins/<插件>/skills/<层>/<技能>/`、公共层 `plugins/common/skills/<技能>/`）。
-# 层目录自己（`skills/crwu`、`skills/dws`）没有 SKILL.md，因此不会被当成技能；不需要名单文件。
-SKILL_DIRS    := $(shell find plugins -name SKILL.md -type f 2>/dev/null | sed 's|/SKILL.md$$||' | sort)
-
-.PHONY: build build-mac build-win fmt test clean \
+.PHONY: build build-mac build-win fmt test clean docs-check \
         plugin-deps plugin-skills plugin-dws plugin-bin plugin-bin-check plugin-check plugin-pack plugin-clean \
-        skills-install
+        plugin-version plugin-version-set plugin-npm-login plugin-npm-whoami \
+        plugin-publish-dry-run plugin-publish
 
 build: build-mac build-win
 
@@ -63,6 +60,9 @@ fmt:
 test:
 	$(GO) test ./...
 
+docs-check:
+	node scripts/check-docs.mjs
+
 clean:
 	rm -rf -- "$(CURDIR)/$(BIN_DIR)"
 
@@ -74,6 +74,21 @@ $(PLUGIN_DIR)/node_modules: $(PLUGIN_DIR)/package-lock.json
 	cd "$(PLUGIN_DIR)" && npm ci
 
 plugin-deps: $(PLUGIN_DIR)/node_modules
+
+plugin-version:
+	node scripts/plugin-release.mjs info \
+		--plugin-dir "$(PLUGIN_DIR)" --npm "$(NPM)" --registry "$(NPM_REGISTRY)"
+
+plugin-version-set: plugin-deps
+	@test -n "$(PLUGIN_RELEASE_VERSION)" || { echo "用法：make plugin-version-set PLUGIN_RELEASE_VERSION=x.y.z"; exit 1; }
+	cd "$(PLUGIN_DIR)" && $(NPM) run version:set -- "$(PLUGIN_RELEASE_VERSION)"
+	cd "$(PLUGIN_DIR)" && $(NPM) run version:check
+
+plugin-npm-login:
+	cd "$(PLUGIN_DIR)" && $(NPM) login --registry="$(NPM_REGISTRY)"
+
+plugin-npm-whoami:
+	cd "$(PLUGIN_DIR)" && $(NPM) whoami --registry="$(NPM_REGISTRY)"
 
 # 把 plugins/common/skills/ 里的公共技能拷进包内 common/skills/（npm files 出不了包目录）。
 # 员工机器上没有源目录，脚本会自己跳过，所以这条在接收方也不会失败。
@@ -130,20 +145,24 @@ plugin-pack: plugin-deps
 	@echo "    发布：走 tag（git tag plugin-v$(PLUGIN_VERSION) && git push origin plugin-v$(PLUGIN_VERSION)），"
 	@echo "    由 .github/workflows/release.yml 跑 npm publish --provenance；不要手工 npm publish。"
 
+# 正式发布仍优先使用 plugin-v* tag。以下入口用于维护者显式检查或应急手动发布。
+plugin-publish-dry-run:
+	node scripts/plugin-release.mjs preflight \
+		--plugin-dir "$(PLUGIN_DIR)" --repo-root "$(CURDIR)" \
+		--npm "$(NPM)" --registry "$(NPM_REGISTRY)" \
+		--require-confirmation false --confirmation ""
+	@$(MAKE) --no-print-directory plugin-bin
+	cd "$(PLUGIN_DIR)" && $(NPM) publish --dry-run --registry="$(NPM_REGISTRY)"
+
+plugin-publish:
+	node scripts/plugin-release.mjs preflight \
+		--plugin-dir "$(PLUGIN_DIR)" --repo-root "$(CURDIR)" \
+		--npm "$(NPM)" --registry "$(NPM_REGISTRY)" \
+		--require-confirmation true --confirmation "$(CONFIRM_PUBLISH)"
+	@$(MAKE) --no-print-directory plugin-bin
+	cd "$(PLUGIN_DIR)" && $(NPM) publish --dry-run --registry="$(NPM_REGISTRY)"
+	cd "$(PLUGIN_DIR)" && $(NPM) publish --registry="$(NPM_REGISTRY)"
+
 # 插件侧的构建产物：分发包（dist/）、装配好的二进制（bin/）与它的下载缓存（.cache/）。
 plugin-clean:
 	rm -rf -- "$(DIST_DIR)" "$(PLUGIN_DIR)/bin" "$(PLUGIN_DIR)/.cache"
-
-# 把仓库里的全部技能装进任意宿主的 skills 目录（非 DSH 宿主，例如 codex / workbuddy）。
-# 同名覆盖：先删后拷，保证不带旧文件。
-skills-install:
-	@test -n "$(AGENT_DIR)" || { echo "用法：make skills-install AGENT_DIR=<skills 根目录>"; exit 1; }
-	@test -n "$(SKILL_DIRS)" || { echo "没有找到任何技能目录（任何含 SKILL.md 的目录）"; exit 1; }
-	@mkdir -p "$(AGENT_DIR)"
-	@for dir in $(SKILL_DIRS); do \
-		name=$$(basename "$$dir"); \
-		rm -rf "$(AGENT_DIR)/$$name"; \
-		cp -R "$$dir" "$(AGENT_DIR)/$$name"; \
-	done
-	@echo "==> 已装 $(words $(SKILL_DIRS)) 个技能到 $(AGENT_DIR)"
-	@ls -1 "$(AGENT_DIR)"

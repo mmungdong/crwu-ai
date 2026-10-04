@@ -1,5 +1,9 @@
 # README Redesign Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-16).** This completed plan is retained as implementation evidence,
+> not current operating guidance. Start from [`README.md`](../../../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the outdated CLI-only repository landing page with a polished, accurate, bilingual overview of the current CRWU CLI, Skills ecosystem, audit workflow, enterprise integrations, and maintainer entry points.

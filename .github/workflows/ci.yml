@@ -56,6 +56,13 @@ jobs:
           # 锁文件不在仓根，必须显式指路，否则 setup-node 找不到缓存键。
           cache-dependency-path: plugins/dsh-crwu-workbench/package-lock.json
 
+      - name: documentation gate
+        if: runner.os == 'Linux' && matrix.node == 22
+        working-directory: .
+        run: |
+          node --test scripts/*.test.mjs
+          node scripts/check-docs.mjs
+
       # npm ci 会执行 prepare（tsdown），所以这一步同时验证「依赖可复现」与「产物可构建」。
       - run: npm ci
 

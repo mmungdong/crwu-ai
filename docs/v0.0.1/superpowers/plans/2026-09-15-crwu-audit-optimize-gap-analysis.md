@@ -1,5 +1,9 @@
 # crwu-audit-optimize AI—人工差距分析 Implementation Plan
 
+> [!NOTE]
+> **状态：历史快照（2026-09-15）。** 本计划仅保留当时的实施证据，不代表当前实现或操作口径。现行入口见
+> [`README.zh-CN.md`](../../../../README.zh-CN.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在现有 `crwu-audit-optimize` 内增加审核后 AI—人工差距分析、双基线归因、HTML 可视化报告、知识库人工修复单和批准后 Skill 修复 Prompt。

@@ -1,5 +1,9 @@
 # Repository Restructure Design
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-03).** This design is retained as decision history, not as a current
+> source of truth. Start from [`README.md`](../../../../README.md).
+
 ## Goal
 
 Restructure `crwu-ai` into a single Go module that can grow into one enterprise

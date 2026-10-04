@@ -4,12 +4,11 @@
 > 不熟悉的 agent 安装前，用 `web_search` 核实官方文档；路径有变 → **以官方为准**
 > 并回写本表（含链接、日期）。deepseek harness 以本机 dsh 的 skills 根为准。
 
-安装入口是仓库根目录的 Makefile（原来那个 `crwu-init` 技能已废弃：技能已随插件维护，
-目录布局本身就是名单，不再需要"分发器技能"去拉一份 `skills/`）：
+DSH 技能随插件包发布。其它宿主按需选择单个 Skill，并使用宿主自己的安装流程；本仓库不再提供
+把全部层扁平复制到用户目录的 Make 目标。目录布局本身就是名单，不维护第二份清单：
 
 ```bash
-make skills-install AGENT_DIR=~/.codex/skills    # 其它宿主：拷全部技能（各层扁平化，按技能名落盘）
-make plugin-pack                                 # DSH：打成插件包，技能按层随包发布
+make plugin-pack    # DSH：打成插件包，技能按层随包发布
 ```
 
 ## 目录表
@@ -39,8 +38,7 @@ make plugin-pack                                 # DSH：打成插件包，技�
 
 ## 覆盖语义（重要）
 
-- **更新模式 = 同名技能全量替换**：`rm -rf <TARGET>/<name>` 后再 `cp -R`，保证
-  `references/` 等子文件夹也被覆盖、旧文件不残留。`make skills-install` 就是这么做的。
-- 只安装含 `SKILL.md` 的目录：`make skills-install` 用 `find plugins -name SKILL.md` 收技能，
-  因此**任何层**（插件自研层、上游 vendored 层、`plugins/common/skills/` 公共层）都会被收到，
-  层目录自己（没有 `SKILL.md`）不会被误当成技能，不需要任何名单文件。
+- 安装或更新时只选择含 `SKILL.md` 的具体 Skill 目录，不要把层目录本身当作 Skill。
+- 替换同名 Skill 时使用宿主提供的安装/更新流程；若宿主没有安装器，先备份目标目录，再完整替换
+  该 Skill 目录，避免残留旧的 `references/` 或脚本。
+- 不要把不同层批量扁平化到同一目录；同名 Skill、上游 vendored 内容和宿主自己的版本策略需要逐项确认。

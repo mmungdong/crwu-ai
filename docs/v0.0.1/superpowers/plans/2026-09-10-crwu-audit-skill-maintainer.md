@@ -1,5 +1,9 @@
 # crwu-audit-skill-maintainer Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-10).** This completed plan is retained as implementation evidence,
+> not current operating guidance. Start from [`README.md`](../../../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a source-repo maintenance skill that inventories a supplied DingTalk knowledge-base tree, identifies missing or invalid first-level asset/business skills and mappings, and safely creates, repairs, or remaps those skills after approval.

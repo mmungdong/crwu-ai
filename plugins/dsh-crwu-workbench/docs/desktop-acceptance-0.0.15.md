@@ -1,5 +1,9 @@
 # 桌面本机访问验收清单（0.0.15 · 人工）
 
+> [!NOTE]
+> **状态：历史快照（插件 0.0.15）。** 本文保留该版本的验收证据，不代表当前版本或操作口径。现行入口见
+> [`README.md`](../README.md) 和 [`releasing.md`](releasing.md)。
+
 本文件是 [本机权限完整适配方案](superpowers/specs/2026-09-28-desktop-local-access-design.md) §10
 的**执行与留证模板**：装 `dsh-crwu-workbench-0.0.15.tgz`，在**干净的非管理员账户**上逐条走完
 P-01…P-18（Windows / macOS 各一遍）、W-01…W-07（Windows）、M-01…M-10（macOS）。

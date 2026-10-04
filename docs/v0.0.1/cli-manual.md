@@ -1,9 +1,9 @@
 # crwu CLI 说明书（H3Yun 员工级访问）
 
 > **给 Agent 的话**：读完本文即可完整操作 `crwu` 对接氚云，**不需要阅读整个项目**。
-> 本文档是 CLI 使用的**唯一权威来源**；命令、参数、环境变量或通道行为变化时，必须
-> 同步更新本文，并在 [`docs/CHANGELOG.md`](CHANGELOG.md) 追加纪要（见
-> `AGENTS.md` 的"CLI Manual & Changelog"纪律）。
+> 本文档是面向人和 Agent 的完整操作手册；机器可读的命令元数据以运行时 `crwu scheme` 为准。
+> 命令、参数、环境变量或通道行为变化时，必须同步更新本文，并在
+> [`CHANGELOG.md`](CHANGELOG.md) 追加纪要（见 [`AGENTS.md`](../../AGENTS.md)）。
 
 ## 1. 这是什么
 

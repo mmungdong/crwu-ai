@@ -1,5 +1,9 @@
 # CRWU Plugin Self-Update Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-28).** This plan preserves implementation context from that date;
+> it is not current operating guidance. Start from [`README.md`](../../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let installed `dsh-crwu-workbench` users discover a newer stable npm release, install the Host-approved exact version through DSH Plugin Manager, and receive a clear prompt to fully quit and reopen DeepSeek Harness.

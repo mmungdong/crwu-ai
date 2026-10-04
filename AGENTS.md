@@ -1,85 +1,68 @@
 # AGENTS.md
 
-## Repository Purpose
+## Scope
 
-This repository contains AI-related tools, including Skills and MCP servers.
+This repository contains the `crwu` CLI, reusable Skills, and the DeepSeek Harness Workbench plugin. Follow this file for repository-wide rules, then apply the nearest nested `AGENTS.md` for files under `plugins/`.
 
-## Current Scope
+## Architecture
 
-- Keep core application services, authentication, CLI behavior, and MCP protocol code independent of WorkBuddy and DeepSeek Harness.
-- Treat WorkBuddy and DeepSeek Harness as thin outer adapters; never branch core behavior by AI host.
-- Employee H3Yun access binds a credential that the employee themselves obtained by scanning into H3Yun (or a H3Yun personal token). Never ask for or store H3Yun passwords.
+- Keep application services, authentication, CLI behavior, and MCP protocol code independent of an AI host.
+- Treat CLI and MCP as transports, integrations as providers, and application services as their shared orchestration boundary. Provider integrations do not import one another.
+- Keep WorkBuddy and DeepSeek Harness integrations as outer adapters. Do not branch core behavior by host.
+- Prefer focused modules and existing repository patterns over new abstractions or dependencies.
 
-## Development Guidelines
+## Credentials and employee identity
 
-- Prefer small, focused tools with a single clear responsibility.
-- Keep Skills, MCP servers, and their supporting files in clearly separated directories.
-- Make every Skill self-contained: no Skill may reference anything outside its own directory (see §Skill Self-Containment).
-- Treat MCP and CLI as transports, integrations (H3Yun web session, H3Yun agent MCP) as providers, and application services as their shared orchestration boundary. No provider integration imports another.
-- Use descriptive, consistent names for directories, commands, tools, and configuration fields.
-- Document installation, configuration, required environment variables, and usage alongside each tool.
-- Never commit credentials, tokens, private endpoints, or other secrets.
-- H3Yun credentials (web session tokens, personal access tokens) are stored in the local OS credential store (`internal/platform/h3yuncreds`), an approved maintainer decision; never write them to files, logs, scheme output, or chat.
-- Each H3Yun credential belongs to one explicit employee. Never treat a service credential, administrator credential, or H3Yun engine credential as the employee identity.
-- Never authorize an H3Yun operation for an employee whose stored credential cannot be validated; never silently fall back to a system or engine-wide user.
-- Avoid dependencies that are not necessary for the tool's core behavior.
-- Preserve backward compatibility for existing WorkBuddy integrations unless a breaking change is explicitly approved.
+- Every H3Yun credential represents one explicit employee. Never substitute a service, administrator, or engine-wide identity.
+- Employees obtain H3Yun access by scanning into H3Yun or by supplying a H3Yun personal token. Never ask for or store an H3Yun password.
+- Store H3Yun web sessions and personal tokens only through `internal/platform/h3yuncreds` in the local OS credential store.
+- Keep credentials, tokens, signed URLs, private endpoints, and secret-bearing errors out of files, logs, scheme output, tests, and chat.
+- Fail closed when a stored employee credential cannot be validated.
 
-## Skill Self-Containment
+## Sources of truth
 
-Every Skill under a **skill layer** (`plugins/<plugin>/skills/<layer>/<skill>/`, or `plugins/common/skills/<skill>/` for the shared layer) must work when installed as a copy on its own — agents install each Skill into their own skills root, so nothing outside the Skill directory exists at that point. This is a hard rule, enforced by a machine gate.
+- `crwu scheme` is the machine-readable source for CLI command names, arguments, descriptions, usage, and examples.
+- [`docs/v0.0.1/cli-manual.md`](docs/v0.0.1/cli-manual.md) owns human and agent operating workflows for the current CLI line.
+- [`docs/v0.0.1/cli-command-contract.md`](docs/v0.0.1/cli-command-contract.md) owns command-catalog requirements.
+- [`docs/v0.0.1/CHANGELOG.md`](docs/v0.0.1/CHANGELOG.md) records functional CLI and audit-system changes.
+- Package metadata and `VERSION` files own release versions. Directory layout and `SKILL.md` frontmatter own the Skill inventory.
+- Root READMEs are concise entry points. Keep English and Simplified Chinese structurally equivalent, and do not copy dynamic versions, totals, or command catalogs into them.
 
-> Layers exist because DSH registers **one skill root per layer** and scans exactly one level below each root. The upstream `dws` layer (`plugins/dsh-crwu-workbench/skills/dws/`) is vendored `dingtalk-workspace-cli` content: it is exempt from this lint and gated by `npm run dws:check` instead. See [`plugins/AGENTS.md`](plugins/AGENTS.md) §1 and §5.
+## Skill self-containment
 
-Never, in `SKILL.md`, `references/*` or the Skill's own `scripts/*`:
+Every non-vendored Skill must work after its own directory is copied into an agent's skills root.
 
-- reference a repository directory or repository-root file: `docs/`, `tools/`, `cmd/`, `internal/`, `bin/`, `Makefile`, `go.mod`;
-- link out of the Skill directory (`[manual](../../docs/cli-manual.md)`, `../docs/...`);
-- write a repo-root-relative cross-Skill path (`skills/<other-skill>/...`);
-- rely on a deployment-injected executable path, or point at a repository manual or `./bin/<platform>/crwu` instead of the installed `crwu` command.
+- Keep runtime scripts, schemas, examples, tests, and references inside the Skill directory.
+- Call installed commands from `PATH`; discover CLI contracts through `crwu scheme`.
+- Refer to a sibling Skill through `$SKILLS_ROOT/<skill>/...`, never through a repository path.
+- Derive repository or skills roots in source-repository maintenance scripts from `__file__`.
+- When a Skill depends on a genuinely external tool that this repository does not ship, state that boundary and that the tool is not installed with the Skill.
+- Repository-only contract tests may locate the source repository after declaring `源仓契约测试` or `源仓维护工具` in their first 30 lines. They must skip when source-only documents or sibling Skills are absent.
+- Vendored DWS Skills are governed by their provenance check and are not rewritten to match repository-owned rules.
 
-Do instead:
+Run the self-containment validator once for each non-vendored layer; passing an umbrella `skills/` directory is invalid because discovery is one level deep. Detailed layer and maintenance rules live in [`plugins/AGENTS.md`](plugins/AGENTS.md).
 
-- keep every script a Skill runs inside that Skill's own `scripts/`, together with its tests, schemas, examples and README; write commands as `python3 scripts/<file>` (run from the Skill directory);
-- refer to a sibling Skill's script as "the `<skill>` Skill's `scripts/<file>`" and run it as `python3 "$SKILLS_ROOT/<skill>/scripts/<file>"`, where `$SKILLS_ROOT` is the skills root this Skill is installed into;
-- put explanations, thresholds and design rationale in the Skill's own `references/`; never treat repository design docs as runtime reading;
-- take CLI usage, flags and output contracts from `crwu scheme` (runtime command catalog) and call `crwu` from `PATH`;
-- derive any skills-root or repository-root constant inside a script from `__file__` (`Path(__file__).resolve().parents[N]`), never from hardcoded repository layout;
-- describe source-repository bookkeeping (design docs, skill index, change log) functionally rather than by repository path.
+## CLI changes
 
-Two exceptions, and only these two:
+For every new or changed `crwu` subcommand:
 
-- **External tools** that genuinely ship outside this repository (for example a deployment-side script): the Skill must state that this repository does not provide them and that they do not install with the Skill.
-- **Source-repository contract tests / maintenance tools**: `.py` files that only run while maintaining this repository, that the runtime never needs and that `SKILL.md` never references as a runtime step, may locate the repository after declaring `源仓契约测试` or `源仓维护工具` within their first 30 lines. Any assertion about repository documents must skip explicitly when they are absent, so that an installed copy skips instead of failing.
+1. Register its English description, exact usage, and at least one accurate example in the canonical catalog.
+2. Keep `crwu scheme` JSON-only on stdout; diagnostics go to stderr.
+3. Test observable command behavior and generated scheme output.
+4. Update the CLI manual and append the changelog when commands, flags, environment variables, output contracts, channel behavior, or workflows change.
+5. Keep the CLI default version synchronized between `internal/buildinfo` and the root `Makefile`.
 
-Machine gate: `python3 <layer>/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root <layer>` must report `error=0` for **every non-vendored layer** (the self-owned layer and the shared `plugins/common/skills/` layer; pass one `--skill-root` per layer, since the lint treats a root's direct children as Skills). Its self-containment lint enforces the list above over Skill content and Skill-owned scripts (`plugins/AGENTS.md` and `docs/skills.md` are repository documents, not Skills). The full checklist, the "what to write instead" table and the migration steps are in [`plugins/AGENTS.md`](plugins/AGENTS.md) §「技能自洽性」.
+## Documentation lifecycle
 
-## CLI Command Contract
+- Active instructions describe current behavior and link only to current operating documents.
+- Dated plans, specs, reviews, backlogs, acceptance reports, and handoffs are historical snapshots. Keep their original body intact and mark them as historical instead of using them as current instructions.
+- Fix links in active navigation. Do not mechanically rewrite historical prose to use today's paths.
+- Run `make docs-check` after changing an active Markdown entry point.
 
-- Follow `docs/v0.0.1/cli-command-contract.md` for every new or changed `crwu` command.
-- Register every invokable subcommand in the canonical CLI command catalog.
-- Give every subcommand a specific English description, exact usage, and at least one accurate example with an English description.
-- Keep `crwu scheme` as stable JSON intended for AI command discovery; write no human-oriented logs to its standard output.
-- Treat a command missing its description, usage, or example as incomplete.
-- Add or update tests that exercise command behavior and the generated scheme whenever a command changes.
-- Keep the default application version synchronized between `internal/buildinfo` and the root `Makefile`; the current version is `0.0.1`.
+## Verification and delivery
 
-## CLI Manual & Changelog
-
-- `docs/v0.0.1/cli-manual.md` is the single source of truth for *using* the CLI, so an
-  agent can operate `crwu` without reading the whole repository. Update it
-  whenever commands, flags, environment variables, output contracts, channel
-  behavior, or workflows change.
-- Append an entry to `docs/v0.0.1/CHANGELOG.md` for every functional CLI change
-  (feat / fix / refactor / docs), following that file's format.
-- Keep the README command tables in sync with the actual command catalog
-  (`crwu scheme`).
-
-## Changes and Verification
-
-- Limit changes to the requested feature or tool; avoid unrelated refactoring.
-- Add or update tests when behavior changes.
-- Run the relevant tests, formatting checks, and lint checks before considering work complete.
-- If automated verification is unavailable, document the manual verification performed.
-- Update affected documentation whenever setup, configuration, commands, or behavior changes.
-- When updating README documentation, synchronize all supported language versions.
+- Add or update tests before behavior changes and verify the test can fail for the intended reason.
+- Run the narrow test while iterating, then the relevant repository gate before completion.
+- Use `make test` for Go behavior, `make docs-check` for active documentation, and `make plugin-check` for Workbench or packaged Skill changes.
+- Run `git diff --check` and inspect the final diff for unrelated files and generated artifacts.
+- Do not commit, push, tag, or publish unless the user explicitly requests that action.

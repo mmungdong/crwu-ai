@@ -1,5 +1,9 @@
 # Repository Restructure Implementation Plan
 
+> [!NOTE]
+> **Status: historical snapshot (2026-09-03).** This completed plan is retained as implementation evidence,
+> not current operating guidance. Start from [`README.md`](../../../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Produce a compilable single-module Go repository with one `crwu` CLI binary, a root build Makefile, documented component boundaries, and no protocol/provider coupling.

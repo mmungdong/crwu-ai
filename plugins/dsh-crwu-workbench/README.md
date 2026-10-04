@@ -428,65 +428,23 @@ CI（`.github/workflows/ci.yml`）在 Ubuntu + Windows × Node 22/24 上跑同�
 
 ## 五、npm 发布（包形态的正式分发）
 
-包形态是长期维护的那一半，按 npm 包分发。仓库已配好发布链路，**不要手工 `npm publish`**：
+正式发布优先走 `plugin-v<version>` tag 触发的 GitHub Actions。版本查看、修改、登录检查、空跑与
+应急手动发布都由仓库根目录 Makefile 提供统一入口：
 
 ```bash
-npm run version:set 0.0.2     # 改 package.json + VERSION（并同步 lockfile 根版本）
-# 在 CHANGELOG.md 加一节 `## package · 0.0.2 · <日期>`
-npm run check                 # 本地门禁：version:check + typecheck + test + build + smoke:built
-npm run pack:assert           # 核对真正打进 tarball 的文件清单
-git commit -am "release(dsh-crwu-workbench): 0.0.2" && git push
-git tag plugin-v0.0.2 && git push origin plugin-v0.0.2
+make plugin-version
+make plugin-version-set PLUGIN_RELEASE_VERSION=<version>
+make plugin-pack
+make plugin-publish-dry-run
 ```
 
-`plugin-v*` tag 会触发仓根的 [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
-（`v*` 留给仓里的 Go CLI，两条发布线分开）：先断言
-**tag 与 `package.json` / `VERSION` 一致**，再跑完整门禁与产物自检，最后发布。
+`make plugin-version` 会显示本地版本、npm `latest` 和建议的下一个 patch 版本。`plugin-pack` 会运行完整
+门禁并核对真实 tarball；`plugin-publish-dry-run` 会先检查干净工作树、npm 登录和版本递增，再构建并空跑。
+插件名默认由 Makefile 顶部的 `PLUGIN` 指定，也可在命令行覆盖。
 
-**当前发布方式（0.0.12 及以后）：只走 tag → GitHub Actions → CI 发布，禁止在本机手工 `npm publish`。**
-推 `plugin-v0.0.12` 这类 tag 时，`release.yml` 会校验 tag 与 `package.json` / `VERSION` 一致，
-再由 CI 用仓库 Secret `NPM_TOKEN` 执行 `npm publish --provenance`（provenance 来自 GitHub Actions OIDC）；
-**Trusted Publishing 尚未启用**，它只是 `docs/releasing.md` §3.3 记录的未来迁移方案。
-本机只允许 `npm publish --dry-run`（dry-run 不是发布）。
-
-下面这段是 **0.0.10 初次建包时的历史记录**，只用于解释 provenance 的本机限制，
-**不得**照它去发 0.0.12 或任何后续版本（那时包还不存在，才必须在本机建包）：
-
-**首次发布（引导）必须在本机做，而且不能带 `--provenance`**（2026-09-28 实测）：
-`--provenance` 只在受支持的 CI（GitHub Actions 的 OIDC）里成立，本机 provider 是 `null`，
-npm 会直接以 `EUSAGE: Automatic provenance generation not supported for provider: null` 拒绝发布。
-所以 `publishConfig` 里**不要**写 `provenance: true`（有测试钉住这一点），本机首发用：
-
-```bash
-npm login --registry=https://registry.npmjs.org
-npm run build && npm run check && npm run pack:assert:strict
-npm publish                      # 不带 --provenance
-```
-
-**当前真实工作流（0.0.12 仍在用）**：`.github/workflows/release.yml` 读 GitHub Secret
-`NPM_TOKEN`（`NODE_AUTH_TOKEN`），在 tag `plugin-v<版本>` 上执行 `npm publish --provenance` ——
-provenance（构建来源证明）由 GitHub Actions 的 OIDC 在 CI 里产生，**不是**本机发布。
-**Trusted Publishing 目前没有启用**：它只是 `docs/releasing.md` §3.3 记录的**未来可迁移方案**，
-在真的改完工作流之前，不要把"已采用无 token 发布"当成当前事实。
-
-未来若迁移到 Trusted Publisher（npm 网页给这个包配 repo `mmungdong/crwu-ai`
-+ workflow `release.yml`）；之后的版本由 CI 用 **OIDC** 发布 —— 不需要任何长期 token，
-npm 会**自动**附带 provenance attestation，`NPM_TOKEN` secret 也可以删掉。
-也可以在 Actions 里用 `workflow_dispatch` 跑一次 dry-run：只打包与校验，不发。
-
-**`prepublishOnly` 会挡住不该发的包**：先 `pack:assert`（缺入口、误打 `tests/`/`install/`
-一律失败），再 `check`。所以哪怕有人绕过 tag 手工发布，也过不了这两道。
-
-**发布目标钉在官方 registry**：`publishConfig.registry = https://registry.npmjs.org`，与 CI 里
-`setup-node` 的 `registry-url` 一致（`tests/unit/host-package.test.mjs` 会核对两者相同）。
-不钉的话，本机 `~/.npmrc` 若指向镜像（国内开发机常见），手工 `npm publish` 会往镜像上发，
-而 `--provenance` 在镜像上根本不成立 —— 一条命令同时踩两个坑。装依赖仍然走你的镜像，不受影响。
-
-发之前可以先空跑一次，它会真的跑完 `prepublishOnly` 并打印将要发布的清单（不会上传）：
-
-```bash
-npm publish --dry-run    # 期望看到：Publishing to https://registry.npmjs.org …（dry-run）
-```
+只有 tag 流程不可用且维护者明确选择应急发布时，才运行带精确确认值的
+`make plugin-publish CONFIRM_PUBLISH=<package>@<version>`。完整步骤、门禁和失败恢复见
+[`docs/releasing.md`](docs/releasing.md)。
 
 ### npm 分发路径也实测过
 
