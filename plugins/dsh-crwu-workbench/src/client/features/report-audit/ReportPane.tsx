@@ -1124,7 +1124,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
 
     {state.handoff === null
       ? null
-      : <Handoff task={state.handoff} copied={props.handoffCopied} onCopied={props.onHandoffCopied} />}
+      : <Handoff task={state.handoff} workspacePath={props.workspace?.path} copied={props.handoffCopied} onCopied={props.onHandoffCopied} />}
     {state.childAliveHint === '' ? null : <div className={C.muted}>{state.childAliveHint}</div>}
 
     {state.activeKey === '' ? null : (() => {

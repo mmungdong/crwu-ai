@@ -337,7 +337,7 @@ test('ping and boot answer with the state the panel needs to render', async () =
   // 协议 24：审核根的 cwd/沙箱边界改成**已选工作空间**（DSH 的边界 = 会话 cwd，
   // 而挂到工作空间下要求 cwd 逐字等于工作空间路径 —— 否则审核会话永远落「未分组」）。
   // 旧宿主按"案例目录"建根，两代的会话归类与沙箱事实都不同，必须靠协议号分开。
-  assert.equal(WORKBENCH_PROTOCOL, 25, '授权态新增 unreadable 后协议必须 +1')
+  assert.equal(WORKBENCH_PROTOCOL, 26, '普通会话案例访问与手工交接变化后必须识别旧 Host')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')

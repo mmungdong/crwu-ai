@@ -5915,3 +5915,15 @@ test('artifactHint 在 Windows 工作空间下用 `\\` 拼（界面不能显示 
   const posix = artifactHint('/Users/me/工作空间')
   assert.match(posix, /\/Users\/me\/工作空间\/<报告流水号>\//, posix)
 })
+
+test('manual handoff carries the selected Windows case path and refreshes its input snapshot', async () => {
+  const { handoffPrompt } = await import(new URL('src/client/features/workbench/Handoff.tsx', ROOT).href)
+  const prompt = handoffPrompt({ id: 'obj-1', seqNo: 'S1', name: '报告', project: '项目' }, 'C:\\Cases')
+  assert.ok(prompt.includes('C:\\Cases\\S1'), prompt)
+  assert.match(prompt, /crwu_audit_case_bootstrap/)
+  const call = /crwu_audit_case_bootstrap\((\{[^\n]+\})\)/.exec(prompt)
+  assert.ok(call, prompt)
+  assert.deepEqual(JSON.parse(call[1]), { objectId: 'obj-1', seqNo: 'S1', caseDir: 'C:\\Cases\\S1', refresh: true })
+  assert.match(prompt, /普通会话/)
+  assert.match(prompt, /load_workspace_dependencies/)
+})

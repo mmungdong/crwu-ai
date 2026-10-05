@@ -157,15 +157,12 @@ export function samePathText(a: unknown, b: unknown): boolean {
  */
 export function isAuditChild(state: WorkbenchState, childId: string, parentSessionId = ''): boolean {
   if (childId === '') return false
+  if (parentSessionId !== '' && parentSessionId === state.auditRoot?.sessionId) return true
   for (const record of Object.values(state.audits ?? {})) {
     if (record === undefined) continue
-    if (record.childId === childId) return true
-    // 待接管窗口：子会话已经在跑，但 childId 还没落到记录里 —— 按父会话认。
-    // ⚠️ 这条只用在**拒绝方向**（"你是不是审核子会话" → 拒绝面板类 Tool），
-    // 所以父会话 id 的证明力不足在这里是**可接受**的：最坏结果是**多拒绝**一个同 root 的
-    // sibling（安全方向），而不是放行。放行方向**绝不用**父会话 id（见 `auditScopeFor`）。
-    if (record.pending === true && record.childId === '' && parentSessionId !== ''
-      && record.parentSessionId === parentSessionId) return true
+    if (record.childId === childId || record.replacedChildId === childId) return true
+    // Parent identity is only a denial criterion; it cannot grant an audit scope.
+    if (parentSessionId !== '' && record.parentSessionId === parentSessionId) return true
   }
   return false
 }
@@ -181,7 +178,7 @@ export function isAuditChild(state: WorkbenchState, childId: string, parentSessi
  * 退路问的是会话存储本身：**审核根的孩子里有没有这个调用者**。
  * 两条都拿不到才算"问不到"，由门禁 fail closed（不猜）。
  *
- * 只对**待接管**的候选问（正常最多一条）：多条 pending 是状态异常，直接不认。
+ * Query known audit roots so replaced children retain their managed identity.
  */
 export async function callerParentSessionId(
   ctx: Context,
@@ -195,24 +192,25 @@ export async function callerParentSessionId(
     listChildren?: (parentSessionId: string) => Promise<unknown>
   } | undefined
   if (subagents === undefined || typeof subagents.listChildren !== 'function') return ''
-  const candidates = Object.values(state.audits ?? {}).filter((record) => record !== undefined
-    && record.pending === true && record.childId === '' && record.parentSessionId !== '')
-  if (candidates.length !== 1) return ''
-  const parentId = candidates[0]?.parentSessionId ?? ''
-  if (parentId === '') return ''
-  try {
-    const children = await subagents.listChildren(parentId)
-    if (!Array.isArray(children)) return ''
-    for (const child of children) {
-      if (child === null || typeof child !== 'object') continue
-      const record = child as Record<string, unknown>
-      if (text(record.kind) !== 'child') continue
-      // 会话存储驱动的列表：确认"这个调用者确实是审核根的孩子"。
-      if (text(record.id) === childId) return parentId
+  const candidates = new Set([
+    text(state.auditRoot?.sessionId),
+    ...Object.values(state.audits ?? {}).map((record) => text(record?.parentSessionId)),
+  ].filter((id) => id !== ''))
+  for (const parentId of candidates) {
+    try {
+      const children = await subagents.listChildren(parentId)
+      if (!Array.isArray(children)) continue
+      for (const child of children) {
+        if (child === null || typeof child !== 'object') continue
+        const record = child as Record<string, unknown>
+        if (text(record.kind) !== 'child') continue
+        // 会话存储驱动的列表：确认"这个调用者确实是审核根的孩子"。
+        if (text(record.id) === childId) return parentId
+      }
+    } catch (error) {
+      // Failed ancestry queries cannot establish an audit identity.
+      void error
     }
-  } catch (error) {
-    // 问不到不能当"确认了"：返回空串让门禁 fail closed。
-    void error
   }
   return ''
 }

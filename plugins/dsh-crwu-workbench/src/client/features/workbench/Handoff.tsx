@@ -4,6 +4,7 @@ import { WORKBENCH_CLASSES as C } from './consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { workbenchApi } from '../report-audit/api.ts'
 import type { TaskRow } from '../../../shared/types.ts'
+import { caseDirOf } from '../../../shared/utils/case-dir.ts'
 
 /**
  * 发起审核失败时的**手工兜底**。
@@ -27,21 +28,38 @@ export interface HandoffProps {
   task: Pick<TaskRow, 'id' | 'seqNo' | 'name' | 'project'>
   onCopied: (copied: boolean) => void
   copied: boolean
+  workspacePath?: string
 }
 
 /** 手工提示词全文。字段缺失时给出可操作的提示，而不是留空。 */
-export function handoffPrompt(task: HandoffProps['task']): string {
+export function handoffPrompt(task: HandoffProps['task'], workspacePath = ''): string {
+  const caseDir = caseDirOf(workspacePath, task.seqNo)
   return [
     zhCN.handoffIntro,
     '',
     `- ${zhCN.handoffObjectId}${task.id === '' ? zhCN.handoffObjectIdMissing : task.id}`,
     `- ${zhCN.handoffSeqNo}${task.seqNo === '' ? task.name : task.seqNo}`,
     `- ${zhCN.handoffProject}${task.project === '' ? zhCN.handoffProjectMissing : task.project}`,
+    '',
+    '这是普通会话中的手工审核，无需登记为审核子会话。先准备本轮输入快照，再执行技能的完整两阶段审核。',
+    ...(caseDir === '' ? [
+      '请先在工作台选定工作空间并确认报告流水号，然后重新复制提示词；不要猜案例目录。',
+    ] : [
+      `本次唯一案例目录：${caseDir}`,
+      '若案例目录不存在，只在上述工作空间下创建这个目录；所有材料、脚本与交付件均放在其中，不复用旧审核产物。',
+      ...(task.id === '' ? [] : [
+        `先调用 crwu_audit_case_bootstrap(${JSON.stringify({ objectId: task.id, seqNo: task.seqNo, caseDir, refresh: true })})。`,
+        '成功后只读取它返回的 snapshotPath、attachmentsPath、metadataPath；失败则停止并报告结构化错误。',
+      ]),
+      '附件按清单通过 crwu_h3yun_file_get 逐件下载，知识清单用 crwu_audit_knowledge_materialize 实时下载。',
+      '技能脚本用 crwu_run_python_script；运行时仅由 load_workspace_dependencies 解析，不查找或改用系统 Python。',
+      '最终 HTML/JSON 校验通过后，分别调用 crwu_audit_oss_publish、crwu_audit_dingtalk_archive、crwu_audit_dingtalk_notify_self，独立报告各通道交付结果。',
+    ]),
   ].join('\n')
 }
 
 export function Handoff(props: HandoffProps): React.ReactElement {
-  const prompt = handoffPrompt(props.task)
+  const prompt = handoffPrompt(props.task, props.workspacePath)
   const copy = (): void => {
     // 浏览器剪贴板不可用时退到 Host 的剪贴板命令（走 stdin，不拼命令行）。
     const fallback = (): void => { void workbenchApi.clipboard({ text: prompt }) }

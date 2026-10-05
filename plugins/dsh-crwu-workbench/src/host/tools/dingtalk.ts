@@ -10,7 +10,7 @@ import { buildPublishPlan, nodeSize } from '../dws/plan.ts'
 import { requireInsideCase, fileSize } from './case-dir.ts'
 import { writeCaseText } from './case-files.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { requireAuditScope } from '../audit/scope.ts'
+import { requireCaseAccess } from '../audit/case-access.ts'
 import { dwsJson, type DwsJsonOptions } from './dws-json.ts'
 import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
 import { failure, jsonObject, renderJson } from './outcome.ts'
@@ -174,7 +174,7 @@ export function dingtalkTools(deps: ToolDeps) {
         remotePath: '', remoteName: '', nodeId: '', sizeBytes: 0, exitCode: null as number | null, steps,
       }
       const ctx = toolContext(deps.ctx, exec)
-      const caseCheck = await requireAuditScope(ctx, deps.state, exec, {
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
         caseDir: args.caseDir, seqNo: args.seqNo,
       })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
@@ -405,7 +405,7 @@ export function dingtalkTools(deps: ToolDeps) {
       const empty = {
         alreadySent: false, userId: '', openDingTalkId: '', conversationId: '', messageId: '', openDingId: '', steps,
       }
-      const caseCheck = await requireAuditScope(ctx, deps.state, exec, {
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
         caseDir: args.caseDir, seqNo: args.seqNo,
       })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }

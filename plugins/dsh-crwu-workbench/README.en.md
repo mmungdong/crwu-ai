@@ -112,6 +112,12 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
 > root and child sessions are always `workspace-write` with `approval=never`, and the account-connection
 > step also offers a read-only `.dws` checkup with a second-confirmed permission repair.
 
+### Manual audit in a new DSH session
+
+The fallback prompt carries the selected workspace's case directory and refreshes the record/attachment input snapshot with `crwu_audit_case_bootstrap`. Ordinary sessions can run scripts, materialize knowledge, download attachments, publish to OSS, archive to DingTalk, and notify themselves without registering an audit child or discussion session. Keep the workspace, case path, employee logins, and local-access consent ready; the session's own DSH sandbox policy still applies.
+
+Managed audit children remain bound to their current case and attachment manifest, including after stopping. Registered discussions can use case tools and query their own report. After updating, fully quit and restart DSH, then copy the prompt again.
+
 ### Updating CRWU (self-update, from 0.0.12)
 
 **Where to look:** the version badge in the sidebar card header and in the panel header (`dev` / `v0.0.12`)

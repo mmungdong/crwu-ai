@@ -32,6 +32,7 @@ const { makeSandboxedFs, makeSandboxedShell, makeSessionPolicyService } = await 
 const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
 const { registerCrwuTools, missingAuditTools } = await import(new URL('src/host/tools/register.ts', ROOT).href)
 const { AUDIT_CHILD_DENIED_TOOLS, CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_CHILD_TOOLS, REQUIRED_AUDIT_TOOLS, TOOL_NAMES } = await import(new URL('src/host/tools/consts.ts', ROOT).href)
+const { requireCaseAccess } = await import(new URL('src/host/audit/case-access.ts', ROOT).href)
 const { sanitizeOssError } = await import(new URL('src/host/tools/oss.ts', ROOT).href)
 const { classifyRun } = await import(new URL('src/host/tools/outcome.ts', ROOT).href)
 const { assertDwsCommand, dwsOperationOf, runDws } = await import(new URL('src/host/dws/run.ts', ROOT).href)
@@ -333,6 +334,19 @@ function scopedExec(name, args, signal, childId = AUDIT_CHILD) {
   }
 }
 
+function caseCaller(deps, mode, patch = {}) {
+  if (mode === 'audit') return withAuditScope(deps.state, patch)
+  if (mode === 'discussion') {
+    deps.discussionScopes.register({
+      sessionId: 'case-discussion', seqNo: SEQ, objectId: 'obj-1',
+      caseDir: patch.casePath ?? CASE_DIR, allowedAttachmentIds: patch.allowedAttachmentIds ?? ['f-1'],
+    })
+    return 'case-discussion'
+  }
+  if (!deps.state.workspacePath) deps.state.workspacePath = '/cases/space'
+  return 'manual-new-session'
+}
+
 /** 工具的 execute 需要一个 exec：这里只给信号与 agent（agent 为空 = 全局 scope）。 */
 function execOf(signal) {
   return { callId: 'call-1', rootCallId: 'call-1', token: Symbol('t'), name: 'x', arguments: {}, signal, agent: undefined, deferContext() {}, concludeTurn() {} }
@@ -356,30 +370,32 @@ test('registerCrwuTools registers exactly the nine business tools and unregister
   assert.deepEqual([...registry.definitions.keys()], [], '插件卸载时必须完整注销')
 })
 
-test('crwu_run_python_script：技能脚本的执行收进 Host，参数逐个走 argv', async () => {
-  // 现场：模型可见的 pwsh 工具与插件的 `ctx.shell` 是**同一套** Windows sandbox，
-  // 所以子代理自己拼 `& 'python.exe' script.py` 会命中受限沙箱下 native 子进程的管道缺陷。
-  // 这条 Tool 把执行收进 Host：同一条 seam、同一层（只在受限沙箱生效的）临时文件捕获。
-  // `withAuditScope` 是**改写**传入的 state 并回 childId（不是回一个新 state）。
-  const state = makeState()
-  withAuditScope(state)
-  const { deps, registry, shell } = makeDeps({ state })
-  registerCrwuTools(deps.ctx, deps)
-  const tricky = '$(rm -rf /)'
-  const result = await registry.execute(scopedExec(TOOL_NAMES.runPythonScript, {
-    caseDir: CASE_DIR, script: 'scripts/review.py', scriptArgs: ['--case', CASE_DIR, tricky],
-  }, new AbortController().signal))
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: crwu_run_python_script：技能脚本的执行收进 Host，参数逐个走 argv`, async () => {
+    // 现场：模型可见的 pwsh 工具与插件的 `ctx.shell` 是**同一套** Windows sandbox，
+    // 所以子代理自己拼 `& 'python.exe' script.py` 会命中受限沙箱下 native 子进程的管道缺陷。
+    // 这条 Tool 把执行收进 Host：同一条 seam、同一层（只在受限沙箱生效的）临时文件捕获。
+    // `withAuditScope` 是**改写**传入的 state 并回 childId（不是回一个新 state）。
+    const state = makeState()
+    const { deps, registry, shell } = makeDeps({ state })
+    const callerId = caseCaller(deps, mode)
+    registerCrwuTools(deps.ctx, deps)
+    const tricky = '$(rm -rf /)'
+    const result = await registry.execute(scopedExec(TOOL_NAMES.runPythonScript, {
+      caseDir: CASE_DIR, script: 'scripts/review.py', scriptArgs: ['--case', CASE_DIR, tricky],
+    }, new AbortController().signal, callerId))
 
-  assert.equal(result.value.ok, true, JSON.stringify(result.value))
-  assert.equal(result.value.scriptPath, `${CASE_DIR}/scripts/review.py`)
-  assert.deepEqual(result.value.argv, [`${CASE_DIR}/scripts/review.py`, '--case', CASE_DIR, tricky])
-  // 参数只走 argv：命令里那个形状奇怪的值必须被**引用成字面量**，不许变成命令替换。
-  const command = String(shell.commands[0] ?? '')
-  assert.equal(command.includes(`'${tricky}'`), true, command)
-  assert.equal(command.includes('/dsh/python/bin/python3'), true, '必须用解析出来的 DSH Python')
-  // **不提权**：脚本在案例目录内，边界由调用方会话给出。
-  assert.equal(result.value.sandbox.requested, '', '案例内的脚本执行不提权')
-})
+    assert.equal(result.value.ok, true, JSON.stringify(result.value))
+    assert.equal(result.value.scriptPath, `${CASE_DIR}/scripts/review.py`)
+    assert.deepEqual(result.value.argv, [`${CASE_DIR}/scripts/review.py`, '--case', CASE_DIR, tricky])
+    // 参数只走 argv：命令里那个形状奇怪的值必须被**引用成字面量**，不许变成命令替换。
+    const command = String(shell.commands[0] ?? '')
+    assert.equal(command.includes(`'${tricky}'`), true, command)
+    assert.equal(command.includes('/dsh/python/bin/python3'), true, '必须用解析出来的 DSH Python')
+    // **不提权**：脚本在案例目录内，边界由调用方会话给出。
+    assert.equal(result.value.sandbox.requested, '', '案例内的脚本执行不提权')
+  })
+}
 
 test('crwu_run_python_script：只接受案例目录内的相对路径（绝对路径 / .. / 空串一律拒绝）', async () => {
   const state = makeState()
@@ -592,10 +608,10 @@ test('案例内 Tool 的反例矩阵：工作空间根 / 兄弟案例 / 子目�
     assert.deepEqual(shell.commands, [], '外来 fileId 一个进程都不许起')
   }
 
-  // ④ 已结束 / 未知的 childId：没有 scope，案例内 Tool 一律拒绝
+  // Ended managed children and callers without identity cannot use manual access.
   for (const [scopePatch, childId, label] of [
     [{ ended: true }, AUDIT_CHILD, '已结束的审核'],
-    [{}, 'ghost-child', '未知的 childId'],
+    [{}, '', '缺少调用者身份'],
     [{ casePath: '', attemptId: '' }, AUDIT_CHILD, 'scope 不完整的认领记录'],
   ]) {
     const { registry, shell } = built(scopePatch)
@@ -761,35 +777,37 @@ test('crwu_h3yun_files_list returns metadata only and never a download URL', asy
   assert.equal(JSON.stringify(result.value).includes('h3yun.com'), false, '不许把带会话鉴权的下载 URL 带回模型')
 })
 
-test('crwu_h3yun_file_get downloads one attachment inside the case directory and rejects escapes', async () => {
-  const shell = makeShell((spec) => {
-    const out = /--out '?([^'\s]+)'?/.exec(spec.command)
-    if (spec.command.includes('file get') && out !== null) {
-      shellFs.addFile(out[1], 'PDF')
-      return shellOk(JSON.stringify({ ok: true, data: { file: out[1] } }))
-    }
-    return null
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: crwu_h3yun_file_get downloads one attachment inside the case directory and rejects escapes`, async () => {
+    const shell = makeShell((spec) => {
+      const out = /--out '?([^'\s]+)'?/.exec(spec.command)
+      if (spec.command.includes('file get') && out !== null) {
+        shellFs.addFile(out[1], 'PDF')
+        return shellOk(JSON.stringify({ ok: true, data: { file: out[1] } }))
+      }
+      return null
+    })
+    const shellFs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/材料-源`] })
+    const { deps, registry } = makeDeps({ fs: shellFs, shell })
+    const callerId = caseCaller(deps, mode, { casePath: CASE_DIR, allowedAttachmentIds: ['f-1'] })
+    registerCrwuTools(deps.ctx, deps)
+
+    const ok = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+      { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/估值报告.pdf' },
+      new AbortController().signal, callerId))
+    assert.equal(ok.value.ok, true)
+    assert.equal(ok.value.path, `${CASE_DIR}/材料-源/估值报告.pdf`)
+    assert.equal(ok.value.sizeBytes, 3)
+    assert.ok(shell.commands[0].startsWith(CRWU))
+
+    const escape = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
+      { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '../outside.pdf' },
+      new AbortController().signal, callerId))
+    assert.equal(escape.value.ok, false)
+    assert.equal(escape.value.errorKind, 'input', '越界路径必须在执行前被拒绝')
+    assert.equal(shell.commands.length, 1, '被拒绝的请求不许发出任何命令')
   })
-  const shellFs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/材料-源`] })
-  const { deps, registry } = makeDeps({ fs: shellFs, shell })
-  withAuditScope(deps.state, { casePath: CASE_DIR, allowedAttachmentIds: ['f-1'] })
-  registerCrwuTools(deps.ctx, deps)
-
-  const ok = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
-    { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/估值报告.pdf' },
-    new AbortController().signal))
-  assert.equal(ok.value.ok, true)
-  assert.equal(ok.value.path, `${CASE_DIR}/材料-源/估值报告.pdf`)
-  assert.equal(ok.value.sizeBytes, 3)
-  assert.ok(shell.commands[0].startsWith(CRWU))
-
-  const escape = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet,
-    { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '../outside.pdf' },
-    new AbortController().signal))
-  assert.equal(escape.value.ok, false)
-  assert.equal(escape.value.errorKind, 'input', '越界路径必须在执行前被拒绝')
-  assert.equal(shell.commands.length, 1, '被拒绝的请求不许发出任何命令')
-})
+}
 
 test('两个同名附件不许互相覆盖：目标名必须带上这件附件自己的 fileId 标识', async () => {
   // 真实现场：一份报告里挂着两个 `广兴建筑v3.zip`（fileId 不同）。按文件名落盘时第二件会
@@ -877,7 +895,7 @@ test('已登记的讨论会话可以下载白名单附件（这是"讨论会话�
   assert.equal(shellFs.files.has(`${CASE_DIR}/材料-源/${NAME}`), true)
 })
 
-test('讨论会话：清单外的 fileId、别人的案例目录、未登记的会话一律拒绝且零命令', async () => {
+test('讨论会话：清单外的 fileId、别人的案例目录、无身份调用一律拒绝且零命令', async () => {
   const shell = makeShell(() => shellOk(JSON.stringify({ ok: true })))
   const shellFs = makeFs({ dirs: [CASE_DIR] })
   const scopes = createDiscussionScopeRegistry()
@@ -889,7 +907,7 @@ test('讨论会话：清单外的 fileId、别人的案例目录、未登记的�
     ['清单外的 fileId', { fileId: 'f-2', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }, DISCUSSION_SESSION, 'policy'],
     ['别人的案例目录', { fileId: 'f-1', caseDir: `${CASE_DIR}/别的`, relativePath: '材料-源/a.pdf' }, DISCUSSION_SESSION, 'policy'],
     ['工作空间根当案例目录', { fileId: 'f-1', caseDir: '/cases/space', relativePath: '材料-源/a.pdf' }, DISCUSSION_SESSION, 'policy'],
-    ['没登记过的会话', { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }, 'session-plain-1', 'policy'],
+    ['没登记过的会话', { fileId: 'f-1', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }, '', 'policy'],
   ]
   for (const [label, args, sessionId, kind] of cases) {
     const result = await registry.execute(scopedExec(TOOL_NAMES.h3yunFileGet, args, new AbortController().signal, sessionId))
@@ -899,7 +917,7 @@ test('讨论会话：清单外的 fileId、别人的案例目录、未登记的�
   assert.deepEqual(shell.commands, [], '被拒绝的请求一个进程都不许起')
 })
 
-test('讨论会话不能查记录、也不能列举附件（它不是氚云查询入口）', async () => {
+test('讨论会话查询其他报告时拒绝且零命令', async () => {
   const shell = makeShell(() => shellOk(JSON.stringify({ ok: true, data: [] })))
   const scopes = createDiscussionScopeRegistry()
   const { deps, registry } = makeDeps({ shell, discussionScopes: scopes })
@@ -907,11 +925,11 @@ test('讨论会话不能查记录、也不能列举附件（它不是氚云查�
   registerCrwuTools(deps.ctx, deps)
 
   for (const name of [TOOL_NAMES.h3yunRecordGet, TOOL_NAMES.h3yunFilesList]) {
-    const result = await registry.execute(scopedExec(name, { objectId: 'obj-1', caseDir: CASE_DIR },
+    const result = await registry.execute(scopedExec(name, { objectId: 'obj-other', caseDir: CASE_DIR },
       new AbortController().signal, DISCUSSION_SESSION))
     assert.equal(result.value.ok, false, name)
-    assert.equal(result.value.errorKind, 'policy', name)
-    assert.match(String(result.value.error), /报告讨论会话/, name)
+    assert.equal(result.value.errorKind, 'input', name)
+    assert.match(String(result.value.error), /记录标识/, name)
   }
   assert.deepEqual(shell.commands, [], '拒绝要在任何 fs / shell 之前发生')
 })
@@ -1016,14 +1034,7 @@ test('discussion-material-open：没有工作空间 / 参数不合法时拒绝�
   assert.equal(scopes.size(), 0)
 })
 
-test('氚云三条 Tool 的授权矩阵（协议 23）：三种调用者 × 三个工具，逐格钉住', async () => {
-  // 这张矩阵是**刻意**的，不是现状的副产品：
-  // - `file_get` 是"取材料"的入口 → 只有**审核子会话**与**已登记的讨论会话**能进来；
-  //   普通顶层会话一律拒绝（这正是"普通 DeepSeek 对话不是材料入口"的落点）。
-  // - `record_get` / `files_list` 是**按 objectId 的查询能力**，`crwu-h3yun-query` 技能
-  //   （自动触发的那种"查一下这个报告"）依赖它在**普通会话**里可用，所以那里**保持既有规则**
-  //   （不变宽、也不变窄）；但**已登记的讨论会话**不许用它们 —— 讨论拿到的是"登记那一刻的
-  //   那批附件"，让它顺手查记录就把一次受限授权变成了通用读能力。
+test('氚云三条 Tool 的授权矩阵：普通会话完整可用，托管调用受本轮范围约束', async () => {
   const record = JSON.stringify({ data: { ObjectId: 'obj-1', SeqNo: SEQ, F1: 'x' } })
   const files = JSON.stringify({ data: [{ field: 'F1', fileId: 'f-1', fileName: 'a.pdf', fileSize: '3', contentType: 'application/pdf' }] })
   const shell = makeShell((spec) => {
@@ -1043,6 +1054,7 @@ test('氚云三条 Tool 的授权矩阵（协议 23）：三种调用者 × 三�
   withAuditScope(deps.state, { childId: AUDIT_CHILD, casePath: CASE_DIR, allowedAttachmentIds: ['f-1'] })
   // ② 已登记的讨论会话
   withDiscussionScope(scopes, { sessionId: DISCUSSION_SESSION, allowedAttachmentIds: ['f-1'] })
+  deps.state.workspacePath = '/cases/space'
   registerCrwuTools(deps.ctx, deps)
 
   const PLAIN = 'session-plain-1'
@@ -1051,10 +1063,13 @@ test('氚云三条 Tool 的授权矩阵（协议 23）：三种调用者 × 三�
   const FILE_OUT = { fileId: 'f-9', caseDir: CASE_DIR, relativePath: '材料-源/a.pdf' }
   const QUERY = { objectId: 'obj-1', caseDir: CASE_DIR }
 
-  // 允许的三格（命令真的跑起来了）。
+  // Allowed calls must reach the business command.
   for (const [label, name, args, sessionId] of [
     ['审核子会话 · file_get（白名单内）', TOOL_NAMES.h3yunFileGet, FILE_IN, AUDIT_CHILD],
     ['讨论会话 · file_get（白名单内）', TOOL_NAMES.h3yunFileGet, FILE_IN, DISCUSSION_SESSION],
+    ['普通会话 · file_get', TOOL_NAMES.h3yunFileGet, FILE_IN, PLAIN],
+    ['讨论会话 · record_get', TOOL_NAMES.h3yunRecordGet, QUERY, DISCUSSION_SESSION],
+    ['讨论会话 · files_list', TOOL_NAMES.h3yunFilesList, QUERY, DISCUSSION_SESSION],
     ['普通会话 · record_get（既有规则：可用）', TOOL_NAMES.h3yunRecordGet, QUERY, PLAIN],
     ['普通会话 · files_list（既有规则：可用）', TOOL_NAMES.h3yunFilesList, QUERY, PLAIN],
   ]) {
@@ -1064,15 +1079,12 @@ test('氚云三条 Tool 的授权矩阵（协议 23）：三种调用者 × 三�
     assert.equal(shell.commands.length > before, true, `${label} 应当真的执行`)
   }
 
-  // 拒绝的七格（一个进程都不许起）。
+  // Denied calls must not start a process.
   for (const [label, name, args, sessionId] of [
     ['审核子会话 · file_get（清单外）', TOOL_NAMES.h3yunFileGet, FILE_OUT, AUDIT_CHILD],
     ['审核子会话 · record_get', TOOL_NAMES.h3yunRecordGet, QUERY, AUDIT_CHILD],
     ['审核子会话 · files_list', TOOL_NAMES.h3yunFilesList, QUERY, AUDIT_CHILD],
     ['讨论会话 · file_get（清单外）', TOOL_NAMES.h3yunFileGet, FILE_OUT, DISCUSSION_SESSION],
-    ['讨论会话 · record_get', TOOL_NAMES.h3yunRecordGet, QUERY, DISCUSSION_SESSION],
-    ['讨论会话 · files_list', TOOL_NAMES.h3yunFilesList, QUERY, DISCUSSION_SESSION],
-    ['普通会话 · file_get（不是材料入口）', TOOL_NAMES.h3yunFileGet, FILE_IN, PLAIN],
   ]) {
     const before = shell.commands.length
     const result = await call(name, args, sessionId)
@@ -1447,44 +1459,46 @@ function dwsRouter(routes) {
   })
 }
 
-test('crwu_audit_oss_publish uploads, lists the object back and reports the verified size', async () => {
-  const html = `<html>审核意见</html>`
-  const json = JSON.stringify({ auditTask: { auditTime: '2026-09-20T10:35:52+08:00', projectId: 'P1' }, fileTrace: { generatedAt: '2026-09-20T10:35:52+08:00' } })
-  const fs = makeFs({
-    dirs: [CASE_DIR],
-    files: { [`${CASE_DIR}/审核意见.${SEQ}.html`]: html, [`${CASE_DIR}/审核结果.${SEQ}.json`]: json },
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: crwu_audit_oss_publish uploads, lists the object back and reports the verified size`, async () => {
+    const html = `<html>审核意见</html>`
+    const json = JSON.stringify({ auditTask: { auditTime: '2026-09-20T10:35:52+08:00', projectId: 'P1' }, fileTrace: { generatedAt: '2026-09-20T10:35:52+08:00' } })
+    const fs = makeFs({
+      dirs: [CASE_DIR],
+      files: { [`${CASE_DIR}/审核意见.${SEQ}.html`]: html, [`${CASE_DIR}/审核结果.${SEQ}.json`]: json },
+    })
+    const shell = dwsRouter([
+      ['cp -f', { ok: true }],
+      ['ls ', `2026-09-20 10:35:52 +0800 CST  ${html.length}  Standard  d41d8cd98f00b204e9800998ecf8427e  oss://crwu-workspace/crwu/audit/${SEQ}/审核意见.${SEQ}.html\n`],
+    ])
+    const { deps, registry } = makeDeps({ fs, shell })
+    const callerId = caseCaller(deps, mode, { casePath: CASE_DIR })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish, { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal, callerId))
+    assert.equal(result.isError, false, result.isError ? result.error.message : '')
+    assert.equal(result.value.ok, true, result.value.error)
+    assert.equal(result.value.uploaded, 1)
+    assert.equal(result.value.results[0].sizeBytes, html.length, '必须回报写后列举到的真实字节数')
+    assert.equal(result.value.results[0].key, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
+    assert.ok(shell.commands.some((command) => command.includes(`${OSSUTIL.replace(/'/g, '')}`) || command.includes(OSSUTIL)), '必须用包内 ossutil')
+    // **口径已改**（2026-09-29 用户复查 P1）：`ossutil` 的每一次调用都会读
+    // `~/.ossutilconfig`（工作区之外的凭据文件），受限沙箱下读不到 —— 上传与写后校验
+    // 都必须逐次声明 `danger-full-access`。旧断言写的是"OSS 是非凭据操作，不提权"，
+    // 那个前提本身就是错的，于是把"审核子会话里必然失败"这件事固定成了预期。
+    // `resolve()` 与 `execute()` 逐条配对（一条命令一次 resolve），按下标配对就能拿回策略。
+    const ossIndexes = shell.commands
+      .map((command, index) => ({ command, index }))
+      .filter((entry) => entry.command.includes('ossutil'))
+      .map((entry) => entry.index)
+    assert.equal(ossIndexes.length >= 2, true, `至少要有上传与写后校验两条 ossutil 调用：${String(ossIndexes.length)}`)
+    for (const index of ossIndexes) {
+      assert.equal(
+        shell.requests[index]?.sandboxPolicy?.mode, 'danger-full-access',
+        `ossutil 必须逐次提权：${shell.commands[index]}`,
+      )
+    }
   })
-  const shell = dwsRouter([
-    ['cp -f', { ok: true }],
-    ['ls ', `2026-09-20 10:35:52 +0800 CST  ${html.length}  Standard  d41d8cd98f00b204e9800998ecf8427e  oss://crwu-workspace/crwu/audit/${SEQ}/审核意见.${SEQ}.html\n`],
-  ])
-  const { deps, registry } = makeDeps({ fs, shell })
-  withAuditScope(deps.state, { casePath: CASE_DIR })
-  registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish, { caseDir: CASE_DIR, seqNo: SEQ, files: [`审核意见.${SEQ}.html`] }, new AbortController().signal))
-  assert.equal(result.isError, false, result.isError ? result.error.message : '')
-  assert.equal(result.value.ok, true, result.value.error)
-  assert.equal(result.value.uploaded, 1)
-  assert.equal(result.value.results[0].sizeBytes, html.length, '必须回报写后列举到的真实字节数')
-  assert.equal(result.value.results[0].key, `crwu/audit/${SEQ}/审核意见.${SEQ}.html`)
-  assert.ok(shell.commands.some((command) => command.includes(`${OSSUTIL.replace(/'/g, '')}`) || command.includes(OSSUTIL)), '必须用包内 ossutil')
-  // **口径已改**（2026-09-29 用户复查 P1）：`ossutil` 的每一次调用都会读
-  // `~/.ossutilconfig`（工作区之外的凭据文件），受限沙箱下读不到 —— 上传与写后校验
-  // 都必须逐次声明 `danger-full-access`。旧断言写的是"OSS 是非凭据操作，不提权"，
-  // 那个前提本身就是错的，于是把"审核子会话里必然失败"这件事固定成了预期。
-  // `resolve()` 与 `execute()` 逐条配对（一条命令一次 resolve），按下标配对就能拿回策略。
-  const ossIndexes = shell.commands
-    .map((command, index) => ({ command, index }))
-    .filter((entry) => entry.command.includes('ossutil'))
-    .map((entry) => entry.index)
-  assert.equal(ossIndexes.length >= 2, true, `至少要有上传与写后校验两条 ossutil 调用：${String(ossIndexes.length)}`)
-  for (const index of ossIndexes) {
-    assert.equal(
-      shell.requests[index]?.sandboxPolicy?.mode, 'danger-full-access',
-      `ossutil 必须逐次提权：${shell.commands[index]}`,
-    )
-  }
-})
+}
 
 test('crwu_audit_oss_publish fails when the object is missing or its size differs after upload', async () => {
   const html = 'x'.repeat(10)
@@ -1563,108 +1577,112 @@ test('oss errors are sanitized before they can reach the model', () => {
   assert.match(clean, /<redacted>/)
 })
 
-test('crwu_audit_dingtalk_archive resolves every id from real returns and verifies the write', async () => {
-  const json = JSON.stringify({ auditTask: { auditTime: '2026-09-20T10:35:52+08:00', projectId: 'PRJ-1' }, fileTrace: { generatedAt: '2026-09-18T14:06:07.123456+08:00' } })
-  const fs = makeFs({ dirs: [CASE_DIR], files: { [`${CASE_DIR}/审核结果.${SEQ}.json`]: json } })
-  let listedAfterUpload = false
-  const shell = makeShell((spec) => {
-    if (spec.command.includes('profile list')) {
-      return shellOk(JSON.stringify({ profiles: [{ corpName: '中瑞世联资产评估集团有限公司', corpId: 'corp-1', isOrgCurrent: true, profile: 'corp-1:user-1' }] }))
-    }
-    if (spec.command.includes('space list')) {
-      return shellOk(JSON.stringify({ success: true, result: { items: [{ spaceName: '00-【系统专用】AI结果回传区（自动同步·请勿删改）', spaceType: 'orgSpace', spaceId: 'space-1', rootFolderId: 'root-1' }] } }))
-    }
-    if (spec.command.includes('+list')) {
-      const folder = /--folder '?([^'\s]+)'?/.exec(spec.command)?.[1] ?? ''
-      if (folder === 'root-1') return shellOk(JSON.stringify({ success: true, data: { files: [{ name: 'AI资产评估审核结果', type: 'FOLDER', nodeId: 'target-1' }], hasMore: false } }))
-      if (folder === 'target-1') return shellOk(JSON.stringify({ success: true, data: { files: [{ name: '2026', type: 'FOLDER', nodeId: 'year-1' }], hasMore: false } }))
-      if (folder === 'year-1') return shellOk(JSON.stringify({ success: true, data: { files: [{ name: '09', type: 'FOLDER', nodeId: 'month-1' }], hasMore: false } }))
-      if (folder === 'month-1') {
-        // 上传前后各列一次：第二次必须能看到刚上传的那个文件（写后验证）。
-        return shellOk(JSON.stringify({
-          success: true,
-          data: {
-            files: listedAfterUpload
-              ? [{ name: '审核结果.PRJ-1.20260918-140607123456.json', type: 'FILE', nodeId: 'node-9', sizeBytes: json.length }]
-              : [],
-            hasMore: false,
-          },
-        }))
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: crwu_audit_dingtalk_archive resolves every id from real returns and verifies the write`, async () => {
+    const json = JSON.stringify({ auditTask: { auditTime: '2026-09-20T10:35:52+08:00', projectId: 'PRJ-1' }, fileTrace: { generatedAt: '2026-09-18T14:06:07.123456+08:00' } })
+    const fs = makeFs({ dirs: [CASE_DIR], files: { [`${CASE_DIR}/审核结果.${SEQ}.json`]: json } })
+    let listedAfterUpload = false
+    const shell = makeShell((spec) => {
+      if (spec.command.includes('profile list')) {
+        return shellOk(JSON.stringify({ profiles: [{ corpName: '中瑞世联资产评估集团有限公司', corpId: 'corp-1', isOrgCurrent: true, profile: 'corp-1:user-1' }] }))
       }
-      return shellOk(JSON.stringify({ success: true, data: { files: [], hasMore: false } }))
-    }
-    if (spec.command.includes('+upload')) {
-      listedAfterUpload = true
-      return shellOk(JSON.stringify({ success: true, data: { nodeId: 'node-9' } }))
-    }
-    return null
+      if (spec.command.includes('space list')) {
+        return shellOk(JSON.stringify({ success: true, result: { items: [{ spaceName: '00-【系统专用】AI结果回传区（自动同步·请勿删改）', spaceType: 'orgSpace', spaceId: 'space-1', rootFolderId: 'root-1' }] } }))
+      }
+      if (spec.command.includes('+list')) {
+        const folder = /--folder '?([^'\s]+)'?/.exec(spec.command)?.[1] ?? ''
+        if (folder === 'root-1') return shellOk(JSON.stringify({ success: true, data: { files: [{ name: 'AI资产评估审核结果', type: 'FOLDER', nodeId: 'target-1' }], hasMore: false } }))
+        if (folder === 'target-1') return shellOk(JSON.stringify({ success: true, data: { files: [{ name: '2026', type: 'FOLDER', nodeId: 'year-1' }], hasMore: false } }))
+        if (folder === 'year-1') return shellOk(JSON.stringify({ success: true, data: { files: [{ name: '09', type: 'FOLDER', nodeId: 'month-1' }], hasMore: false } }))
+        if (folder === 'month-1') {
+          // 上传前后各列一次：第二次必须能看到刚上传的那个文件（写后验证）。
+          return shellOk(JSON.stringify({
+            success: true,
+            data: {
+              files: listedAfterUpload
+                ? [{ name: '审核结果.PRJ-1.20260918-140607123456.json', type: 'FILE', nodeId: 'node-9', sizeBytes: json.length }]
+                : [],
+              hasMore: false,
+            },
+          }))
+        }
+        return shellOk(JSON.stringify({ success: true, data: { files: [], hasMore: false } }))
+      }
+      if (spec.command.includes('+upload')) {
+        listedAfterUpload = true
+        return shellOk(JSON.stringify({ success: true, data: { nodeId: 'node-9' } }))
+      }
+      return null
+    })
+    const { deps, registry } = makeDeps({ fs, shell, state: makeState({ localAccess: grantedConsent() }) })
+    const callerId = caseCaller(deps, mode, { casePath: CASE_DIR })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.dingtalkArchive, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal, callerId))
+    assert.equal(result.isError, false, result.isError ? result.error.message : '')
+    assert.equal(result.value.ok, true, result.value.error)
+    assert.equal(result.value.remoteName, '审核结果.PRJ-1.20260918-140607123456.json')
+    assert.equal(result.value.remotePath, `AI资产评估审核结果/2026/09/${result.value.remoteName}`)
+    assert.equal(result.value.nodeId, 'node-9', 'nodeId 必须来自写后列举的真实返回')
+    assert.equal(result.value.sizeBytes, json.length)
+    assert.equal(listedAfterUpload, true, '上传后必须重新列目录核对')
+    const resolved = shell.commands.filter((command) => !command.includes('profile list'))
+    assert.ok(resolved.length > 0, '必须真的跑过解析后的命令')
+    assert.ok(resolved.every((command) => command.includes('--profile corp-1:user-1')), '解析与执行必须用同一个 profile（除了解析它自己的那一条）')
+    assert.equal(shell.commands.some((command) => command.includes('+create-folder')), false, '年/月目录已存在时不许创建')
   })
-  const { deps, registry } = makeDeps({ fs, shell, state: makeState({ localAccess: grantedConsent() }) })
-  withAuditScope(deps.state, { casePath: CASE_DIR })
-  registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute(scopedExec(TOOL_NAMES.dingtalkArchive, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
-  assert.equal(result.isError, false, result.isError ? result.error.message : '')
-  assert.equal(result.value.ok, true, result.value.error)
-  assert.equal(result.value.remoteName, '审核结果.PRJ-1.20260918-140607123456.json')
-  assert.equal(result.value.remotePath, `AI资产评估审核结果/2026/09/${result.value.remoteName}`)
-  assert.equal(result.value.nodeId, 'node-9', 'nodeId 必须来自写后列举的真实返回')
-  assert.equal(result.value.sizeBytes, json.length)
-  assert.equal(listedAfterUpload, true, '上传后必须重新列目录核对')
-  const resolved = shell.commands.filter((command) => !command.includes('profile list'))
-  assert.ok(resolved.length > 0, '必须真的跑过解析后的命令')
-  assert.ok(resolved.every((command) => command.includes('--profile corp-1:user-1')), '解析与执行必须用同一个 profile（除了解析它自己的那一条）')
-  assert.equal(shell.commands.some((command) => command.includes('+create-folder')), false, '年/月目录已存在时不许创建')
-})
+}
 
-test('crwu_audit_dingtalk_notify_self sends once, is idempotent per case, and never uses sms/call', async () => {
-  const html = '<html>审核意见</html>'
-  const fs = makeFs({ dirs: [CASE_DIR], files: { [`${CASE_DIR}/审核意见.${SEQ}.html`]: html } })
-  const sentMessages = []
-  const shell = makeShell((spec) => {
-    if (spec.command.includes('profile list')) {
-      return shellOk(JSON.stringify({ profiles: [{ corpName: '中瑞世联资产评估集团有限公司', corpId: 'corp-1', isOrgCurrent: true, profile: 'corp-1:user-1' }] }))
-    }
-    if (spec.command.includes('get-self')) {
-      return shellOk(JSON.stringify({ result: [{ orgEmployeeModel: { userId: 'user-9', orgUserName: '张三', openDingTalkId: 'ding-9' } }] }))
-    }
-    if (spec.command.includes('aisearch')) {
-      return shellOk(JSON.stringify({ result: [{ name: '张三', openDingTalkId: 'ding-9' }] }))
-    }
-    if (spec.command.includes('messages-send')) {
-      sentMessages.push(spec.command)
-      return shellOk(JSON.stringify({ result: { messageId: 'msg-1' } }))
-    }
-    if (spec.command.includes('chat-messages')) {
-      return shellOk(JSON.stringify({ result: [{ conversationId: 'conv-1', messageId: 'msg-1', resourceRefs: [`审核意见.${SEQ}.html`] }] }))
-    }
-    if (spec.command.includes('send-by-message')) {
-      return shellOk(JSON.stringify({ result: { openDingId: 'open-ding-1' } }))
-    }
-    return null
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: crwu_audit_dingtalk_notify_self sends once, is idempotent per case, and never uses sms/call`, async () => {
+    const html = '<html>审核意见</html>'
+    const fs = makeFs({ dirs: [CASE_DIR], files: { [`${CASE_DIR}/审核意见.${SEQ}.html`]: html } })
+    const sentMessages = []
+    const shell = makeShell((spec) => {
+      if (spec.command.includes('profile list')) {
+        return shellOk(JSON.stringify({ profiles: [{ corpName: '中瑞世联资产评估集团有限公司', corpId: 'corp-1', isOrgCurrent: true, profile: 'corp-1:user-1' }] }))
+      }
+      if (spec.command.includes('get-self')) {
+        return shellOk(JSON.stringify({ result: [{ orgEmployeeModel: { userId: 'user-9', orgUserName: '张三', openDingTalkId: 'ding-9' } }] }))
+      }
+      if (spec.command.includes('aisearch')) {
+        return shellOk(JSON.stringify({ result: [{ name: '张三', openDingTalkId: 'ding-9' }] }))
+      }
+      if (spec.command.includes('messages-send')) {
+        sentMessages.push(spec.command)
+        return shellOk(JSON.stringify({ result: { messageId: 'msg-1' } }))
+      }
+      if (spec.command.includes('chat-messages')) {
+        return shellOk(JSON.stringify({ result: [{ conversationId: 'conv-1', messageId: 'msg-1', resourceRefs: [`审核意见.${SEQ}.html`] }] }))
+      }
+      if (spec.command.includes('send-by-message')) {
+        return shellOk(JSON.stringify({ result: { openDingId: 'open-ding-1' } }))
+      }
+      return null
+    })
+    const { deps, registry } = makeDeps({ fs, shell, state: makeState({ localAccess: grantedConsent() }) })
+    const callerId = caseCaller(deps, mode, { casePath: CASE_DIR })
+    registerCrwuTools(deps.ctx, deps)
+
+    const first = await registry.execute(scopedExec(TOOL_NAMES.dingtalkNotifySelf, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal, callerId))
+    assert.equal(first.isError, false, first.isError ? first.error.message : '')
+    assert.equal(first.value.ok, true, first.value.error)
+    assert.equal(first.value.alreadySent, false)
+    assert.deepEqual(
+      [first.value.userId, first.value.openDingTalkId, first.value.conversationId, first.value.messageId, first.value.openDingId],
+      ['user-9', 'ding-9', 'conv-1', 'msg-1', 'open-ding-1'],
+      '五个稳定 ID 必须来自真实返回',
+    )
+    assert.equal(sentMessages.length, 1)
+    const ding = shell.commands.find((command) => command.includes('send-by-message'))
+    assert.match(ding, /--type app/, 'DING 必须是应用内（免费）通道')
+    assert.equal(/sms|call/.test(shell.commands.join(' ')), false, '命令里不许出现 sms / call')
+
+    const second = await registry.execute(scopedExec(TOOL_NAMES.dingtalkNotifySelf, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal, callerId))
+    assert.equal(second.value.ok, true)
+    assert.equal(second.value.alreadySent, true, '同一案例第二次调用必须命中幂等')
+    assert.equal(sentMessages.length, 1, '幂等命中时不许再发一条')
   })
-  const { deps, registry } = makeDeps({ fs, shell, state: makeState({ localAccess: grantedConsent() }) })
-  withAuditScope(deps.state, { casePath: CASE_DIR })
-  registerCrwuTools(deps.ctx, deps)
-
-  const first = await registry.execute(scopedExec(TOOL_NAMES.dingtalkNotifySelf, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
-  assert.equal(first.isError, false, first.isError ? first.error.message : '')
-  assert.equal(first.value.ok, true, first.value.error)
-  assert.equal(first.value.alreadySent, false)
-  assert.deepEqual(
-    [first.value.userId, first.value.openDingTalkId, first.value.conversationId, first.value.messageId, first.value.openDingId],
-    ['user-9', 'ding-9', 'conv-1', 'msg-1', 'open-ding-1'],
-    '五个稳定 ID 必须来自真实返回',
-  )
-  assert.equal(sentMessages.length, 1)
-  const ding = shell.commands.find((command) => command.includes('send-by-message'))
-  assert.match(ding, /--type app/, 'DING 必须是应用内（免费）通道')
-  assert.equal(/sms|call/.test(shell.commands.join(' ')), false, '命令里不许出现 sms / call')
-
-  const second = await registry.execute(scopedExec(TOOL_NAMES.dingtalkNotifySelf, { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal))
-  assert.equal(second.value.ok, true)
-  assert.equal(second.value.alreadySent, true, '同一案例第二次调用必须命中幂等')
-  assert.equal(sentMessages.length, 1, '幂等命中时不许再发一条')
-})
+}
 
 test('crwu_audit_dingtalk_archive refuses an AuditResult whose timestamps lack a timezone', async () => {
   const json = JSON.stringify({ auditTask: { auditTime: '2026-09-20', projectId: 'P1' }, fileTrace: { generatedAt: '2026-09-18T14:06:07+08:00' } })
@@ -1823,20 +1841,147 @@ test('bootstrap 在 Windows 案例目录下用 `\\` 拼快照路径（含落盘�
   assert.equal(fs.files.has(`${dir}\\快照元数据.json`), true)
 })
 
-test('knowledge 在 Windows 案例目录下用 `\\` 拼 knowledge 目录', async () => {
-  const winCase = `C:\\Cases\\${SEQ}`
-  // `wiki +space-list` 回空表：定位不到知识库 → 工具提前返回，但 caseDir / knowledgeDir
-  // 已经在返回值里，正好用来断言拼接方式（不需要把整条下载链路都替身出来）。
-  const shell = makeShell((spec) => (spec.command.includes('+space-list') ? shellOk('{"spaces":[]}') : shellOk('{}')))
-  const fs = makeFs({ dirs: [winCase] })
-  // 信任域也要与案例目录同平台：案例目录必须落在它之下（真实流程里案例目录就是
-  // `<工作空间>\<流水号>`；这套夹具此前是 POSIX 的 `/cases` + Windows 的 `C:\Cases\…`，自相矛盾）。
-  const winState = makeState({ caseRoot: 'C:\\Cases', workspacePath: 'C:\\Cases' })
-  const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64', state: winState })
-  withAuditScope(deps.state, { casePath: winCase })
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: knowledge uses Windows case directory separators`, async () => {
+    const winCase = `C:\\Cases\\${SEQ}`
+    // `wiki +space-list` 回空表：定位不到知识库 → 工具提前返回，但 caseDir / knowledgeDir
+    // 已经在返回值里，正好用来断言拼接方式（不需要把整条下载链路都替身出来）。
+    const shell = makeShell((spec) => (spec.command.includes('+space-list') ? shellOk('{"spaces":[]}') : shellOk('{}')))
+    const fs = makeFs({ dirs: [winCase] })
+    // 信任域也要与案例目录同平台：案例目录必须落在它之下（真实流程里案例目录就是
+    // `<工作空间>\<流水号>`；这套夹具此前是 POSIX 的 `/cases` + Windows 的 `C:\Cases\…`，自相矛盾）。
+    const winState = makeState({ caseRoot: 'C:\\Cases', workspacePath: 'C:\\Cases' })
+    const { deps, registry } = makeDeps({ shell, fs, platform: 'win32-x64', state: winState })
+    const callerId = caseCaller(deps, mode, { casePath: winCase })
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.knowledgeMaterialize, { caseDir: winCase, paths: ['02-资产类型/机器设备/评估审核条目'] }, new AbortController().signal, callerId))
+    assert.equal(result.value.caseDir, winCase)
+    assert.equal(result.value.knowledgeDir, `${winCase}\\knowledge`)
+    assert.equal(String(result.value.knowledgeDir).includes('/'), false)
+  })
+}
+
+test('Python script resolves runtime in the caller agent before any audit has started', async () => {
+  const { deps, registry } = makeDeps({ python: {
+    async check(options) {
+      if (options?.agent?.id === 'manual-new-session') return PYTHON_STUB.check()
+      return { ...await PYTHON_STUB.check(), ok: false, error: 'agent scope required' }
+    },
+    cached() { return null },
+  } })
+  caseCaller(deps, 'manual')
   registerCrwuTools(deps.ctx, deps)
-  const result = await registry.execute(scopedExec(TOOL_NAMES.knowledgeMaterialize, { caseDir: winCase, paths: ['02-资产类型/机器设备/评估审核条目'] }, new AbortController().signal))
-  assert.equal(result.value.caseDir, winCase)
-  assert.equal(result.value.knowledgeDir, `${winCase}\\knowledge`)
-  assert.equal(String(result.value.knowledgeDir).includes('/'), false)
+  const result = await registry.execute(scopedExec(TOOL_NAMES.runPythonScript,
+    { caseDir: CASE_DIR, script: 'scripts/review.py' }, new AbortController().signal, 'manual-new-session'))
+  assert.equal(result.value.ok, true, result.value.error)
+})
+
+test('all case tools reject invalid manual directories and stale managed children before I/O', async () => {
+  const tools = [
+    [TOOL_NAMES.runPythonScript, { script: 'scripts/review.py' }],
+    [TOOL_NAMES.knowledgeMaterialize, { paths: ['rules/'] }],
+    [TOOL_NAMES.h3yunFileGet, { fileId: 'f-1', relativePath: 'materials/a.pdf' }],
+    [TOOL_NAMES.ossPublish, { seqNo: SEQ }],
+    [TOOL_NAMES.dingtalkArchive, { seqNo: SEQ }],
+    [TOOL_NAMES.dingtalkNotifySelf, { seqNo: SEQ }],
+  ]
+  const { deps, registry, shell } = makeDeps({ fs: makeFs({ dirs: [
+    CASE_DIR, '/cases/space', `${CASE_DIR}/nested`, '/outside',
+  ] }) })
+  deps.state.workspacePath = '/cases/space'
+  withAuditScope(deps.state, { ended: true })
+  registerCrwuTools(deps.ctx, deps)
+  for (const [name, extra] of tools) {
+    for (const [caller, caseDir] of [
+      ['manual-new-session', '/cases/space'],
+      ['manual-new-session', `${CASE_DIR}/nested`],
+      ['manual-new-session', '/outside'],
+      [AUDIT_CHILD, CASE_DIR],
+      ['', CASE_DIR],
+    ]) {
+      const result = await registry.execute(scopedExec(name, { ...extra, caseDir }, new AbortController().signal, caller))
+      assert.equal(result.value.ok, false, `${name}: ${caller}: ${caseDir}`)
+      assert.equal(result.value.errorKind, 'policy', JSON.stringify(result.value))
+    }
+  }
+  assert.deepEqual(shell.commands, [])
+})
+
+test('replaced and adopting audit children cannot fall back to manual access', async () => {
+  for (const patch of [
+    { childId: 'replacement', replacedChildId: AUDIT_CHILD },
+    { childId: '', pending: true },
+  ]) {
+    const { deps, registry, shell } = makeDeps()
+    deps.state.workspacePath = '/cases/space'
+    withAuditScope(deps.state, patch)
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.ossPublish,
+      { caseDir: CASE_DIR, seqNo: SEQ }, new AbortController().signal, AUDIT_CHILD))
+    assert.equal(result.value.ok, false)
+    assert.equal(result.value.errorKind, 'policy', JSON.stringify(result.value))
+    assert.deepEqual(shell.commands, [])
+  }
+})
+
+test('manual case access rejects multi-segment serial numbers before I/O', async () => {
+  const { deps, shell } = makeDeps({ fs: makeFs({ dirs: [`${CASE_DIR}/nested`] }) })
+  deps.state.workspacePath = '/cases/space'
+  const result = await requireCaseAccess(deps.ctx, deps.state, deps.discussionScopes,
+    scopedExec('test', {}, new AbortController().signal, 'manual-new-session'),
+    { caseDir: `${CASE_DIR}/nested`, seqNo: `${SEQ}/nested` })
+  assert.equal(result.ok, false)
+  assert.equal(result.errorKind, 'input', JSON.stringify(result))
+  assert.deepEqual(shell.commands, [])
+})
+
+for (const mode of ['audit', 'manual', 'discussion']) {
+  test(`${mode}: knowledge materialization exports current content and persists evidence`, async () => {
+    const fs = makeFs({ dirs: [CASE_DIR, `${CASE_DIR}/knowledge`] })
+    const shell = makeShell((spec) => {
+      if (spec.command.includes('+space-list')) return shellOk(JSON.stringify({ spaces: [{ name: 'Test rules', workspaceId: 'wiki-1', spaceType: 'orgWikiSpace' }] }))
+      if (spec.command.includes('+node-list')) return shellOk(JSON.stringify({ nodes: [{ nodeId: 'rule-1', name: 'Rule', type: 'FILE', extension: 'adoc' }] }))
+      if (spec.command.includes('doc +export')) {
+        fs.addFile(`${spec.workdir}/Rule.md`, '# Current rule')
+        return shellOk(JSON.stringify({ ok: true }))
+      }
+      return null
+    })
+    const { deps, registry } = makeDeps({ fs, shell })
+    const caller = caseCaller(deps, mode)
+    registerCrwuTools(deps.ctx, deps)
+    const result = await registry.execute(scopedExec(TOOL_NAMES.knowledgeMaterialize,
+      { caseDir: CASE_DIR, paths: ['Rule'], spaceName: 'Test rules' }, new AbortController().signal, caller))
+    assert.equal(result.value.ok, true, JSON.stringify(result.value))
+    assert.equal(result.value.counts.exported, 1)
+    assert.equal(fs.files.get(`${CASE_DIR}/knowledge/Rule.md`), '# Current rule')
+    const evidence = JSON.parse(fs.files.get(result.value.manifestPath))
+    assert.deepEqual(evidence.requested, ['Rule'])
+    assert.equal(evidence.entries[0].nodeId, 'rule-1')
+    assert.equal(evidence.entries[0].status, 'exported')
+  })
+}
+
+test('manual Python on Windows preserves caller sandbox and literal arguments', async () => {
+  const root = 'C:\\Cases'
+  const caseDir = `${root}\\${SEQ}`
+  const shell = makeShell(() => shellOk('review complete'))
+  const { deps, registry } = makeDeps({
+    fs: makeFs({ dirs: [caseDir] }), shell, platform: 'win32-x64',
+    state: makeState({ workspacePath: root }),
+    python: { async check() { return { ...await PYTHON_STUB.check(), path: 'C:\\DshRuntime\\python.exe' } } },
+  })
+  const baseGet = deps.ctx.get.bind(deps.ctx)
+  const policy = makeSessionPolicyService({ defaultRoot: 'C:\\Plugin', roots: (session) => session?.header?.cwd ?? 'C:\\Plugin' })
+  deps.ctx.get = (name) => name === 'sandboxPolicy' ? policy.service : baseGet(name)
+  registerCrwuTools(deps.ctx, deps)
+  const exec = scopedExec(TOOL_NAMES.runPythonScript,
+    { caseDir, script: 'scripts/review.py', scriptArgs: ['$(unexpected)', 'a;b'] }, new AbortController().signal, 'manual-win')
+  exec.agent.session = { header: { cwd: root } }
+  const result = await registry.execute(exec)
+  assert.equal(result.value.ok, true, result.value.error)
+  assert.equal(result.value.scriptPath, `${caseDir}\\scripts\\review.py`)
+  assert.equal(result.value.stdout, 'review complete')
+  assert.deepEqual(result.value.argv, [`${caseDir}\\scripts\\review.py`, '$(unexpected)', 'a;b'])
+  assert.deepEqual(shell.requests[0].sandboxPolicy, { mode: 'workspace-write', workspaceRoot: root })
 })

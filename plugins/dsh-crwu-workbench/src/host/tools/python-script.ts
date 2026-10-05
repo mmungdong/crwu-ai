@@ -1,7 +1,7 @@
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { text } from '../../shared/utils/value.ts'
 import { isAbsoluteLocalPath, joinLocalPath } from '../../shared/utils/local-path.ts'
-import { requireAuditScope } from '../audit/scope.ts'
+import { requireCaseAccess } from '../audit/case-access.ts'
 import { shellInvoke } from '../platform/shell.ts'
 import { PYTHON_RUNTIME_SOURCE } from '../runtime/python.ts'
 import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
@@ -96,7 +96,7 @@ export function pythonScriptTools(deps: ToolDeps) {
       'script 必须是案例目录内的相对路径；scriptArgs 逐个作为 argv 传入，不经过 shell 解析。',
     ].join(' '),
     parameters: {
-      caseDir: { required: true, type: 'string', description: '本轮案例目录（Host 用它做审核范围校验）。' },
+      caseDir: { required: true, type: 'string', description: '本轮案例目录（Host 校验工作空间与案例范围）。' },
       script: {
         required: true, type: 'string',
         description: '案例目录**之内**的脚本相对路径，例如 scripts/review.py。不接受绝对路径与 `..`。',
@@ -148,8 +148,8 @@ export function pythonScriptTools(deps: ToolDeps) {
       const ctx = toolContext(deps.ctx, exec)
       const base = idleResult()
 
-      // ① 审核范围：与其它案例内 Tool 同一条判据（`caseDir` 必须与 Host 记录精确相等）。
-      const caseCheck = await requireAuditScope(ctx, deps.state, exec, { caseDir: args.caseDir })
+      // Preserve managed scopes; ordinary sessions use the selected workspace.
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
       if (!caseCheck.ok) return { ...base, ...caseCheck }
 
       // ② 脚本路径：只接受案例目录内的相对路径。**拒绝而不是清洗** —— 静默清洗会让调用方
@@ -179,7 +179,7 @@ export function pythonScriptTools(deps: ToolDeps) {
       if (deps.python === undefined) {
         return { ...base, ...failure('capability-gap', 'DSH 自带 Python 解析器没有装配：本插件实例不能执行技能脚本') }
       }
-      const runtime = await deps.python.check()
+      const runtime = await deps.python.check({ agent: exec.agent })
       if (!runtime.ok) {
         return {
           ...base,

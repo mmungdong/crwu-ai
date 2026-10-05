@@ -20,7 +20,7 @@ import {
 import { CASE_KNOWLEDGE_DIR, KB_MANIFEST_FILE } from './consts.ts'
 import { ensureDirectory, removeFileIfExists } from './case-files.ts'
 import { fileSize } from './case-dir.ts'
-import { requireAuditScope } from '../audit/scope.ts'
+import { requireCaseAccess } from '../audit/case-access.ts'
 import { dwsJson } from './dws-json.ts'
 import { failure, renderJson } from './outcome.ts'
 import { callerSession, credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
@@ -253,7 +253,7 @@ export function knowledgeTools(deps: ToolDeps) {
       }
       const requested = (Array.isArray(args.paths) ? args.paths : []).map((item) => text(item)).filter((item) => item !== '')
       if (requested.length === 0) return { ...failure('input', 'paths 不能为空'), ...empty }
-      const caseCheck = await requireAuditScope(ctx, deps.state, exec, { caseDir: args.caseDir })
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
 
       const platform = await deps.world.platform()

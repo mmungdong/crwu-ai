@@ -42,13 +42,7 @@ export interface ToolDeps {
   ifindTimeoutMs?: number
   /** Broker（协议 18）：审核 Tool 的每一次跨边界调用都经它（来源 = audit-tool）。 */
   access: LocalAccessBroker
-  /**
-   * **讨论会话的受限材料范围**（协议 23，进程内、不落盘）。
-   *
-   * `crwu_h3yun_file_get` 的材料门禁要回答"这个调用者能取哪些附件"：
-   * 审核子会话走审核记录里的白名单，**报告讨论会话**走这里登记的 `fileId` 白名单。
-   * 它必须由 `apply()` 创建并随插件生命周期释放（模块级会跨实例串味）。
-   */
+  /** Registered case and attachment boundaries, owned by this plugin instance's lifecycle. */
   discussionScopes: DiscussionScopeRegistry
   /**
    * DSH 自带 Python 的**实例级**解析器（`crwu_run_python_script` 用它）。

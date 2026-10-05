@@ -142,8 +142,10 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    旧客户端读到 `unreadable` 会当成 `missing` 显示「需要授权」并把员工指向"再授权一次"——
  *    而读失败时写盘同样是读-改-写，根本落不了盘，员工会陷在"授权成功、界面永远停在需要授权"里。
  *    这正是这一代要断掉的那句话。
+ * 26: Manual sessions can use case tools within the selected workspace; managed scopes stay bound.
+ *     The handoff now prepares a fresh input snapshot before running the audit.
  */
-export const WORKBENCH_PROTOCOL = 25
+export const WORKBENCH_PROTOCOL = 26
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

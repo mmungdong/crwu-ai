@@ -13,7 +13,7 @@ import { parseLsEntries, type OssEntry } from '../oss/parse.ts'
 import { basenameLocalPath } from '../../shared/utils/local-path.ts'
 import { runOssutil, type OssExecDeps } from '../oss/run.ts'
 import { fileSize, requireInsideCase } from './case-dir.ts'
-import { requireAuditScope } from '../audit/scope.ts'
+import { requireCaseAccess } from '../audit/case-access.ts'
 import { failure, renderJson } from './outcome.ts'
 import { toolContext, type ToolDeps } from './types.ts'
 
@@ -105,7 +105,7 @@ export function ossTools(deps: ToolDeps) {
       if (!isSafeSeqNo(seqNo)) {
         return { ...failure('input', `流水号形状不对（不放进 OSS 路径）：${seqNo === '' ? '(空)' : seqNo}`), ...empty }
       }
-      const caseCheck = await requireAuditScope(ctx, deps.state, exec, {
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
         caseDir: args.caseDir, seqNo: args.seqNo,
       })
       if (!caseCheck.ok) return { ...caseCheck, ...empty }

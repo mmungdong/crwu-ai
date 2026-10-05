@@ -28,7 +28,7 @@ import { auditScopeFor, callerIdentity, requireAuditScope, type AuditScope } fro
  *    别的会话（包括同一个工作空间里的普通对话）拿不到它。
  * 3. **案例目录由 Host 算**：`<已选工作空间>/<流水号>`（`caseDirOf`），客户端提交不了路径。
  * 4. **附件白名单来自 Host 自己取的那一次数**：讨论会话不能自己指定 `objectId` / `fileId`，
- *    也不能靠这条范围去查记录（`record_get` / `files_list` 对它一律拒绝）。
+ *    Record and attachment-list queries must match the registered ObjectId.
  * 5. **有 TTL**：过期即失效，`get()` 顺手清掉 —— 一个长期不用的会话不该永久握着材料权限。
  */
 

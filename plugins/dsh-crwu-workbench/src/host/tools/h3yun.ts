@@ -11,7 +11,8 @@ import { readTextIfExists } from '../fs/paths.ts'
 import { SNAPSHOT_ATTACHMENTS_FILE, SNAPSHOT_DIR } from './bootstrap.ts'
 import { allowedCaseRootOf, requireCaseDir, requireInsideCase, isRegularFile, fileSize } from './case-dir.ts'
 import { callerIdentity, callerParentSessionId, isAuditChild } from '../audit/scope.ts'
-import { isRegisteredDiscussion, requireMaterialScope } from '../audit/discussion-scope.ts'
+import { requireMaterialScope } from '../audit/discussion-scope.ts'
+import { requireCaseAccess } from '../audit/case-access.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from './outcome.ts'
 import { credentialsTrusted, toolContext, type ToolDeps } from './types.ts'
@@ -124,10 +125,11 @@ export function h3yunTools(deps: ToolDeps) {
       if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
         return { ...failure('policy', '审核子会话不能直接查询氚云记录：本轮记录与附件清单已在输入快照里'), ...base }
       }
-      // 讨论会话的材料范围**只**包含登记那一刻取到的附件 —— 它不是"氚云查询入口"：
-      // 让它顺手查记录，等于把一次受限授权变成通用读能力。
-      if (isRegisteredDiscussion(deps.discussionScopes, callerIdentity(exec).childId)) {
-        return { ...failure('policy', '报告讨论会话不能查询氚云记录：材料范围只包含登记时取到的那批附件'), ...base }
+      const discussion = deps.discussionScopes.peek(callerIdentity(exec).childId)
+      if (discussion !== undefined) {
+        const checked = await requireMaterialScope(ctx, deps.state, deps.discussionScopes, exec,
+          { caseDir: args.caseDir, objectId }, { requireCaseDir: false })
+        if (!checked.ok) return { ...checked, ...base }
       }
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
@@ -142,7 +144,7 @@ export function h3yunTools(deps: ToolDeps) {
       // 绝对 / 存在 / 不含 `..` / **在当前工作空间之下**。旧实现把它原样交给 `runCrwu`，
       // 等于让模型指定特权命令的工作目录（2026-09-29 复查）。
       const requested = text(args.caseDir).trim()
-      let workdir = await deps.world.workdir()
+      let workdir = discussion?.caseDir || await deps.world.workdir()
       if (requested !== '') {
         const caseCheck = await requireCaseDir(ctx, requested, { allowedRoot: allowedCaseRootOf(deps.state) })
         if (!caseCheck.ok) return { ...caseCheck, ...base }
@@ -225,8 +227,11 @@ export function h3yunTools(deps: ToolDeps) {
       if (isAuditChild(deps.state, callerIdentity(exec).childId, await callerParentSessionId(ctx, deps.state, exec))) {
         return { ...failure('policy', '审核子会话不能直接查询氚云记录：本轮记录与附件清单已在输入快照里'), count: 0, files: [] }
       }
-      if (isRegisteredDiscussion(deps.discussionScopes, callerIdentity(exec).childId)) {
-        return { ...failure('policy', '报告讨论会话不能列举氚云附件：材料范围只包含登记时取到的那批附件'), count: 0, files: [] }
+      const discussion = deps.discussionScopes.peek(callerIdentity(exec).childId)
+      if (discussion !== undefined) {
+        const checked = await requireMaterialScope(ctx, deps.state, deps.discussionScopes, exec,
+          { caseDir: args.caseDir, objectId }, { requireCaseDir: false })
+        if (!checked.ok) return { ...checked, count: 0, files: [] }
       }
       const platform = await deps.world.platform()
       const gap = await requireCrwu(ctx, platform)
@@ -240,7 +245,7 @@ export function h3yunTools(deps: ToolDeps) {
       // 绝对 / 存在 / 不含 `..` / **在当前工作空间之下**。旧实现把它原样交给 `runCrwu`，
       // 等于让模型指定特权命令的工作目录（2026-09-29 复查）。
       const requested = text(args.caseDir).trim()
-      let workdir = await deps.world.workdir()
+      let workdir = discussion?.caseDir || await deps.world.workdir()
       if (requested !== '') {
         const caseCheck = await requireCaseDir(ctx, requested, { allowedRoot: allowedCaseRootOf(deps.state) })
         if (!caseCheck.ok) return { ...caseCheck, count: 0, files: [] }
@@ -282,12 +287,12 @@ export function h3yunTools(deps: ToolDeps) {
     name: TOOL_NAMES.h3yunFileGet,
     description: [
       '按 fileId **单附件定向下载**氚云记录附件到**本轮案例目录**内的相对路径。',
-      '只接受本轮输入快照（附件清单）里登记过的 fileId；不在清单里的附件在起进程之前就被拒绝。',
+      '普通会话可按员工权限下载；托管审核与已登记讨论会话只接受本次材料清单里的 fileId。',
       '目标必须落在给定案例目录之下（越界直接拒绝）。',
       '本工具没有「整单下载」路径：一次只取一个附件，失败就是失败，不会退化成批量下载。',
     ].join(' '),
     parameters: {
-      fileId: { type: 'string', required: true, description: '附件 fileId（只接受本轮输入快照登记过的附件）' },
+      fileId: { type: 'string', required: true, description: '附件 fileId（托管审核与已登记讨论会话须在本次材料清单内）' },
       caseDir: { type: 'string', required: true, description: '案例目录绝对路径（下载目标必须落在它之下）' },
       relativePath: { type: 'string', required: true, description: '案例目录内的相对目标路径，例如 材料-源/估值报告.pdf' },
     },
@@ -308,17 +313,14 @@ export function h3yunTools(deps: ToolDeps) {
     async execute(args, exec) {
       const ctx = toolContext(deps.ctx, exec)
       const fileId = text(args.fileId).trim()
-      // **先证身份、再证案例、最后证附件**：三者都成立之前不起任何进程。
-      // 范围有两种来源（协议 23）：审核子会话的记录范围，或报告讨论会话登记的材料范围。
-      const materialCheck = await requireMaterialScope(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
+      // Validate the case before downloading; managed callers also need a manifest match.
+      const materialCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
       if (!materialCheck.ok) return { ...materialCheck, fileId, path: '', sizeBytes: 0 }
-      const material = materialCheck.material
-      const casePath = material.kind === 'audit' ? material.scope.casePath : material.scope.caseDir
+      const material = materialCheck
+      const casePath = material.casePath
       if (fileId === '') return { ...failure('input', 'fileId 不能为空'), fileId, path: '', sizeBytes: 0 }
-      // ⚠️ `fileId` 也是**模型提交**的：此前只要进程能跑，子会话就能把任意附件下到自己的案例目录。
-      // 只认**可信范围**里登记过的附件（审核 = 本轮输入快照；讨论 = 登记那一刻的远端清单）
-      // —— 空白名单意味着"一个都不允许"。
-      if (!material.scope.allowedAttachmentIds.includes(fileId)) {
+      // An empty managed manifest permits no attachments; ordinary calls use employee access.
+      if (material.kind !== 'session' && !material.allowedAttachmentIds?.includes(fileId)) {
         return {
           ...failure('policy', material.kind === 'audit'
             ? '这个附件不在本轮审核的输入快照里：只允许下载本次登记的附件'
