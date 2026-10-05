@@ -53,7 +53,8 @@ H0 的机制 owner 是 `references/00-input-and-route-profile.md`，隐藏区的
 13. [11-html-delivery-spec.md](references/11-html-delivery-spec.md)：阶段一定稿冻结后、阶段二对照与交付（步骤 14）时读取；**送达与交付层正文**（CRWU 审核意见 HTML 送达规范 v1.6：AuditResult 单一事实源、JSON 校验先行、员工单文件 HTML + 同源监控 JSON、双证据链、两阶段门禁、客观命中率与验收清单）。
 14. [12-leaf-common-contract.md](references/12-leaf-common-contract.md)：加载任一 `crwu-audit-asset-*` / `crwu-audit-biz-*` 叶子时读取；**叶子共同约束**（轴边界、输入、一级根装配、二级选择、执行顺序、条目状态、来源优先级、证据出处、capability gap）。公共规则只在该文件写一份，叶子不各自复述；叶子与它冲突时以它为准。
 15. [13-dingtalk-result-publish.md](references/13-dingtalk-result-publish.md)：步骤 14 已生成最终态监控 JSON 后读取；定义固定组织/团队空间/结果目录的精确解析、按审核年月建目录、带生成时间戳文件名、DWS 上传与写后验证契约。
-16. [14-orchestration-workflow.md](references/14-orchestration-workflow.md)：**正式执行前必读**；router 运行时执行顺序与条件分支的唯一落点——脚本运行时（Python）、路由流程步骤 1–15、KB 兼容与运行时装配边界；步骤 14 的交付细节仍以 `11-html-delivery-spec.md` 为权威、钉钉回传仍以 `13-dingtalk-result-publish.md` 为权威，本文件不复述它们的正文。
+16. [15-oss-result-publish.md](references/15-oss-result-publish.md)：步骤 14 成对生成并校验最终 HTML/JSON 后、步骤 15 上传前读取；定义默认双文件 OSS 发布、受信目标、逐文件写后验证和非阻塞失败契约。
+17. [14-orchestration-workflow.md](references/14-orchestration-workflow.md)：**正式执行前必读**；router 运行时执行顺序与条件分支的唯一落点——脚本运行时（Python）、路由流程步骤 1–16、KB 兼容与运行时装配边界；交付、OSS 与钉钉细节分别以 11、15、13 为权威，本文件不复述它们的正文。
 
 ## 输入
 
@@ -81,10 +82,10 @@ H0 的机制 owner 是 `references/00-input-and-route-profile.md`，隐藏区的
 
 router 的运行时执行顺序与条件分支**只在** [14-orchestration-workflow.md](references/14-orchestration-workflow.md) 维护；入口不复述、不并行维护第二份。
 
-1. **正式执行前必须读取** `references/14-orchestration-workflow.md`——Python 运行时、路由流程步骤 1–15、KB 兼容与运行时装配边界都在那里。
-2. 必须**按 14 的步骤 1–15 顺序执行**：不得跳步、不得调序、不得改写已冻结的阶段产物。
+1. **正式执行前必须读取** `references/14-orchestration-workflow.md`——Python 运行时、路由流程步骤 1–16、KB 兼容与运行时装配边界都在那里。
+2. 必须**按 14 的步骤 1–16 顺序执行**：不得跳步、不得调序、不得改写已冻结的阶段产物。
 3. **阶段一隔离与冻结、阶段二复核不得合并**：读取任何复核记录前，阶段一正式意见与 `route_profile` 必须已定稿并冻结。
-4. Python 运行时与 KB 装配边界服从 14；交付与送达服从 [11-html-delivery-spec.md](references/11-html-delivery-spec.md)（**JSON 校验先行**、`validate` → `render --json-out` 调用序列与字段契约以 11 为唯一权威）；钉钉回传服从 [13-dingtalk-result-publish.md](references/13-dingtalk-result-publish.md)。
+4. Python 运行时与 KB 装配边界服从 14；交付与送达服从 [11-html-delivery-spec.md](references/11-html-delivery-spec.md)（**JSON 校验先行**、`validate` → `render --json-out` 调用序列与字段契约以 11 为唯一权威）；OSS 发布服从 [15-oss-result-publish.md](references/15-oss-result-publish.md)；钉钉回传服从 [13-dingtalk-result-publish.md](references/13-dingtalk-result-publish.md)。
 5. 任一步门禁失败**按「失败与冲突」处理**，不得静默跳过，也不得降级叙述成"材料缺失"。
 
 ## 失败与冲突
@@ -95,6 +96,7 @@ router 的运行时执行顺序与条件分支**只在** [14-orchestration-workf
 - ROUTE001–004 只按 06 挂起受影响的业务/范围/资产标签、基准日或价值类型及其依赖规则；未受影响的技能继续执行。证据冲突不得静默任选一边。
 - 单个专业技能 `pending`、未注册、下载失败或执行失败时逐标签记录原因，其他 `available` 技能和满足条件的公共能力继续执行。
 - 钉钉回传的目标组织、团队空间或结果根目录零命中/多命中时停止回传；只有审核年份和月份目录允许缺失后创建。回传失败不删除本地交付件，也不得换组织、选相似目录或覆盖同名远端文件。
+- OSS 交付失败只停止该通道，保留已验证本地双文件并继续钉钉交付；各通道分别报告，不能把本地审核完成冒充完全交付成功。
 - 只有所有分发维度均无可靠命中时，才停止专业审核结论，输出已知画像、证据、缺口与候选，请求人工确认；表格等不依赖画像的公共能力仍可按条件执行，但不得冒充专业结论。
 
 ## 输出
@@ -148,5 +150,6 @@ dispatch.skills_to_load = stable_unique(
 - `references/11-html-delivery-spec.md`（v1.6 送达规范）要求的逐条裁定、复核对照与综合对比、《本次审核记录清单》、未检查项，以及最终**员工单文件 HTML + 内部同源监控 JSON**（AuditResult 单一事实源渲染）。
 - 脚本目录、用法与维护入口见 [scripts/README.md](scripts/README.md)（脚本清单、命令用法、强制校验规则与维护规则）；交付字段与编排层调用映射仍以 `references/11-html-delivery-spec.md` 为唯一权威，本入口不复述。
 - `references/13-dingtalk-result-publish.md` 要求的钉钉回传状态：成功时保留精确远端路径与节点 ID；失败时保留失败层级与真实原因。
+- `references/15-oss-result-publish.md` 要求的 OSS 状态：双文件分别保留验证结果与对象键；失败/部分成功时保留真实错误与缺项，不改写审核结论。
 
 无专业技能可用时仍交付画像、逐标签 gap 与已执行公共能力结果，不以“无能力”空返。

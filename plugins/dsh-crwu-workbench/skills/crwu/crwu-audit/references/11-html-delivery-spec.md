@@ -876,6 +876,6 @@ renderer 只能按上表映射展示，不能新增业务字段或另造统计�
 
 约定：`digest` 与 `render` 使用同一规范化序列化（排序键、UTF-8、无多余空白），因此冻结指纹可复现、`fileTrace.sourceDigest` 可与冻结摘要互校；脚本仅依赖 Python 标准库，退出码 `0` 通过 / `1` 失败。`render` 的执行顺序固定为：载入输入 → **JSON 校验** → 内存渲染 → 提取 HTML 内嵌对象 → 渲染态校验 → 成对写出；禁止在 JSON 合规前进入 HTML 渲染逻辑。
 
-### 14.2 最终 JSON 钉钉回传
+### 14.2 最终结果远端发布
 
-步骤 14 只负责产生员工 HTML 与最终态内部监控 JSON；其后的远端归档属于独立传输边界。步骤 15 必须读取本技能 `references/13-dingtalk-result-publish.md`，只把已经通过渲染后校验的配套 JSON 回传到固定组织与团队空间。远端失败不得反向改写 AuditResult、HTML 或审核结论，也不得用“本地已生成”代替“远端已验证”。
+步骤 14 只负责产生员工 HTML 与最终态内部监控 JSON；其后的远端发布属于独立传输边界。步骤 15 读取本技能 `references/15-oss-result-publish.md`，显式发布已经通过最终态校验的 HTML/JSON 双文件；步骤 16 读取 `references/13-dingtalk-result-publish.md`，只把配套 JSON 归档到固定组织与团队空间，再把 HTML 发给自己并 DING。各通道独立报告，OSS 失败不阻断钉钉交付。远端失败不得反向改写 AuditResult、HTML 或审核结论，也不得用“本地已生成”代替“远端已验证”。

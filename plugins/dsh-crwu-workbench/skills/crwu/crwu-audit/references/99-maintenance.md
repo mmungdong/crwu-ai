@@ -22,8 +22,10 @@
 | 能力 gap 与待建提案 | `10-capability-gap-proposal.md` |
 | 送达与交付层规范（AuditResult/单文件 HTML、双证据链、两阶段门禁、验收清单） | `11-html-delivery-spec.md` |
 | 最终 AuditResult 的钉钉组织门禁、年月归档、文件命名与上传验证 | `13-dingtalk-result-publish.md` |
+| 最终 HTML/JSON 的 OSS 双文件发布、写后验证与失败收尾 | `15-oss-result-publish.md` |
 | HTML 页面结构、左侧目录、CSS 与打印样式 | `template/audit-report.html` |
-| 总体 workflow、加载指针与输出步骤 | `SKILL.md` |
+| 总体 workflow 与运行时执行顺序 | `14-orchestration-workflow.md` |
+| 加载指针与输出门禁 | `SKILL.md` |
 
 规则正文和检查点不属于本技能族的 owner；只允许按编号和知识库层级路径引用。**例外**：送达与交付层正文（CRWU 审核意见 HTML 送达规范 v1.4）为本技能内正式规范，owner 是 `11-html-delivery-spec.md`，不经知识库下载。
 

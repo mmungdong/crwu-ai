@@ -1506,6 +1506,54 @@ test('crwu_audit_oss_publish fails when the object is missing or its size differ
   assert.match(missing.value.results[0].error, /没有目标对象/)
 })
 
+test('explicit OSS deliverable pairs verify both files and fail visibly for a missing or unverified JSON', async () => {
+  const htmlName = `审核意见.${SEQ}.html`
+  const jsonName = `审核结果.${SEQ}.json`
+  const html = '<html>final</html>'
+  const json = '{"final":true}'
+  const entry = (name, size) => `2026-09-20 10:35:52 +0800 CST  ${size}  Standard  d41d8cd98f00b204e9800998ecf8427e  oss://crwu-workspace/crwu/audit/${SEQ}/${name}\n`
+  const publish = async (hasJson, remoteJsonSize) => {
+    const fs = makeFs({
+      dirs: [CASE_DIR],
+      files: {
+        [`${CASE_DIR}/${htmlName}`]: html,
+        ...(hasJson ? { [`${CASE_DIR}/${jsonName}`]: json } : {}),
+      },
+    })
+    const shell = dwsRouter([
+      ['cp -f', { ok: true }],
+      ['ls ', entry(htmlName, html.length) + entry(jsonName, remoteJsonSize)],
+    ])
+    const made = makeDeps({ fs, shell })
+    withAuditScope(made.deps.state, { casePath: CASE_DIR })
+    registerCrwuTools(made.deps.ctx, made.deps)
+    const result = await made.registry.execute(scopedExec(TOOL_NAMES.ossPublish, {
+      caseDir: CASE_DIR, seqNo: SEQ, files: [htmlName, jsonName],
+    }, new AbortController().signal))
+    assert.equal(result.isError, false)
+    return result.value
+  }
+
+  const complete = await publish(true, json.length)
+  assert.equal(complete.ok, true, complete.error)
+  assert.equal(complete.uploaded, 2)
+  assert.deepEqual(complete.results.map(({ name, key, ok, sizeBytes }) => ({ name, key, ok, sizeBytes })), [
+    { name: htmlName, key: `crwu/audit/${SEQ}/${htmlName}`, ok: true, sizeBytes: html.length },
+    { name: jsonName, key: `crwu/audit/${SEQ}/${jsonName}`, ok: true, sizeBytes: json.length },
+  ])
+
+  const absent = await publish(false, json.length)
+  assert.equal(absent.ok, false, 'explicit JSON must not be silently skipped, even when an old remote object exists')
+  assert.equal(absent.uploaded, 1)
+  assert.equal(absent.results.find(({ name }) => name === jsonName)?.ok, false)
+  assert.ok(absent.results.find(({ name }) => name === jsonName)?.error)
+
+  const mismatch = await publish(true, 1)
+  assert.equal(mismatch.ok, false, 'successful HTML must not mask a JSON verification failure')
+  assert.equal(mismatch.uploaded, 1)
+  assert.match(mismatch.results.find(({ name }) => name === jsonName)?.error ?? '', /字节数不符/)
+})
+
 test('oss errors are sanitized before they can reach the model', () => {
   const raw = 'failed url=https://crwu-workspace.oss-cn-beijing.aliyuncs.com/a.html?OSSAccessKeyId=LTAI5tSecret&Signature=abc%2Fdef&security-token=xyz key=LTAI5tSecret1234567890'
   const clean = sanitizeOssError(raw)

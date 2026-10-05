@@ -108,6 +108,7 @@ function toolSection(): string[] {
     '**登录与授权（必须照做）**：任何 Tool 返回「需要先允许工作台访问本机账号和配置」'
       + '（`not-authorized`）或「未登录 / 会话过期」时：**立即停止本次审核**，在汇报里写明'
       + '「需要员工回到工作台完成账号连接（氚云 / 钉钉）或允许本机访问」，并把已经完成的步骤列清楚。',
+    '上述审核停止规则用于取数与审核阶段；步骤 14 已成功生成并校验本地 HTML/JSON 后，交付通道的认证/授权失败只停止该通道，保留本地成果并继续其他独立交付，分别报告失败。',
     '',
     '**绝对不许**：自己执行登录（`login` 类命令 / 打开浏览器扫码 / 让用户扫码）、'
       + '去系统钥匙串或用户目录里翻找凭据、改 `PATH` 或去找别的命令、把「登录失败」当成本次审核的结论。'
@@ -312,14 +313,14 @@ function legacyAuditPrompt(task: LegacyTask) {
     L.push('调用一次：')
     L.push('')
     L.push('```text')
-    L.push('crwu_audit_oss_publish({ caseDir: "' + caseDir + '", seqNo: "' + seq + '" })')
+    L.push('crwu_audit_oss_publish({ caseDir: "' + caseDir + '", seqNo: "' + seq + '", files: ["审核意见.' + seq + '.html", "审核结果.' + seq + '.json"] })')
     L.push('```')
     L.push('')
     L.push('要求：')
-    L.push('1. **HTML 必须上传**（`审核意见.' + seq + '.html`）。结果 JSON（`审核结果.' + seq + '.json`）存在就一并上传；不存在时 Tool 会跳过它，你需要在汇报里说明「结果 JSON 未生成」。')
+    L.push('1. 先读取 crwu-audit 的 `references/15-oss-result-publish.md`：完整两阶段审核及必要补审后，步骤 14 必须成对生成并校验最终 HTML/JSON；显式上传上面两个文件，不省略 `files`，不上传初审、中间产物或会话。成对生成或校验失败则停止本地交付，不调用上传。')
     L.push('2. bucket / endpoint / 对象前缀由 Tool 从部署配置读取，**不要提交、也不要自己拼 `oss://` 地址**；凭据已经配在本机，**不要问我要 AccessKey，不要回显任何密钥**。')
-    L.push('3. Tool 会在上传后**真的列举一次**核对目标对象与字节数；你必须在汇报里写出 Tool 返回的 `key`、`sizeBytes` 与 `ok`。')
-    L.push('4. 上传失败**不要静默略过**，把 Tool 返回的 `error` 原文（已脱敏）贴出来。')
+    L.push('3. Tool 会在上传后**真的列举一次**核对目标对象与字节数；只有整体 `ok:true`、`results` 按精确 `name` 唯一命中两个预期文件且各项 `ok:true`、`key` 非空、`sizeBytes` 非零并无失败/缺项，才报告 OSS 双文件上传成功。分别汇报 `name`、`key`、`sizeBytes`、`ok`，不能只看 `uploaded` 或 HTML 成功。')
+    L.push('4. 上传失败/部分成功**不要静默略过**，保留本地成果，报告 Tool 返回的 `errorKind`、`error`（已脱敏）与失败/缺项；继续独立的钉钉归档与通知，不改写审核结论、不循环重试、不绕过权限。明确区分本地审核完成与 OSS 交付状态，不冒充完全交付成功。')
   }
 
   // 钉钉这两件**不挂在 OSS 分支下**：没配 OSS 时同样要做。用户报过「skill 给钉钉文档上传的

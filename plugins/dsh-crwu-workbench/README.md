@@ -10,6 +10,8 @@ AI 审核子会话 → 盯住它的运行状态、可随时停止/重启 → 交
 
 审核流程本体不在本仓：它由 `crwu-audit` 技能族执行（见「依赖」）。本仓只负责**发起、盯状态、交付件回传**。
 
+审核 Skill 的收尾契约：完整两阶段审核后生成并校验最终 HTML/JSON，按 [OSS 发布契约](skills/crwu/crwu-audit/references/15-oss-result-publish.md) 显式上传双文件并逐项写后验证。OSS 失败保留本地成果、如实报告，继续独立的钉钉归档与通知；不上传会话内容。
+
 源码在 `src/`，构建产物是 `lib/index.js` + `lib/client.js`，按 **DSH 包插件**（npm）分发安装。
 维护规范见 [`AGENTS.md`](AGENTS.md)，完整发版步骤见
 [`docs/releasing.md`](https://github.com/mmungdong/crwu-ai/blob/main/plugins/dsh-crwu-workbench/docs/releasing.md)，

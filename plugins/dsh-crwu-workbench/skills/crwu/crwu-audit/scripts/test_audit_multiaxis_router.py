@@ -95,6 +95,7 @@ EXPECTED_REFERENCE_FILES = (
     "12-leaf-common-contract.md",
     "13-dingtalk-result-publish.md",
     "14-orchestration-workflow.md",
+    "15-oss-result-publish.md",
     "99-maintenance.md",
 )
 
@@ -401,11 +402,11 @@ class AuditMultiaxisRouterContractTest(unittest.TestCase):
                 f"references/{ORCHESTRATION_REFERENCE} 必须承载运行时细节 {token}",
             )
 
-        # 4) 14 必须按序保留步骤 1–15（执行顺序不得丢步或改序）。
+        # Execution order includes OSS publishing before DingTalk delivery.
         steps = [int(number) for number in re.findall(r"(?m)^(\d+)\.\s", reference)]
         self.assertEqual(
-            list(range(1, 16)), steps,
-            f"references/{ORCHESTRATION_REFERENCE} 必须按序保留 1–15 全部步骤，实际={steps}",
+            list(range(1, 17)), steps,
+            f"references/{ORCHESTRATION_REFERENCE} 必须按序保留 1–16 全部步骤，实际={steps}",
         )
 
         # 5) 14 必须保留阶段隔离、Python 运行时与 KB 装配边界的稳定标识。

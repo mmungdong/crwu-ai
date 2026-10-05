@@ -82,6 +82,7 @@ test('the audit main path has no CLI compatibility region at all', async () => {
     'skills/crwu/crwu-audit/SKILL.md',
     'skills/crwu/crwu-audit/references/00-input-and-route-profile.md',
     'skills/crwu/crwu-audit/references/13-dingtalk-result-publish.md',
+    'skills/crwu/crwu-audit/references/15-oss-result-publish.md',
   ]) {
     const text = await readFile(join(ROOT, relative), 'utf8')
     assert.equal(text.includes('crwu-cli-guard:legacy-compat'), false, `${relative} 不许引用兼容层`)

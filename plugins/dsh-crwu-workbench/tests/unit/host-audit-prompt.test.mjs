@@ -199,7 +199,11 @@ test('指令不含裸 crwu / dws / ossutil 命令，也不再点名 Python 回�
 test('OSS 交付改写成 crwu_audit_oss_publish 调用，并保留写后校验语义', () => {
   const text = auditPrompt(task())
   assert.equal(text.includes('## 完成后必须把交付件上传到 OSS（用 `crwu_audit_oss_publish`）'), true)
-  assert.equal(text.includes(`crwu_audit_oss_publish({ caseDir: "${WORKSPACE}/${SEQ}", seqNo: "${SEQ}" })`), true, '要给出可直接照抄的调用')
+  const call = /crwu_audit_oss_publish\(\{([^\n]+)\}\)/.exec(text)?.[1] ?? ''
+  assert.equal(call.includes(`caseDir: "${WORKSPACE}/${SEQ}"`), true)
+  assert.equal(call.includes(`seqNo: "${SEQ}"`), true)
+  const files = /files:\s*(\[[^\]]+\])/.exec(call)?.[1] ?? '[]'
+  assert.deepEqual(JSON.parse(files), [`审核意见.${SEQ}.html`, `审核结果.${SEQ}.json`], '必须显式提交最终 HTML 与 JSON，不能走缺文件静默跳过的默认清单')
   assert.equal(text.includes('**真的列举一次**核对目标对象与字节数'), true, '写后校验的要求必须留着')
   assert.equal(text.includes('不要问我要 AccessKey'), true, '凭据提示要在（否则子会话会来问密钥）')
   assert.equal(text.includes('不要提交、也不要自己拼 `oss://` 地址'), true, 'bucket/endpoint/prefix 由 Tool 从配置读')

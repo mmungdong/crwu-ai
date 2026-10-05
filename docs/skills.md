@@ -43,6 +43,11 @@ Make 目标。宿主目录与替换注意事项见 [`agent-skill-dirs.md`](agent
 知识库正文。现行设计见 [`design-crwu-audit-skills.md`](v0.0.1/design-crwu-audit-skills.md) 和
 [`design-audit-live-kb-protocol.md`](v0.0.1/design-audit-live-kb-protocol.md)。
 
+最终交付按 Skill 内 [HTML/JSON 送达规范 v1.6](../plugins/dsh-crwu-workbench/skills/crwu/crwu-audit/references/11-html-delivery-spec.md)
+成对校验与渲染；远端发布分别维护在 [OSS 契约](../plugins/dsh-crwu-workbench/skills/crwu/crwu-audit/references/15-oss-result-publish.md)
+和 [钉钉契约](../plugins/dsh-crwu-workbench/skills/crwu/crwu-audit/references/13-dingtalk-result-publish.md)，
+顺序由 [运行时编排](../plugins/dsh-crwu-workbench/skills/crwu/crwu-audit/references/14-orchestration-workflow.md) 统一维护。
+
 外部数据核验只使用 iFinD：WorkBuddy 通过宿主连接器 `ifind-mcp`，DeepSeek Harness 通过受控的结构化
 Tool `crwu_audit_ifind_query`。不要用第三方 Skill、裸 CLI 或子进程替代这些宿主边界。
 

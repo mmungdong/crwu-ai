@@ -4,6 +4,7 @@
 规范正文（唯一事实源）：本技能 `references/11-html-delivery-spec.md`。
 
 > **归档与通知只走结构化 Tool，本目录不含任何业务 CLI 执行路径。**
+> OSS 双文件发布由 `crwu_audit_oss_publish` 完成（契约见 [15-oss-result-publish.md](../references/15-oss-result-publish.md)）。
 > 钉钉回传由 `crwu_audit_dingtalk_archive`（契约见 `references/13-dingtalk-result-publish.md`）与
 > `crwu_audit_dingtalk_notify_self` 完成；Skill 自带脚本**不得**用 `subprocess` / `child_process` /
 > shell / 裸命令调用 `crwu` / `dws` / `ossutil`。这条边界由 `npm run skills:cli-guard`
@@ -27,7 +28,7 @@
 | `examples/audit-result.sample.json` | 【示意】样例（数值与名称为占位，禁止当真值使用） | §9.3 |
 | `test_audit_delivery.py` | 契约测试（Schema 语义、门禁、证据链、统计可重算、隐私、模板、目录、渲染确定性、转义、打印、空态） | §13.4 |
 | `test_fetch_review_records.py` | `fetch_review_records.py` 的契约测试（清单边界、字节数校验、禁写源材料目录） | [14-orchestration-workflow.md](../references/14-orchestration-workflow.md) 步骤 2、步骤 12 |
-| `test_audit_multiaxis_router.py` | 多轴 router 契约测试（注册表、并集派发、装配路径键、渐进披露与入口尺寸） | [SKILL.md](../SKILL.md) + `references/00–14` |
+| `test_audit_multiaxis_router.py` | 多轴 router 契约测试（注册表、并集派发、装配路径键、渐进披露与入口尺寸） | [SKILL.md](../SKILL.md) + `references/00–15` |
 
 ## 用法
 

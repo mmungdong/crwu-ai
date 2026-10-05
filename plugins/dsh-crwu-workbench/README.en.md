@@ -12,6 +12,8 @@ auto-upload deliverables to Aliyun OSS → open the cloud-hosted audit opinion.
 The audit process itself is **not** in this repository; the `crwu-audit` skill family runs it.
 This repository only *dispatches, watches, and ships back*.
 
+The audit Skill's completion contract generates and validates final HTML/JSON after both audit phases, then explicitly uploads and verifies both files under the [OSS publishing contract](skills/crwu/crwu-audit/references/15-oss-result-publish.md). OSS failure preserves local results and is reported separately while independent DingTalk archive and notification continue. Conversation content is not uploaded.
+
 One form only: `src/` is the single source, bundled by tsdown into `lib/index.js` (Host) and
 `lib/client.js` (Client), distributed as a DSH **package** plugin (npm / tarball / git).
 Migration history: [`PORTING.md`](PORTING.md).

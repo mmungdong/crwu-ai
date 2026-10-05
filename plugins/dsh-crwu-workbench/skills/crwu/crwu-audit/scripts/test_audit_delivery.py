@@ -1669,7 +1669,7 @@ class DeliveryContractDocumentationTest(unittest.TestCase):
 
         router_test_owner = _owner_cell("test_audit_multiaxis_router.py")
         self.assertIn("SKILL.md", router_test_owner, "router 测试必须回指 router 入口")
-        self.assertIn("references/00–14", router_test_owner, "router 测试必须回指 router references 全段")
+        self.assertIn("references/00–15", router_test_owner, "router 测试必须回指 router references 全段")
         self.assertNotIn("§13.4", router_test_owner, "router 测试不归交付规范 §13.4")
 
 
