@@ -495,7 +495,7 @@ AuditResult 是单一事实源。字段名推荐统一使用英文 camelCase，�
 
 | 对象 | 关键字段 | 约束 |
 | --- | --- | --- |
-| auditTask | projectId, reportVersion, auditTime, engineVersion, profile | projectId 和报告版本不得为空；profile 保留 routeProfile 摘要。 |
+| auditTask | projectId, reportVersion, auditTime, engineVersion, profile, mode? | projectId 和报告版本不得为空；profile 保留 routeProfile 摘要。`mode` 缺省即报告审核；写 `local` 时按 [16-local-audit.md](16-local-audit.md) 换标题、加顶部信息条（模式 · 生成时间 · 已审核 N/M 个文件，N/M 由渲染器从 `scope.inputs[].readable` 数出）并把阶段二写成不适用。 |
 | phaseControl | phase1FrozenAt, phase1Digest, reviewAccessedAt, phase2CompletedAt | reviewAccessedAt 必须晚于 phase1FrozenAt。 |
 | summary | overallDecision, narrative, counts | counts 必须与 issues 和 manualConfirmationItems 可重算一致。 |
 | issues[] | issueId, title, decision, severity, issueType, ruleEvidence, materialEvidence, gapAnalysis, handlingRequirement, recommendedEdits | 规则性缺陷必须同时具备规则证据与材料证据。 |

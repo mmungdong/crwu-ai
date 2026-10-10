@@ -2389,11 +2389,25 @@ def render(result: dict, print_trail: bool = None) -> str:
     review_items = comparison.get("reviewItems") or []
     review_metrics = _review_metrics(review_items)
     unresolved_claims = sum(item.get("inFileResolution") == "L-unclosed" for item in review_items)
-    report_title = "中瑞世联AI审核报告 - {0}".format(audit_task.get("projectId"))
+    # 本地审核（协议 28）：`auditTask.mode == "local"` 时换标题、加信息条、把阶段二说成不适用。
+    # 判据只认这个显式字段（不猜 objectType 里的字面量）：标题与信息条是员工第一眼看到的东西，
+    # 认错模式比不认更糟。
+    is_local_audit = _text(audit_task.get("mode")) == "local"
+    report_title = "{0} - {1}".format(
+        "本地审核报告" if is_local_audit else "中瑞世联AI审核报告",
+        audit_task.get("projectId"),
+    )
 
     # 01 AI 审核综合总结 + 紧凑项目信息
     parts.append('<header id="project-info">')
     parts.append("<h1>{0}</h1>".format(_text(report_title)))
+    if is_local_audit:
+        # 顶部信息条：模式 · 生成时间 · 已审核 N/M 个文件（N/M 直接从 scope.inputs 数出来，
+        # 不让模型自己写一个可能与清单对不上的数字）。
+        local_inputs = scope.get("inputs") or []
+        local_readable = sum(1 for item in local_inputs if (item or {}).get("readable") is not False)
+        parts.append('<p class="audit-mode">{0}</p>'.format(_text("本地文件审核 · {0} · 已审核 {1}/{2} 个文件".format(
+            _dt(file_trace.get("generatedAt", "")), local_readable, len(local_inputs)))))
     parts.append('<p class="project-line"><strong>{0}</strong><span>{1}</span><span>{2}</span><span>{3}</span></p>'.format(
         _text(audit_task.get("projectId")), _text(audit_task.get("reportVersion")),
         _text(((audit_task.get("profile") or {}).get("objectType"))), _text(_dt(audit_task.get("auditTime", "")))))
@@ -2403,7 +2417,9 @@ def render(result: dict, print_trail: bool = None) -> str:
                 "phase-note",
                 "阶段一独立审核已完成并冻结；阶段二复核对照不改变阶段一结论"
                 if comparison.get("status") == "performed"
-                else "阶段一独立审核已完成并冻结；本次未执行阶段二复核对照",
+                else ("阶段一独立审核已完成并冻结；本地审核没有人工复核件，阶段二复核对照不适用"
+                      if is_local_audit
+                      else "阶段一独立审核已完成并冻结；本次未执行阶段二复核对照"),
             )
         )
     )

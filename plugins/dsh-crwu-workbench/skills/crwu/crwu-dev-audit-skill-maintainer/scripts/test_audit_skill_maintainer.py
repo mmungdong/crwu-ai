@@ -2995,6 +2995,27 @@ class PublicAxisMappingTest(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(has_skill("crwu-audit-public-general-standards"), "public skill absent")
+class PublicProofreadingContractTest(unittest.TestCase):
+    def test_internal_checks_are_executed_with_bounded_output_authority(self):
+        root = skill_path("crwu-audit-public-general-standards")
+        contract = (root / "references/03-execution-contract.md").read_text(encoding="utf-8")
+        self.assertIn("内部校对检查点", contract)
+        self.assertIn("internal_control", contract)
+        self.assertIn("formal_defect", contract)
+        self.assertIn("不以待官方核验为由跳过内部校对", contract)
+        self.assertIn("逐项", contract)
+        self.assertIn("无法核验", contract)
+
+    def test_institution_policy_exclusion_does_not_exclude_material_checks(self):
+        root = skill_path("crwu-audit-public-general-standards")
+        assembly = (root / "references/01-kb-assembly.md").read_text(encoding="utf-8")
+        self.assertIn("机构制度体系对照", assembly)
+        self.assertIn("不排除", assembly)
+        self.assertIn("内部校对检查点", assembly)
+        self.assertIn("06-规则库/02-通用准则-报告与披露/", assembly)
+
+
 class SecondLevelIndexGateTest(unittest.TestCase):
     """CRWU-SKILL-OPT-003：知识库二级对象/子业务必须在父叶子里被**分维度**索引。
 
