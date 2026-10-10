@@ -6,6 +6,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { AuditParentButton } from './features/workbench/AuditParentButton.tsx'
 import { RunCardAction } from './features/workbench/RunCardAction.tsx'
 import { WorkbenchPanel } from './features/workbench/WorkbenchPanel.tsx'
+import { createLocalAuditPaneController } from './features/local-audit/LocalAuditPane.tsx'
 import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './features/workbench/WorkbenchSidebarEntry.tsx'
 import { createBuildStore } from './features/workbench/build-store.ts'
 import { createModuleStore } from './features/workbench/module-store.ts'
@@ -63,6 +64,15 @@ export function apply(ctx: ClientContext): void {
   // 模块状态（报告评估 / 报告审核 / 环境信息）同理必须**只有一份**：侧栏那张分组卡上
   // 的三个子项与面板里的三页是同一件事，各存一份就会出现「侧栏高亮报告审核、面板显示环境信息」。
   const modules = createModuleStore()
+  /**
+   * 「本地审核」那一页的**草稿状态**（选择 / 提示词 / 已准备好的 handoff）。
+   *
+   * 为什么必须在这一层建：这一页握着用户刚选的一批本机文件与一份已经建好的临时快照。
+   * 状态机若长在组件里，切一次页签（或离开面板再回来）就把这份草稿丢了 —— 而设计明确要求
+   * 「失败/切换都不要丢弃已选内容」。它与 `modules` / `updateDialog` 同一套口径：
+   * **实例级、只有一份，不放在模块顶层**（模块级单例会在插件卸载后残留）。
+   */
+  const localAudit = createLocalAuditPaneController(services)
   // 自助更新同理，而且这条是**硬要求**：侧栏那枚版本徽标与面板里的更新面板必须共用
   // 唯一一份更新状态（各自建 store 就会各发一次 status/check，还会出现"徽标说有更新、
   // 面板说已是最新"）。开关状态也挂在实例上（侧栏徽标要能打开面板里的那只 Dialog）。
@@ -115,6 +125,7 @@ export function apply(ctx: ClientContext): void {
     () => React.createElement(WorkbenchPanel, {
       services,
       envStatus,
+      localAudit,
       build: buildStore,
       modules,
       update: updateStore,

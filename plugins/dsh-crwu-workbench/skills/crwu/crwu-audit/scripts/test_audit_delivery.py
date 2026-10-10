@@ -516,6 +516,34 @@ class AuditResultRenderTest(unittest.TestCase):
         self.result = load_sample()
         self.document = delivery.render(self.result)
 
+    def test_local_audit_mode_marks_title_and_counts_readable_inputs(self):
+        """本地审核（协议 28）：标题换成「本地审核报告」，顶部信息条给出 已审核 N/M 个文件。
+
+        N/M 由渲染器从 `scope.inputs` 数出来（readable 为 false 的不算已审核），
+        **不接受模型自己写一个可能与清单对不上的数字**。
+        """
+        result = load_sample()
+        result["auditTask"]["mode"] = "local"
+        # 本地审核没有人工复核件 → 阶段二本来就不会执行。
+        result["reviewComparison"]["status"] = "not_performed"
+        result["scope"]["inputs"] = [
+            {"fileId": "f-1", "displayName": "资产清单.xlsx", "version": "1", "readable": True},
+            {"fileId": "f-2", "displayName": "估值计算表.xlsx", "version": "1", "readable": True},
+            {"fileId": "f-3", "displayName": "锁住的文件.xlsx", "version": "1", "readable": False},
+        ]
+        document = delivery.render(result)
+        self.assertIn("本地审核报告", document)
+        self.assertIn('class="audit-mode"', document)
+        self.assertIn("已审核 2/3 个文件", document)
+        self.assertIn("本地审核没有人工复核件，阶段二复核对照不适用", document)
+        self.assertNotIn("中瑞世联AI审核报告", document)
+
+    def test_report_mode_keeps_the_report_title_and_has_no_mode_bar(self):
+        """没写 mode（或写成 report）时一个字都不能变：报告审核的既有交付件形态不受影响。"""
+        document = delivery.render(load_sample())
+        self.assertIn("中瑞世联AI审核报告", document)
+        self.assertNotIn('class="audit-mode"', document)
+
     def test_sections_in_required_order(self):
         positions = []
         for region in REGION_ORDER:

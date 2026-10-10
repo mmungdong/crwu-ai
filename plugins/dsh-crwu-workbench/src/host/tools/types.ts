@@ -9,6 +9,8 @@ import type { H3yunFormResolver } from '../h3yun/form.ts'
 import type { IfindTransport } from '../ifind/mcp.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { DiscussionScopeRegistry } from '../audit/discussion-scope.ts'
+import type { LocalAuditRegistry } from '../local-audit/handoff.ts'
+import type { SnapshotIo } from '../local-audit/snapshot.ts'
 import type { PythonRuntimeResolver } from '../runtime/python.ts'
 
 /**
@@ -44,6 +46,18 @@ export interface ToolDeps {
   access: LocalAccessBroker
   /** Registered case and attachment boundaries, owned by this plugin instance's lifecycle. */
   discussionScopes: DiscussionScopeRegistry
+  /**
+   * **本地审核的一次性 handoff 与案例 scope 注册表**（协议 28）。
+   *
+   * 与 `discussionScopes` 同类：进程内、随插件生命周期释放。本地审核的案例目录在操作系统
+   * 临时目录下，普通会话判据（`<工作空间>/<流水号>`）覆盖不到它，所以它必须有自己的注册表。
+   *
+   * 可选只是为了让只关心别的 Tool 的测试夹具不被逼着造一个注册表：缺失时
+   * `crwu_audit_local_claim` 如实回 `capability-gap`，案例门禁也只是少一类本地 scope。
+   */
+  localAudit?: LocalAuditRegistry
+  /** 本地审核快照的 IO（claim 时要回读清单确认快照仍在）；测试注入内存替身。 */
+  localAuditIo?: SnapshotIo
   /**
    * DSH 自带 Python 的**实例级**解析器（`crwu_run_python_script` 用它）。
    *

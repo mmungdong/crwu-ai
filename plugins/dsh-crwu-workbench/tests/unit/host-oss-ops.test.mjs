@@ -107,6 +107,11 @@ const ossutilOnPath = (command) => {
   return { stdout: '' }
 }
 
+/** `sign` 给一条链接、别的命令给空输出（只关心"起没起浏览器进程"的用例用它）。 */
+const signedStub = (command) => (command.includes(' sign ')
+  ? { stdout: 'https://bkt.oss-cn-x.aliyuncs.com/a?Signature=x\n' }
+  : { stdout: '' })
+
 // ── oss-index ───────────────────────────────────────────────────────────────
 
 test('oss-index：一次 ls 就带回 个数/大小/最后写入时间/ETag（不加 --short-format）', async () => {
@@ -590,4 +595,30 @@ test('the shipped default manifest keeps OSS upload off until a bucket is config
   assert.equal(DEFAULT_MANIFEST.oss.bucket, '')
   assert.equal(DEFAULT_MANIFEST.oss.prefix, 'crwu/audit')
   assert.equal(DEFAULT_MANIFEST.oss.linkMode, 'signed', '内部材料默认走签名 URL')
+})
+
+// ── oss-link 的 `open: false`（2026-10-11 用户实测"浏览器很慢"）────────────────
+//
+// 这条链路原来是两次串行的提权进程：`ossutil sign` 出链接、`open <url>` 拉起浏览器。
+// 现在客户端可以只要链接（`open: false`），自己去 `window.open`（桌面端主进程转
+// `shell.openExternal` → 系统默认浏览器）—— 宿主这边**一个浏览器进程都不该起**。
+
+test('oss-link with open:false returns the url without launching a browser', async () => {
+  const { deps, commands } = ossDeps({ shell: signedStub })
+  const result = await ossLink(deps, { key: `crwu/audit/${SEQ}/审核意见.${SEQ}.html`, open: false })
+  assert.equal(result.ok, true)
+  assert.match(result.url, /^https:\/\//, '链接照旧要有（客户端拿它去开）')
+  assert.equal(result.opened, false, '没说"宿主打开了"')
+  assert.equal(commands.some((command) => command.includes(' sign ')), true, '签名照旧要做')
+  // 判据：不许出现任何"打开外部程序"的命令（macOS 的 open / Windows 的 start / Linux 的 xdg-open）。
+  assert.equal(commands.some((command) => /(^|\s)(open|start|xdg-open)\s/.test(command)), false,
+    `open:false 不该起浏览器进程：${commands.join(' | ')}`)
+})
+
+test('oss-link keeps launching the browser by default (old clients unaffected)', async () => {
+  const { deps, commands } = ossDeps({ shell: signedStub })
+  const result = await ossLink(deps, { key: `crwu/audit/${SEQ}/审核意见.${SEQ}.html` })
+  assert.equal(result.ok, true)
+  assert.equal(result.opened, true, '缺省仍然是"宿主打开"（旧界面不会因此变成点了没反应）')
+  assert.equal(commands.some((command) => /(^|\s)(open|start|xdg-open)\s/.test(command)), true)
 })

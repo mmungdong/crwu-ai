@@ -16,3 +16,6 @@ node_modules/
 # 二进制是构建输入，不进版本库；下载缓存同理。
 /bin/
 /.cache/
+# `npm test` 里那两条 tarball 用例会调 `npm pack`；沙箱不让写 `~/.npm` 时用
+# `npm_config_cache="$PWD/.npm-cache"` 把缓存挪到包根（纯本地测试产物，不进版本库）。
+/.npm-cache/

@@ -314,7 +314,7 @@ export function h3yunTools(deps: ToolDeps) {
       const ctx = toolContext(deps.ctx, exec)
       const fileId = text(args.fileId).trim()
       // Validate the case before downloading; managed callers also need a manifest match.
-      const materialCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
+      const materialCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir }, deps.localAudit)
       if (!materialCheck.ok) return { ...materialCheck, fileId, path: '', sizeBytes: 0 }
       const material = materialCheck
       const casePath = material.casePath

@@ -57,6 +57,10 @@ export const FROZEN_OPERATIONS = [
   // 第 39 个：报告讨论会话的**受限材料登记**（协议 23）。讨论不是审核 —— 它没有审核记录，
   // 所以 Host 在登记时自己重新取一次附件清单，只把那一批 `fileId` 写进内存白名单。
   'discussion-material-open',
+  // 第 40~42 个：**本地审核**（协议 28）。选本机文件 → 扫描 → 建一次性快照与 handoff →
+  // 在对话里认领。它**不判环境门禁**（本地审核的意义就是不需要氚云 / OSS / 工作空间），
+  // 唯一的前置是本机访问授权（由 Broker 的操作表判）。
+  'local-audit-status', 'local-audit-start', 'local-audit-claim',
   // ⚠️ 协议 22（2026-09-30）**删掉**了 `browser-session-bind`（氚云内置浏览器扫码，协议 20）
   // 与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录，协议 21）：
   // DSH 只读取、检查已有凭据，登录由本机 CLI 打开系统浏览器完成。

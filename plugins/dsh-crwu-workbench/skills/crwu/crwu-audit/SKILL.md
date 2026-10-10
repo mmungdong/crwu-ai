@@ -55,11 +55,15 @@ H0 的机制 owner 是 `references/00-input-and-route-profile.md`，隐藏区的
 15. [13-dingtalk-result-publish.md](references/13-dingtalk-result-publish.md)：步骤 14 已生成最终态监控 JSON 后读取；定义固定组织/团队空间/结果目录的精确解析、按审核年月建目录、带生成时间戳文件名、DWS 上传与写后验证契约。
 16. [15-oss-result-publish.md](references/15-oss-result-publish.md)：步骤 14 成对生成并校验最终 HTML/JSON 后、步骤 15 上传前读取；定义默认双文件 OSS 发布、受信目标、逐文件写后验证和非阻塞失败契约。
 17. [14-orchestration-workflow.md](references/14-orchestration-workflow.md)：**正式执行前必读**；router 运行时执行顺序与条件分支的唯一落点——脚本运行时（Python）、路由流程步骤 1–16、KB 兼容与运行时装配边界；交付、OSS 与钉钉细节分别以 11、15、13 为权威，本文件不复述它们的正文。
+18. [16-local-audit.md](references/16-local-audit.md)：**输入是本地文件**（提示词里带 `handoffId` 且写着「本地审核」）时读取；定义一次性交接的认领（`crwu_audit_local_claim`）、**不适用**而非缺失的处置、只在案例目录内的交付，以及 HTML 必须标记为「本地审核」并区分四种状态。
 
 ## 输入
 
-接受材料包、`SeqNo` 或 `ObjectId`。
+接受材料包、`SeqNo`、`ObjectId` 或**本地审核交接**（`handoffId`）。
 
+- **本地审核**（提示词里带 `handoffId` 且写着「本地审核」）：先按 [16-local-audit.md](references/16-local-audit.md) 调用一次
+  `crwu_audit_local_claim` 取回本轮案例目录与材料清单；认领失败就停止并交回原文，
+  **不得**退化成自己在本机找文件。氚云记录/附件/复核件相关的步骤一律记「不适用」，不得写成"缺失"。
 - `SeqNo` / `ObjectId` 只按 `01-report-id-resolution.md` 解析。`SeqNo` 必须精确查询；返回 0 条或多条时停止，不自行选择。
 - 不得硬编码或猜测 `ObjectId`、schema code 或 schema。schema 必须来自现场可验证结果或已确认配置。
 - 对记录型输入，router 只 fetch 一次完整报告记录，以同一快照构建画像并准备材料。H3Yun 项目附件与知识库规则/契约使用两条隔离的下载链，禁止混用。

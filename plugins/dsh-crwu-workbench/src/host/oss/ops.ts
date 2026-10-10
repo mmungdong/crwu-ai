@@ -65,7 +65,7 @@ async function shellWorkdir(deps: OssDeps): Promise<string> {
 }
 
 /** 统一的「前置检查」：OSS 必须启用、有 bucket、ossutil 可用。 */
-async function requireOss(deps: OssDeps): Promise<{ ok: true; oss: OssSpec; ossutil: string } | { ok: false; error: string }> {
+export async function requireOss(deps: OssDeps): Promise<{ ok: true; oss: OssSpec; ossutil: string } | { ok: false; error: string }> {
   const oss = deps.manifest.oss
   if (!oss.enabled) return { ok: false, error: '清单里 oss.enabled 不是 true' }
   if (oss.bucket === '') return { ok: false, error: '清单缺 oss.bucket' }
@@ -74,6 +74,24 @@ async function requireOss(deps: OssDeps): Promise<{ ok: true; oss: OssSpec; ossu
   })
   if (lookup.path === '') return { ok: false, error: ossutilMissingMessage(lookup) }
   return { ok: true, oss, ossutil: lookup.path }
+}
+
+export async function listOssDirectory(
+  deps: OssDeps,
+  ready: Extract<Awaited<ReturnType<typeof requireOss>>, { ok: true }>,
+  prefix: string,
+  options: { signal?: AbortSignal; timeoutMs?: number; workdir?: string } = {},
+) {
+  const argv = [ready.ossutil, 'ls', `oss://${ready.oss.bucket}/${prefix}`]
+  if (ready.oss.endpoint !== '') argv.push('--endpoint', ready.oss.endpoint)
+  return await runOssutil({
+    ctx: deps.ctx, access: deps.access, platform: deps.platform, source: deps.source,
+    workdir: options.workdir ?? await shellWorkdir(deps),
+  }, {
+    operation: 'oss.remote.read', argv, signal: options.signal,
+    timeoutMs: options.timeoutMs ?? 90_000, stdoutMaxBytes: 4 * 1024 * 1024,
+    summary: 'ossutil ls（查询报告审核文件）',
+  })
 }
 
 // ── oss-index ───────────────────────────────────────────────────────────────
@@ -109,7 +127,7 @@ export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}
 
   const ready = await requireOss(deps)
   if (!ready.ok) return { ok: false, error: ready.error, ...empty }
-  const { oss, ossutil } = ready
+  const { oss } = ready
 
   // 前缀隔离：只在配置前缀内再下一层；上面已保证这一段不含 `/`，这里再用既有 stripPrefix 兜一道。
   const listedPrefix = seqNo === '' ? oss.prefix : `${oss.prefix}/${seqNo}`
@@ -120,15 +138,7 @@ export async function ossIndex(deps: OssDeps, args: Record<string, unknown> = {}
   // **不加 `--short-format`**：`ls` 默认的长格式一次就能给出每个对象的
   // 大小 / 最后写入时间 / ETag，以及总数（`Object Number is: N`）。
   // 那些元数据是"审核结果有没有重新生成过"的客观依据 —— 加 `--short-format` 等于把它们丢掉。
-  const argv = [ossutil, 'ls', `oss://${oss.bucket}/${listedPrefix}/`]
-  if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
-  const run = await runOssutil(await exec(deps), {
-    operation: 'oss.remote.read',
-    argv,
-    timeoutMs: 90_000,
-    stdoutMaxBytes: 4 * 1024 * 1024,
-    summary: 'ossutil ls（列举交付件）',
-  })
+  const run = await listOssDirectory(deps, ready, `${listedPrefix}/`)
   if (!run.ok) {
     const raw = (text(run.stderr) || text(run.error) || text(run.stdout) || '列举失败').trim()
     return { ok: false, error: raw.slice(0, 400), ...empty }
@@ -207,9 +217,23 @@ export interface OssLinkResult {
   openError: string
 }
 
-/** 生成访问链接并用系统默认程序打开。 */
+/**
+ * 生成访问链接；**默认**顺便用系统默认程序打开，`open: false` 时只回链接。
+ *
+ * 为什么要有 `open: false`（2026-10-11 用户实测「点查看报告后浏览器很慢」）：
+ * 这条链路原来是**两次串行的提权进程** —— ①`ossutil sign` 出链接；②`open <url>` 拉起浏览器。
+ * 第②步完全可以由**客户端**直接做：DSH 桌面端主进程的 `setWindowOpenHandler` 会把
+ * `window.open(url)` 转成 `shell.openExternal` → 系统默认浏览器（本仓 notes §14.1 那张表里
+ * 已经写明，登录流程正是**为了避开**它才改用内置浏览器）。少一次提权进程就少一段等待，
+ * 而且 Web profile 下 `window.open` 开的就是浏览器标签页 —— 两种部署都对。
+ *
+ * 兼容性：旧宿主**不认**这个参数，照旧自己打开并回 `opened: true`；客户端看到
+ * `opened === true` 就不再自己开一次，所以「新界面 + 旧宿主」不会开出两个窗口。
+ */
 export async function ossLink(deps: OssDeps, args: Record<string, unknown>): Promise<OssLinkResult> {
   const key = text(args.key)
+  // 只有显式 `false` 才跳过打开（缺省与旧宿主的行为都保持"宿主打开"）。
+  const shouldOpen = args.open !== false
   const failed = (error: string): OssLinkResult => ({ ok: false, error, url: '', mode: '', ttl: 0, opened: false, openError: '' })
   if (key === '') return failed('缺少对象 key')
 
@@ -243,6 +267,11 @@ export async function ossLink(deps: OssDeps, args: Record<string, unknown>): Pro
 
   // 链接里带 bearer 签名，能拿到就能看 —— 不能走明文。
   if (url.startsWith('http://')) url = `https://${url.slice('http://'.length)}`
+
+  // 客户端要求自己打开（快路径）：一个进程都不起，只回链接。
+  if (!shouldOpen) {
+    return { ok: true, error: '', url, mode: oss.linkMode, ttl: oss.linkTtl, opened: false, openError: '' }
+  }
 
   const opened = await deps.access.runShell(
     { operation: 'system.browser.open', source: 'panel', workdir: await shellWorkdir(deps) },

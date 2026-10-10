@@ -2,7 +2,7 @@
  * 真实浏览器验收（第 5 ~ 7a 条验收判据的唯一自动化办法）。
  *
  * 为什么需要它：`npm run smoke:built` 用替身把 `lib/client.js` 过一遍 `__ModuleLoader__`，
- * 只能证明「产物形状对、注册调用了」；**面板真的画出来、标签能切、切标签不重复列举 OSS**
+ * 只能证明「产物形状对、注册调用了」；**面板真的画出来、单列表可用、分页只补齐本页 OSS**
  * 这些行为只有真浏览器能证明。第 26 轮之前这一条一直挂在「需人眼」。
  *
  * 前置：
@@ -80,9 +80,10 @@ async function main() {
   const consoleErrors = []
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text().slice(0, 160)) })
   page.on('pageerror', (error) => consoleErrors.push(String(error).slice(0, 160)))
+  const ossBatches = []
   page.on('request', (request) => {
     if (request.url().includes('/api/crwu-workbench') && request.method() === 'POST') {
-      try { ops.push(JSON.parse(request.postData() ?? '{}').op) } catch { ops.push('?') }
+      try { const payload = JSON.parse(request.postData() ?? '{}'); ops.push(payload.op); if (payload.op === 'oss-index') ossBatches.push(payload.args?.seqNos) } catch { ops.push('?') }
     }
   })
 
@@ -95,13 +96,12 @@ async function main() {
   /** 侧栏分组卡上的一行子项（报告评估 / 报告审核 / 环境信息）。 */
   const moduleButton = (label) => entry().locator('.crwu-audit-module').filter({ hasText: label }).first()
   const ossListings = () => ops.filter((op) => op === 'oss-index').length
-  /** 列表的"上下文"（关抽屉前后必须逐字相同）：当前页签 + 页码 + 搜索框内容 + 滚动位置。 */
+  /** 列表的"上下文"（关抽屉前后必须逐字相同）：当前页码 + 搜索框内容 + 滚动位置。 */
   const listContext = async () => {
-    const tab = await page.locator('.crwu-audit-tab-on').first().innerText().catch(() => '')
     const pageNo = await page.locator('.crwu-audit-pager-page-on').first().innerText().catch(() => '')
     const query = await page.locator('.crwu-audit-search input').first().inputValue().catch(() => '')
     const scroll = await page.locator('.crwu-audit-pane-main').first().evaluate((node) => Math.round(node.scrollTop)).catch(() => -1)
-    return { tab: tab.replace(/\s+/g, ' ').trim(), pageNo: pageNo.trim(), query, scroll }
+    return { pageNo: pageNo.trim(), query, scroll }
   }
   /** 技术详情里有没有引擎版本那一行（标签来自 locales，这里只认"引擎版本"字样）。 */
   const techIncludesEngine = (text) => /引擎版本/.test(text)
@@ -374,8 +374,8 @@ async function main() {
         await phase('浮层：Tooltip 与 ••• 菜单', async () => {
           // 这一段自带前置：清掉上一段可能留下的浮层/Dialog，并确保站在**报告列表**上。
           await page.keyboard.press('Escape')
-          await page.locator('.crwu-audit-page-title').first().click().catch(() => undefined)
-          await page.getByRole('button', { name: /报告列表/ }).last().click().catch(() => undefined)
+          // 中性点击（清浮层）：2026-10-11 起页面头那行大字已移除，改点工具条左侧空白。
+          await page.locator('.crwu-audit-toolbar').first().click({ position: { x: 3, y: 3 } }).catch(() => undefined)
           await page.waitForTimeout(300)
           const firstRow = page.locator('.crwu-audit-tbody-row').first()
           await firstRow.waitFor({ state: 'visible', timeout: 30_000 })
@@ -463,7 +463,8 @@ async function main() {
           // 5) 点外部关闭
           await rowA.locator('.crwu-audit-menu').first().click()
           await page.waitForTimeout(200)
-          await page.locator('.crwu-audit-page-title').first().click()
+          // 同上：那行大字已移除，改成点工具条左侧空白（点外部关闭菜单）。
+          await page.locator('.crwu-audit-toolbar').first().click({ position: { x: 3, y: 3 } })
           await page.waitForTimeout(220)
           checks.that('点击外部关闭菜单', await page.locator('.crwu-audit-float-menu').count() === 0)
           // 6) 滚动列表关闭
@@ -926,7 +927,6 @@ async function main() {
             await page.screenshot({ path: join(out, 'gate.png') })
             return
           }
-          await page.getByRole('button', { name: /报告列表/ }).last().click()
           // 氚云查询真机上十几秒是常态：等真正画出流水号（或明确报错）再断言，别用固定等待。
           await page.waitForFunction(
             (source) => new RegExp(source).test(document.body.innerText),
@@ -935,8 +935,8 @@ async function main() {
           ).catch(() => undefined)
           const pendingText = await body()
           checks.that('待审核报告画出真实流水号行', SEQ.test(pendingText))
-          // 「按流水号查**云端交付件**」那只工具条属于 AI 审核列表页，不该出现在报告列表页。
-          // （报告列表页自己那只搜索框的占位**就是**「输入报告流水号」，两者不是一回事。）
+          // 单列表之后，报告列表页自己那只搜索框的占位**就是**「输入报告流水号」；
+          // 旧 AI 审核列表页那只「查云端交付件」的工具条已经随双视图一起删除。
           checks.that(
             '报告列表页没有「查云端交付件」的工具条',
             await page.getByPlaceholder(/交付件|审核结果/).count() === 0,
@@ -977,12 +977,13 @@ async function main() {
           await page.screenshot({ path: join(out, 'pending.png') })
         })
 
-        // ── 报告审核页：Workspace Surface + Segmented 页签 + 小鲸鱼（拉文件 → 气泡 / 直跳） ──
+        // ── 报告审核页：单列表（7 列）+ 工具条 + 小鲸鱼（拉文件 → 气泡 / 直跳） ──
         // 用户 2026-09-22 口径：「除了 header 部分，其他都是 border…用一个圆角的大背景框住」；
         // 「这里不设计右侧对话框了，去掉吧，只会增加负担」；「点击小鲸鱼时如果有绑定的对话，
         // 需要有个气泡框询问用户是针对这个报告建立新对话还是继续上次聊天，如果没有的话就直接
         // 通过 crwu 拉取文件信息后直接跳转到新对话就可以了」。
-        await phase('报告审核页：大圆角框 + 小鲸鱼讨论入口', async () => {
+        // 2026-10-09：报告列表与旧「AI 审核列表」合并成同一张表，列表上方不再有标题 / 页签。
+        await phase('报告审核页：大圆角框 + 单列表 + 小鲸鱼讨论入口', async () => {
           const surface = page.locator('.crwu-audit-surface').first()
           await surface.waitFor({ state: 'visible', timeout: 20_000 })
           const frame = await surface.evaluate((node) => {
@@ -994,43 +995,42 @@ async function main() {
             frame.radius !== '0px' && Number.parseFloat(frame.border) > 0,
             JSON.stringify(frame),
           )
-          // 轻量 Segmented Workspace Tabs（用户 2026-09-23 口径）：**槽才有底**、选中项是浮起的白片。
-          // 文字型 + 品牌色下划线那套已撤（不要红色 underline、不要底色 + 下划线双重选中）。
-          const trackStyle = await page.locator('.crwu-audit-tabs').first().evaluate((n) => {
-            const s = getComputedStyle(n)
-            return { bg: s.backgroundColor, radius: s.borderRadius, pad: s.paddingTop }
-          })
+          checks.that('报告审核只保留单列表，没有任何页签 / 列表标题',
+            await page.locator('.crwu-audit-tabs').count() === 0
+              && await page.getByRole('button', { name: /报告列表|AI 审核列表/ }).count() === 0)
+          checks.that('报告列表包含独立 AI 审核结果列',
+            await page.locator('.crwu-audit-table th').count() === 7
+              && await page.getByRole('columnheader', { name: 'AI 审核结果', exact: true }).count() === 1)
+          // AI 审核结果列逐行都要有明确状态：查询中 spinner / 「暂无数据」Tag / 「N 个交付件」+ ⓘ，
+          // 或者查询失败的明确文案。**空白格是缺陷**（会被读成"这条报告没有审核结果"）。
+          const aiCells = await page.$$eval('.crwu-audit-tbody-row', (rows) => rows.map((row) => {
+            const cell = row.querySelectorAll('td')[4]
+            if (cell === null) return '缺列'
+            if (cell.querySelector('.crwu-audit-result-loading') !== null) return 'loading'
+            if (cell.querySelector('.crwu-audit-result-empty') !== null) return '暂无数据'
+            if (cell.querySelector('.crwu-audit-result-files') !== null) return '交付件'
+            const text = (cell.innerText || '').trim()
+            return text === '' ? '空白' : `错误态:${text.slice(0, 16)}`
+          }))
           checks.that(
-            '页签容器是浅槽（Segmented，不再是透明文字页签）',
-            trackStyle.bg === 'rgb(242, 243, 245)' && Number.parseFloat(trackStyle.radius) >= 8,
-            JSON.stringify(trackStyle),
+            'AI 审核结果列逐行都有明确状态（没有空白格）',
+            aiCells.length > 0 && aiCells.every((state) => state !== '空白' && state !== '缺列'),
+            aiCells.slice(0, 6).join(' / '),
           )
-          const onStyle = await page.locator('.crwu-audit-tab-on').first().evaluate((n) => {
-            const s = getComputedStyle(n)
-            return {
-              bg: s.backgroundColor,
-              weight: s.fontWeight,
-              shadow: s.boxShadow,
-              h: Math.round(n.getBoundingClientRect().height),
-            }
-          })
-          checks.that(
-            '选中页签是浮起的白片（白底 + 600 + 一层轻投影，高 34px）',
-            onStyle.bg === 'rgb(255, 255, 255)' && onStyle.weight === '600'
-              && onStyle.shadow !== 'none' && onStyle.h === 34,
-            JSON.stringify(onStyle),
-          )
-          checks.that(
-            '页签不再有下划线指示条',
-            await page.locator('.crwu-audit-tab-ind').count() === 0,
-            String(await page.locator('.crwu-audit-tab-ind').count()),
-          )
-          const tabText = (await page.locator('.crwu-audit-tabs').innerText()).replace(/\s+/g, ' ')
-          checks.that(
-            '两个页签就叫「报告列表 / AI 审核列表」',
-            tabText.includes('报告列表') && tabText.includes('AI 审核列表'),
-            tabText,
-          )
+          // 有交付件的行：悬停 ⓘ 出浮层，浮层只讲业务语义（不给 OSS 路径 / 扩展名）。
+          const infoButton = page.locator('.crwu-audit-result-info').first()
+          if (await infoButton.count() > 0) {
+            await infoButton.hover()
+            const tip = page.locator('.crwu-audit-float-tip').first()
+            await tip.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
+            const tipText = await tip.innerText().catch(() => '')
+            checks.that('交付件浮层区分「审核报告 / 审核数据」', /审核报告|审核数据/.test(tipText), tipText.slice(0, 80))
+            checks.that('交付件浮层不暴露 OSS 路径 / 扩展名', !/crwu\/|\.html|\.json/.test(tipText), tipText.slice(0, 80))
+            await page.mouse.move(0, 0)
+          } else {
+            checks.passed.push('当前页没有带交付件的报告行（交付件浮层这一段属数据条件）')
+          }
+          checks.that('报告总数在分页区显示', (await page.locator('.crwu-audit-pager').innerText()).includes('共'))
           // 列表工具条：搜索 + 刷新**同一行**（刷新不再挂页面右上角），刷新是 Ghost（透明底）。
           const toolbar = page.locator('.crwu-audit-toolbar').first()
           checks.that(
@@ -1080,7 +1080,7 @@ async function main() {
           )
           checks.that(
             '小鲸鱼有可访问名（不用原生 title）',
-            String(await lastAction.getAttribute('aria-label') ?? '') === '与 DeepSeek 讨论报告',
+            /^与 DeepSeek (讨论报告|分析审核结果)$/.test(String(await lastAction.getAttribute('aria-label') ?? '')),
             String(await lastAction.getAttribute('aria-label') ?? ''),
           )
           // 小鲸鱼是**浅中性底的 Icon Button**（不是第二个实心按钮），32×32。
@@ -1109,67 +1109,9 @@ async function main() {
             `小鲸鱼 ${whaleStyle.bg} vs 刷新 ${ghostStyle.bg}`,
           )
 
-          // **只挑已经有绑定会话的那份报告来点**：没有绑定会话时点它 = 建会话 + 真发一次
-          // 上下文（一次真实 AI 回合），验收脚本不该烧这个钱、也不该往用户的会话库里写东西。
-          // 拿不到这类报告（干净环境）就如实跳过这一整段。
-          const sideText = await page.locator('body').innerText()
-          const discussed = [...new Set(
-            [...sideText.matchAll(new RegExp('报告讨论 · (\\d{4}-\\d{5,7}-[A-Z0-9]{3,}-[A-Z0-9]{3,})', 'g'))]
-              .map((match) => match[1]),
-          )]
-          const row = discussed.length === 0
-            ? null
-            : page.locator('.crwu-audit-tbody-row').filter({ hasText: discussed[0] }).first()
-          if (row === null || await row.count() === 0) {
-            checks.passed.push('这份报告还没有绑定会话（"直跳新对话"那条要真发一次上下文，验收脚本不触发）')
-          } else {
-            // 拉文件要跑 OSS 列举与 crwu 读附件（几秒到几十秒）：把这一次拖慢，
-            // 才能把"整块正文里出现过中瑞世联等待页"变成确定性断言。
-            await page.route('**/api/crwu-workbench**', async (route) => {
-              const payload = route.request().postData() ?? ''
-              if (payload.includes('"op":"report-files"')) await new Promise((resolve) => setTimeout(resolve, 3000))
-              await route.continue()
-            })
-            await row.locator('.crwu-audit-ai-row-btn').first().click()
-            const waiting = page.locator('.crwu-audit-ai-mask .crwu-audit-loading-pane').first()
-            await waiting.waitFor({ state: 'visible', timeout: 20_000 })
-            checks.that(
-              '拉文件时**整块正文**是中瑞世联的等待页（品牌标记 + 进度条）',
-              await waiting.locator('svg polygon').count() === 4
-                && await waiting.locator('.crwu-audit-load-bar').count() === 1,
-            )
-            await page.screenshot({ path: join(out, 'ai-pulling.png') })
-            // 等被拖慢的这次查询真的回来再撤路由（撤早了 handler 里的 continue() 会撞上
-            // 「Route is already handled」）。
-            await page.waitForFunction(
-              () => document.querySelector('.crwu-audit-ai-mask') === null,
-              undefined,
-              { timeout: 90_000 },
-            ).catch(() => undefined)
-            await page.unroute('**/api/crwu-workbench**')
-            const bubble = page.locator('.crwu-audit-ai-dialog').first()
-            await bubble.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => undefined)
-            if (await bubble.count() === 0) {
-              checks.that('已有绑定会话时应当弹气泡问「新建 / 继续」', false, '气泡没出现')
-            } else {
-              const bubbleText = await bubble.innerText()
-              checks.that(
-                '气泡问的是「新建对话 / 继续上次聊天」',
-                bubbleText.includes('新建对话') && bubbleText.includes('继续上次聊天'),
-                bubbleText.replace(/\s+/g, ' ').slice(0, 120),
-              )
-              await page.screenshot({ path: join(out, 'ai-ask.png') })
-              // 关掉气泡（点遮罩）：不该顺手建任何会话。
-              await page.locator('.crwu-audit-ai-dialog-backdrop').first().click()
-              await page.waitForFunction(
-                () => document.querySelector('.crwu-audit-ai-dialog') === null,
-                undefined,
-                { timeout: 10_000 },
-              ).catch(() => undefined)
-              checks.that('点遮罩能关掉气泡', await page.locator('.crwu-audit-ai-dialog').count() === 0)
-            }
-            checks.that('拉文件只列举、不下载对象内容（没有 oss-result）', !ops.includes('oss-result'), ops.join(','))
-          }
+          checks.that('分页补齐不读取审核 JSON', !ops.includes('oss-result'))
+          checks.that('列表 OSS 请求均为批量流水号形状，未扫描总前缀',
+            ossBatches.every((seqs) => Array.isArray(seqs) && seqs.length <= 100))
         })
         // ── 「审核信息」抽屉：读一个**真实** OSS 对象并渲染摘要 ────────────
         // 这条盯的是第 26 轮修掉的那个缺陷：`ossutil` 把 `<n>(s) elapsed` 写到 stdout，
@@ -1177,8 +1119,21 @@ async function main() {
         // 只有点开真实对象才能证明它真的好了。
         await phase('审核信息抽屉：AI 审核质量与问题摘要', async () => {
           // 浮层菜单项带 `role="menuitem"`：`getByRole('button')` 永远匹配不到（踩过）。
+          // 单列表之后「这一行有交付件」的可见判据是 AI 审核结果列的「N 个交付件」；
+          // 旧 AI 审核列表那套「审核报告与数据齐全」文案已随双视图删除 —— 继续按它筛会
+          // 永远筛不到、整段**静默跳过**，这条回归保护也就跟着失效。
+          const resultRows = page.locator('.crwu-audit-tbody-row').filter({ hasText: /个交付件/ })
           const button = page.locator('.crwu-audit-float-item', { hasText: '查看审核信息' }).first()
+          // 只有带 JSON 摘要的行才有「查看审核信息」：逐行开菜单，找到第一条就停。
+          for (let i = 0; i < await resultRows.count(); i += 1) {
+            await resultRows.nth(i).locator('.crwu-audit-menu').click()
+            await page.waitForTimeout(120)
+            if (await button.count() > 0) break
+            await page.keyboard.press('Escape')
+            await page.waitForTimeout(80)
+          }
           if (await button.count() === 0) {
+            await page.keyboard.press('Escape')
             // 数据条件，不是代码缺陷：没有"已完成并上云 + 带 JSON 摘要"的记录时这一整段无从验证。
             checks.passed.push('当前没有带审核摘要的云端记录（抽屉这一段跳过，属于数据条件）')
             return
@@ -1409,7 +1364,12 @@ async function main() {
           ).catch(() => undefined)
 
           checks.that('翻页真的重新取了那一页', ops.filter((op) => op === 'pending').length > pendingBefore)
-          checks.that('翻页不重复列举 OSS', ossListings() === before, `翻页前 ${before} 次、翻页后 ${ossListings()} 次`)
+          checks.that('翻页只提交本页流水号的一次批量 OSS 查询', ossListings() === before + 1, `翻页前 ${before} 次、翻页后 ${ossListings()} 次`)
+          // 当前页业务行的流水号 = 每行第 2 个单元格里的等宽 span。**不要**用 `td .crwu-audit-mono`：
+          // 「更新时间」列也是同一枚等宽类，那样会把时间混进流水号集合（单列表之后旧的
+          // `.crwu-audit-seq` 单元格类已删除，继续用它取到的永远是空数组）。
+          const pageSerials = await page.locator('.crwu-audit-tbody-row td:nth-child(2) .crwu-audit-mono').allInnerTexts()
+          checks.that('批量流水号与当前页业务行一致', JSON.stringify(ossBatches.at(-1)) === JSON.stringify([...new Set(pageSerials.map((value) => value.trim()))]))
           checks.that('翻页结束后加载态收掉', await page.locator('.crwu-audit-load-bar').count() === 0)
           await page.screenshot({ path: join(out, 'page2.png') })
           // 翻回第一页，别把页面留在第 2 页影响后面的检查。
@@ -1418,148 +1378,34 @@ async function main() {
           await page.waitForTimeout(2000)
         })
 
-        // ── 切标签不得重复列举 OSS（README/AGENTS §4.4 的硬要求） ──────────
-        await phase('标签切换', async () => {
-          const before = ossListings()
-          for (let i = 0; i < 3; i += 1) {
-            await page.getByRole('button', { name: /AI 审核列表/ }).first().click()
-            await page.waitForTimeout(1200)
-            await page.getByRole('button', { name: /报告列表/ }).last().click()
-            await page.waitForTimeout(1200)
+        await phase('单列表结果入口与搜索', async () => {
+          // 有交付件的判据：AI 审核结果列的「N 个交付件」（旧的双视图文案已删除）。
+          const resultRow = page.locator('.crwu-audit-tbody-row').filter({ hasText: /个交付件/ }).first()
+          if (await resultRow.count() > 0) {
+            const whale = resultRow.locator('.crwu-audit-ai-row-btn')
+            checks.that('有正式结果的行使用结果分析入口', await whale.getAttribute('aria-label') === '与 DeepSeek 分析审核结果')
+            await resultRow.locator('.crwu-audit-menu').click()
+            checks.that('结果行保留原始报告讨论入口', await page.getByRole('menuitem', { name: '讨论原始报告', exact: true }).count() === 1)
+            checks.that('结果行保留原始交付件入口', await page.getByRole('menuitem', { name: '原始交付件', exact: true }).count() === 1)
+            await page.keyboard.press('Escape')
           }
-          checks.that(
-            '来回切标签不重复列举 OSS',
-            ossListings() === before,
-            `切换前 ${before} 次、切换后 ${ossListings()} 次`,
-          )
-        })
-
-        // ── AI审核结果页：真实云端对象 ────────────────────────────────────
-        await phase('AI审核结果页', async () => {
-          await page.getByRole('button', { name: /AI 审核列表/ }).first().click()
-          await page.waitForFunction(
-            (source) => new RegExp(source).test(document.body.innerText),
-            SEQ.source,
-            { timeout: 90_000 },
-          ).catch(() => undefined)
-          checks.that('AI审核结果画出真实云端案例', SEQ.test(await body()))
-          // 统一的 DeepSeek 入口（与「报告列表」同一枚图标/同一套 Icon Button）：
-          // 列表里只多这一枚按钮，不加文字按钮、不加「可分析 / AI ready」这类噪音 Tag。
-          const aiWhale = page.locator('.crwu-audit-tbody-row').first().locator('.crwu-audit-ai-row-btn').first()
-          checks.that('AI审核列表增加统一的 DeepSeek 入口', await aiWhale.count() === 1, String(await aiWhale.count()))
-          checks.that(
-            '入口画的是同一个 DeepSeek 官方标记',
-            await aiWhale.locator('svg[viewBox="0 0 23.16 17.04"]').count() === 1,
-          )
-          checks.that(
-            '入口的可访问名是「与 DeepSeek 分析审核结果」',
-            String(await aiWhale.getAttribute('aria-label') ?? '') === '与 DeepSeek 分析审核结果',
-            String(await aiWhale.getAttribute('aria-label') ?? ''),
-          )
-          const aiRowText = (await page.locator('.crwu-audit-tbody-row').first().innerText()).replace(/\s+/g, ' ')
-          checks.that(
-            '没有新增「AI分析 / 可分析 / AI ready / 已同步」这类噪音',
-            !/(AI分析|可分析|AI ready|已同步|上下文完整)/.test(aiRowText),
-            aiRowText.slice(0, 120),
-          )
-          await aiWhale.hover()
-          const aiTip = page.locator('.crwu-audit-float-tip').first()
-          await aiTip.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
-          checks.that(
-            '悬停给浮动 Tooltip「与 DeepSeek 分析审核结果」',
-            (await aiTip.count()) === 1 && (await aiTip.innerText()).includes('与 DeepSeek 分析审核结果'),
-            await aiTip.innerText().catch(() => ''),
-          )
-          await page.mouse.move(4, 4)
-          await page.screenshot({ path: join(out, 'results.png') })
-        })
-
-        // ── 按流水号查云端交付件（**「AI审核列表」页自己的工具条**）─────────────
-        // 用户 2026-09-23 口径：和报告列表**共用同一个 Search 组件**，只认流水号，
-        // **按 Enter 才发起查询**（没有「查找 / 清空」两个按钮，清空是输入框右侧那个 ×）。
-        // 这里盯五条：工具条在、输入过程不列举 OSS、不存在的流水号明确说「没有」、
-        // 命中的流水号真的列出交付件、点 × 回到全量且不重新列举。
-        await phase('按流水号查找', async () => {
-          const search = page.getByLabel('按流水号查找交付件').first()
-          checks.that('「AI审核列表」页里有「按流水号」查找框', await search.count() === 1)
-          // 位置也是需求的一部分：它是**这一页自己的工具条**，必须长在 AI 审核列表这一页的正文里。
-          const resultCard = page.locator('.crwu-audit-pane-main')
-          checks.that(
-            '查找框在 AI 审核列表这一页的正文里（且全页只有一只）',
-            await page.locator('.crwu-audit-pane-main input').count() === 1,
-            `正文里输入框 ${await page.locator('.crwu-audit-pane-main input').count()} 个`,
-          )
-          checks.that(
-            '搜索框旁边没有「查找 / 清空」按钮（Enter 发起、× 清空）',
-            await page.locator('.crwu-audit-toolbar button', { hasText: /查找|清空/ }).count() === 0,
-          )
-
-          // 真流水号必须从**这一页的表格行**里取，不能扫整页文本：
-          // 左侧会话列表里会出现「报告讨论 · <流水号>」这样的会话名，整页扫描会先把**氚云待审核的**
-          // 流水号捞出来，而它根本不在云端清单里（踩过 —— 命中用例假红，看起来像查找功能坏了）。
-          const fake = '2099-999999-ZZZZZZ-ZZZZZZ'
-          const realSeq = (await resultCard.locator('tbody tr td:first-child').allInnerTexts())
-            .map((text) => text.trim())
-            .find((text) => /^\d{4}-\d{5,7}-[A-Z0-9]{3,}-[A-Z0-9]{3,}$/.test(text)) ?? ''
-
+          const search = page.locator('.crwu-audit-search input').first()
           const before = ossListings()
-          await search.fill(fake)
-          await page.waitForTimeout(800)
-          checks.that(
-            '输入流水号的过程不列举 OSS',
-            ossListings() === before,
-            `输入前 ${before} 次、输入后 ${ossListings()} 次`,
-          )
-
-          // 按 Enter 发起（条件等待这次应答落地：请求在飞的时候页面还画着全量清单）。
+          const pendingBefore = ops.filter((op) => op === 'pending').length
+          await search.fill('2099-999999-ZZZZZZ-ZZZZZZ')
+          await page.waitForTimeout(300)
+          checks.that('输入不查询氚云或 OSS', ossListings() === before && ops.filter((op) => op === 'pending').length === pendingBefore)
+          const response = page.waitForResponse((r) => r.url().includes('/api/crwu-workbench') && r.request().postData()?.includes('"op":"pending"'))
           await search.press('Enter')
-          await page.waitForFunction(
-            () => document.body.innerText.includes('OSS 上没有这个流水号的交付件'),
-            undefined,
-            { timeout: 60_000 },
-          ).catch(() => undefined)
-          const afterMissing = await body()
-          checks.that('不存在的流水号明确说「OSS 上没有这个流水号的交付件」', afterMissing.includes('OSS 上没有这个流水号的交付件'))
-          checks.that('查找不存在的流水号只发一次列举', ossListings() === before + 1, `现在 ${ossListings()} 次`)
-          await page.screenshot({ path: join(out, 'cloud-search-missing.png') })
-
-          // 已存在的流水号：拿真实的那一条（拿不到就如实跳过，不编造）。
-          if (realSeq === '') {
-            checks.passed.push('云端清单里暂无可验证的流水号（跳过命中用例）')
-          } else {
-            await search.fill(realSeq)
-            await search.press('Enter')
-            await page.waitForFunction(
-              (text) => document.body.innerText.includes(text) && document.body.innerText.includes('查看报告'),
-              realSeq,
-              { timeout: 60_000 },
-            ).catch(() => undefined)
-            // 同样只看**结果行**：整页断言会被左侧那条同名会话（报告讨论 · <流水号>）满足。
-            const hit = await resultCard.locator('tbody tr').first().innerText()
-            checks.that('存在的流水号能列出交付件与「查看报告」', hit.includes(realSeq) && hit.includes('查看报告'), hit.replace(/\s+/g, ' ').slice(0, 120))
-            // 交付件按业务语义呈现：不出现 OSS 路径、不出现 .html/.json。
-            checks.that(
-              '交付件按业务语义呈现（审核报告 / 审核数据，不暴露 OSS 路径）',
-              hit.includes('审核报告') && !/crwu\/audit|\.html|\.json/.test(hit),
-              hit.replace(/\s+/g, ' ').slice(0, 160),
-            )
-            checks.that('查找命中也只发一次列举', ossListings() === before + 2, `现在 ${ossListings()} 次`)
-            await page.screenshot({ path: join(out, 'cloud-search-hit.png') })
-
-            // × 只是一个视图切回全量：不许把已经取到的云端清单丢掉，也不许重新列举 OSS。
-            await page.locator('.crwu-audit-search-clear').first().click()
-            await page.waitForFunction(
-              (text) => !document.body.innerText.includes(text),
-              'OSS 上没有这个流水号的交付件',
-              { timeout: 30_000 },
-            ).catch(() => undefined)
-            const cleared = await body()
-            checks.that(
-              '点 × 回到全量云端清单',
-              !cleared.includes('OSS 上没有这个流水号的交付件') && cleared.includes('查看报告'),
-            )
-            checks.that('清空不重新列举 OSS', ossListings() === before + 2, `现在 ${ossListings()} 次`)
-          }
+          const data = await (await response).json()
+          await page.waitForFunction(() => document.querySelectorAll('.crwu-audit-load-bar').length === 0, undefined, { timeout: 90_000 })
+          checks.that('未命中搜索显示氚云空页且跳过 OSS', data.ok === true && data.rows.length === 0 && ossListings() === before)
+          const clearResponse = page.waitForResponse((r) => r.url().includes('/api/crwu-workbench') && r.request().postData()?.includes('"op":"pending"'))
+          await page.locator('.crwu-audit-search-clear').click()
+          const cleared = await (await clearResponse).json()
+          await page.waitForFunction(() => document.querySelectorAll('.crwu-audit-load-bar').length === 0, undefined, { timeout: 90_000 })
+          checks.that('清空重新查询第一页并定向补齐当前页', cleared.ok === true && cleared.page === 1 && (cleared.rows.length === 0 || ossListings() === before + 1))
+          await page.screenshot({ path: join(out, 'report-list-results.png') })
         })
 
         // ── 「查看会话」：客户端服务晚注册时不许报「服务不可用」 ─────────────
@@ -1568,9 +1414,9 @@ async function main() {
         // undefined。这条断言盯两件事：那句话不许再出现；要么真把会话打开（主面板切走），
         // 要么给出**真实**原因（「打开子会话失败：…」）而不是把服务缺失当结论。
         await phase('查看会话', async () => {
-          // 「查看会话」在**待审核报告**那一页的行操作里（它绑的是本地审核记录的 childId，
-          // 而 AI审核结果那页是 OSS 上的云端对象，没有子会话）。所以先切回去。
-          await page.getByRole('button', { name: /报告列表/ }).last().click()
+          // 「查看会话」只出现在**有本地审核记录**的行上（它绑的是那条记录的 childId；
+          // 只有云端 OSS 交付件、没有本地记录的行本来就没有子会话）。所以先确保列表回到
+          // 含真实流水号的那一页，再在这一页里找行。
           await page.waitForFunction(
             (source) => new RegExp(source).test(document.body.innerText),
             SEQ.source,
@@ -1611,6 +1457,82 @@ async function main() {
             await page.locator('.crwu-audit-version').first().waitFor({ state: 'visible', timeout: 30_000 })
             await page.waitForTimeout(1500)
           }
+        })
+
+        // ── 本地审核页签（协议 28）：三块卡片 + 主按钮禁用原因 + 切回报告审核不变 ──
+        // 只读：**不点**「选择文件 / 选择文件夹」（会弹系统对话框），也不点主按钮（没选择时它本来就禁用）。
+        await phase('本地审核页签', async () => {
+          const localTab = page.locator('.crwu-audit-tab').filter({ hasText: '本地审核' }).first()
+          const reportTab = page.locator('.crwu-audit-tab').filter({ hasText: '报告审核' }).first()
+          checks.that('报告审核页顶部有「本地审核」页签', await localTab.count() > 0)
+          // 页签是**工作区导航**：44px 命中高度 + 选中项靠 3px 底部强调线（形状 + 颜色双重表达）。
+          const tabBox = await localTab.boundingBox()
+          checks.that('页签命中区高度 ≥44px', (tabBox?.height ?? 0) >= 44, `h=${String(tabBox?.height ?? 0)}`)
+          const tabCss = await localTab.evaluate((element) => { const after = getComputedStyle(element, '::after'); return { h: after.height, w: after.width } })
+          checks.that('页签有底部强调线的占位（切换不跳版）', tabCss.h === '3px', JSON.stringify(tabCss))
+          await localTab.click()
+          await page.locator('.crwu-audit-local').first().waitFor({ state: 'visible', timeout: 20_000 })
+          // 页签语义：`aria-selected` 必须与视觉选中态一致（roving tabindex 的判据也在这里）。
+          checks.that('「本地审核」页签已选中', (await localTab.getAttribute('aria-selected')) === 'true')
+          // 非选中的 tabpanel 必须**真的不占位**（2026-10-11 用户报「切过来下面一大片空白」）：
+          // 两个 tabpanel 常驻，靠 `hidden` 隐藏；而它们身上有作者样式 `display:flex`，
+          // 会盖掉 UA 对 `[hidden]` 的 `display:none` —— 没有那条 `[hidden]` 规则，
+          // 空壳会实打实占掉几百像素。这里直接量高度。
+          const reportPanelHeight = await page.locator('#crwu-audit-tabpanel-report')
+            .evaluate((element) => element.getBoundingClientRect().height)
+          checks.that('切到本地审核后，报告页签面板高度为 0', reportPanelHeight === 0, `h=${String(reportPanelHeight)}`)
+          const localText = await body()
+          checks.that('页面顶部有副标题与辅助说明（设计 §2）',
+            localText.includes('选择本机文件或文件夹，创建一个新的审核对话。')
+              && localText.includes('文件只会用于本次对话，不会进入报告审核或云端交付流程。'))
+          checks.that('第一块「已选择内容」在',
+            localText.includes('已选择内容') && localText.includes('还没有选择文件'))
+          checks.that('空态说明了怎么开始与上限',
+            localText.includes('请选择文件或文件夹开始本地审核。') && localText.includes('单次最多审核 30 个文件。'))
+          checks.that('第三块「补充提示词（可选）」在', localText.includes('补充提示词（可选）'))
+          // 选择按钮：**至少有一个**必须可用。这一条盯的是一类真缺陷（2026-10-11 实测）：
+          // 能力探测与实际注入形态不一致（`__DSH_HOST_PATHS__` 是对象不是函数）时，
+          // 「选择文件」会被误判成不支持，而两条能力共用一个布尔时「选择文件夹」也被一起撤掉。
+          // 整页只允许一枚 primary（底部「开始本地审核」）—— 选择按钮是次级。
+          const primaryCount = await page.locator('.crwu-audit-local .crwu-audit-btn-primary').count()
+          checks.that('本地审核页只有一枚主按钮', primaryCount === 1, `primary=${String(primaryCount)}`)
+          // 桌面宽度下是双栏（左：选择与已选择；右：提示词与交接）。
+          const columns = page.locator('.crwu-audit-local-columns').first()
+          checks.that('本地审核页有双栏容器', await columns.count() > 0)
+          checks.that('主按钮旁边有可见的不可点原因',
+            (await page.locator('.crwu-audit-local-action-reason').first().innerText()).length > 0)
+          const pickLabels = await page.locator('.crwu-audit-local button').allInnerTexts()
+          const hasFolder = pickLabels.some((label) => label.trim() === '选择文件夹')
+          const hasFiles = pickLabels.some((label) => label.trim() === '选择文件')
+          checks.that('至少一个选择按钮可用（选择文件夹 / 选择文件）', hasFolder || hasFiles,
+            `实际按钮：${pickLabels.map((label) => label.trim()).filter((label) => label !== '').join('/')}`)
+          if (hasFolder && !hasFiles) {
+            checks.passed.push('这次运行环境里没有桌面端的文件路径桥，界面只给「选择文件夹」并说明了原因（预期行为）')
+          }
+          // 没有选择时主按钮必须**禁用**，而且旁边有一句可理解的原因（不是只挂 title）。
+          const primary = page.locator('.crwu-audit-local-action button').first()
+          const primaryText = (await primary.innerText()).trim()
+          checks.that('没有文件时主按钮禁用', await primary.isDisabled(), primaryText)
+          checks.that('禁用按钮的文案说明下一步', primaryText.includes('请选择文件后开始'), primaryText)
+          const reason = (await page.locator('.crwu-audit-local-action-reason').first().innerText().catch(() => '')).trim()
+          checks.that('禁用原因写在按钮旁边（不只靠 title）', reason.length > 0, reason)
+          await page.screenshot({ path: join(out, 'local-audit-empty.png') })
+          // 切回报告审核：旧页面必须原样（列表还是那张表，页签条不遮不挤）。
+          await reportTab.click()
+          await page.waitForTimeout(1200)
+          // 判据不写「列表里有什么」（那一页可能本来就没加载出来）：只钉**页签与面板**的切换结果。
+          // 反向也要量：切回报告审核后，本地审核那个空壳同样必须 0 高。
+          const localPanelHeight = await page.locator('#crwu-audit-tabpanel-local')
+            .evaluate((element) => element.getBoundingClientRect().height)
+          checks.that('切回报告审核后，本地审核面板高度为 0', localPanelHeight === 0, `h=${String(localPanelHeight)}`)
+          checks.that('切回报告审核：本地审核页已卸载、报告页签已选中',
+            (await reportTab.getAttribute('aria-selected')) === 'true'
+              && await page.locator('.crwu-audit-local').count() === 0)
+          const reportPanelText = await page.locator('#crwu-audit-tabpanel-report').first().innerText().catch(() => '')
+          checks.that('切回报告审核：报告那一侧的正文还在', reportPanelText.trim().length > 0,
+            reportPanelText.slice(0, 80).replace(/\s+/g, ' '))
+          const localOps = ops.filter((op) => op.startsWith('local-audit-'))
+          checks.that('切页签没有触发本地审核的操作（零副作用）', localOps.length === 0, localOps.join(','))
         })
 
         // ── 切回环境信息仍然正常（状态没被弄坏） ──────────────────────────

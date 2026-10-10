@@ -142,10 +142,36 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    旧客户端读到 `unreadable` 会当成 `missing` 显示「需要授权」并把员工指向"再授权一次"——
  *    而读失败时写盘同样是读-改-写，根本落不了盘，员工会陷在"授权成功、界面永远停在需要授权"里。
  *    这正是这一代要断掉的那句话。
+ * 27: Page-scoped OSS batches return per-serial results and support request cancellation.
+ *     Old Hosts must not receive seqNos because they interpret it as an unscoped listing.
  * 26: Manual sessions can use case tools within the selected workspace; managed scopes stay bound.
  *     The handoff now prepares a fresh input snapshot before running the audit.
+ * 31：**「查看报告」的打开动作改由客户端发起**（2026-10-11，用户实测"浏览器很慢"）。
+ *    `oss-link` 新增可选入参 `open: false`（只回链接、不拉起浏览器），客户端拿到链接后
+ *    自己 `window.open`（桌面端主进程会转成 `shell.openExternal` → 系统默认浏览器）。
+ *    少一次串行的提权进程。字段是**向后兼容**的（旧宿主忽略它、照旧自己打开并回
+ *    `opened: true`，新客户端看到 `opened === true` 就不再开第二个窗口），但仍然 +1 ——
+ *    "跨进程行为变了就升协议号"这条规则不留例外，否则下次没人分得清哪一代在跑。
+ * 30：**本地审核的选择展开与逐个移除**（2026-10-11，用户第二次口径）。
+ *    `local-audit-status` 的应答新增 `files[]`（文件级清单，带 `parentPath`），
+ *    两条本地审核操作都新增可选入参 `excluded[]`（排除清单，重扫后仍生效）。
+ *    旧宿主没有这两样：新界面会看不到文件行、也移除不掉单个文件 —— 必须 +1 让协议号喊出来。
+ * 29：**本地审核的会话落点与交接字段**（2026-10-11，用户第一次真机审核后）。
+ *    `local-audit-start` 的应答新增 `workspacePath`，并**改变 `casePath` 的含义**：
+ *    案例目录从系统临时目录移到 `<已选工作空间>/本地审核/<handoffId>`，新会话的 cwd 也
+ *    从 `casePath` 改成 `workspacePath`。必须 +1：旧宿主**不回这个字段**，新客户端会拿一个
+ *    空 cwd 去建会话，真机上表现为一句莫名其妙的
+ *    `failed to ensure project directory "": ENOENT: mkdir ''`（用户实测踩到）——
+ *    这正是协议号该替他喊出来的那类"界面新、宿主旧"。
+ * 28：**本地审核**（2026-10-11）。「报告审核」页下新增并列页签「本地审核」：用户选本机文件/文件夹，
+ *    插件建一次性输入快照与 handoff，自动尝试创建**普通 DSH 对话**并发送固定审核指令，失败时
+ *    退回「复制提示词 + 完全权限手动新建对话」的人工路径。新增三个 Host 操作
+ *    （`local-audit-status` / `local-audit-start` / `local-audit-claim`，操作清单 39 → 42）与一条
+ *    模型可见 Tool `crwu_audit_local_claim`。必须 +1 的理由：旧宿主没有这三个操作，
+ *    新界面点下去只会 404 —— 而"能不能在本地审核里建会话"正是这一代的行为；
+ *    反过来旧界面不知道这条链路，只会把用户留在报告审核里（不会误用新宿主的能力）。
  */
-export const WORKBENCH_PROTOCOL = 26
+export const WORKBENCH_PROTOCOL = 31
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

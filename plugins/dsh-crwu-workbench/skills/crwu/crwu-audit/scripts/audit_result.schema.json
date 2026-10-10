@@ -74,6 +74,14 @@
               "type": "object"
             }
           }
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "report",
+            "local"
+          ],
+          "description": "审核模式：report（报告审核，默认）/ local（本地审核，本机文件一次性交接）。local 时渲染器把标题换成「本地审核报告」并加顶部信息条。"
         }
       }
     },

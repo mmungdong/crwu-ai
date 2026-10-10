@@ -267,6 +267,9 @@
     #project-info { margin: -34px -42px 0; padding: 34px 42px 28px; color: #eaf3f8; background: linear-gradient(135deg, var(--brand-strong), var(--brand) 60%, #247b87); border-radius: 12px 12px 0 0; }
     #project-info .badge { margin-bottom: 0; color: #eff8fc; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.25); }
     .project-line { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0 12px; }
+    /* 本地审核顶部信息条（协议 28）：模式 · 生成时间 · 已审核 N/M 个文件。
+       与 .badge 同一层观感，但**不用颜色**表达任何状态 —— 它只是一行事实。 */
+    .audit-mode { margin: 6px 0 10px; font-size: 13px; color: #d9eaf3; letter-spacing: .01em; }
     .project-line span { color: #d9eaf3; }
     .project-details { margin: 12px 0 0; color: var(--ink); background: rgba(255,255,255,.96); }
     #summary { padding: 22px; margin: 0 -2px 24px; background: #f7fbfd; border: 1px solid #d6e5ee; border-radius: 0 0 12px 12px; }

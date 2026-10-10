@@ -7,6 +7,7 @@ import { dingtalkTools } from './dingtalk.ts'
 import { h3yunTools } from './h3yun.ts'
 import { ifindTool } from './ifind.ts'
 import { knowledgeTools } from './knowledge.ts'
+import { localClaimTools } from './local-claim.ts'
 import { ossTools } from './oss.ts'
 import { pythonScriptTools } from './python-script.ts'
 import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from './consts.ts'
@@ -40,6 +41,7 @@ export function registerCrwuTools(ctx: Context, deps: ToolDeps): () => void {
     ...ossTools(deps),
     ...dingtalkTools(deps),
     ...pythonScriptTools(deps),
+    ...localClaimTools(deps),
   ]
 
   const disposers = definitions.map((definition) => registry.register(definition))

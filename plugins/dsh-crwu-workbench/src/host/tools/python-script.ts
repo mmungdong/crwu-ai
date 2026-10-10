@@ -149,7 +149,7 @@ export function pythonScriptTools(deps: ToolDeps) {
       const base = idleResult()
 
       // Preserve managed scopes; ordinary sessions use the selected workspace.
-      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir }, deps.localAudit)
       if (!caseCheck.ok) return { ...base, ...caseCheck }
 
       // ② 脚本路径：只接受案例目录内的相对路径。**拒绝而不是清洗** —— 静默清洗会让调用方

@@ -24,10 +24,9 @@ export interface ButtonSpec {
     | 'progress'
     /** 「重新审核」：只在 ••• 里出现。 */
     | 'restart'
-    /** AI 审核列表独有：打开该流水号的原始交付件（OSS 对象），与「查看报告」区分。 */
+    /** 报告行：打开该流水号的原始交付件（OSS 对象），与「查看报告」区分。 */
     | 'raw-artifact'
-    /** AI 审核列表独有：复制流水号到剪贴板。 */
-    | 'copy-seqno'
+    | 'report-discuss' | 'retry-query'
   label: string
   tone: 'primary' | 'warn' | 'plain'
   disabled: boolean

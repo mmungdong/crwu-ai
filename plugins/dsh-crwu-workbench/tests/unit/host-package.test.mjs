@@ -337,7 +337,10 @@ test('ping and boot answer with the state the panel needs to render', async () =
   // 协议 24：审核根的 cwd/沙箱边界改成**已选工作空间**（DSH 的边界 = 会话 cwd，
   // 而挂到工作空间下要求 cwd 逐字等于工作空间路径 —— 否则审核会话永远落「未分组」）。
   // 旧宿主按"案例目录"建根，两代的会话归类与沙箱事实都不同，必须靠协议号分开。
-  assert.equal(WORKBENCH_PROTOCOL, 26, '普通会话案例访问与手工交接变化后必须识别旧 Host')
+  // 协议 28（2026-10-11）：**新增**本地审核三条操作（扫描 / 建快照与 handoff / 认领）。
+  // 新增操作同样是跨进程契约变化：旧宿主没有它们，新界面点下去只会 404；
+  // 旧界面不知道这条链路，也不会误用新宿主的能力。
+  assert.equal(WORKBENCH_PROTOCOL, 31, '本地审核必须识别旧 Host')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -393,7 +396,9 @@ test('the Host half still registers the frozen inventory of operations', async (
   // 41 → 38（协议 22，2026-09-30）：这三个操作**整体删除** —— DSH 不再提供内置浏览器扫码登录与
   // 钉钉设备码 / 两阶段登录，账号连接只读取、检查已有凭据。
   // 38 → 39（协议 23，2026-09-30）：报告讨论会话的受限材料登记 `discussion-material-open`。
-  assert.equal(FROZEN_OPERATION_COUNT, 39)
+  // 39 → 42（协议 28，2026-10-11）：**本地审核**三条 —— `local-audit-status`（扫描）/
+  // `local-audit-start`（建快照与一次性 handoff）/ `local-audit-claim`（在对话里认领）。
+  assert.equal(FROZEN_OPERATION_COUNT, 42)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {

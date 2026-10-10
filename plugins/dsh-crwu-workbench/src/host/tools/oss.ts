@@ -13,7 +13,7 @@ import { parseLsEntries, type OssEntry } from '../oss/parse.ts'
 import { basenameLocalPath } from '../../shared/utils/local-path.ts'
 import { runOssutil, type OssExecDeps } from '../oss/run.ts'
 import { fileSize, requireInsideCase } from './case-dir.ts'
-import { requireCaseAccess } from '../audit/case-access.ts'
+import { localDeliveryRefused, requireCaseAccess } from '../audit/case-access.ts'
 import { failure, renderJson } from './outcome.ts'
 import { toolContext, type ToolDeps } from './types.ts'
 
@@ -107,8 +107,11 @@ export function ossTools(deps: ToolDeps) {
       }
       const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
         caseDir: args.caseDir, seqNo: args.seqNo,
-      })
+      }, deps.localAudit)
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
+      // 本地审核的产物不上传（协议 28）：提示词里写了不许调用，这里才是门禁。
+      const localRefused = localDeliveryRefused(caseCheck)
+      if (localRefused !== null) return { ...localRefused, ...empty }
 
       const oss = normalizeOss(deps.state.manifest.oss, deps.state.manifest.oss)
       if (!oss.enabled) return { ...failure('policy', 'OSS 回传未启用（受信配置里 oss.enabled 不是 true）'), ...empty }

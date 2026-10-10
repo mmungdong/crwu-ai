@@ -176,7 +176,9 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
 14：删除 `install-prompt`；15：iFinD 改为必需项；18：本机访问授权收据 + 诊断 + DWS 本机目录体检；
 19：审核 scope 收紧到本轮案例目录；20：内置浏览器扫码的凭据出口；21：钉钉登录两阶段；
-22：删掉上面三条登录操作；23：讨论会话的受限材料范围；24：审核根绑到已选工作空间）
+22：删掉上面三条登录操作；23：讨论会话的受限材料范围；24：审核根绑到已选工作空间；
+27：当前页 OSS 批量查询与请求取消；28：本地审核（一次性 handoff + 会话级案例 scope，
+见本文件末尾「本地审核」一节））
 写在那个常量的注释里。
 
 ## 8. 本地开发循环与两道人工关卡
@@ -351,8 +353,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 新加的类名没有样式，页面看起来"少了一块" | `WORKBENCH_CLASSES` 里加了键但样式表里没有 `.<类名>` 规则 | 有一条单测断言"每个类名常量都有一条规则"（`client-package.test.mjs`），补规则即可；新写的断言记得**注入缺陷证伪一次** |
 | `oss-index` / `report-files` 等测试突然全部报「插件包不完整」 | `resolveOssutil` **删掉了 PATH 回退**（2026-09-25）：只认包内 `bin/<平台>/ossutil`，替身里的 `command -v ossutil` 回应已经不算数 | 测试的 fs 替身要让 `bundledBinaryPath(platform, 'ossutil')` 这个 key `stat` 出 `{type:'file'}`，且 `platform` 必须是 `darwin-arm64`/`win32-x64` 这类规范键（写成 `'darwin'` 会直接判成平台不受支持） |
 | 环境自检突然对一台装好 Python 的机器报「未安装」/ 少一项 | 清单曾把 `crwu`/`dws`/`ossutil`（packaged）与 `python3`（runtime）混在一张 `binaries[]` 里统一按 PATH 命令探 | 清单已拆成 `packaged[]` + `runtime.python`（`crwu.env-manifest.v3`）：packaged 只 `stat` 包内文件比字节数（**不跑命令**），runtime 只认 **DSH 自带** Python（缺了报 capability gap，不是「未安装」）；`blocked` 里插件包不完整只算一项 |
-| 客户端里点「复制」没反应也不报错 | `navigator.clipboard` 在非安全上下文（老宿主 / 非 https）里是 `undefined`，`writeText` 也可能 reject | `ReportPane.copySeqNo` 先判 `typeof clipboard?.writeText === 'function'`，失败就**静默不改状态**（不假装复制成功），Hover 复制图标只在行悬停/聚焦时出现 |
-| 同一行里的次级控件看起来"颜色不一致" | 各自的底色被写成了不同的值（一个填充、一个透明、一个又是 Ghost） | 次级控件（刷新 / 小鲸鱼 / ••• / 复制）**只允许走 `--crwu-control*` 这一对**；单测「次级控件共用同一套中性底」盯着 |
+| 同一行里的次级控件看起来"颜色不一致" | 各自的底色被写成了不同的值（一个填充、一个透明、一个又是 Ghost） | 次级控件（刷新 / 小鲸鱼 / •••）**只允许走 `--crwu-control*` 这一对**；单测「次级控件共用同一套中性底」盯着 |
 | 鼠标移到某一行时，小鲸鱼 / ••• 的底色"消失" | 中性控件的底与 `--crwu-hover`（行悬停底）取了同一档 | `--crwu-control` 必须与 `--crwu-hover` **分得开**（浅色 `#EFF0F2` vs `#F5F6F7`、深色 `#2E2F34` vs `#222326`），且浅深两套里各写一遍 |
 | 业务界面出现「昨天 / 09-20 / 3 天前」 | 有人为了"简洁"写了相对时间格式化 | 审核/复核/交付留痕**一律绝对时间**（`features/report-audit/time.ts`：`YYYY-MM-DD HH:mm`，只有日期给 `YYYY-MM-DD`，完整原值进 title / 技术详情）；只有 DSH 侧栏的会话活跃时间允许相对 |
 | 抽屉里要显示「AI 发现了什么」，但客户端根本没有 issues[] | `oss-result` 的摘要只回 counts/metrics/bands，问题清单在完整 JSON 里 | 在 `auditInfoFromResult` 里**追加裁剪过的最小集**（`issues[]` / `reviewItems[]`，逐字段截断 + 封顶），并按规矩把 `WORKBENCH_PROTOCOL` +1；`ruleEvidence` / 知识库路径仍然不进这个接口 |
@@ -1049,3 +1050,402 @@ Windows PowerShell 5.1 的 `Out-File` 默认是 **UTF-16LE**（pwsh 7 才是 UTF
 审核子会话身份用于约束工作台托管审核，不是所有业务工具的使用资格。`audit/case-access.ts` 是案例工具的统一入口：已知托管 child 只能走 `requireAuditScope`，包括结束、停止、scope 不完整与待接管窗口；已登记讨论使用其案例与附件白名单；普通会话无需登记，按当前工作空间下的直接案例目录校验，带 `seqNo` 的交付必须与目录一致。无调用者身份、工作空间根、嵌套替代目录及工作空间外路径均拒绝。
 
 普通会话的氚云下载权限由员工凭据和远端服务判定；不通过伪造审核记录或复用旧 childId 放行。讨论会话记录查询改为核对登记 ObjectId。Python 解析必须传当前 Agent，避免手工新会话依赖自动审核填过的运行时缓存。复制提示词带工作空间案例路径，先刷新输入快照，再消费同一 Skill 流程。原 §讨论材料范围中“普通会话不是材料入口”的规则已由此替代。
+
+## 当前页 OSS 批量查询（协议 27）
+
+`oss-index({ seqNos })` 的共享应答在 `shared/types.ts`，Client 门面与 Host 队列通过 `shared/wire-contract.ts` 检查类型。
+单流水号接口仍可用于详情场景；新版报告列表不调用无参模式。Host 在读取配置、凭据或启动命令之前校验批量输入，空数组零 I/O。
+`host/oss/batch.ts` 管理实例级并发队列与整批截止时间，实际目录读取复用 `listOssDirectory` 并逐次经过 Broker。
+HTTP route 提供请求 AbortSignal，正常完成不取消；连接提前关闭、Client 翻页、模块退出或卸载取消旧任务。
+`page-loader.ts` 分离分页错误、逐行远端状态与页/行轮次；上传与分页查询竞争时，旧结果失去写入资格，完成当前批次后补查。
+
+## 本地审核（2026-10-11，协议 28）
+
+「报告审核」页下新增并列页签「本地审核」：用户选本机文件/文件夹 → Host 建一次性输入快照与
+`handoffId` → 客户端用 DSH 的会话服务开一条**普通对话**并把固定提示词发过去 → 自动切过去；
+失败时给「切完全权限 → 新建对话 → 粘贴发送」的人工路径。产品口径是**审核结果只存在于那次对话里**：
+不保存历史、不加 sidecar、不监控其他对话、不上传下载任何产物。
+
+### 谁建会话：客户端，不是 Host
+
+普通 DSH 会话只有浏览器侧能建（`sessions.create` + `sessions.using` 拿 `rename` / `prompt`，
+再 `uiWorkspace.openSession` 切过去 —— **客户端 `sessions` 服务上没有 `open()`**）。
+Host 侧 `agents.create` 那条路只适合带 `agentPreset` 的托管会话（审核根）。所以切分是：
+
+- **Host**：扫描、30 文件上限、临时快照、一次性 handoff、固定提示词、claim 校验、案例 scope、TTL 清理；
+- **Client**：选择文件/文件夹、准备阶段状态、调三个操作、建会话/发提示词/切会话。
+
+两个失败点因此分开处理：Host 准备失败（`ok:false`，选择内容不丢）与会话创建失败（同样是复制提示词兜底）。
+**任何一步失败都不许丢掉已选内容与提示词** —— 那是用户唯一能重来的东西。
+
+### 本机文件选择：DSH 只有目录选择器
+
+`uiWorkspace.pickDirectory()` 能拿到绝对路径；**没有**对应的"文件选择器"客户端服务
+（`inputHub.pickFiles` 是往输入框挂附件，不返回路径）。所以：
+
+- 「选择文件夹」→ `uiWorkspace.pickDirectory()`；
+- 「选择文件」→ 渲染进程里一个隐藏 `<input type="file" multiple>`，再对每个 `File` 调
+  Electron 的 `__DSH_HOST_PATHS__.pathFor(file)`（`webUtils.getPathForFile`）取绝对路径；
+- 两条都拿不到（Web profile / 旧宿主）→ 整块显示「当前 DeepSeek Harness 版本不支持本机文件选择」，
+  **不暴露 JS 错误或底层服务名**。
+
+### 扫描与快照为什么走 Host 自己的 fs
+
+`ctx.fs` 与 shell 共用同一条沙箱策略：员工选的文件在自己的任意目录里（会话 cwd 之外），
+`ctx.fs.listDir` / `stat` 连"在不在"都问不出来；而它又没有二进制写、没有 mkdir、没有 copy，
+**根本复制不了快照**。所以递归枚举与逐件复制由 Host 的 `node:fs/promises` 完成，但**不是**
+绕开策略：`local-audit-start` 先向 Broker 要一条具名特权操作
+（`system.local-audit-material.snapshot`，`transport: 'filesystem'`、只给 `panel`），
+被拒时**一个字节都不读**，通过后逐次留一条结构化诊断（`Broker.note()` —— 非 shell 的
+本机访问事实也要能在「开发者诊断」里查到，否则"点了没反应"永远查不出来）。
+
+### 案例 scope：第四类调用者
+
+本地审核的案例目录在操作系统临时目录下（`crwu-local-audit/<handoffId>/`），
+所以普通会话判据（`<工作空间>/<流水号>` 精确相等）**永远覆盖不到它**。
+`audit/case-access.ts` 因此多了 `kind: 'local'`：判据是
+`local-audit-claim` 写下的**会话级 scope**（`local-audit/scope.ts` 的窄接口），
+且模型提交的 `caseDir` 必须与那份案例目录规范解析后精确相等。
+审核子会话与讨论会话的判据一个字没改。
+
+### handoff 的六条判据
+
+存在 / 未用 / 未过期 / 快照仍在（**读清单里的 handoffId**，不是只判目录存在）/ 会话身份非空 /
+同一条会话重复认领**幂等**。最后一条是被自动链路逼出来的：客户端建完会话会替它认领一次，
+模型随后按提示词再调一次 Tool —— 那一次必须拿到同一份清单，而不是一句"提示词已经用过了"
+（那会把它指向一条根本不存在的恢复路径）。别的会话拿到的仍是"已用过"。
+
+### `hidden` 打不过作者样式：常驻页签空壳占了一块空白（2026-10-11 用户实测）
+
+为了让 `aria-controls` 永远指向真实节点，两个 tabpanel 改成**常驻**、非选中者加 `hidden`。
+结果用户看到「切到报告审核时，页签下面一大片空白」。
+
+原因一句话：**`hidden` 属性只靠 UA 样式表的 `display: none`，而作者样式里写了
+`.crwu-audit-tab-panel { display: flex }` —— 作者样式优先级更高，`hidden` 被整条盖掉。**
+（这也是为什么"用 `hidden` 隐藏"在真实项目里经常翻车：任何后续 `display` 声明都会把它废掉。）
+
+无头实测（900px 视口，真实样式表）：
+
+| | 修前 | 修后 |
+| --- | --- | --- |
+| 非选中 tabpanel 的 display / 高度 | `flex` / **320px** | `none` / **0** |
+| 报告页可用高度 | 484px | 804px |
+
+修法：手写 `.crwu-audit-tab-panel[hidden] { display: none; }`（不依赖 UA 样式，将来改
+`display` 也兜得住）。判据两条：**样式契约**（这条规则必须存在、且排在那条 `display:flex`
+之后）+ **真机高度断言**（browser-check 里正反两向都量 `getBoundingClientRect().height === 0`）。
+
+### 「查看报告」为什么慢：先量，再改（2026-10-11）
+
+用户报「点查看报告后浏览器/下载出来得很慢」，并提了一个方案：*ossutil 既然能查到数据，
+不如直接 `cp` 到本地再打开，这样不是更快吗？*
+
+**先把账量出来**（本机，都是真跑）：
+
+| 环节 | 实测 |
+| --- | --- |
+| 交付件 HTML 体积 | **200–450KB**（不是大文件） |
+| `ossutil sign` 全过程 | **29ms**（进程启动也是 29ms） |
+| 插件自己的 RPC 派发 | 就是一次 `operation(args)`，没有额外环境探测 |
+| 剩下的 | ①DSH 每次**提权进程**的开销；②**系统浏览器启动/聚焦**（冷启动常是 1–3s） |
+
+结论：**慢主要不在我们这一侧**，而在"两次串行的提权进程"和"浏览器冷启动"。所以改法是
+**把能剪的那一段剪掉**：第②次进程（`open <url>`）交给客户端 —— 桌面端主进程会把
+`window.open` 转成 `shell.openExternal`，一样是系统默认浏览器，但少一次提权进程。
+剪不掉的（浏览器自己启动）如实说明，不假装。
+
+**为什么"先 cp 到本地再打开"不会更快**（记下来免得以后再走一遍）：
+
+1. 同一份字节仍要过一次网络 —— 浏览器下载和 `ossutil cp` 没有区别；cp 只是把这段等待
+   从"浏览器里看得到进度"挪成"插件里什么都看不到"；
+2. 本地路线是 **cp 完才能开**，而现在是**浏览器立刻开、下载并行开始** —— 感知上更慢；
+3. 还多一个进程（`cp` 也是一次提权 shell），以及本地文件的落点与生命周期问题：
+   `openPath` 的边界**故意**只允许打开案例根目录内的文件，"丢到系统临时目录再打开"
+   等于要放宽这条安全边界；
+4. 只有在"浏览器自己下载这一步被策略/代理拦住"时才划得来 —— 那是另一种故障，该单独诊断。
+
+真要让点击**近乎瞬时**，正确做法是**预热**（悬停时后台按 ETag 把交付件抓到
+`<工作空间>/交付件缓存/<流水号>/`，点击直接开本地文件）—— 代价是后台网络 + 磁盘缓存 + 清理，
+不是本轮范围（用户 2026-10-11 选了先做剪进程这一步）。
+
+### UI 重构（2026-10-11）：把"现在是什么状态、下一步做什么"做成结构
+
+这一轮的改动都不改数据流，只改"用户能不能看懂"，所以判据集中在**可被断言的结构**上：
+
+- **一枚 primary**：整页只允许一枚实心主按钮（本地审核里是底部的「开始本地审核 / 重试准备」）。
+  选择文件/文件夹与卡片里的复制、重新准备都是次级。判据：页面上 `.crwu-audit-btn-primary` 恰好 1 枚。
+- **扫描中不许显示空态**：`items` 为空有两种含义（还没选 / 正在扫），界面上必须是两种样子。
+  扫描给骨架 + `role="status"`，空态只在"扫完确实一个都没有"时出现 —— 否则用户会以为自己没选上。
+- **命中区 44px 靠 `::after` 外扩**，视觉尺寸不动（列表行里的 X 保持 28px、交付件 ⓘ 保持 18px）。
+  直接放大视觉会毁掉表格密度与列表节奏，而命中区是**可点面积**，不是画出来的大小。
+- **剪掉的重复入口**：`重新扫描` 按钮（移除本身就会重扫，两个入口做同一件事说不清）；
+  高风险动作（重新审核 / 停止审核）用**行内二次确认**（第一次点只把那一项变「确认…」）。
+- **焦点要还回去**：`•••` 菜单关闭（Esc / 选中 / 点外部）后焦点回到触发按钮，否则键盘用户
+  要重新 Tab 一整圈才能回到原处。菜单打开时焦点进第一项、方向键在项间移动。
+- **失败要说出来**：错误类 `Notice` 一律 `live="alert"`；复制成功走 `role="status"`。
+  普通说明（例如"宿主是旧构建"）**不**用 alert —— 全播报会变成噪音。
+- **两个 tabpanel 常驻**：非选中者渲染成 `hidden` 空壳。这样 `aria-controls` 永远指向真实节点，
+  同时又不会把重的页面挂起来（报告审核离开后不再拉数据）。
+
+### 把会话挂到工作空间下：只有 `workspaceId` 说了算，`cwd` 不算（2026-10-11 用户实测）
+
+用户口径：「本地审核的对话应该创建在我【环境信息】中已经配置的工作空间下面，而不是随便找个位置创建」。
+我先前按"协议 24 的结论"只给了 `cwd` = 工作空间路径，以为会话会自动归组 —— **不对**。
+
+决定性证据在 DSH 自己的客户端产物里（`@deepseek-ai/dsh-client-ui-workspace` 的 `reuseOrCreateBlank`）：
+
+```js
+return this.sessions.create({ workspaceId: workspace.workspaceId })
+```
+
+而侧栏「未分组」的判据是 `workspace.sessionIds.includes(id)` —— 也就是**宿主工作区注册表里的成员关系**。
+`ui-workspace` 自己的 `inject` 里就有 `workspaces`（纯控制器），工作区的成员关系由它维护；
+`cwd` 只决定会话的沙箱边界与它在文件系统里的位置。所以"只给 cwd"的会话永远挂在「未分组」下。
+
+现在：界面把 **`env.workspace.id`**（我们的 `state.workspaceId`，由 `workspaceRegistry.resolveByPath`
+解析出来的注册表 id）一路带到 `createLocalAuditSession`，建会话用它；`workspacePath` 只留两个用途 ——
+沙箱边界（案例目录在它之内）与"工作区中途被换掉"的守卫（两边不一致就重新准备），以及拿不到 id 时的退路。
+
+判据：一条端到端回归 —— 界面传下来的 `workspaceId` 必须**原样**出现在 `sessions.create` 的入参里
+（退路那条另有用例：拿不到 id 时用 `cwd`）。
+
+### 同一件事的两种"拼法"：`/x/资料/` ≠ `/x/资料`（2026-10-11 用户实测"移不掉"）
+
+用户报「点击移除文件夹时，移不掉」。判据在**字符串拼法**上：
+
+- macOS 的目录选择器（`osascript choose folder`）回的是 **`/Users/x/资料/`（带尾斜杠）**；
+- Host 扫描回的 `items[].path` 是 `trimTrailingSeparators` 过了的 `/Users/x/资料`。
+
+界面当时的判定是 `current.selected.includes(item.path)` —— 两个拼法对不上，于是"移除这个文件夹"
+走进了"移除入口里的某个文件"那条分支：它把文件夹路径塞进排除清单，而排除清单在 Host 那边只匹配
+**入口之内的文件**，所以文件夹纹丝不动，用户看到的就是"怎么点都移不掉"。
+
+两条修法（都必要）：
+1. **入库就归一**：`addSelection` 现在对每个路径做 `trimTrailingSeparators`（`/`、`C:\`、UNC 都照顾到），
+   所以 `selected` 里不会再有尾斜杠；
+2. **判据换成权威来源**：是"入口"还是"入口里的文件"，改看 **Host 回的 `items`**（拼法归一后比较），
+   而不是 `selected.includes`。扫描还没回来时 `items` 是占位行、路径就是 `selected` 本身，判据照样成立。
+
+通用教训：**跨进程传路径时，"同一个东西"有好几种拼法**（尾斜杠、分隔符、盘符大小写）。
+比较一律走归一函数，别用裸字符串相等；而"这东西是什么"尽量问给数据的那一端。
+
+### 下掉「重新扫描」：一个动作只该有一个入口
+
+同一个 X 点下去会**立刻重扫**（否则界面与 Host 的清单不一致）。既然移除自带重扫，
+旁边再放一个「重新扫描」按钮，用户就会问"我刚移除了它，为什么还要再扫一次？"——
+两个入口做同一件事，还各自带着不同的隐含语义（重扫会把移除结果重新算一遍）。
+所以按用户口径把按钮下掉，辅助操作只剩「清空选择」；真要重扫（目录在别处变了）就清空后重选，
+**重新选择本来就会扫**。
+
+### 「移除一个文件」必须是 Host 认的状态，不是界面自己藏起来（2026-10-11）
+
+用户口径：扫描后要**完整看到文件名**，且每行右侧一枚 X 能移除该文件。
+
+最容易做错的地方是"移除"存哪：如果只在界面状态里把那一行藏起来，**下一次扫描它就会回来**
+（扫描是 Host 按 `selection` 重新展开的，界面藏起来它根本不知道）。所以排除清单是**协议的一部分**：
+
+- 界面：`state.excluded`（绝对路径，排序去重）；
+- 每次 `local-audit-status` / `local-audit-start` 都带上它；
+- Host：`scanSelection(selection, fs, { excluded })` 在展开时跳过命中项 —— 于是它不计入
+  `fileCount`、不进快照、也**不报成"读不到"**（那是另一回事，会把用户引去查权限）。
+
+两条粒度也必须分开（同一个 X，语义不同）：
+`selection` 去掉一项 = 不审这个入口；`excluded` 加一项 = 只不审入口里的这个文件。
+入口被移除时顺手清掉它下面的排除项，选择变化时丢掉不属于任何入口的排除项 —— 否则那条排除项会
+在以后悄悄少审一个同名文件。
+
+判据：Host 三条（排除项不进清单/不计数量/不算跳过、入口本身被移除时如实说"已移除"、start 的快照里
+确实没有它）+ 客户端三条（文件夹展开出文件行且每枚 X 的可访问名说出具体文件、文件行的 X 只加排除项
+不碰入口、换了选择就丢掉孤儿排除项）。
+
+### 会话 cwd 不该依赖"宿主新回一个字段"（2026-10-11 用户一句话点破）
+
+我为了把会话挂到工作空间下，给 `local-audit-start` 加了个 `workspacePath` 字段。用户反问：
+
+> 我插件的【环境信息】中不是已经规定了工作区吗
+
+对。**那份工作区本来就在界面上**（`env.workspace.path`，`boot` / `env` 早就回了），
+面板甚至已经把它传给报告审核页了。让它成为"必须由宿主在新应答里再回一次"的东西，只有一个后果：
+宿主是旧构建时它是空的（于是发出空 cwd、报 `mkdir ''`）——那正是我上一节记的那个故障。
+
+现在的取法：**宿主那份优先**（`handoff.workspacePath`，它决定案例目录落在哪，才是权威），
+**面板那份兜底**（`controller.start({ workspacePath })`）；两边都非空且不一致时**拒绝**
+（提示"重新准备文件"）—— 因为那种情况下案例目录在旧工作区里，会话的沙箱边界罩不住它，
+硬跑会在"写交付件"那一步才失败。
+
+判据：两条回归 —— 宿主不回字段时用面板那份建会话（断言 cwd 非空）、两份不一致时一个会话都不建。
+
+### 改了跨进程字段就**必须**升协议号（2026-10-11 我自己踩的）
+
+本轮给 `local-audit-start` 的应答加了 `workspacePath`、并改了 `casePath` 的含义，**没有**升
+`WORKBENCH_PROTOCOL`。后果在真机上很具体：客户端产物刷新页面就换新，宿主产物只有重启 profile 才换，
+于是"新界面 + 旧宿主"里，客户端拿一个旧宿主根本不回的字段去建会话，发出 `cwd: ''`，
+
+```text
+创建审核对话失败：session create failed: gateway/internal: failed to create session "…":
+Error: failed to ensure project directory "": Error: ENOENT: no such file or directory, mkdir ''
+```
+
+用户完全看不懂这句话，也无从处置。这是 `shared/consts.ts` 那条规则存在的**唯一理由**：
+它不解释字段为什么变，只负责让"界面新、宿主旧"显形，并把用户送去"完全退出并重新打开"。
+
+现在的两道闸：
+1. **协议号 29**：客户端发现不一致就顶一条横幅、并把发起类操作的门禁关掉（本仓既有机制）；
+2. **本地审核自己也不许猜**：`createLocalAuditSession` 在 `workspacePath` 为空时
+   **一个请求都不发**，文案直接说"宿主没有回工作空间路径：请完全退出并重新打开 DeepSeek Harness"。
+   面板上的主按钮同样在旧宿主下禁用（不发请求、不建快照，免得用户白等一轮）。
+
+### 「已交接」不等于「用完了」：清理把交付件删了（2026-10-11 真机第一次审核）
+
+用户报「审核完成后的交付件 html 和 json 文件都直接被删掉了」。根因不是文件被谁覆盖，而是
+**清理逻辑把 `used` 当成了「用完了」**：
+
+```text
+if (now <= record.expiresAt && !record.used) continue   // ← 过期 **或** 已认领都清
+```
+
+`claim()` 一成功就置 `used = true`，于是审核刚跑完（甚至还在跑），下一次 `sweep()`
+（10 分钟兜底定时器 / 下一次点「开始本地审核」）就把整个案例目录 `rm -rf` 了 ——
+交付件在里面。
+
+**判据**：`used` 的语义只是"已经交接给某条会话了"，**不是"这条链路结束了"**。我们刻意不监控对话
+（设计 §1：不监控其他对话），所以 Host **没有**"审核完成"这个信号，唯一安全的做法是
+**认领过的一律不自动删**：目录落在员工自己的工作空间里，删不删由员工决定（与报告审核的案例目录
+同一条口径）。未认领的过期快照照旧清掉（那是没有价值的副本）。
+
+顺带把"记录"也留着：自动链路是**客户端先认领一次、模型随后按提示词再认领一次**，
+中间若把记录清了，模型那一次会拿到"已过期"、整条审核莫名其妙停住。
+
+### 会话挂在哪个工作空间：靠 cwd 逐字相等（2026-10-11，协议 24 的同一条结论）
+
+用户口径：「本地审核对话应该创建在我环境信息规定的工作区下面」。这条与协议 24 完全同源：
+**DSH 按会话 cwd 把会话归到工作空间下，cwd 必须逐字等于工作空间路径**。
+
+于是三件事被绑在一起、必须一起满足：
+
+1. 会话 `cwd` = 员工选定的工作空间（逐字）→ 会话挂在工作空间下 ✓
+2. 会话的沙箱边界 = 那个 cwd → **案例目录必须在工作空间之内**，否则对话里的
+   `crwu_run_python_script` 等（非特权）写不进去 ✗
+3. 交付件要落在员工找得到的地方 ✗（原来的 `os.tmpdir()` 两个都不满足）
+
+所以案例目录从 `os.tmpdir()/crwu-local-audit/<id>` 移到 `<工作空间>/本地审核/<id>`，
+`local-audit-start` 没选工作空间时直接拒绝（`policy`）。
+
+### 交付件链接为什么点不开：界面按**工作空间根**解析
+
+用户报「在会话中直接点击文件跳转不过去」。读了 DSH 的客户端产物（`ui-deliverables` 里的
+`openFile`）：
+
+```text
+const cwd = sessions.list.getSnapshot().byId[sessionId]?.cwd
+const url = fileAddressFor(sessionId, cwd, path)   // 相对 → 按 cwd 解析；绝对 → 在 cwd 内则折算成相对
+sidebarRight.openResource(url)                     // 打开右侧文档预览 Tab
+```
+
+即：**相对路径按会话 cwd（= 工作空间根）解析**。模型只写文件名（`审核意见.la-xxx.html`）时，
+它会被解析成 `<工作空间>/审核意见.la-xxx.html` —— 那个位置没有文件，点开什么都没有。
+所以固定提示词与 `16-local-audit.md` 的收尾格式现在要求写 **`caseDir` 拼出来的完整路径**
+（绝对路径在 cwd 之内会被折算成相对，仍然有效），并明确「不要只写文件名」。
+
+### 客户端能力**不许在 `apply()` 里快照**（2026-10-11 又在本地审核上踩了一次）
+
+本仓早就写过这条教训（`features/workbench/services.ts`）：客户端服务是根服务，注册顺序
+不由我们定；**判一次就存起来的结论会永远是那个值**。`sessions` / `uiWorkspace` 都吃过一次。
+
+2026-10-11 第三次踩到，换了个地方：本地审核的 `portOf()` 在 `apply()` 里写
+
+```text
+if (typeof services.uiWorkspace?.pickDirectory === 'function') port.pickDirectory = …
+```
+
+我们的客户端插件比 `ui-workspace` 先激活时，`port.pickDirectory` 就**永远是 undefined** ——
+而页面上的能力探测（渲染时现读）看得到服务，于是按钮画出来了、点下去却回
+「当前宿主不支持本机目录选择」，症状看着像"宿主不支持"，其实是竞态。
+
+现在那四条能力（`pickDirectory` / `hostPaths` / `sessions.create` / `sessions.using`）
+全部用 **getter** 在调用时刻现读；缺席时属性仍是 `undefined`，"不支持"的分支照旧成立。
+另外给目录能力补了一次**一次性重探**（1.2s，不轮询）：真的晚到一点点也能自愈。
+
+判据：`client-local-audit.test.mjs` 里两条"晚注册"用例 —— 建状态机时服务不存在，
+注册之后再 `pickDirectory()` / `start()`，必须走通（改回快照就会红）。
+
+### 面板里量真实布局：无头 Edge + 本地回传（2026-10-11 现学现用）
+
+用户报「页签下面有一条横线」「页面滚动条没了」时，光看 CSS 猜不出来 —— 本仓的样式表是
+**一个几百行的大模板字符串**，嵌套 flex / surface 的高度链又只能靠实际排版算。
+这时最快的判据是：把**真实样式表**塞进一个最小 DOM 骨架，用**无头 Edge** 量一遍。
+
+做法（本机、不需要 playwright、不碰用户 profile）：
+
+1. 用本仓的 TS loader 把样式表导出来：
+   `registerTsxLoader()` 后 `import('…/workbench/consts.ts')`，把 `WORKBENCH_STYLE_TEXT`
+   与 `WORKBENCH_CLASSES` 写成一份 JSON；
+2. 生成一个 `file://` 之外的最小页面：把真实类名按真实层级拼出
+   `root > header + body > surface > pane-head + tab-panel > surface > pane-main`，正文塞 80 行撑高；
+3. 页内两帧后算出每个盒子的 `clientHeight / scrollHeight / offsetWidth - clientWidth`，
+   **用 `fetch('/report?m=…')` 回传给一个本地 node HTTP 服务**（`--dump-dom` 在这里会挂住，
+   回传法更稳），服务收到就打印并退出；
+4. Edge 启动参数：`--headless=new --no-sandbox --disable-gpu --user-data-dir=<tmp>`
+   （不加 `--no-sandbox` 会在本机的文件沙箱下 `sandbox initialization failed`）。
+
+量出来的两组事实（就是这两个缺陷的判据）：
+
+| 结构 | `pane-main` clientHeight / scrollHeight | canScroll | 滚动条占位 |
+| --- | --- | --- | --- |
+| 没有 `.crwu-audit-tab-panel`（页签刚加进来时的样子） | 1704 / 1704 | **false** | 0 —— 内容被 `overflow:hidden` 裁掉，整页都没有滚动条 |
+| 加上 `.crwu-audit-tab-panel`（现在） | 755 / 1704 | **true** | 见下 |
+
+滚动条占位那一列：带 `scrollbar-width: thin` + `scrollbar-color` 时是 **0**
+（Chromium 用平台 overlay 条，macOS 不滚就不画 → 用户说"滚动条没了"），
+把这两个标准属性删掉、只留 `::-webkit-scrollbar` 之后是 **10**（始终画出来）。
+
+### 会话 cwd 与「未分组」：从 DSH 源码里核过的两条事实（2026-10-11）
+
+本地审核把新会话的 `cwd` 设成**系统临时目录下的案例目录**，所以有两条必须确认的事实。
+它们在**装好的产物里**就能读到（`app.asar` 的
+`dsh/node_modules/@deepseek-ai/dsh-api-session-controller/lib/{client.js,index.js}`）：
+
+1. **`session.create` 接受 `{ cwd }`，不需要预先注册工作空间。** 客户端 `create()` 在
+   `workspaceId` 缺席时只把 `{ cwd }`（与可选的 `sessionId`）转发出去；host 侧
+   `SessionController.create` 的判据是「`workspaceId` 与 `cwd` 二选一」，拿到 `cwd` 后走
+   `agents.ensureSession(id, cwd, …)` → `createOrAdopt()`，里面是
+   **`await mkdir(cwd, { recursive: true })`**，然后把它写进会话 `meta.cwd`。
+   也就是说：目录不存在会被**创建**，且**不要求**它是已注册的工作空间。
+   （只有给了 `workspaceId` 才会走 `workspace.attachSession()`。）
+2. **它的沙箱边界就是那个 `cwd`** —— 这正是本地审核必须把 `cwd` 设成案例目录的原因：
+   不设的话，对话里的 `crwu_run_python_script` 等案例内工具（非特权）写不进快照。
+3. **它会落进侧栏的「未分组」。** 这与协议 24 那条同源：会话只有挂在**已注册工作空间**下
+   才有分组，而 `attachSession` 要求 cwd 逐字等于工作空间路径。案例目录在临时目录里，
+   所以不注册（注册会让工作空间表里留下一条指向临时目录的陈旧条目 —— 我们不引入这种状态）。
+   会话本身仍然可见，标题由我们 `rename` 成 `本地审核 · MM-DD HH:mm`。
+
+### 选择能力探测：三个坑（2026-10-11 用户实测反馈）
+
+用户看到的是一句「当前 DeepSeek Harness 版本不支持本机文件选择。请更新宿主后重试。」，
+然后问「不能选择文件夹吗」。这句话后面藏着三个问题，都值得记住：
+
+1. **能力探测必须与真实注入形态一致**。`globalThis.__DSH_HOST_PATHS__` 是**对象**
+   `{ pathFor }`（Electron preload 的 `webUtils.getPathForFile` 出口），而 `pickSupported`
+   早先写的是 `typeof input.hostPaths === 'function'` —— 于是**永远为假**，
+   「选择文件」这条能力从来没被认出来过。它之所以能活到真机：**这条判据一条单测都没有**，
+   而注入替身恰好是函数形状。→ 教训：探测外部注入物的谓词，必须有一个"用真实形状"的用例。
+2. **两条独立能力不许共用一个布尔**。早先 `pickSupported` 把「目录选择器」与「文件路径服务」
+   合成一个布尔，一旦为假就**整块**换成"不支持"文案 —— 于是"只有文件选择不可用"被读成
+   "连文件夹也不能选"（用户的原话）。现在两条分开判：各自在就各自给按钮，
+   **只有两条都没有**时才说设计 §4 那句固定的话；缺哪条就在按钮下面说清"该改用哪一条"。
+3. **"这个宿主不支持"与"这一次没打开"是两句话**。早先 `pickDirectory` 的 `catch` 也走
+   `unsupported()`，于是系统选择窗口被挡（宿主弹不出窗口、`osascript` 被拒）时，
+   用户被告知"请更新宿主" —— 而换宿主根本修不好这件事。现在失败分两支：
+   `unsupported: true`（能力不存在，给设计那句固定话）与 `unsupported: false`
+   （能力在、这一次打不开，文案说"请重试一次 / 反馈给维护者"，**不提**更新宿主）。
+
+顺带一条产品事实（回答"不能选文件了吗"）：**「选择文件夹」本来就能覆盖按文件夹选文件** ——
+浏览器的 file input 拿不到绝对路径（这是浏览器安全模型的硬限制，不是宿主版本问题），
+而目录选择走的是**宿主**的原生对话框（macOS 上是 `osascript choose folder`），
+所以"选一批文件"在浏览器里同样做得成：选它们所在的文件夹即可。
+
+### 清理与过期
+
+TTL 30 分钟，过期或本轮用完后由 `local-audit-start` 顺手清、以及 10 分钟一次的兜底定时器清
+（定时器 `unref()` 并挂 `ctx.effect` 释放）。删的只有 Host 自己在系统临时目录下拼出来的案例目录，
+**不碰用户原始文件**。

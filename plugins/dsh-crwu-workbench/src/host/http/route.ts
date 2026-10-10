@@ -12,6 +12,11 @@ export function registerRpcRoute(ctx: Context, operations: OperationMap): () => 
     kind: 'exact',
     path: WORKBENCH_ROUTE,
     async handler(req, res) {
+      const controller = new AbortController()
+      const abort = (): void => { controller.abort() }
+      const disconnect = (): void => { if (!res.writableEnded) abort() }
+      req.once?.('aborted', abort)
+      res.once?.('close', disconnect)
       try {
         if (req.method !== 'POST') {
           writeJson(res, 405, { ok: false, error: '仅支持 POST' })
@@ -32,9 +37,13 @@ export function registerRpcRoute(ctx: Context, operations: OperationMap): () => 
           return
         }
         const args = (body.args !== null && typeof body.args === 'object' ? body.args : {}) as OperationArgs
-        writeJson(res, 200, await operation(args))
+        const result = await operation(args, { signal: controller.signal })
+        if (!controller.signal.aborted) writeJson(res, 200, result)
       } catch (error) {
-        writeJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        if (!controller.signal.aborted) writeJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      } finally {
+        req.removeListener?.('aborted', abort)
+        res.removeListener?.('close', disconnect)
       }
     },
   })
