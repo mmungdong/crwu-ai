@@ -6,8 +6,9 @@ import { SideDrawer } from '../../components/SideDrawer.tsx'
 import { BUILD_TAG_CLASSES, WORKBENCH_CLASSES as C } from './consts.ts'
 import { joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
+import { WORKBENCH_PROTOCOL } from '../../../shared/consts.ts'
 import { environmentStateOf, gatingOf, workbenchApi } from '../report-audit/api.ts'
-import type { PendingResult } from '../report-audit/api.ts'
+import { createReportPageLoader } from '../report-audit/page-loader.ts'
 import type { AuditView, CloudItem, DwsLocalDoctorView, DwsLocalRepairView, TaskRow } from '../../../shared/types.ts'
 import { openChildSession } from './open-session.ts'
 import { discussionPortOf } from './services.ts'
@@ -16,7 +17,11 @@ import { EnvironmentPane } from '../environment/EnvironmentPane.tsx'
 import { createEnvStatusStore, useEnvStatus, type EnvStatusStore } from '../environment/status.ts'
 import { AuditInfoDrawer } from '../report-audit/AuditInfoDrawer.tsx'
 import { ReportPane } from '../report-audit/ReportPane.tsx'
-import { openReportNotice, openSessionTarget, pendingArgs } from '../report-audit/row.ts'
+import { openReportNotice, openSessionTarget, openSignedUrl } from '../report-audit/row.ts'
+import { LocalAuditPane } from '../local-audit/LocalAuditPane.tsx'
+import type { LocalAuditController } from '../local-audit/controller.ts'
+import { LOCAL_AUDIT_CLASSES } from '../local-audit/consts.ts'
+import { localAuditTabLabel, nextTabKey, LOCAL_AUDIT_TABS, type LocalAuditTab } from '../local-audit/tabs.ts'
 import { ReportEvalPane } from '../report-eval/ReportEvalPane.tsx'
 import { WorkbenchLoading } from './LoadingPane.tsx'
 import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
@@ -68,6 +73,13 @@ export interface WorkbenchPanelProps {
   update?: UpdateStore
   /** 由 apply 创建的更新面板开关状态（侧栏徽标点开的就是它）。 */
   updateDialog?: UpdateDialogStore
+  /**
+   * 「本地审核」那一页的状态机草稿（选择 / 提示词 / 已准备的 handoff）。
+   *
+   * 由 `apply()` 创建、随 props 下发：它必须**跨页签与跨模块存活** —— 用户点一下「报告审核」
+   * 看一眼再回来，刚才选的文件与提示词不能没。缺省（单测直接渲染组件）就地建一份。
+   */
+  localAudit?: LocalAuditController
   /** 当前平台：决定等待重启说明里的 macOS 提示。 */
   platform?: 'mac' | 'other'
   /** 过期判据用的时钟；缺省本机时钟（测试注入固定值）。 */
@@ -105,6 +117,24 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const mod = useModule(modules)
   const module = mod.active
   /**
+   * 「报告审核」模块下的两个页签：`report` = 既有的报告审核，`local` = 本地审核。
+   *
+   * 为什么是**组件内的 useState**而不是往 `module-store` 里塞：那两个页签是"报告审核"
+   * 这一个模块**内部**的视图切换，放进模块状态会让侧栏那张分组卡、统一导航门禁都跟着
+   * 多出一个它并不认识的维度。默认停在既有的报告审核上 —— 既有行为一丝不变。
+   */
+  const [auditTab, setAuditTab] = React.useState<LocalAuditTab>('report')
+  /** 键盘左右切换时把焦点带到新页签上（roving tabindex 的一半，另一半是 tabIndex）。 */
+  const tabRefs = React.useRef<Partial<Record<LocalAuditTab, { focus?: () => void } | null>>>({})
+  const onTabKeyDown = (event: React.KeyboardEvent): void => {
+    const key = (event as unknown as { key?: string }).key ?? ''
+    const next = nextTabKey(auditTab, key)
+    if (next === auditTab) return
+    event.preventDefault()
+    setAuditTab(next)
+    tabRefs.current[next]?.focus?.()
+  }
+  /**
    * **统一导航入口的本地包装**。
    *
    * 每一次跳转（侧栏子项、环境页的「进入报告审核」、报告页内跳转、报告评估页的引导）
@@ -139,7 +169,22 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [authDeclined, setAuthDeclined] = React.useState(false)
   const [authBusy, setAuthBusy] = React.useState(false)
   const [authError, setAuthError] = React.useState('')
-  const [pending, setPending] = React.useState<PendingResult | null>(null)
+  const reportLoader = React.useRef<ReturnType<typeof createReportPageLoader> | null>(null)
+  if (reportLoader.current === null) reportLoader.current = createReportPageLoader({
+    pending: workbenchApi.pending,
+    ossBatchIndex: async (args, options) => {
+      if (buildStore.get().protocol === null) await buildStore.refresh()
+      if (buildStore.get().protocol !== WORKBENCH_PROTOCOL) return { ok: false, error: zhCN.hostStaleGate, results: {} }
+      return await workbenchApi.ossBatchIndex(args, options)
+    },
+  })
+  const pageLoader = reportLoader.current
+  const [reportPage, setReportPage] = React.useState(pageLoader.get())
+  const pending = reportPage.pending
+  const busy = reportPage.pageLoading
+  const ossIndex = Object.fromEntries(Object.entries(reportPage.remote)
+    .filter(([, result]) => result.status === 'ready' && result.item !== null)
+    .map(([seq, result]) => [seq, result.item!]))
   const [audits, setAudits] = React.useState<Record<string, AuditView>>({})
   /**
    * 本地记下的"我刚点过停止"的时刻（F1）。
@@ -149,6 +194,8 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    * 「正在请求停止审核…」，阶段与结论仍然以 Host 回报为准。
    */
   const [stopRequestedAt, setStopRequestedAt] = React.useState(0)
+  /** 正在打开交付件的那一行（行内显示「正在打开…」并锁住按钮）。 */
+  const [openingKey, setOpeningKey] = React.useState('')
   /**
    * Host 说"现在能不能启动下一条审核"（F4）。**只信 Host**：
    * 缺字段（旧宿主）按"没有正在停的审核"处理，否则老版本界面会被永久禁用。
@@ -156,25 +203,15 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [canStartNext, setCanStartNext] = React.useState(true)
   const [activeKey, setActiveKey] = React.useState('')
   const [activeChildId, setActiveChildId] = React.useState('')
-  const [ossIndex, setOssIndex] = React.useState<Record<string, CloudItem>>({})
-  // 按流水号查云端交付件：查的是哪个流水号、命中什么、是否已经查过。
-  const [cloudSearch, setCloudSearch] = React.useState({
-    seqNo: '', items: [] as CloudItem[], error: '', busy: false, done: false,
-  })
-  const [ossError, setOssError] = React.useState('')
-  const [ossLoading, setOssLoading] = React.useState(false)
-  const [ossLoaded, setOssLoaded] = React.useState(false)
   const [notice, setNotice] = React.useState('')
-  const [busy, setBusy] = React.useState(false)
   const [auditBusy, setAuditBusy] = React.useState('')
   const [stopBusy, setStopBusy] = React.useState(false)
   const [retryBusy, setRetryBusy] = React.useState(false)
-  const [query, setQuery] = React.useState('')
-  const [page, setPage] = React.useState(1)
   const [drawer, setDrawer] = React.useState<{ key: string; info: Record<string, unknown> | null; error: string } | null>(null)
   /** Drawer 正在播关闭动画（150ms 后再卸载）。 */
   const [drawerClosing, setDrawerClosing] = React.useState(false)
   const drawerTimer = React.useRef<number | null>(null)
+  const drawerRequest = React.useRef(0)
   const [wsBusy, setWsBusy] = React.useState(false)
   const [wsMessage, setWsMessage] = React.useState('')
   // 钉钉本机目录体检（协议 18 · D）：诊断结果是**组件状态**，不进全局 store ——
@@ -185,11 +222,8 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   const [dwsLocalError, setDwsLocalError] = React.useState('')
   // 二次确认：**许可**（允许读本机凭据）与**改权限**是两件事，必须分开问。
   const [dwsLocalConfirming, setDwsLocalConfirming] = React.useState(false)
-  const [escalateAvailable, setEscalateAvailable] = React.useState(false)
   const [handoff, setHandoff] = React.useState<TaskRow | null>(null)
   const [handoffCopied, setHandoffCopied] = React.useState(false)
-  // 请求序号：迟到的应答必须被丢弃，否则快速切换时会显示上一条的内容。
-  const requestSeq = React.useRef(0)
   // 卸载标记：面板切走之后到达的应答**不得**再写状态。
   // 没有这个守卫时，React 会对已卸载组件设置状态，而且旧数据可能覆盖下一次挂载的结果。
   const mounted = React.useRef(true)
@@ -234,66 +268,24 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     if (mounted.current) await envStatus.refresh()
   }, [envStatus])
 
-  const loadCloud = React.useCallback(async (force: boolean) => {
-    // **只在首次进入、显式刷新或上传成功后列举 OSS**：切模块、翻页、检索都不得重复列举。
-    if (!force && ossLoaded) return
-    setOssLoading(true)
-    try {
-      const result = await workbenchApi.ossIndex()
-      if (!mounted.current) return
-      if (result.ok) {
-        setOssIndex(result.items)
-        setOssError('')
-      } else {
-        // 云端清单失败**不拖垮氚云列表**：只记错误，列表照常显示。
-        setOssError(result.error)
+  React.useEffect(() => {
+    let epoch = pageLoader.get().epoch
+    return pageLoader.subscribe((next) => {
+      if (next.epoch !== epoch) {
+        epoch = next.epoch
+        drawerRequest.current++
+        if (drawerTimer.current !== null) { window.clearTimeout(drawerTimer.current); drawerTimer.current = null }
+        setDrawer(null)
+        setDrawerClosing(false)
       }
-      setOssLoaded(true)
-    } catch (cause) {
-      if (mounted.current) setOssError(describe(cause))
-    } finally {
-      if (mounted.current) setOssLoading(false)
-    }
-  }, [ossLoaded])
-
-  const searchCloud = React.useCallback(async (raw: string) => {
-    const seqNo = raw.trim()
-    // 用户操作触发 → 允许**一次**列举，且只列这一个流水号那一层。
-    setCloudSearch({ seqNo, items: [], error: '', busy: true, done: false })
-    try {
-      const result = await workbenchApi.ossIndex({ seqNo })
-      if (!mounted.current) return
-      setCloudSearch({
-        seqNo,
-        items: result.ok ? Object.values(result.items) : [],
-        error: result.ok ? '' : result.error,
-        busy: false,
-        done: true,
-      })
-    } catch (cause) {
-      if (mounted.current) setCloudSearch({ seqNo, items: [], error: describe(cause), busy: false, done: true })
-    }
-  }, [])
-
-  const loadReport = React.useCallback(async (options: { query?: string; page?: number } = {}) => {
-    setBusy(true)
-    const seq = requestSeq.current + 1
-    requestSeq.current = seq
-    try {
-      const result = await workbenchApi.pending({
-        ...(options.query === undefined ? {} : { query: options.query }),
-        ...(options.page === undefined ? {} : { page: options.page }),
-      })
-      if (!mounted.current || requestSeq.current !== seq) return
-      setPending(result)
-      setNotice(result.ok ? '' : result.error)
-    } catch (cause) {
-      if (!mounted.current || requestSeq.current !== seq) return
-      setNotice(describe(cause))
-    } finally {
-      if (mounted.current && requestSeq.current === seq) setBusy(false)
-    }
-  }, [])
+      setReportPage(next)
+    })
+  }, [pageLoader])
+  const loadReport = React.useCallback((options: Partial<{ query: string; page: number; size: number }> = {}) => {
+    setNotice('')
+    return pageLoader.load({ ...pageLoader.get().target, ...options })
+  }, [pageLoader])
+  const uploaded = React.useRef<Record<string, string>>({})
 
   // 「本地的审核记录 / 子会话是否已经查过一次」。报告行的主操作标签（AI 审核 / 重新审核）
   // 取决于这份数据，所以**必须先有它再画行**：否则用户会看到「AI 审核」先出现、
@@ -342,6 +334,11 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       setAuditsReady(true)
       const next: Record<string, AuditView> = {}
       for (const record of result.audits) next[record.key] = record
+      for (const record of result.audits) {
+        if (record.uploadedAt !== '' && uploaded.current[record.key] !== undefined
+        && uploaded.current[record.key] !== record.uploadedAt) void pageLoader.refresh(record.seqNo)
+      }
+      uploaded.current = Object.fromEntries(result.audits.map((record) => [record.key, record.uploadedAt]))
       setAudits(next)
       setActiveKey(result.active.key)
       setActiveChildId(result.active.childId)
@@ -350,7 +347,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       // 轮询失败不改状态：下一轮会自愈，把界面清空反而更糟。
       void cause
     }
-  }, [])
+  }, [pageLoader])
 
   // 首次进入：boot（宿主版本 / 协议代数 / 已登记父级）+ 环境自检。
   // 侧栏入口也会 refresh 这两个 store，store 内部做并发去重，所以整页只发一次真实请求。
@@ -393,10 +390,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     if (module !== 'audit' || !envOk) return undefined
     void refreshAudits()
     void loadReport()
-    void loadCloud(false)
     const timer = setInterval(() => { void refreshAudits() }, POLL_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [module, envOk, refreshAudits, loadReport, loadCloud])
+    return () => { clearInterval(timer); pageLoader.cancel() }
+  }, [module, envOk, refreshAudits, loadReport, pageLoader])
 
   /**
    * 「进入报告审核」。
@@ -424,18 +420,42 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     })
   }
 
+  /**
+   * 打开一份**已签名**的报告链接。
+   *
+   * 2026-10-11 用户实测「点查看报告后浏览器很慢」：原来这条链路是**两次串行的提权进程**
+   * （`ossutil sign` → `open <url>`）。现在第②步交给客户端：
+   *   1. `oss-link({ open: false })` 只拿链接（宿主一个进程都不起）；
+   *   2. 客户端 `window.open` → 桌面端主进程转 `shell.openExternal` → 系统默认浏览器；
+   *   3. 被弹窗拦截（`window.open` 返回 null）**或**宿主自作主张已经打开了（旧宿主
+   *      忽略 `open:false`、回 `opened: true`）时，按对应分支收尾 —— 绝不重复开两个窗口。
+   */
+  const openReportLink = async (key: string): Promise<void> => {
+    try {
+      const signed = await workbenchApi.ossLink({ key, open: false })
+      if (signed.ok !== true || String(signed.url ?? '') === '') {
+        const note = openReportNotice(signed)
+        if (note !== '') setNotice(note)
+        return
+      }
+      // 旧宿主不认 `open:false`：它已经自己打开了，客户端不能再开一次。
+      if (signed.opened === true) return
+      if (openSignedUrl(String(signed.url))) return
+      // 被浏览器拦住：退回宿主打开（老宿主与新宿主都支持这条路径）。
+      const fallback = await workbenchApi.ossLink({ key })
+      const note = openReportNotice(fallback)
+      if (note !== '') setNotice(note)
+    } catch (cause: unknown) {
+      setNotice(describe(cause))
+    }
+  }
+
   /** 抽屉里「查看更多审核依据」的动作：打开这一行的交付件 HTML（没有就不给入口）。 */
   const reportOpenerOf = (key: string): (() => void) | undefined => {
     const cloud = ossIndex[key]
     if (cloud === undefined || cloud.htmlKey === '') return undefined
     const htmlKey = cloud.htmlKey
-    return () => {
-      void workbenchApi.ossLink({ key: htmlKey })
-        // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
-        // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
-        .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
-        .catch((cause: unknown) => { setNotice(describe(cause)) })
-    }
+    return () => { void openReportLink(htmlKey) }
   }
 
   /**
@@ -445,6 +465,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    * 推迟到动画之后；重新打开会取消上一次的计时器，避免"关到一半又打开"时被中途卸载。
    */
   const closeDrawer = React.useCallback((): void => {
+    drawerRequest.current++
     setDrawerClosing(true)
     if (drawerTimer.current !== null) window.clearTimeout(drawerTimer.current)
     drawerTimer.current = window.setTimeout(() => {
@@ -455,6 +476,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   }, [])
 
   const openAuditInfo = async (key: string, cloud: CloudItem): Promise<void> => {
+    const request = ++drawerRequest.current
+    const epoch = pageLoader.get().epoch
+    const current = (): boolean => mounted.current && request === drawerRequest.current && epoch === pageLoader.get().epoch
     // 上一次的关闭动画还没跑完就又打开了：取消卸载，直接换成新的内容。
     if (drawerTimer.current !== null) { window.clearTimeout(drawerTimer.current); drawerTimer.current = null }
     setDrawerClosing(false)
@@ -465,9 +489,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     }
     try {
       const result = await workbenchApi.ossResult({ key: cloud.jsonKey })
+      if (!current()) return
       setDrawer({ key, info: result.info, error: result.ok ? '' : result.error })
     } catch (cause) {
-      setDrawer({ key, info: null, error: describe(cause) })
+      if (current()) setDrawer({ key, info: null, error: describe(cause) })
     }
   }
 
@@ -576,21 +601,20 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     /** 审核记录查过没有 —— 报告页据此决定"现在能不能画行"（见 ReportPaneState 注释）。 */
     auditsReady,
     ossIndex,
-    ossIndexError: ossError,
-    ossLoading,
-    cloudSearchSeqNo: cloudSearch.seqNo,
-    cloudSearchItems: cloudSearch.items,
-    cloudSearchError: cloudSearch.error,
-    cloudSearchBusy: cloudSearch.busy,
-    cloudSearchDone: cloudSearch.done,
+    ossIndexError: reportPage.ossError,
+    ossLoading: reportPage.ossLoading,
+    remote: reportPage.remote,
+    pageEpoch: reportPage.epoch,
+    stale: reportPage.stale,
+    pageError: reportPage.pageError,
     formName: pending?.formName ?? '',
-    query,
-    page: pending?.page ?? page,
+    query: reportPage.target.query,
+    page: pending?.page ?? reportPage.target.page,
     pageSize: pending?.size ?? 20,
     total: pending?.total ?? 0,
     filterMode: pending?.filterMode ?? '',
     activeKey,
-    escalateAvailable,
+    escalateAvailable: reportPage.escalateAvailable,
     handoff,
     notice,
     childAliveHint,
@@ -761,9 +785,67 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
 
       {!awaitingEnv && (module === 'env' || env === null) ? envPane : null}
 
+      {/* 「报告审核」模块 = **一张纸**（唯一一层 Workspace Surface）+ 纸内顶部的两个页签。
+          页签在纸里，所以它下面**不会**再出现一条内容框的描边。 */}
       {module === 'audit' && env !== null
-        ? (envOk
-            ? <ReportPane
+        ? <div className={C.surface}>
+            {/* 页签条沿用本仓既有 token（pane-head 的位置留白 + 分段式选中态）。
+                左侧是**现有页签**，右侧新增「本地审核」：两者流程完全独立，
+                所以本地审核**不要求 envOk**（环境没过也能用），报告审核那一侧照旧。 */}
+            <div className={C.paneHead}>
+              <div
+                className={LOCAL_AUDIT_CLASSES.tablist}
+                role="tablist"
+                aria-orientation="horizontal"
+                aria-label={zhCN.auditTabsLabel}
+              >
+                {LOCAL_AUDIT_TABS.map((key) => <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  id={`crwu-audit-tab-${key}`}
+                  aria-selected={auditTab === key}
+                  aria-controls={`crwu-audit-tabpanel-${key}`}
+                  tabIndex={auditTab === key ? 0 : -1}
+                  ref={(element) => { tabRefs.current[key] = element }}
+                  className={[LOCAL_AUDIT_CLASSES.tab, auditTab === key ? LOCAL_AUDIT_CLASSES.tabOn : ''].filter((item) => item !== '').join(' ')}
+                  onClick={() => { setAuditTab(key) }}
+                  onKeyDown={onTabKeyDown}
+                >{localAuditTabLabel(key)}</button>)}
+              </div>
+            </div>
+            {/* 两个 tabpanel 元素**都在 DOM 里**（`aria-controls` 因此在任何时刻都指向真实节点，
+                读屏不会引用到不存在的 id）。非选中的那个是 `hidden` 空壳：既满足语义，
+                又不会把重的页面挂起来 —— 报告审核离开这一页之后不再拉数据，本地审核的状态机
+                本来就在 `apply()` 里（切回来仍是同一份选择与提示词）。 */}
+            <div
+              id="crwu-audit-tabpanel-local"
+              role="tabpanel"
+              aria-labelledby="crwu-audit-tab-local"
+              hidden={auditTab !== 'local'}
+              className={C.tabPanel}
+            >
+              {auditTab === 'local'
+                // 本地审核是单列滚动布局，不重复画 24px 的页头（身份由上面那行页签说明）。
+                ? <LocalAuditPane
+                    services={props.services}
+                    {...(props.localAudit === undefined ? {} : { controller: props.localAudit })}
+                    hostStale={hostStale}
+                    workspacePath={env?.workspace.path ?? ''}
+                    workspaceId={env?.workspace.id ?? ''}
+                  />
+                : null}
+            </div>
+            <div
+              id="crwu-audit-tabpanel-report"
+              role="tabpanel"
+              aria-labelledby="crwu-audit-tab-report"
+              hidden={auditTab !== 'report'}
+              className={C.tabPanel}
+            >
+              {auditTab === 'report'
+                ? (envOk
+                    ? <ReportPane
                 state={reportState}
                 gating={gating}
                 workspace={{ id: env?.workspace.id ?? '', path: env?.workspace.path ?? '' }}
@@ -779,12 +861,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                   // 用户还能在左侧列表里点那条会话。`openSession` 自己也会调这一句，幂等。
                   props.services.layout?.selectPanel?.(null)
                 }}
-                onSearch={(next) => { setQuery(next); setPage(1); void loadReport(pendingArgs(next, 1)) }}
-                onGoPage={(next) => { setPage(next); void loadReport(pendingArgs(query, next)) }}
-                onRefreshPending={() => { void loadReport(pendingArgs(query, page)) }}
-                onRefreshCloud={() => { void loadCloud(true) }}
-                onSearchCloud={(seqNo) => { void searchCloud(seqNo) }}
-                onClearCloudSearch={() => { setCloudSearch({ seqNo: '', items: [], error: '', busy: false, done: false }) }}
+                onSearch={(next) => { void loadReport({ query: next, page: 1 }) }}
+                onGoPage={(next) => { void loadReport({ page: next }) }}
+                onRefreshPending={() => { void loadReport() }}
+                onRetryQuery={(seqNo) => { void pageLoader.retry(seqNo) }}
                 onStart={(task, retry) => {
                   const key = task.seqNo !== '' ? task.seqNo : task.name
                   setAuditBusy(key)
@@ -826,6 +906,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                     .finally(() => { setStopBusy(false) })
                 }}
                 stopRequestedAt={stopRequestedAt}
+                openingKey={openingKey}
                 onRefreshStatus={() => { void refreshAudits() }}
                 onCopyDiagnostics={(key) => { copyStopDiagnostics(key) }}
                 onRetryUpload={(key) => {
@@ -834,18 +915,17 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                     .then((result) => {
                       setNotice(result.ok ? '' : result.error)
                       // 上传成功才重新列举云端清单。
-                      if (result.ok) void loadCloud(true)
+                      if (result.ok) void pageLoader.refresh(key)
                       return refreshAudits()
                     })
                     .catch((cause: unknown) => { setNotice(describe(cause)) })
                     .finally(() => { setRetryBusy(false) })
                 }}
                 onOpenCloud={(key) => {
-                  void workbenchApi.ossLink({ key })
-                    // 判据在 `openReportNotice` 里（纯函数、可单测）：`ok` 只代表签名成功，
-                    // 「打开浏览器」失败时也必须出声，否则用户只看到「点了没反应」。
-                    .then((result) => { const note = openReportNotice(result); if (note !== '') setNotice(note) })
-                    .catch((cause: unknown) => { setNotice(describe(cause)) })
+                  // 立刻进入「正在打开…」：签名 + 拉起浏览器这几百毫秒里按钮不能看起来没反应，
+                  // 也不能被重复点（同一个 key 只允许一次在飞）。
+                  setOpeningKey(key)
+                  void openReportLink(key).finally(() => { setOpeningKey('') })
                 }}
                 onOpenLocalHtml={(key) => {
                   const record = audits[key]
@@ -879,28 +959,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                 }}
                 handoffCopied={handoffCopied}
                 onHandoffCopied={setHandoffCopied}
-                onEscalateRetry={() => {
-                  setEscalateAvailable(false)
-                  setBusy(true)
-                  // 协议 18：不再提交 `escalate` —— 提权由操作身份决定，不是调用方的参数。
-                  // 这个按钮现在做的是"允许本机访问之后再取一次"，失败时 Host 的原文会说清去干什么。
-                  void workbenchApi.pending({
-                    ...(query === '' ? {} : { query }),
-                    page: reportState.page,
-                    size: reportState.pageSize,
-                  }).then((result) => {
-                    setPending(result)
-                    setEscalateAvailable(result.escalateAvailable === true)
-                    setNotice(result.ok ? '' : result.error)
-                  }).catch((cause: unknown) => { setNotice(describe(cause)) })
-                    .finally(() => { setBusy(false) })
-                }}
+                onEscalateRetry={() => { void loadReport() }}
                 onOpenPath={(path) => {
                   void workbenchApi.openPath({ path })
                     .then((result) => { if (!result.ok) setNotice(result.error) })
                 }}
               />
-            : auditGate)
+                    : auditGate)
+                : null}
+            </div>
+          </div>
         : null}
     </div>
 

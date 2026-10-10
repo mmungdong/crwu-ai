@@ -119,12 +119,26 @@ export function Meter(props: { ratio: number; bad?: boolean }): React.ReactEleme
 
 export interface NoticeProps {
   tone: 'warn' | 'ok'
+  /**
+   * `alert` = 这条是**失败/阻断**，读屏必须立刻播报；`status` = 一般状态变化。
+   *
+   * 不默认成 `alert`：Notice 也用于"宿主是旧构建，建议重启"这类**不是错误**的说明，
+   * 全部播报会变成噪音。错误调用点显式传 `role="alert"`。
+   */
+  live?: 'alert' | 'status'
   children?: React.ReactNode
 }
 
 export function Notice(props: NoticeProps): React.ReactElement {
-  const tone = props.tone === 'ok' ? C.noticeOk : C.noticeWarn
-  return <div className={`${C.notice} ${tone}`}>{props.children}</div>
+  const className = `${C.notice} ${props.tone === 'ok' ? C.noticeOk : C.noticeWarn}`
+  // 三个分支写开（不用展开运算符）：JSX 属性类型对联合展开不友好，而这里本来就只有三种形态。
+  if (props.live === 'alert') {
+    return <div className={className} role="alert" aria-live="assertive">{props.children}</div>
+  }
+  if (props.live === 'status') {
+    return <div className={className} role="status" aria-live="polite">{props.children}</div>
+  }
+  return <div className={className}>{props.children}</div>
 }
 
 export interface ButtonProps {
@@ -133,6 +147,14 @@ export interface ButtonProps {
   disabled?: boolean
   small?: boolean
   title?: string
+  /**
+   * 禁用/忙碌的**可读原因**（指向页面上那段可见文字的元素 id）。
+   *
+   * 只用 `title` 不够：触屏与读屏对 `title` 的支持不稳，而"为什么不能点"必须能被读出来。
+   */
+  ariaDescribedBy?: string
+  /** 异步进行中：设置 `aria-busy` 并锁住点击（避免重复触发）。 */
+  busy?: boolean
   onClick?: () => void
 }
 
@@ -140,12 +162,16 @@ export interface ButtonProps {
 export function Button(props: ButtonProps): React.ReactElement {
   const tone = props.tone === 'primary' ? C.btnPrimary : (props.tone === 'warn' ? C.btnWarn : '')
   const classes = [C.btn, tone, props.small === true ? C.btnSmall : ''].filter((item) => item !== '').join(' ')
+  const described = props.ariaDescribedBy === undefined ? {} : { 'aria-describedby': props.ariaDescribedBy }
+  const busy = props.busy === true ? { 'aria-busy': true } : {}
   return <button
     className={classes}
     type="button"
-    disabled={props.disabled === true}
+    disabled={props.disabled === true || props.busy === true}
     title={props.title ?? ''}
-    onClick={props.onClick}
+    {...described}
+    {...busy}
+    onClick={props.busy === true ? undefined : props.onClick}
   >{props.label}</button>
 }
 

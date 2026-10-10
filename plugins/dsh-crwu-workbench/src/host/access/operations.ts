@@ -79,6 +79,7 @@ export type LocalAccessOperation =
   | 'system.case-file.read'
   | 'system.case-file.write'
   | 'system.workspace-directory.read'
+  | 'system.local-audit-material.snapshot'
   | 'python.script.run'
 
 export interface LocalAccessDescriptor {
@@ -155,6 +156,7 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'system.case-file.read',
   'system.case-file.write',
   'system.workspace-directory.read',
+  'system.local-audit-material.snapshot',
   'python.script.run',
 ] as const satisfies readonly LocalAccessOperation[]
 
@@ -321,8 +323,19 @@ export const LOCAL_ACCESS_OPERATIONS = {
     capability: 'system-integration', transport: 'shell', privileged: true,
     allowedSources: [...AUDIT_SOURCES, 'panel'],
   },
-  // 审核子代理跑**本轮案例目录内**的技能脚本（DSH 自带 Python）。
+  // **本地审核的输入快照**（协议 28）：读用户在界面上选中的本机文件，复制进临时快照目录。
   //
+  // 为什么是特权：用户选的文件在自己的任意目录里（通常在会话 cwd 之外），而复制目标在
+  // 操作系统临时目录下 —— 两头都在工作区之外。判据与 `system.case-directory.write` 同一条：
+  // 逐次声明，路径由 Host 从**用户选择**推导（模型提交不了路径），做完留一条结构化诊断。
+  //
+  // `transport: 'filesystem'`：这一步不走 shell（递归枚举与逐件复制由 Host 的 fs 完成），
+  // 所以它不需要工作目录，也不该被当成"跑了一条命令"。只给 `panel`：快照是面板在用户点
+  // 「开始本地审核」时建的，审核子代理与宿主后台都不该拿这条去读用户的本机目录。
+  'system.local-audit-material.snapshot': {
+    capability: 'system-integration', transport: 'filesystem', privileged: true, allowedSources: PANEL,
+  },
+  // 审核子代理跑**本轮案例目录内**的技能脚本（DSH 自带 Python）。
   // **不提权**：脚本在案例目录里，而案例目录就在会话 cwd（工作空间）之内 —— 边界之内不需要
   // `danger-full-access`。反过来正是这条"不提权"让命令**落在受限沙箱里**，于是
   // `windowsCaptureCommand` 会给它套上那层临时文件捕获：Windows 的 restricted-token runner

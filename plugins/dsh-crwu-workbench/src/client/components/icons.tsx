@@ -100,6 +100,36 @@ export function WarnIcon(props: IconProps): React.ReactElement {
   </svg>
 }
 
+export function InfoIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <circle cx={12} cy={12} r={8.5} />
+    <path d="M12 10.8v5.4M12 7.7h.01" />
+  </svg>
+}
+
+/** 文件夹：本地审核的「还没有选择文件」空态与文件夹行用它（同一枚图形，尺寸不同）。 */
+export function FolderIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M3.5 7.3c0-.9.7-1.6 1.6-1.6h3.4c.5 0 1 .2 1.3.6l1 1.2h6.6c.9 0 1.6.7 1.6 1.6v8.3c0 .9-.7 1.6-1.6 1.6H5.1c-.9 0-1.6-.7-1.6-1.6Z" />
+    <path d="M3.5 10.4h17" />
+  </svg>
+}
+
+/** 关闭 / 移除：一个 X（本地审核里"移除这个文件"的那枚图标）。 */
+export function CloseIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M6.4 6.4 17.6 17.6M17.6 6.4 6.4 17.6" />
+  </svg>
+}
+
+/** 单个文件：一份带折角的纸（本地审核的已选文件行）。 */
+export function FileIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M6.6 3.5h6.9L18.4 8.4v11.3c0 .7-.6 1.3-1.3 1.3H6.6c-.7 0-1.3-.6-1.3-1.3V4.8c0-.7.6-1.3 1.3-1.3Z" />
+    <path d="M13.3 3.7v4.9h4.9" />
+  </svg>
+}
+
 /**
  * 刷新：一段带箭头的整圆。
  *

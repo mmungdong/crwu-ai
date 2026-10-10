@@ -130,6 +130,17 @@ export interface LocalAccessBroker {
   startShell(call: LocalAccessCall, command: string, options?: BrokerShellOptions): Promise<ShellStartResult>
   /** 写一个**目标种类与路径都必须对得上**的凭据 / 状态文件。 */
   writeText(call: LocalAccessCall, target: BrokerFsTarget, content: string): Promise<BrokerFsResult>
+  /**
+   * 记一条**不走 shell、也不走 `writeText`** 的本机访问事实。
+   *
+   * 为什么需要它：本地审核的输入快照（协议 28）由 Host 自己的 fs 完成（递归枚举 + 逐件复制），
+   * 既不是一条命令、也不是"写一个固定路径的凭据文件"。没有这条 API 时，那一步会在诊断里
+   * **完全不存在** —— 而"我点了开始本地审核、什么都没发生"正是要靠诊断回答的问题。
+   *
+   * 调用方**必须先 `authorize()` 通过**（授权判据只有一处）；这里只负责留痕，
+   * 不重新判权限，也不接受路径（脱敏口径与 shell 路径一致：只有操作名、来源与类别）。
+   */
+  note(call: LocalAccessCall, options?: { errorClass?: AccessErrorClass; summary?: string }): void
   /** 当前授权收据的视图（诊断与界面共用一个事实）。 */
   consent(): LocalAccessConsentView
   /** 最近的结构化诊断（新的在前）。 */
@@ -255,6 +266,19 @@ export function createLocalAccessBroker(deps: LocalAccessBrokerDeps): LocalAcces
     consent: consentOf,
     diagnostics: () => diagnostics.list(),
     lastDiagnostic: () => diagnostics.list()[0] ?? null,
+
+    note(call, options = {}) {
+      const descriptor = localAccessDescriptorOf(call.operation)
+      const requested = descriptor?.privileged === true ? 'danger-full-access' : ''
+      // 没有起进程（`processStarted: false`）：诊断里"进程起没起来"是计划里那个布尔，
+      // 而这一步根本没有进程 —— 报成 true 会让排障的人去找一条不存在的命令。
+      record(
+        { operation: call.operation, source: call.source, ...(options.summary === undefined ? {} : { summary: options.summary }) },
+        options.errorClass ?? '',
+        { requested, resolved: '', ran: '', denied: options.errorClass === 'sandbox-denied', runnerFailed: false },
+        false,
+      )
+    },
 
     async runShell(call, command, options = {}) {
       const descriptor = localAccessDescriptorOf(call.operation)

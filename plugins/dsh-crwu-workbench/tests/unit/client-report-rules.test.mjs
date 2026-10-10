@@ -339,3 +339,21 @@ test('openReportNotice names both failure kinds and stays quiet on success', () 
   assert.equal(openReportNotice({ ok: false, error: '对象不在配置的 OSS 前缀内' }), '对象不在配置的 OSS 前缀内')
   assert.equal(openReportNotice({ ok: false, error: '' }), '打开报告失败', '空原因也要给一句能看的话')
 })
+
+
+test('single report rows gate unknown OSS history and merge JSON-only result actions', () => {
+  const json = { seqNo: SEQ, files: [], htmlKey: '', jsonKey: `crwu/audit/${SEQ}/审核结果.${SEQ}.json` }
+  const view = buildRows([TASK], {}, { [SEQ]: json }, GATING, { [SEQ]: { status: 'ready', item: json, error: '' } })[0]
+  assert.equal(primaryActionOf(view).label, '重新审核')
+  assert.equal(primaryActionOf(view).confirm, true)
+  assert.ok(menuActionsOf(view).some((item) => item.id === 'audit-info'))
+  for (const id of ['raw-artifact', 'report-discuss']) assert.ok(menuActionsOf(view).some((item) => item.id === id))
+  for (const status of ['loading', 'failed', 'invalid']) {
+    const row = buildRows([TASK], {}, {}, GATING, { [SEQ]: { status, item: null, error: 'failed' } })[0]
+    assert.equal(primaryActionOf(row).disabled, true)
+    assert.equal(menuActionsOf(row).some((item) => item.id === 'retry-query'), status === 'failed')
+  }
+  const running = buildRows([TASK], { [SEQ]: audit({ status: 'running', childAlive: true, childId: 'c' }) }, {}, GATING,
+    { [SEQ]: { status: 'failed', item: null, error: 'failed' } })[0]
+  assert.equal(menuActionsOf(running).find((item) => item.id === 'stop').disabled, false)
+})

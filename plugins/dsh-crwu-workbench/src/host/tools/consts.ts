@@ -78,6 +78,9 @@ export const CRWU_BUSINESS_TOOLS = [
   // 技能脚本的执行入口（2026-09-30）。**注册面**里有它，但它不进 `REQUIRED_AUDIT_TOOLS`：
   // 审核能不能启动不该取决于"脚本执行工具在不在"，而要用它的时候自然会用。
   'crwu_run_python_script',
+  // 本地审核的**一次性交接认领**（协议 28）。同样不进审核必需集：本地审核没有氚云记录、
+  // 没有审核根，它的门禁是 handoff 本身（存在 / 未用 / 未过期 / 快照仍在）。
+  'crwu_audit_local_claim',
 ] as const
 
 export const TOOL_NAMES = {
@@ -92,6 +95,7 @@ export const TOOL_NAMES = {
   dingtalkArchive: 'crwu_audit_dingtalk_archive',
   dingtalkNotifySelf: 'crwu_audit_dingtalk_notify_self',
   runPythonScript: 'crwu_run_python_script',
+  localAuditClaim: 'crwu_audit_local_claim',
 } as const
 
 /** 自研审核链路随包发布的三个二进制。 */

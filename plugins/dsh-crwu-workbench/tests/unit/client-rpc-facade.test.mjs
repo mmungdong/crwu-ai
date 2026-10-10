@@ -38,6 +38,14 @@ test('every facade method posts to the same-origin route with its operation name
   assert.deepEqual(calls[0].payload.args, {}, '无参数操作也必须发一个空对象，不能让 Host 收到 undefined')
 })
 
+test('page batch facade preserves serials and cancellation on the same oss-index operation', async () => {
+  const calls = stubFetch({ ok: true, error: '', results: {} })
+  const controller = new AbortController()
+  await workbenchApi.ossBatchIndex({ seqNos: ['2026-301705-LX1'] }, { signal: controller.signal })
+  assert.deepEqual(calls[0].payload, { op: 'oss-index', args: { seqNos: ['2026-301705-LX1'] } })
+  assert.equal(calls[0].init.signal, controller.signal)
+})
+
 test('the facade sends the declared operation for every method', async () => {
   const calls = stubFetch({ ok: true })
   const args = {

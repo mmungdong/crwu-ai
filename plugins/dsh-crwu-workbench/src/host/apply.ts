@@ -23,6 +23,12 @@ import { H3yunFormResolver } from './h3yun/form.ts'
 import { createPythonRuntimeResolver } from './runtime/python.ts'
 import { registerCrwuTools } from './tools/register.ts'
 import { createDiscussionScopeRegistry } from './audit/discussion-scope.ts'
+import { createLocalAuditRegistry } from './local-audit/handoff.ts'
+import { nodeSnapshotIo } from './local-audit/snapshot.ts'
+import { nodeLocalAuditFs } from './local-audit/scan.ts'
+
+/** 过期快照的兜底清理间隔（面板每次准备也会顺手清一次）。 */
+const LOCAL_AUDIT_SWEEP_INTERVAL_MS = 10 * 60_000
 
 /** 装配 DSH 工作台 Host 插件。 */
 export function apply(ctx: Context, pluginConfig: PluginConfig): void {
@@ -73,10 +79,25 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
    * 所以这份白名单必须挂在实例上（模块级会跨插件实例串味，落盘会引出新的暴露面）。
    */
   const discussionScopes = createDiscussionScopeRegistry()
+  /**
+   * **本地审核的一次性 handoff 与案例 scope**（协议 28）。同样是进程内、随插件生命周期释放：
+   * 产品口径是「审核结果只存在于这次对话里」，所以交接记录不落盘、不做历史、重启即失效。
+   * 它的案例目录在操作系统临时目录下，普通会话判据覆盖不到，因此必须有自己的注册表。
+   */
+  const localAudit = createLocalAuditRegistry()
+  const localAuditIo = nodeSnapshotIo()
+  // 过期 / 用完的快照目录要清掉：临时目录不该无限长。定时器随插件卸载释放；
+  // 面板每次调用 `local-audit-start` 也会顺手清一次（见 `ops/core.ts`），所以这里只是兜底。
+  const cleanupTimer = setInterval(() => {
+    void localAudit.sweep(localAuditIo).catch(() => undefined)
+  }, LOCAL_AUDIT_SWEEP_INTERVAL_MS)
+  cleanupTimer.unref?.()
+  ctx.effect(() => () => { clearInterval(cleanupTimer) }, 'crwu-workbench: local audit sweep')
   // 自研审核链路的全部业务能力都以结构化 Tool 交付（`crwu_*`）。注册进 DSH 的注册表，
   // schema 自动进 system prompt，并走同一条审批/沙箱/取消 pipeline。
   ctx.effect(() => registerCrwuTools(ctx, {
     ctx, config, state, world, form, access, discussionScopes,
+    localAudit, localAuditIo,
     // 与审核启动、环境自检共用同一个 Python 解析器（同一份缓存）：`crwu_run_python_script`
     // 绝不自己去猜解释器。
     python,
@@ -99,7 +120,7 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     config,
     state,
     world,
-    { form, python, access, discussionScopes },
+    { form, python, access, discussionScopes, localAudit, localAuditFs: nodeLocalAuditFs(), localAuditIo },
     { update: update.operations },
   )
   ctx.effect(() => registerRpcRoute(ctx, operations), 'crwu-workbench: rpc route')

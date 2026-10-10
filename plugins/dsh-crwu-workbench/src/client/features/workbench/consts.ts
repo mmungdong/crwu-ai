@@ -3,6 +3,8 @@
  *
  * 为什么样式随 `lib/client.js` 一起交付，而不是独立 CSS：包形态还没接入 DSH 官方的
  * CSS Module 虚拟加载器，独立 CSS 会漏发。样式由 `styles.ts` 随 Cordis 生命周期插入。
+ * 本地审核（协议 28）新增的类名与样式在 `features/local-audit/consts.ts` 里，
+ * 由本文件末尾拼进同一条样式表 —— 交付通道只有一条。
  *
  * ## 视觉语言（办公 + Apple，2026-09-22 用户指定的口径）
  *
@@ -23,6 +25,8 @@
  * 圆点、胶囊与左侧一条细边上。所有过渡都限制在 background/color/box-shadow/transform，
  * 时长 120~160ms，不动布局属性（width/height 过渡会引起重排抖动）。
  */
+import { LOCAL_AUDIT_STYLE_TEXT } from '../local-audit/consts.ts'
+
 export const WORKBENCH_CLASSES = {
   root: 'crwu-audit-root',
   header: 'crwu-audit-header',
@@ -117,10 +121,6 @@ export const WORKBENCH_CLASSES = {
   evalLink: 'crwu-audit-eval-link',
   evalArrow: 'crwu-audit-eval-arrow',
 
-  tabs: 'crwu-audit-tabs',
-  tab: 'crwu-audit-tab',
-  tabOn: 'crwu-audit-tab-on',
-  tabCount: 'crwu-audit-tab-count',
 
   /** 页面头：标题 + 副标题 + 右侧计数（Apple 的 Workspace Header 语汇）。 */
   pageHead: 'crwu-audit-page-head',
@@ -139,20 +139,16 @@ export const WORKBENCH_CLASSES = {
   ghost: 'crwu-audit-ghost',
   /** 刷新进行中的图标旋转（列表保持显示，只转图标）。 */
   ghostBusy: 'crwu-audit-ghost-busy',
-  /** 流水号：平时的等宽文字 + 悬停才浮出的复制图标。 */
-  seq: 'crwu-audit-seq',
-  seqCopy: 'crwu-audit-seq-copy',
-  seqCopyOn: 'crwu-audit-seq-copy-on',
   /** 空态：一行主文案 + 一行轻量说明（不画插画）。 */
   empty: 'crwu-audit-empty',
   emptyHint: 'crwu-audit-empty-hint',
   /** AI 审核列表的交付件列：业务语义（审核报告 / 审核数据），不暴露 OSS 原始路径。 */
   resultFiles: 'crwu-audit-result-files',
   resultCount: 'crwu-audit-result-count',
-  fileChip: 'crwu-audit-file-chip',
-  colResSeqNo: 'crwu-audit-col-res-seq-no',
-  colResFiles: 'crwu-audit-col-res-files',
-  colResAction: 'crwu-audit-col-res-action',
+  resultEmptyTag: 'crwu-audit-result-empty',
+  resultInfo: 'crwu-audit-result-info',
+  resultLoading: 'crwu-audit-result-loading',
+  resultSpinner: 'crwu-audit-result-spinner',
   /** 分页的「首页 / 上一页 / 下一页 / 末页」四枚导航按钮（图标 + 可访问名）。 */
   pagerNav: 'crwu-audit-pager-nav',
 
@@ -160,6 +156,15 @@ export const WORKBENCH_CLASSES = {
   surface: 'crwu-audit-surface',
   /** 大框顶部那一行：下划线式页签（+ 各视图自己的工具条仍在正文里）。 */
   paneHead: 'crwu-audit-pane-head',
+  /**
+   * 页签下面那一块内容（报告审核 / 本地审核各一个）。
+   *
+   * 它存在的唯一理由是**把高度接下去**：`.crwu-audit-surface` 是 `height:100%` 的 flex 列，
+   * 而它是页签条的兄弟、盒子高度是 auto —— 没有这一层，里面那层 surface 的 `height:100%`
+   * 会退化成 auto，`.crwu-audit-pane-main` 的 `overflow:auto` 就再也滚不起来
+   * （列表长的时候会被外层 `overflow:hidden` 直接裁掉）。
+   */
+  tabPanel: 'crwu-audit-tab-panel',
   /** 大框身体：左数据 + 右 AI 讨论。 */
   paneBody: 'crwu-audit-pane-body',
   paneMain: 'crwu-audit-pane-main',
@@ -245,6 +250,7 @@ export const WORKBENCH_CLASSES = {
   colSeqNo: 'crwu-audit-col-seq-no',
   colRisk: 'crwu-audit-col-risk',
   colReview: 'crwu-audit-col-review',
+  colAudit: 'crwu-audit-col-ai',
   colModified: 'crwu-audit-col-modified',
   colAction: 'crwu-audit-col-action',
   tableWrap: 'crwu-audit-table-wrap',
@@ -694,40 +700,6 @@ export const WORKBENCH_STYLE_TEXT = `
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   4. 分段控件（页内：报告列表 / AI 审核列表）
-   ────────────────────────────────────────────────────────────────────
-   轻量 Apple Segmented Workspace Tabs：**容器才有底**（一枚 9px 圆角的浅槽），
-   选中项是槽里浮起来的一块白片（1px 投影），没有下划线、也没有第二重选中状态。
-   这是唯一一处"选中 = 换底色"的控件；页签容器透明 + 品牌色下划线那套已废弃
-   （用户 2026-09-23 口径：不要红色 underline，不要红色下划线 + 底色双重选中）。
-   ──────────────────────────────────────────────────────────────────── */
-.crwu-audit-tabs {
-  display: inline-flex; gap: 2px; padding: 3px; margin: 0;
-  border-radius: 9px; background: var(--crwu-tab-track); border: none;
-}
-.crwu-audit-tab {
-  height: 34px; padding: 0 12px; border: none; border-radius: 7px;
-  background: transparent; color: var(--crwu-tab-text);
-  font-family: inherit; font-size: 13px; font-weight: 500; line-height: 18px;
-  cursor: pointer;
-  transition: background 120ms var(--crwu-ease), color 120ms var(--crwu-ease),
-    box-shadow 160ms var(--crwu-ease);
-}
-.crwu-audit-tab:hover { background: var(--crwu-tab-hover); color: var(--crwu-tab-text-hover); }
-.crwu-audit-tab:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
-/* 选中：白片 + 极轻投影。hover 时不再追加别的层（禁止 hover 出红线 / 大灰块 / 位移）。 */
-.crwu-audit-tab-on,
-.crwu-audit-tab-on:hover {
-  background: var(--crwu-surface); color: var(--crwu-text-primary); font-weight: 600;
-  box-shadow: var(--crwu-shadow-tab);
-}
-.crwu-audit-tab-count {
-  margin-left: 6px; color: var(--crwu-text-tertiary); font-weight: 400;
-  font-variant-numeric: tabular-nums;
-}
-.crwu-audit-tab-on .crwu-audit-tab-count { color: var(--crwu-text-tertiary); }
-
-/* ════════════════════════════════════════════════════════════════════
    5. 卡片与分区
    ────────────────────────────────────────────────────────────────────
    办公风格的关键是「一眼能扫」：卡片只靠 1px 描边 + 最浅一档投影分层，
@@ -808,22 +780,14 @@ export const WORKBENCH_STYLE_TEXT = `
   width: 100%; min-width: 1000px;
   border-collapse: collapse; table-layout: fixed;
 }
-/* 列宽分工：流水号 23% 是**按内容算出来**的下限 —— 26 字符的等宽流水号（13px）约 203px，
-   再加悬停复制图标 22px 与左右 padding 24px；低于这一档就会被从中间截断
-   （它是用户检索用的标识，截断比换行更糟）。更新时间 14% 同理：业务时间改成
-   YYYY-MM-DD HH:mm（16 字符）之后，12% 会把年份截掉 —— 而年份正是不能省的那一段。
-   报告名列吸收剩余宽度，窄列一律 nowrap，整张表严格等于容器宽度、不出现横向滚动。 */
-.crwu-audit-col-name { width: 22%; }
+/* Seven columns share the page width; identifiers and dates stay unwrapped. */
+.crwu-audit-col-name { width: 16%; }
 .crwu-audit-col-seq-no { width: 23%; }
 .crwu-audit-col-risk { width: 6%; }
-.crwu-audit-col-review { width: 12%; }
+.crwu-audit-col-review { width: 10%; }
+.crwu-audit-col-ai { width: 15%; }
 .crwu-audit-col-modified { width: 14%; }
-.crwu-audit-col-action { width: 23%; }
-/* AI 审核列表的三列分工（用户 2026-09-23 口径：38% / 42% / 20%）。
-   它没有独立的表格组件：同一张 .crwu-audit-table 换一份 colgroup 就是另一张表。 */
-.crwu-audit-col-res-seq-no { width: 38%; }
-.crwu-audit-col-res-files { width: 42%; }
-.crwu-audit-col-res-action { width: 20%; }
+.crwu-audit-col-action { width: 16%; }
 /* 表格自己横向滚动，而不是被卡片裁掉：表有 min-width，视口够窄时宁可滚动也不要把列切掉。 */
 .crwu-audit-table-wrap { overflow-x: auto; }
 .crwu-audit-th {
@@ -1672,10 +1636,6 @@ export const WORKBENCH_STYLE_TEXT = `
   --crwu-tech-hover: rgba(0, 0, 0, 0.02);
 
   /* 控件专用面 */
-  --crwu-tab-track: #F2F3F5;
-  --crwu-tab-text: #77787C;
-  --crwu-tab-text-hover: #333438;
-  --crwu-tab-hover: rgba(255, 255, 255, 0.55);
   --crwu-input-bg: #F4F5F6;
   /* 次级控件（刷新 / 小鲸鱼 / ••• / 流水号复制）共用**同一套中性底**：
      用户口径（2026-09-23）：「操作列的按钮颜色不一致，还有刷新按钮」—— 一个填充、一个全透明、
@@ -1724,10 +1684,6 @@ body[data-ds-dark-theme] .crwu-audit-root {
   --crwu-th-text: #8A8B90;
   --crwu-risk-text: #B4B5BA;
 
-  --crwu-tab-track: #1F2023;
-  --crwu-tab-text: #9A9BA0;
-  --crwu-tab-text-hover: #D8D9DD;
-  --crwu-tab-hover: rgba(255, 255, 255, 0.06);
   --crwu-input-bg: #202124;
   /* 次级控件同一套中性底：必须比 --crwu-hover（行悬停 #222326）亮一档，
      否则悬停到那一行时「小鲸鱼 / •••」的底和行底糊成一片（用户报的"颜色不一致"里的一条）。 */
@@ -1793,7 +1749,25 @@ body[data-ds-dark-theme] .crwu-audit-root {
 /* 标题 → Tabs 之间只留 18px（不要巨大的空白）。 */
 .crwu-audit-pane-head {
   flex: none; display: flex; align-items: center; gap: var(--crwu-space-3);
-  padding: 18px var(--crwu-pad-x) 0; border-bottom: none;
+  /* 页签条：顶部 10px 起、左右与正文同一档 padding；**不画整条底边** ——
+     选中态由页签自己的 3px 强调线表达，整条线会被误读成"内容框的上边"。 */
+  padding: 10px var(--crwu-pad-x) 0; border-bottom: none;
+}
+/* 页签下面的内容块：把 surface 的高度接下去（理由见 WORKBENCH_CLASSES.tabPanel）。
+   ⚠️ 里面那个 .crwu-audit-surface 是**报告审核页自己的框**（它单独渲染时要用），
+   （这段注释在模板字符串里，**不能**出现反引号 —— 一个反引号就会把样式字符串截断。）
+   但在这里它已经在同一张纸里了 —— 子页面**只有一层 Workspace Surface**（见 ui-design-guidelines §6.0）。
+   不撤掉的话，它那圈 1px 描边正好落在页签正下方，看起来就是"页签下面有一条横线"（用户实测反馈）。 */
+.crwu-audit-tab-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* ⚠️ hidden 必须自己兜住：两个 tabpanel 现在是**常驻**元素（非选中者是空壳），而 hidden
+   属性只靠 UA 样式表的 display:none —— 上面那条 display:flex 是**作者样式**，优先级更高，
+   会把 hidden 整条盖掉。症状（2026-10-11 用户实测）：切到「报告审核」时，那个空的本地审核页
+   在下面**占掉一块很大的空白**（无头实测 320px 高）。手写这一条比依赖 UA 样式稳。
+   （这段注释在模板字符串里，**不能**出现反引号 —— 一个反引号就会把样式字符串截断。） */
+.crwu-audit-tab-panel[hidden] { display: none; }
+.crwu-audit-tab-panel > .crwu-audit-surface {
+  flex: 1 1 auto; height: auto; min-height: 0;
+  border: 0; border-radius: 0; box-shadow: none;
 }
 .crwu-audit-pane-body { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
 .crwu-audit-pane-main {
@@ -1820,6 +1794,8 @@ body[data-ds-dark-theme] .crwu-audit-root {
   cursor: pointer;
   transition: background 120ms var(--crwu-ease), color 120ms var(--crwu-ease);
 }
+.crwu-audit-search-clear::after { content: ''; position: absolute; inset: -12px; }
+.crwu-audit-search-clear:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
 .crwu-audit-search-clear:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
 .crwu-audit-search-action { display: inline-flex; align-items: center; }
 /* 输入框：默认只有一层比底更浅的填充，**没有黑色边框**；聚焦才浮起白底 + 一圈极轻的环。 */
@@ -1853,20 +1829,6 @@ body[data-ds-dark-theme] .crwu-audit-root {
 .crwu-audit-review-main { font-size: 13px; color: var(--crwu-text-body); white-space: nowrap; }
 
 /* 流水号：13px 等宽；复制图标**只在悬停/聚焦时浮出**，不一直占位。 */
-.crwu-audit-seq { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.crwu-audit-seq .crwu-audit-mono { font-size: 13px; color: var(--crwu-text-mono); }
-.crwu-audit-seq-copy {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px;
-  background: transparent; color: var(--crwu-text-tertiary); cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms var(--crwu-ease), background 120ms var(--crwu-ease), color 120ms var(--crwu-ease);
-}
-.crwu-audit-tbody-row:hover .crwu-audit-seq-copy,
-.crwu-audit-seq-copy:focus-visible { opacity: 1; }
-.crwu-audit-seq-copy:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
-.crwu-audit-seq-copy-on { opacity: 1; color: var(--crwu-risk-b); }
-
 /* 风险等级：**扫描信息**，不是装饰 —— 6px 圆点 + 等级字母，没有底色、没有描边、不是彩色 Tag。 */
 .crwu-audit-risk {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1920,15 +1882,33 @@ body[data-ds-dark-theme] .crwu-audit-root {
 .crwu-audit-menu:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
 .crwu-audit-menu-open, .crwu-audit-menu-open:hover { background: var(--crwu-control-active); color: var(--crwu-text-primary); }
 
-/* ── AI 审核列表：交付件按**业务语义**呈现（审核报告 / 审核数据），不暴露 OSS 原始路径 ── */
-.crwu-audit-result-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.crwu-audit-result-count { margin-right: 2px; font-size: 13px; color: var(--crwu-text-secondary); }
-.crwu-audit-file-chip {
-  display: inline-flex; align-items: center; height: 22px; padding: 0 9px;
-  border: 1px solid var(--crwu-border); border-radius: 6px;
-  background: var(--crwu-surface-subtle); color: var(--crwu-text-secondary);
+/* ── AI 审核结果：默认只给数量，悬停/聚焦信息图标再展开交付件明细 ── */
+.crwu-audit-result-files { display: inline-flex; align-items: center; gap: 7px; }
+.crwu-audit-result-count { font-size: 13px; color: var(--crwu-text-secondary); white-space: nowrap; }
+.crwu-audit-result-empty {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px;
+  border: 1px solid var(--crwu-border); border-radius: 999px;
+  background: var(--crwu-surface-subtle); color: var(--crwu-text-tertiary);
   font-size: 12px; line-height: 1;
 }
+.crwu-audit-result-info {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border: 1px solid var(--crwu-border);
+  border-radius: 999px; background: transparent; color: var(--crwu-text-secondary); font-size: 12px; font-weight: 600;
+  padding: 0;
+  cursor: help; outline: none;
+}
+/* 18px 的视觉对表格密度是对的，但命中区太小：用一层不可见 ::after 往外扩到 44×44。 */
+.crwu-audit-result-info::after { content: ''; position: absolute; inset: -13px; }
+.crwu-audit-result-info:hover, .crwu-audit-result-info:focus-visible { color: var(--crwu-text-primary); border-color: var(--crwu-brand); }
+.crwu-audit-result-info:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-result-loading { display: inline-flex; align-items: center; height: 22px; color: var(--crwu-text-tertiary); }
+.crwu-audit-result-spinner {
+  width: 14px; height: 14px; border: 2px solid var(--crwu-border);
+  border-top-color: var(--crwu-brand); border-radius: 999px; animation: crwu-audit-spin 0.8s linear infinite;
+}
+@keyframes crwu-audit-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .crwu-audit-result-spinner { animation: none; } }
 
 /* ── 空态：一行主文案 + 一行轻量说明，不画插画、不留表格骨架 ──────────────── */
 .crwu-audit-empty {
@@ -2102,12 +2082,14 @@ body[data-ds-dark-theme] .crwu-audit-root {
 /* ── 滚动条美化（报告审核正文的横向 + 纵向）────────────────────────────────
    走 DSH 自带的滚动条 token（--dsh-scrollbar-thumb 由侧栏那种容器注入，
    取不到时退回 --dsw-alias-scrollbar-bg-l2），所以一样跟着主题走、深浅都成立。 */
-.crwu-audit-pane-main,
-.crwu-audit-table-wrap,
-.crwu-audit-body {
-  scrollbar-width: thin;
-  scrollbar-color: var(--dsh-scrollbar-thumb, var(--dsw-alias-scrollbar-bg-l2)) transparent;
-}
+/* ⚠️ 这里**故意不写** scrollbar-width / scrollbar-color（2026-10-11 无头实测后去掉）：
+   Chromium 里只要设了这两个标准属性，下面的 ::-webkit-scrollbar 规则就**整段失效**，
+   滚动条退回**平台样式** —— macOS 默认是 overlay（不滚就不画），于是用户看到的就是
+   「滚动条没了」（内容其实滚得动）。两套都写等于白写：本插件只跑在 Chromium 里，
+   所以留 ::-webkit-scrollbar（10px、始终画出来、跟主题 token 走）。
+   实测：带这两个属性时 offsetWidth - clientWidth = 0，去掉后 = 10。
+   （这段注释在模板字符串里，**不能**出现反引号 —— 一个反引号就会把样式字符串截断。） */
+.crwu-audit-pane-main { scrollbar-gutter: stable; }
 .crwu-audit-pane-main::-webkit-scrollbar,
 .crwu-audit-table-wrap::-webkit-scrollbar,
 .crwu-audit-body::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -2232,3 +2214,6 @@ body[data-ds-dark-theme] .crwu-audit-root {
    （2026-09-30）：内置浏览器登录整体下掉，样式与类名常量同批移除，不留死代码。
    —— 样式文本是模板字符串，注释里**不许出现反引号**（踩过两次，第一次就是在这里）。 */
 `
+  // 本地审核（协议 28）的类名与样式：定义在它自己的模块里，但**必须**并进这一条样式表 ——
+  // 样式随 lib/client.js 一起交付，DSH 没有独立的 CSS 加载通道。
+  + LOCAL_AUDIT_STYLE_TEXT

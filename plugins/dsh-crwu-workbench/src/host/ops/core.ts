@@ -24,8 +24,13 @@ import { sessionWorkspaceInfo } from '../workspace/resolve.ts'
 import { auditRootView } from '../audit/root.ts'
 import { openDiscussionMaterial } from '../audit/discussion-material.ts'
 import type { DiscussionScopeRegistry } from '../audit/discussion-scope.ts'
+import type { LocalAuditRegistry } from '../local-audit/handoff.ts'
+import type { LocalAuditFs } from '../local-audit/scan.ts'
+import type { SnapshotIo } from '../local-audit/snapshot.ts'
+import { localAuditClaim, localAuditStart, localAuditStatus, type LocalAuditDeps } from '../local-audit/ops.ts'
 import { maybeAutoUpload } from '../oss/auto.ts'
 import { ossCredSave, ossIndex, ossLink, ossResult, ossUpload, type OssDeps } from '../oss/ops.ts'
+import { createOssBatchQueue } from '../oss/batch.ts'
 import { reportFiles } from '../report/files.ts'
 import { createUploadWatch } from '../oss/watch.ts'
 import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
@@ -105,6 +110,12 @@ export interface HostResolvers {
   access: LocalAccessBroker
   /** 讨论会话的受限材料范围（协议 23）：`discussion-material-open` 写它，业务 Tool 读它。 */
   discussionScopes: DiscussionScopeRegistry
+  /** 本地审核的一次性 handoff 与案例 scope（协议 28）。 */
+  localAudit?: LocalAuditRegistry
+  /** 本地审核扫描用的文件系统能力（测试注入内存替身）。 */
+  localAuditFs?: LocalAuditFs
+  /** 本地审核快照的 IO（测试注入内存替身）。 */
+  localAuditIo?: SnapshotIo
 }
 
 export function createCoreOperations(
@@ -134,6 +145,8 @@ export function createCoreOperations(
   })
   // 上传看门狗：审核跑完不会回调，只能轮询「有结果就传」。句柄挂在插件实例上。
   const watch = createUploadWatch(ctx, state, ossDeps)
+  const ossBatch = createOssBatchQueue(ossDeps)
+  ctx.effect(() => ossBatch.dispose, 'crwu-workbench: OSS query queue')
   /**
    * 「我是谁」的进程内缓存（面板头部那句问候的姓名）。
    *
@@ -212,6 +225,27 @@ export function createCoreOperations(
   // 四个 update 操作（Task 4）：名字从**真实注入的操作表**推导，声明与实现不会各写一份。
   const updateOperations = extra.update ?? {}
 
+  /**
+   * 本地审核操作的依赖（逐次构造）。
+   *
+   * **不抓快照**：`ctx` / `world` 都是活的服务句柄，构造一次就固化的东西在这里没有意义 ——
+   * 与上面 `ossDeps` 同一条理由。
+   *
+   * 三件依赖缺任何一件时返回 `null`（而不是抛 TypeError）：TS 调用方必须传，
+   * 但 JS / 旧调用点漏传时**失败关闭并说人话**，而不是把一个 `undefined.sweep` 抛到路由层。
+   */
+  const localAuditDeps = (): LocalAuditDeps | null => {
+    const registry = resolvers.localAudit
+    const fs = resolvers.localAuditFs
+    const io = resolvers.localAuditIo
+    if (registry === undefined || fs === undefined || io === undefined) return null
+    return { ctx, access: resolvers.access, state, world, registry, fs, io }
+  }
+  /** 没装配时的失败信封（形状与 `LocalAuditStartView` 兼容，界面按普通错误显示）。 */
+  const localAuditUnwired = {
+    ok: false, error: '本地审核没有装配：本插件实例不能准备本地审核文件', errorKind: 'capability-gap',
+  }
+
   return {
     // Task 4：自助更新四个操作（检查 / 手动检查 / 安装 / 取消）。由 update/ops.ts 组装，
     // 这里只并表；没有注入时就不登记（声明必须跟着实现走）。
@@ -271,6 +305,8 @@ export function createCoreOperations(
           'report-files',
           // 协议 23：报告讨论会话的受限材料登记（新建 / 恢复会话后各登记一次）。
           'discussion-material-open',
+          // 协议 28：本地审核（扫描 / 建快照与 handoff / 认领）。
+          'local-audit-status', 'local-audit-start', 'local-audit-claim',
           // 第 6 层：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是「读技能目录里的文件」）。
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
@@ -456,6 +492,47 @@ export function createCoreOperations(
       scopes: resolvers.discussionScopes,
     }, args),
 
+    /**
+     * **本地审核**（协议 28）。
+     *
+     * 三条操作共用一份依赖：注册表、扫描用的 fs、快照 IO。它们**不判环境门禁** ——
+     * 本地审核的存在意义就是"不需要氚云 / OSS / 工作空间也能审本机文件"；它唯一需要的是
+     * **本机访问授权**，而那一条由 Broker 在自己的操作表里判（`local-audit-start` 内）。
+     */
+    'local-audit-status': async (args) => {
+      const ready = localAuditDeps()
+      if (ready === null) {
+        return {
+          ...localAuditUnwired, fileCount: 0, limit: 30, overLimit: false,
+          readableCount: 0, skippedCount: 0, items: [], skipped: [],
+        }
+      }
+      return await localAuditStatus(ready, args)
+    },
+    'local-audit-start': async (args) => {
+      const ready = localAuditDeps()
+      if (ready === null) {
+        return {
+          ...localAuditUnwired, handoffId: '', prompt: '',
+          providedCount: 0, skippedCount: 0, expiresAt: 0, workspacePath: '', casePath: '', files: [], skipped: [],
+        }
+      }
+      // 顺手清一次过期快照：准备新的一轮时正是清理旧的时候。
+      await ready.registry.sweep(ready.io).catch(() => undefined)
+      return await localAuditStart(ready, args)
+    },
+    /**
+     * 认领。`sessionId` 由**客户端**提交（它刚创建了那条会话，这是它自己的事实），
+     * Tool 侧走的是 `crwu_audit_local_claim`（身份来自 Agent，不经过这里）。
+     */
+    'local-audit-claim': async (args) => {
+      const ready = localAuditDeps()
+      if (ready === null) {
+        return { ...localAuditUnwired, casePath: '', fileCount: 0, skippedCount: 0, files: [], skipped: [] }
+      }
+      return await localAuditClaim(ready, args)
+    },
+
     'report-files': async (args) => await reportFiles(
       {
         ctx,
@@ -470,7 +547,9 @@ export function createCoreOperations(
       },
       args,
     ),
-    'oss-index': async (args) => await ossIndex(await ossDeps(), args),
+    'oss-index': async (args, context) => 'seqNos' in args
+      ? await ossBatch.run(args, context?.signal)
+      : await ossIndex(await ossDeps(), args),
     'oss-result': async (args) => await ossResult(await ossDeps(), args),
     'oss-link': async (args) => await ossLink(await ossDeps(), args),
     'oss-upload': async (args) => {

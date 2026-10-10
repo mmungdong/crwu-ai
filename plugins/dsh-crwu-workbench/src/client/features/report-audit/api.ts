@@ -1,6 +1,8 @@
 import { rpc } from '../../api/client.ts'
 import { createUpdateApi, UPDATE_METHOD_OPERATION, type UpdateApi } from '../update/api.ts'
-import type { AuditView, CloudItem, CredentialPermission, TaskRow } from '../../../shared/types.ts'
+import type {
+  AuditView, CloudItem, CredentialPermission, LocalAuditScanView, LocalAuditStartView, TaskRow, OssBatchIndexResult,
+} from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
 import type {
   AccessDiagnosticsView, AuditRootView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
@@ -216,7 +218,7 @@ export interface WorkbenchApi extends UpdateApi {
   boot: () => Promise<BootResult>
   /** `refresh: true` 由界面「重新自检」传：让宿主刷新 DSH 自带运行时的缓存。 */
   env: (args?: { refresh?: boolean }) => Promise<EnvResult>
-  pending: (args: { query?: string; page?: number; size?: number }) => Promise<PendingResult>
+  pending: (args: { query?: string; page?: number; size?: number }, options?: { signal?: AbortSignal }) => Promise<PendingResult>
   auditStatus: (args?: { keys?: string[]; parentSessionId?: string }) => Promise<AuditStatusResult>
   auditStart: (args: { key: string; seqNo?: string; objectId?: string; project?: string; retry?: boolean }) => Promise<StartResult>
   auditStop: (args?: { childId?: string }) => Promise<StopResult>
@@ -229,9 +231,20 @@ export interface WorkbenchApi extends UpdateApi {
    * 把这一批 `fileId` 记进内存白名单。失败时**不登记**（讨论会话保持原样，也不发 kickoff）。
    */
   discussionMaterialOpen: (args: { sessionId: string; seqNo: string; objectId: string }) => Promise<DiscussionMaterialResult>
+  /**
+   * **本地审核**（协议 28）三条。
+   *
+   * `localAuditStatus` 只服务当前准备流程：把这次选择展开成一份确定的清单（递归、去重、大小、
+   * 是否超限）。它不是全局 sidecar 状态，也没有历史。
+   */
+  localAuditStatus: (args: { selection: string[]; excluded?: string[] }) => Promise<LocalAuditScanView>
+  localAuditStart: (args: { selection: string[]; excluded?: string[]; prompt?: string }) => Promise<LocalAuditStartView>
+  /** 把 handoff 绑到客户端刚创建的那条会话（Tool 侧走 `crwu_audit_local_claim`）。 */
+  localAuditClaim: (args: { handoffId: string; sessionId: string }) => Promise<Record<string, unknown>>
   ossIndex: (args?: { seqNo?: string }) => Promise<OssIndexResult>
+  ossBatchIndex: (args: { seqNos: string[] }, options?: { signal?: AbortSignal }) => Promise<OssBatchIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
-  ossLink: (args: { key: string }) => Promise<OssLinkResult>
+  ossLink: (args: { key: string; open?: boolean }) => Promise<OssLinkResult>
   ossUpload: (args: { key: string }) => Promise<{ ok: boolean; error: string }>
   ossCred: () => Promise<{ ok: boolean; cred: EnvResult['delivery']['ossCred'] }>
   ossCredSave: (args: { accessKeyId: string; accessKeySecret: string; stsToken?: string; endpoint?: string }) => Promise<Record<string, unknown>>
@@ -350,8 +363,8 @@ export interface IfindSaveResult {
 }
 
 /** 把 Host 的应答转成声明的返回类型；失败信封（`ok: false`）交给调用方判断。 */
-async function call<T>(operation: string, args?: unknown): Promise<T> {
-  return await rpc(operation, args ?? {}) as unknown as T
+async function call<T>(operation: string, args?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
+  return await rpc(operation, args ?? {}, options) as unknown as T
 }
 
 export const workbenchApi: WorkbenchApi = {
@@ -359,13 +372,17 @@ export const workbenchApi: WorkbenchApi = {
   ...createUpdateApi(),
   boot: () => call('boot'),
   env: (args) => call('env', args),
-  pending: (args) => call('pending', args),
+  pending: (args, options) => call('pending', args, options),
   auditStatus: (args) => call('audit-status', args),
   auditStart: (args) => call('audit-start', args),
   auditStop: (args) => call('audit-stop', args),
   reportFiles: (args) => call('report-files', args),
   discussionMaterialOpen: (args) => call('discussion-material-open', args),
+  localAuditStatus: (args) => call('local-audit-status', args),
+  localAuditStart: (args) => call('local-audit-start', args),
+  localAuditClaim: (args) => call('local-audit-claim', args),
   ossIndex: (args) => call('oss-index', args ?? {}),
+  ossBatchIndex: (args, options) => call('oss-index', args, options),
   ossResult: (args) => call('oss-result', args),
   ossLink: (args) => call('oss-link', args),
   ossUpload: (args) => call('oss-upload', args),
@@ -408,7 +425,11 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   auditStop: 'audit-stop',
   reportFiles: 'report-files',
   discussionMaterialOpen: 'discussion-material-open',
+  localAuditStatus: 'local-audit-status',
+  localAuditStart: 'local-audit-start',
+  localAuditClaim: 'local-audit-claim',
   ossIndex: 'oss-index',
+  ossBatchIndex: 'oss-index',
   ossResult: 'oss-result',
   ossLink: 'oss-link',
   ossUpload: 'oss-upload',

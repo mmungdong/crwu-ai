@@ -253,7 +253,7 @@ export function knowledgeTools(deps: ToolDeps) {
       }
       const requested = (Array.isArray(args.paths) ? args.paths : []).map((item) => text(item)).filter((item) => item !== '')
       if (requested.length === 0) return { ...failure('input', 'paths 不能为空'), ...empty }
-      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir })
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, { caseDir: args.caseDir }, deps.localAudit)
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
 
       const platform = await deps.world.platform()

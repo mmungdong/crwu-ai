@@ -10,7 +10,7 @@ import { buildPublishPlan, nodeSize } from '../dws/plan.ts'
 import { requireInsideCase, fileSize } from './case-dir.ts'
 import { writeCaseText } from './case-files.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { requireCaseAccess } from '../audit/case-access.ts'
+import { localDeliveryRefused, requireCaseAccess } from '../audit/case-access.ts'
 import { dwsJson, type DwsJsonOptions } from './dws-json.ts'
 import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
 import { failure, jsonObject, renderJson } from './outcome.ts'
@@ -176,8 +176,11 @@ export function dingtalkTools(deps: ToolDeps) {
       const ctx = toolContext(deps.ctx, exec)
       const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
         caseDir: args.caseDir, seqNo: args.seqNo,
-      })
+      }, deps.localAudit)
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
+      // 本地审核的产物不回传（协议 28）。
+      const localRefused = localDeliveryRefused(caseCheck)
+      if (localRefused !== null) return { ...localRefused, ...empty }
       const seqNo = text(args.seqNo).trim()
       const requested = text(args.fileName).trim() || `审核结果.${seqNo}.json`
       const inside = await requireInsideCase(ctx, caseCheck.casePath, requested)
@@ -407,8 +410,11 @@ export function dingtalkTools(deps: ToolDeps) {
       }
       const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
         caseDir: args.caseDir, seqNo: args.seqNo,
-      })
+      }, deps.localAudit)
       if (!caseCheck.ok) return { ...caseCheck, ...empty }
+      // 本地审核的产物不回传（协议 28）。
+      const localRefused = localDeliveryRefused(caseCheck)
+      if (localRefused !== null) return { ...localRefused, ...empty }
       const seqNo = text(args.seqNo).trim()
       if (seqNo === '') return { ...failure('input', 'seqNo 不能为空'), ...empty }
       const caseDir = caseCheck.casePath

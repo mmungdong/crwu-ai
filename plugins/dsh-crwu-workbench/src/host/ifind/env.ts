@@ -91,6 +91,8 @@ function missingAccessBroker(): LocalAccessBroker {
         sandbox: { requested: '', resolved: '', ran: '', denied: false, runnerFailed: false },
       }
     },
+    // 恒拒绝的空 Broker 不走 shell 也不写文件，所以没有需要留痕的非 shell 事实。
+    note: () => undefined,
     consent: () => missingLocalAccessView(),
     diagnostics: () => [],
     lastDiagnostic: () => null,

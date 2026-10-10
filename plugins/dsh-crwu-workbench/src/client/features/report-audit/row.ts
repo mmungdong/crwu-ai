@@ -13,6 +13,7 @@
  * 3. **「重传 OSS」只在「已出结果且还没上传」时出现**，不是一有记录就出现。
  */
 
+import type { RemoteQuery } from './page-loader.ts'
 import { text } from '../../../shared/utils/value.ts'
 import type { AuditView, Badge, BadgeTone, ButtonSpec, CloudItem, Gating, RowView, TaskRow } from './types.ts'
 
@@ -26,9 +27,25 @@ export function hasCloudResult(cloud: CloudItem | null | undefined): boolean {
   return cloud !== null && cloud !== undefined && cloud.htmlKey !== ''
 }
 
-/** 有没有可看的审核信息（HTML + JSON 都在才算 —— 只有 HTML 时抽屉里没有内容）。 */
+/** JSON is sufficient for the audit summary drawer. */
 export function hasAuditInfo(cloud: CloudItem | null | undefined): boolean {
-  return cloud !== null && cloud !== undefined && cloud.htmlKey !== '' && cloud.jsonKey !== ''
+  return cloud !== null && cloud !== undefined && cloud.jsonKey !== ''
+}
+
+export function hasFormalResult(cloud: CloudItem | null | undefined): boolean {
+  return hasCloudResult(cloud) || hasAuditInfo(cloud)
+}
+
+export function remoteQueryText(query: RemoteQuery | undefined): string {
+  if (query === undefined || query.status === 'loading') return '查询中'
+  if (query.status === 'failed') return '查询失败'
+  if (query.status === 'invalid') return '流水号不可查询'
+  const item = query.item
+  if (item === null) return '未找到审核结果'
+  if (item.htmlKey !== '' && item.jsonKey !== '') return '审核报告与数据齐全'
+  if (item.htmlKey !== '') return '仅有审核报告'
+  if (item.jsonKey !== '') return '仅有审核数据'
+  return '仅有辅助文件'
 }
 
 /**
@@ -85,6 +102,29 @@ export function childIsLive(audit: AuditView): boolean {
  * 早先客户端只判 `ok`（`if (!result.ok) setNotice(...)`），于是 `opened:false` 时界面**什么都
  * 不说** —— 点下去没反应，用户只能报「查看报告打不开」（实测踩到）。这里把两种情况都说清楚。
  */
+/**
+ * 用**客户端**打开一个已签名的链接（快路径）。
+ *
+ * 桌面端主进程的 `setWindowOpenHandler` 会把它转成 `shell.openExternal` → 系统默认浏览器；
+ * Web profile 下就是浏览器标签页。两种部署都指向"默认浏览器下载报告"。
+ *
+ * @returns 是否成功发起。返回 `false` 时调用方要退回宿主打开（例如被弹窗拦截器拦住）。
+ */
+export function openSignedUrl(url: string, opener?: (url: string, target?: string, features?: string) => unknown): boolean {
+  if (text(url) === '') return false
+  const open = opener ?? (typeof window === 'undefined' ? undefined : window.open.bind(window))
+  if (open === undefined) return false
+  try {
+    // `noopener,noreferrer`：报告链接里带签名，不让新窗口拿到 opener 引用。
+    const handle = open(url, '_blank', 'noopener,noreferrer')
+    // 被拦截时 `window.open` 返回 null（有些壳返回 undefined）—— 那就算没开成。
+    return handle !== null && handle !== undefined
+  } catch (error) {
+    void error
+    return false
+  }
+}
+
 export function openReportNotice(result: {
   ok: boolean
   error?: string
@@ -100,7 +140,7 @@ export function openReportNotice(result: {
 
 /** 发起审核按钮的文案：云端已有意见时是「重新审核」，否则「AI 审核」。 */
 export function startLabel(cloud: CloudItem | null | undefined): string {
-  return hasCloudResult(cloud) ? '重新审核' : 'AI 审核'
+  return hasFormalResult(cloud) ? '重新审核' : 'AI 审核'
 }
 
 /**
@@ -205,13 +245,14 @@ export function deriveRowView(
     //   没有任何审核记录 → AI 审核（首次发起，不需要二次确认）
     //   已经有记录（本地记录或云端交付件）→ 重新审核（会覆盖结果，一律二次确认）
     // 相应地，••• 里也**不再**重复放一个「重新审核」（同一个动作只出现一次）。
-    buttons.push(startButton(gating, key, everStarted || hasReport ? '重新审核' : 'AI 审核', {
-      confirm: everStarted || hasReport,
-      retry: everStarted || hasReport,
+    buttons.push(startButton(gating, key, everStarted || hasFormalResult(cloud) ? '重新审核' : 'AI 审核', {
+      confirm: everStarted || hasFormalResult(cloud),
+      retry: everStarted || hasFormalResult(cloud),
     }))
   }
 
   if (!everStarted) {
+    if (hasAuditInfo(cloud)) buttons.push({ id: 'audit-info', label: '查看审核信息', tone: 'plain', disabled: false })
     const note = gatingNote(gating)
     if (note !== '') notes.push(note)
     return { key, badges, buttons, notes }
@@ -258,7 +299,7 @@ export function deriveRowView(
 
 /** 「重新审核」：次级动作，永远是 ••• 里的一项，且一律二次确认（会覆盖已有结果）。 */
 function restartButton(gating: Gating): ButtonSpec {
-  return { id: 'restart', label: '重新审核', tone: 'plain', disabled: gating.busy === true, confirm: true, retry: true }
+  return { id: 'restart', label: '重新审核', tone: 'plain', disabled: gating.busy === true || !gating.canDispatch || !gating.canStart || (gating.auditBusy ?? '') !== '', confirm: true, retry: true }
 }
 
 /** 这一行的**主操作**：第一个可点的主色按钮；「审核中」那种不可点的占位也算主位。 */
@@ -290,16 +331,37 @@ export function resultItems(ossIndex: Record<string, CloudItem> | null | undefin
     .sort((left, right) => String(right.seqNo ?? '').localeCompare(String(left.seqNo ?? '')))
 }
 
+/** 远端结论还没拿到时，行动区为什么是灰的：按状态分派，别让"不可查询"的行一直等人查。 */
+function queryGateNote(query: RemoteQuery | undefined): string {
+  if (query?.status === 'invalid') return '流水号不可查询，无法发起审核'
+  if (query?.status === 'failed') return '审核结果查询失败，请先重试'
+  return '请先完成审核结果查询'
+}
+
 /** 待审核页的行：氚云记录 + 审核记录 + 云端交付件合成一行。 */
 export function buildRows(
   tasks: TaskRow[],
   audits: Record<string, AuditView> | null | undefined,
   ossIndex: Record<string, CloudItem> | null | undefined,
   gating: Gating,
+  remote?: Record<string, RemoteQuery>,
 ): RowView[] {
   return tasks.map((task) => {
     const key = rowKeyOf(task)
-    return deriveRowView(task, audits?.[key], ossIndex?.[key], gating)
+    const query = remote?.[task.seqNo]
+    const known = remote === undefined || query?.status === 'ready'
+    const view = deriveRowView(task, audits?.[key], ossIndex?.[task.seqNo], {
+      ...gating, canDispatch: gating.canDispatch && known,
+      gateReason: !known && gating.canDispatch ? queryGateNote(query) : gating.gateReason,
+    })
+    if (remote !== undefined) {
+      if (hasFormalResult(ossIndex?.[task.seqNo])) {
+        view.buttons.push({ id: 'report-discuss', label: '讨论原始报告', tone: 'plain', disabled: gating.busy === true })
+        view.buttons.push({ id: 'raw-artifact', label: '原始交付件', tone: 'plain', disabled: false })
+      }
+      if (query?.status === 'failed') view.buttons.push({ id: 'retry-query', label: '重试结果查询', tone: 'plain', disabled: gating.busy === true })
+    }
+    return view
   })
 }
 

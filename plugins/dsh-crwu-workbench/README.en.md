@@ -9,10 +9,21 @@ The **audit workbench** for DeepSeek Harness (DSH): self-check the environment �
 "报告审核" tasks from H3Yun → dispatch exactly one AI audit subagent → watch it, stop it, restart it →
 auto-upload deliverables to Aliyun OSS → open the cloud-hosted audit opinion.
 
+Next to the report-audit page there is a sibling tab, **本地审核 (local audit)**: pick local files or
+folders (at most 30 regular files per run); the plugin copies them into a temporary snapshot directory,
+mints a one-shot `handoffId`, then tries to open an **ordinary DSH conversation**, sends the fixed audit
+prompt, and switches to it. When the conversation cannot be created it offers a manual path instead
+(switch to full access → create a conversation → copy the prompt and send it). This flow keeps **no audit
+history, no sidecar, no cross-conversation monitoring, and uploads or downloads nothing** — results live
+only in that conversation and its temporary case directory. The report-audit flow and its deliverables are
+unchanged.
+
 The audit process itself is **not** in this repository; the `crwu-audit` skill family runs it.
 This repository only *dispatches, watches, and ships back*.
 
 The audit Skill's completion contract generates and validates final HTML/JSON after both audit phases, then explicitly uploads and verifies both files under the [OSS publishing contract](skills/crwu/crwu-audit/references/15-oss-result-publish.md). OSS failure preserves local results and is reported separately while independent DingTalk archive and notification continue. Conversation content is not uploaded.
+
+Report audit now has one report list. Search, paging and refresh first load the H3Yun page, then submit its valid, deduplicated serial numbers to the Host in one batch. The Host queries at most three OSS directories concurrently. The **AI audit result** column stays compact: it shows a small empty tag or the delivery count, and an info icon reveals report/data details on hover. Refresh does not scan the root audit prefix or rerun environment checks.
 
 One form only: `src/` is the single source, bundled by tsdown into `lib/index.js` (Host) and
 `lib/client.js` (Client), distributed as a DSH **package** plugin (npm / tarball / git).
@@ -305,5 +316,5 @@ That keeps the test run to `node --test` with no vitest, jsdom, or react-dom —
 panel renders in its loading / loaded / failed / unmounted states, what `apply` registers into which slot
 inside which lifecycle effect, and that the stylesheet uses DSH theme tokens instead of hard-coded colors.
 The panel's *visual* behaviour (does it render, does the sidebar grouped card hold its three sub-items
-inside one card, does switching modules re-list OSS) is checked in a real browser by `install/browser-check.mjs` — see the
+inside one card, does each page query only its own OSS directories) is checked in a real browser by `install/browser-check.mjs` — see the
 verification checklist in the Chinese README.
