@@ -34,6 +34,7 @@ import { createOssBatchQueue } from '../oss/batch.ts'
 import { reportFiles } from '../report/files.ts'
 import { createUploadWatch } from '../oss/watch.ts'
 import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../system/ops.ts'
+import { emptyDeviceLoginView, type DwsDeviceLoginRegistry, type LoginHandleHolder } from '../system/device-login.ts'
 import { dwsSelf, type WhoamiResult } from '../system/identity.ts'
 import { runCrwu } from '../crwu/run.ts'
 import { dwsLocalDoctor, dwsLocalPermissionRepair, hasAttributableDwsFailure } from '../dws/local.ts'
@@ -116,6 +117,17 @@ export interface HostResolvers {
   localAuditFs?: LocalAuditFs
   /** 本地审核快照的 IO（测试注入内存替身）。 */
   localAuditIo?: SnapshotIo
+  /**
+   * 钉钉**设备流**登录的会话注册表（协议 32）。由 `apply()` 按插件实例创建并持有 ——
+   * 它握着后台进程与轮询定时器，卸载后残留就是「看不见的进程还占着 `~/.dws` 的锁」。
+   * 可选：测试可以注入一份替身；缺省时三条操作回一句"宿主没有装配登录注册表"。
+   */
+  deviceLogin?: DwsDeviceLoginRegistry
+  /**
+   * 正在跑的 **loopback** 登录句柄（协议 32）。`dws-login-cancel` 靠它把那条命令真的杀掉 ——
+   * 两条登录抢同一把 `.dws` 锁，没有它员工点了「登录钉钉」就只能干等（最长 5 分钟）。
+   */
+  loginHandles?: LoginHandleHolder
 }
 
 export function createCoreOperations(
@@ -311,6 +323,10 @@ export function createCoreOperations(
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
           'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
+          // 协议 32：钉钉设备流登录（起 / 查 / 取消）。loopback 的 `dws-login` 未改。
+          'dws-login-device-start', 'dws-login-device-status', 'dws-login-device-cancel',
+          // 协议 32 补：取消正在跑的 loopback 登录（员工改用设备流登录时先让出 `.dws` 锁）。
+          'dws-login-cancel',
           // 协议 18 · 子项目 D：DWS 本机目录的只读体检与最小权限修复。
           'dws-local-doctor', 'dws-local-permission-repair',
           // 协议 16：自助更新四个操作（安装目标由 Host 自己授权，调用方只能传空参数）。
@@ -611,13 +627,82 @@ export function createCoreOperations(
     }, args),
 
     'dws-login': async (args) => {
+      // 设备流正在跑时**先让路**：两条登录都要抢同一把 `~/.dws` 锁，第二个必然以
+      // `Access is denied` 结束 —— 而那句报错会被下面的归因读成"本机权限不足"，
+      // 把员工指去切访问模式（这个模块历史上踩过的坑）。所以这里一个进程都不起。
+      if (resolvers.deviceLogin?.running() === true) {
+        return {
+          ok: false,
+          error: '设备流登录正在进行：请先点上面那颗「取消」，或等它结束再试（两次登录会抢 .dws 的同一把锁）',
+          timedOut: false,
+          stdoutTail: '',
+          stderrTail: '',
+          sandboxBlocked: false,
+          advice: '',
+        }
+      }
       const result = await dwsLogin(
-        { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
+        {
+          ctx, state, access: resolvers.access,
+          platform: await world.platform(), workdir: () => world.workdir(),
+          ...(resolvers.loginHandles === undefined ? {} : { loginHandles: resolvers.loginHandles }),
+        },
         args,
         await world.home(),
       )
       gate.invalidate()
       return result
+    },
+
+    /**
+     * **设备流登录**（协议 32）。三条操作都不接受任何入参 —— URL / 授权码 / argv 全部由 Host
+     * 从 `dws` 的输出里解析，否则面板就成了「让宿主打开任意 URL / 跑任意命令」的入口。
+     *
+     * `start` 只**起**会话并立刻回快照：`dws auth login --device` 要先打印短 URL 与授权码、
+     * 再等人授权，最长 5 分钟。同步等它结束，面板在这期间拿不到码，等于没有这个功能。
+     */
+    'dws-login-device-start': async () => {
+      const registry = resolvers.deviceLogin
+      if (registry === undefined) {
+        return emptyDeviceLoginView('failed', '设备流登录不可用：宿主没有装配登录注册表')
+      }
+      const view = await registry.start({
+        ctx,
+        access: resolvers.access,
+        platform: await world.platform(),
+        workdir: () => world.workdir(),
+      })
+      // 登录态可能已经变了：环境结论作废，与上面的 `dws-login` 同一条口径。
+      gate.invalidate()
+      return view
+    },
+
+    'dws-login-device-status': async () => resolvers.deviceLogin?.status() ?? null,
+
+    /**
+     * 取消正在跑的 **loopback** 登录（协议 32，无入参）。
+     *
+     * 员工「改用设备流登录」时先调它：`dws auth login` 会一直占着 `~/.dws` 锁等人授权，
+     * 不杀掉的话设备流那条命令只会卡在同一把锁上。
+     */
+    'dws-login-cancel': async () => {
+      const killed = resolvers.loginHandles?.cancel() === true
+      if (killed) gate.invalidate()
+      // 如实回报：`killed === false` 说明当时没有在跑的 loopback（可能刚好已经结束）。
+      // 面板据此决定"还要不要等前一次调用落定"，别把没取消到说成取消成功。
+      return killed
+        ? { ok: true, error: '' }
+        : { ok: false, error: '没有正在进行的钉钉登录（可能已经结束）' }
+    },
+
+    'dws-login-device-cancel': async () => {
+      const registry = resolvers.deviceLogin
+      if (registry === undefined) {
+        return emptyDeviceLoginView('failed', '设备流登录不可用：宿主没有装配登录注册表')
+      }
+      const view = registry.cancel()
+      gate.invalidate()
+      return view
     },
 
     session: async () => await sessionStatus({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() }),

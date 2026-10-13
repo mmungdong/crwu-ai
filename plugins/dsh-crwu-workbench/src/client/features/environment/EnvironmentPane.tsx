@@ -4,10 +4,12 @@ import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../components/
 import { WORKBENCH_CLASSES as C } from '../workbench/consts.ts'
 import { zhCN } from '../../locales/zh-CN.ts'
 import { headlineOf, workbenchApi, type EnvResult } from '../report-audit/api.ts'
-import type { AccessDiagnosticView, DwsLocalDoctorView, DwsLocalRepairView } from '../../../shared/types.ts'
+import type { AccessDiagnosticView, DwsDeviceLoginView, DwsLocalDoctorView, DwsLocalRepairView } from '../../../shared/types.ts'
 import type { SetupItemView } from '../../../shared/environment/model.ts'
 import { WorkspaceCard } from '../workbench/WorkspaceCard.tsx'
 import type { ClientServices } from '../workbench/services.ts'
+import { DeviceLoginCard } from './DeviceLoginCard.tsx'
+import { deviceLoginCardView } from './device-login.ts'
 import { DwsLocalCard } from './DwsLocalCard.tsx'
 import { IfindAuthCard } from './IfindAuthCard.tsx'
 import { needsWindowsAdminReminder } from './platform-note.ts'
@@ -70,8 +72,29 @@ export interface EnvironmentPaneProps {
    * 面板只负责触发与"重新检查"。
    */
   onRelogin: () => void
-  /** 走**本机 CLI**登录钉钉（`dws auth login`，系统浏览器 OAuth 回调）。**无设备码入口**。 */
+  /** 走**本机 CLI**登录钉钉（`dws auth login`，系统浏览器 OAuth 回调）。**首选**这条路。 */
   onDwsLogin: () => void
+  /**
+   * **设备流登录**的当前快照（协议 32）：`undefined` = 还没问过，`null` = 没有会话。
+   * Host 是唯一事实来源，界面不自己推断"登录到哪一步了"。
+   */
+  deviceLogin?: DwsDeviceLoginView | null
+  /**
+   * **钉钉 loopback** 登录请求正在飞（`runLogin` 按登录种类给出，氚云登录不算）。
+   *
+   * 为什么要一个单独的标志：两条钉钉登录都要抢同一把 `~/.dws` 锁 —— 设备流在跑时 Host 会拦住
+   * loopback；反过来 Host 看不见同步调用，只能由界面在这时把设备流那颗按钮变成「改用设备流登录」。
+   */
+  deviceLoginBusy?: boolean
+  onDeviceLoginStart?: () => void
+  onDeviceLoginCancel?: () => void
+  /**
+   * 「改用设备流登录」：先取消正在跑的 loopback，再起设备流。
+   *
+   * 为什么要有这条：两条登录抢同一把 `.dws` 锁，loopback 最长占 5 分钟 —— 只把设备流按钮置灰，
+   * 员工点完「登录钉钉」就没有任何出路（2026-10-13 用户实测）。
+   */
+  onDeviceLoginSwitch?: () => void
   /** 最近一次登录的结果（成功 / 失败原因）；空串 = 还没点过。 */
   loginMessage?: string
   /** 被门禁拦住时的界面状态：`running` 正在检查、`blocked` 检查没过。 */
@@ -498,6 +521,12 @@ function StepPanel(props: {
  * CLI 自己拉起**系统浏览器**完成授权，插件只触发并随后「重新检查」。
  * 所以文案里不许再出现"内置浏览器""设备码""等待浏览器授权"这类承诺。
  */
+/** 用系统默认浏览器打开授权页。**尽力而为**：不是用户手势时可能被弹窗拦截，被拦不算失败。 */
+function openDeviceAuthPage(url: string): void {
+  if (url === '' || typeof window === 'undefined') return
+  window.open(url, '_blank', 'noopener')
+}
+
 function AccountsStep(props: EnvironmentPaneProps & {
   env: EnvResult
   authorized: boolean
@@ -505,6 +534,8 @@ function AccountsStep(props: EnvironmentPaneProps & {
   canDiagnoseDws?: boolean
 }): React.ReactElement {
   const authorized = props.authorized
+  const deviceBusy = props.deviceLoginBusy === true
+  const deviceCard = deviceLoginCardView(props.deviceLogin ?? null, { now: Date.now(), busy: deviceBusy })
   /** 「暂不允许」之后点「重新允许一次」只是把本地状态翻回去，真正的同意仍是同一次提交。 */
   const grant = (): void => {
     props.onRegrant?.()
@@ -539,16 +570,27 @@ function AccountsStep(props: EnvironmentPaneProps & {
         <Button label={zhCN.dwsLogin} small disabled={!authorized} onClick={props.onDwsLogin} />
       </div>}
     />
-    <div className={C.muted}>{zhCN.envDwsLoginNoDeviceCode}</div>
+    {/* 一句话就够（2026-10-13 用户口径：这一步的说明文字太啰嗦）。
+        设备流已经在跑（或刚出结论）时不再显示 —— 那时它已经过时，是噪音。 */}
+    {deviceCard.phase === 'idle'
+      ? <div className={C.muted}>{zhCN.envDwsLoginDeviceHint}</div>
+      : null}
+    {/* 设备流登录（协议 32）：回调不通 / 无头环境时的退路。它的**状态与逻辑**都在
+        `device-login.ts` 的纯 store 里，这里只是把它画出来。 */}
+    <DeviceLoginCard
+      view={deviceCard}
+      busy={deviceBusy}
+      onStart={() => { props.onDeviceLoginStart?.() }}
+      onSwitch={() => { props.onDeviceLoginSwitch?.() }}
+      onCancel={() => { props.onDeviceLoginCancel?.() }}
+      onOpen={() => { openDeviceAuthPage(props.deviceLogin?.url ?? '') }}
+      onCopy={(text) => { void workbenchApi.clipboard({ text }) }}
+    />
     {/* Windows 专属提醒（非阻塞）：钉钉 CLI（dws）要碰 `<HOME>\.dws` 的登录态与锁文件，
         进程权限不够时会以"锁被占用 / 拒绝访问"结束，表现却是钉钉登录一直不成功。 */}
     {needsWindowsAdminReminder(props.env)
       ? <div data-crwu-env-windows-admin="1"><Notice tone="warn">{zhCN.envWindowsAdminHint}</Notice></div>
       : null}
-    {/* 登录的**前置条件**要说在点之前：这两条命令都要写工作区之外的路径
-        （临时浏览器 profile / `~/.dws` 的登录态 / 操作系统凭据存储），
-        文件策略不给就一条都走不通 —— 员工不该靠试错去发现这件事。 */}
-    <div className={C.muted}>{zhCN.envLoginSandboxHint}</div>
     {props.loginMessage === undefined || props.loginMessage === ''
       ? null
       : <div className={C.itemFix} style={{ whiteSpace: 'pre-wrap' }}>{props.loginMessage}</div>}

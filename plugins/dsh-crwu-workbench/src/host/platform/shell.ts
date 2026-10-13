@@ -243,9 +243,26 @@ export function removeFileCommand(path: string, platform: string): string {
 }
 
 /** 用系统默认程序打开一个文件或 URL。 */
-export function openExternalCommand(target: string, platform: string): string {
+/**
+ * 用系统默认程序打开目标。
+ *
+ * `options.newInstance`（macOS 的 `open -n`）是给**登录授权页**用的：macOS 上某个应用已经在运行时，
+ * `open <url>` 会把 URL 当作 Apple Event 投给**正在跑的那个实例**，而不是新起一个。现场踩到的是
+ * WorkBuddy 的 `agent-browser` 挂着一个**无头 Edge**（`--headless=new`）——URL 被它吞掉，而 `open`
+ * 照样退出 0，员工看到的就是「点了没反应 / 浏览器空白」。`-n` 强制新实例，实测正常加载。
+ *
+ * Windows 的 `Start-Process` 本来就是新进程，Linux 的 `xdg-open` 没有这个概念，所以这一项在它们上
+ * 是**无操作**（命令形状一个字不变）。
+ */
+export function openExternalCommand(
+  target: string,
+  platform: string,
+  options: { newInstance?: boolean } = {},
+): string {
   if (shellDialect(platform) === 'powershell') return `Start-Process -FilePath ${shellQuote(target, platform)}`
-  if (text(platform).startsWith('darwin')) return `open ${shellQuote(target, platform)}`
+  if (text(platform).startsWith('darwin')) {
+    return `open ${options.newInstance === true ? '-n ' : ''}${shellQuote(target, platform)}`
+  }
   return `xdg-open ${shellQuote(target, platform)}`
 }
 

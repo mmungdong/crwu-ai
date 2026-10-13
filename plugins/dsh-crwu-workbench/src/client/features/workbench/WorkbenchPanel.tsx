@@ -9,12 +9,13 @@ import { zhCN } from '../../locales/zh-CN.ts'
 import { WORKBENCH_PROTOCOL } from '../../../shared/consts.ts'
 import { environmentStateOf, gatingOf, workbenchApi } from '../report-audit/api.ts'
 import { createReportPageLoader } from '../report-audit/page-loader.ts'
-import type { AuditView, CloudItem, DwsLocalDoctorView, DwsLocalRepairView, TaskRow } from '../../../shared/types.ts'
+import type { AuditView, CloudItem, DwsDeviceLoginView, DwsLocalDoctorView, DwsLocalRepairView, TaskRow } from '../../../shared/types.ts'
 import { openChildSession } from './open-session.ts'
 import { discussionPortOf } from './services.ts'
 import type { ClientServices } from './services.ts'
 import { EnvironmentPane } from '../environment/EnvironmentPane.tsx'
 import { createEnvStatusStore, useEnvStatus, type EnvStatusStore } from '../environment/status.ts'
+import { createDeviceLoginStore, loginManualOpenLines, type DeviceLoginStore } from '../environment/device-login.ts'
 import { AuditInfoDrawer } from '../report-audit/AuditInfoDrawer.tsx'
 import { ReportPane } from '../report-audit/ReportPane.tsx'
 import { openReportNotice, openSessionTarget, openSignedUrl } from '../report-audit/row.ts'
@@ -59,6 +60,31 @@ import { greetingLine } from './greeting.ts'
  */
 
 const POLL_INTERVAL_MS = 10_000
+
+/** 哪条登录在飞：两条钉钉路都占 `~/.dws` 锁，氚云不占 —— 界面要区别对待。 */
+type LoginKind = 'h3yun' | 'dingtalk'
+
+/**
+ * 一次登录命令的返回形状。
+ *
+ * `opened` / `url` / `cancelled` 是钉钉那条路独有的（见 `DwsLoginResult`）；氚云不带它们，
+ * 所以这里全是可选的 —— 但**必须声明出来**，否则 `loginManualOpenLines` 读的是未声明的属性
+ *（2026-10-13 评审指出的声明与契约不一致）。
+ */
+interface LoginCallResult {
+  ok: boolean
+  error?: string
+  timedOut?: boolean
+  stdoutTail?: string
+  stderrTail?: string
+  sandboxBlocked?: boolean
+  opened?: boolean
+  openError?: string
+  url?: string
+  cancelled?: boolean
+}
+
+type LoginCall = () => Promise<LoginCallResult>
 
 export interface WorkbenchPanelProps {
   /** 由 apply 注入的浏览器侧可选服务（目录选择器 / 工作空间注册表 / layout）。 */
@@ -165,6 +191,18 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 登录结果（成功/失败原因/CLI 打印的 URL 或设备码）。**不能丢**：命令跑不起来时
   // 它是用户唯一的线索 —— 实测「点了钉钉登录没有任何反应」就是因为它被丢掉了。
   const [loginMessage, setLoginMessage] = React.useState('')
+  /**
+   * loopback 登录（氚云 / 钉钉）在飞。
+   *
+   * 为什么需要它：两条登录都要抢同一把 `~/.dws` 锁。设备流正在跑时宿主会拦住 loopback；
+   * 反方向宿主**看不见**（那是一次同步调用），只能由界面在这里禁用设备流按钮。
+   */
+  const [loginInFlight, setLoginInFlight] = React.useState<'' | 'h3yun' | 'dingtalk'>('')
+  /** 正在飞的那次登录调用；「改用设备流登录」要等它落定，否则两条命令会在同一把锁上撞。 */
+  const loginRunningRef = React.useRef<Promise<void> | null>(null)
+  /** 设备流登录的当前快照（协议 32）；`null` = 没有会话。 */
+  const [deviceLogin, setDeviceLogin] = React.useState<DwsDeviceLoginView | null>(null)
+  const deviceLoginRef = React.useRef<DeviceLoginStore | null>(null)
   // 授权门槛：拒绝**不落盘**（下次打开页面还会再问）；同意落盘在 Host 的 trustCredentials 里。
   const [authDeclined, setAuthDeclined] = React.useState(false)
   const [authBusy, setAuthBusy] = React.useState(false)
@@ -246,27 +284,104 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    * `error` 里已经是一句人话 + 下一步动作，这里不再追加 stdout 尾巴 —— 那只会是一句
    * 「正在打开浏览器窗口…」，把真正的动作挤到看不见。
    */
-  const runLogin = React.useCallback(async (label: string, call: () => Promise<{ ok: boolean; error?: string; timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean }>) => {
-    // 文案口径（2026-09-30）：这两条命令都会让**本机 CLI**打开**系统浏览器**；
-    // 面板不创建浏览器 Tab、不显示二维码 / 设备码，所以这里不许再说"设备码登录"。
-    setLoginMessage(`${label}：正在等待你在系统浏览器里完成授权…（最多 5 分钟）`)
+  const runLogin = React.useCallback(async (label: string, call: LoginCall, kind: LoginKind) => {
+    // 文案口径（协议 32）：**授权页由面板自己打开**（本机 CLI 那次失败是静默的，见 dwsLogin）。
+    // 面板仍然不创建浏览器 Tab、不显示二维码。
+    setLoginMessage(`${label}：正在打开授权页…完成授权后这里会自动更新（最多 5 分钟）`)
+    setLoginInFlight(kind)
     try {
       const result = await call()
       if (!mounted.current) return
       const lines: string[] = []
-      if (result.ok) lines.push(`${label}：命令已执行完成，请点「重新检查」查看结果。`)
+      if (result.cancelled === true) lines.push(`${label}：已取消这次登录。`)
+      else if (result.ok) lines.push(`${label}：命令已执行完成，请点「重新检查」查看结果。`)
       else if (result.timedOut === true) lines.push(`${label}：等待超时（5 分钟）。请重试一次。`)
       else lines.push(`${label}失败：${result.error || result.stderrTail || '未知原因'}`)
       if (result.sandboxBlocked !== true) {
         const detail = (result.stdoutTail ?? '').trim() || (result.stderrTail ?? '').trim()
         if (detail !== '') lines.push(detail)
       }
+      // 系统 `open` 退出 0 不等于页面真的出现了：没能打开就把链接摆出来（见 loginManualOpenLines）。
+      lines.push(...loginManualOpenLines(result))
       setLoginMessage(lines.join('\n'))
     } catch (cause) {
       if (mounted.current) setLoginMessage(`${label}失败：${describe(cause)}`)
+    } finally {
+      if (mounted.current) setLoginInFlight('')
     }
     if (mounted.current) await envStatus.refresh()
   }, [envStatus])
+
+  /** 把一次登录登记成"在飞"，供「改用设备流登录」等待。 */
+  const trackLogin = React.useCallback((label: string, call: LoginCall, kind: LoginKind): void => {
+    const running = runLogin(label, call, kind)
+    loginRunningRef.current = running
+    void running.finally(() => {
+      if (loginRunningRef.current === running) loginRunningRef.current = null
+    })
+  }, [runLogin])
+
+  /**
+   * 设备流登录的会话（协议 32）。**按面板实例持有** —— 它握着轮询定时器，卸载时必须停掉。
+   *
+   * `resume()` 是「切走再切回来还看得到正在跑的那次」的实现：会话在宿主手里，客户端只有主动
+   * 问一次才知道。终态时刷新环境自检一次（由 store 保证只刷一次）。
+   */
+  React.useEffect(() => {
+    const store = createDeviceLoginStore({
+      api: {
+        dwsLoginDeviceStart: workbenchApi.dwsLoginDeviceStart,
+        dwsLoginDeviceStatus: workbenchApi.dwsLoginDeviceStatus,
+        dwsLoginDeviceCancel: workbenchApi.dwsLoginDeviceCancel,
+      },
+      onSettled: (view) => {
+        if (view.phase !== 'ok') return
+        void envStatus.refresh()
+      },
+    })
+    deviceLoginRef.current = store
+    const unsubscribe = store.subscribe(() => {
+      const view = store.get()
+      if (!mounted.current) return
+      setDeviceLogin(view)
+      // 授权页**只由 Host 打开一次**（`open -n`）。客户端**不**再自己补开：它拿到的
+      // `opened === false` 分不清"Host 还没试"和"Host 那次调用还在飞"，补开就会开出两个窗口
+      //（2026-10-13 评审抓到的竞态）。可靠路径是面板上那颗「打开授权页面」+ 可复制的链接。
+    })
+    void store.resume()
+    return () => {
+      unsubscribe()
+      store.dispose()
+      deviceLoginRef.current = null
+    }
+  }, [envStatus])
+
+  const startDeviceLogin = React.useCallback(() => { void deviceLoginRef.current?.start() }, [])
+  const cancelDeviceLogin = React.useCallback(() => { void deviceLoginRef.current?.cancel() }, [])
+  /**
+   * 「改用设备流登录」：**先**让 Host 把正在跑的 loopback 杀掉（它占着 `~/.dws` 锁），
+   * 再起设备流 —— 顺序不能反，反了设备流那条命令只会卡在同一把锁上。
+   */
+  const switchToDeviceLogin = React.useCallback(() => {
+    void (async () => {
+      let killed = false
+      try {
+        killed = (await workbenchApi.dwsLoginCancel()).ok
+      } catch {
+        // 取消请求本身失败不该挡住下一步：真起不来的话设备流会给出它自己的失败归因。
+      }
+      // 真的取消掉了：那次 `dws-login` 还要等到下一次轮询才返回（≤300ms）。**等它落定**再起
+      // 设备流，否则两条命令会撞在同一把 `~/.dws` 锁上 —— 那正是"改用"要解决的事。
+      if (killed) {
+        try {
+          await loginRunningRef.current
+        } catch {
+          // 那次登录自己会记消息；这里只负责顺序。
+        }
+      }
+      await deviceLoginRef.current?.start()
+    })()
+  }, [])
 
   React.useEffect(() => {
     let epoch = pageLoader.get().epoch
@@ -661,9 +776,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     // 账号连接**只读取、检查已有凭据**（2026-09-30 口径）：DSH 不再提供内置浏览器扫码登录，
     // 也不再提供钉钉设备码登录与登录进度轮询。这两颗按钮走的是**本机 CLI**（CLI 自己拉起
     // 系统浏览器），是给已有用户保留的兼容路径。
-    onRelogin={() => { void runLogin('氚云登录', workbenchApi.relogin) }}
-    onDwsLogin={() => { void runLogin('钉钉登录', () => workbenchApi.dwsLogin()) }}
+    onRelogin={() => { trackLogin('氚云登录', workbenchApi.relogin, 'h3yun') }}
+    onDwsLogin={() => { trackLogin('钉钉登录', () => workbenchApi.dwsLogin(), 'dingtalk') }}
     loginMessage={loginMessage}
+    // 设备流登录（协议 32）：快照由 store 订阅进来，两条登录的"在飞"状态合成卡片的 busy。
+    deviceLogin={deviceLogin}
+    // 只有**钉钉**那条 loopback 才占 `~/.dws` 锁；氚云登录时设备流那颗按钮照常可用。
+    deviceLoginBusy={loginInFlight === 'dingtalk'}
+    onDeviceLoginStart={startDeviceLogin}
+    onDeviceLoginCancel={cancelDeviceLogin}
+    onDeviceLoginSwitch={switchToDeviceLogin}
     // 拦截说明**直接读统一导航层记下来的结论**（`gate` + `pendingTarget` + `gateReason`）：
     // 侧栏点子项被拦回来的那一刻就要说清"本来要去哪、为什么没进去"，
     // 不能等用户自己再点一次「重新检查」才出现。

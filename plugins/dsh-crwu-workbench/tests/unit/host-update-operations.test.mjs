@@ -757,7 +757,12 @@ test('20. 协议号覆盖当前页批量 OSS 查询与请求取消', () => {
   //   案例目录改到 `<已选工作空间>/本地审核/<id>`、会话 cwd 从 `casePath` 改成 `workspacePath`。
   //   旧宿主不回这个新字段，新客户端会拿空 cwd 去建会话 —— 真机上表现为
   //   `failed to ensure project directory "": ENOENT: mkdir ''`（用户实测），必须靠协议号拦住。
-  assert.equal(WORKBENCH_PROTOCOL, 31)
+  // 32（2026-10-13）= 新增 `dws-login-device-start` / `-status` / `-cancel`：钉钉设备流登录
+  //   （环境信息 → 账号连接）。`dws auth login --device` 要先打印短 URL 与授权码再等人授权（最长
+  //   5 分钟），同步等它结束面板拿不到码，所以必须拆成"起会话 + 轮询快照 + 取消"三条。
+  //   旧宿主没有这三条，新界面点下去只会 404 —— 而"浏览器回调不通时还能不能登录"正是这一代的行为。
+  //   ⚠️ 这是对协议 22 的**部分反转**：恢复的只有设备流，loopback 的 `dws-login` 语义未变。
+  assert.equal(WORKBENCH_PROTOCOL, 32)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

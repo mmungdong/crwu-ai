@@ -61,9 +61,17 @@ export const FROZEN_OPERATIONS = [
   // 在对话里认领。它**不判环境门禁**（本地审核的意义就是不需要氚云 / OSS / 工作空间），
   // 唯一的前置是本机访问授权（由 Broker 的操作表判）。
   'local-audit-status', 'local-audit-start', 'local-audit-claim',
+  // 第 43~45 个：**钉钉设备流登录**（协议 32，2026-10-13）。用户口径是"loopback 回调不通 /
+  // 无头环境"时要有退路：`dws auth login --device` 会打印短 URL 与授权码再等人授权，
+  // 同步等它跑完（最多 5 分钟）面板拿不到码，所以必须拆成 start / status / cancel 三条。
+  'dws-login-device-start', 'dws-login-device-status', 'dws-login-device-cancel',
+  // 第 46 个：**取消正在跑的 loopback 登录**（协议 32）。login 最长要等人 5 分钟，两条路又抢同一把
+  // `.dws` 锁 —— 没有这条，员工点了「登录钉钉」之后就没有任何出路（实测按钮一直是灰的）。
+  'dws-login-cancel',
   // ⚠️ 协议 22（2026-09-30）**删掉**了 `browser-session-bind`（氚云内置浏览器扫码，协议 20）
-  // 与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录，协议 21）：
-  // DSH 只读取、检查已有凭据，登录由本机 CLI 打开系统浏览器完成。
+  // 与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录，协议 21）。
+  // 协议 32 只恢复了**设备流**这一半，而且是新名字：loopback 的同步 `dws-login` 语义未变，
+  // 氚云的内置浏览器扫码没有回来。
 ]
 
 /** 宿主操作的条数。 */

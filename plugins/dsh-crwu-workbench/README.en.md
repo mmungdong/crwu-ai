@@ -76,9 +76,13 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
    iFinD data source is the **last step** and carries **no** asterisk — when nothing is configured that
    step simply reads "not configured". On Windows the page also reminds you to launch DeepSeek Harness
    **as administrator**, otherwise the DingTalk CLI cannot read the `\.dws` login state.
-   Accounts are **read and checked, not created here**: the two sign-in buttons run the local CLI,
-   which opens your **system browser**. DSH ships no built-in-browser QR sign-in, no QR code, no
-   device code and no login polling.
+   Accounts are **read and checked, not created here**: the two sign-in buttons open the authorization
+   page **directly** (the panel drives the local CLI and opens the page itself, rather than relying on the
+   CLI's own silent attempt). When that loopback callback cannot work, or there is no usable local
+   browser, use **device-flow sign-in** on the same row: it opens the page with the user code already
+   filled in — you only click confirm — shows the code and links as well, and refreshes the self-check
+   automatically once you authorize. DSH ships no built-in-browser QR sign-in, no QR code and no login polling; the two
+   sign-in paths are mutually exclusive because both contend for the same `.dws` lock.
    Secrets are typed only on that page: never paste them into a chat and never let an agent fill them
    in for you. **Both credentials are verified with a real external request** — the OSS AccessKey by a
    read-only `ossutil ls` against the configured delivery prefix, the iFinD API-Key by a real

@@ -141,6 +141,28 @@ test('openExternalCommand：Windows 用 Start-Process，不用 cmd /c start', ()
   }
 })
 
+test('openExternalCommand 的 newInstance：macOS 用 `open -n` 绕过别人的无头实例', () => {
+  // 现场（2026-10-13）：WorkBuddy 的 agent-browser 挂着一个 **无头 Edge** 实例。macOS 的规则是
+  // 应用已在运行时 `open <url>` 会把 URL 作为 Apple Event 投给**那个**实例，无头实例没有窗口 ——
+  // URL 被吞掉，而 `open` 仍然退出 0（员工看到的就是"浏览器打不开 / 地址栏空白"）。
+  // `open -n` 强制新实例，实测能正常加载。Windows 的 `Start-Process` 本来就是新进程，不受影响。
+  assert.equal(openExternalCommand('https://x.dingtalk.com/a', MAC, { newInstance: true }), 'open -n https://x.dingtalk.com/a')
+  assert.equal(openExternalCommand('/tmp/a.html', MAC, { newInstance: true }), 'open -n /tmp/a.html')
+  // 真实的授权链接带 `&`：**必须**被引起来 —— 否则 shell 会把它当成后台运算符，URL 被拆成几段，
+  // 表现就是"浏览器起来了、地址栏空的"（这正是本次现场现象的另一半）。
+  assert.equal(
+    openExternalCommand('https://login.dingtalk.com/oauth2/auth?a=1&b=2', MAC, { newInstance: true }),
+    "open -n 'https://login.dingtalk.com/oauth2/auth?a=1&b=2'",
+  )
+  assert.equal(openExternalCommand('https://x.dingtalk.com/a', WIN, { newInstance: true }),
+    "Start-Process -FilePath 'https://x.dingtalk.com/a'")
+  // Linux 没有"新实例"这个概念：形状与不带该选项时完全一致。
+  assert.equal(openExternalCommand('https://x.dingtalk.com/a', LINUX, { newInstance: true }),
+    'xdg-open https://x.dingtalk.com/a')
+  // 不给这一项时行为一个字不变（「查看报告」「打开案例文件」都还走原来的形状）。
+  assert.equal(openExternalCommand('/tmp/a.html', MAC), 'open /tmp/a.html')
+})
+
 test('clipboardCommand 与 homeProbeCommand 按平台选一条命令，不混用两套工具', () => {
   assert.equal(clipboardCommand(MAC), 'pbcopy')
   assert.equal(clipboardCommand(WIN), 'clip')

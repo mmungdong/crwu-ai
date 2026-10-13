@@ -41,7 +41,7 @@ test('氚云：临时浏览器 profile 被拒 → 归因到工作区之外的写
   assert.match(advice.action, /session bind/)
 })
 
-test('钉钉：.dws/.data.lock 被拒 → 归因，且动作里点明设备码同样走不通', () => {
+test('钉钉：.dws/.data.lock 被拒 → 归因，且动作里点明设备流同样走不通', () => {
   const advice = loginFailureAdvice('dws', {
     exitCode: 2,
     stderr: '{"error":{"category":"auth","code":2,"message":"device authorization failed: 本地登录态无法安全更新: acquiring file lock: opening lock file: open C:\\\\Users\\\\51019\\\\.dws\\\\.data.lock: Access is denied."}}',
@@ -50,8 +50,8 @@ test('钉钉：.dws/.data.lock 被拒 → 归因，且动作里点明设备码�
   assert.equal(advice.blocked, true)
   assert.equal(advice.policyBlocked, false)
   assert.match(advice.reason, /锁文件/)
-  // 设备码那条要抢同一个锁：动作里必须点明它不是绕过办法。
-  assert.match(advice.action, /设备码登录/)
+  // 设备流那条要抢同一个锁：动作里必须点明它不是绕过办法。
+  assert.match(advice.action, /设备流登录/)
   assert.match(advice.action, /不是绕过办法/)
   // 换目录已被实测排除（主目录根 / 插件目录都试过），动作里必须说清，别再让人白试。
   assert.match(advice.action, /换目录也没用/)

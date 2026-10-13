@@ -17,6 +17,7 @@ const { clipboard, openPath, dwsLogin, relogin, sessionStatus, ossCred, bindH3yu
 )
 const { sessionView, isExpired, parseSessionOutput } = await import(new URL('src/host/h3yun/session.ts', ROOT).href)
 const { createWorkbenchState } = await import(new URL('src/host/state/store.ts', ROOT).href)
+const { createLoginHandleHolder } = await import(new URL('src/host/system/device-login.ts', ROOT).href)
 
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
@@ -39,16 +40,40 @@ function makeCtx({ shell, inside = () => true, files = {}, dirs = [] } = {}) {
           async execute(spec) {
             commands.push(spec.command)
             const out = shell === undefined ? { stdout: '' } : shell(spec.command, spec)
-            return { result: async () => ({
-              // 注意不能用 `?? 0`：`exitCode: null`（进程被信号杀死）会被当成 0，
-              // 于是「超时/被杀」在测试里变成成功。用属性存在性判断。
-              exitCode: 'exitCode' in out ? out.exitCode : 0,
+            // 注意不能用 `?? 0`：`exitCode: null`（进程被信号杀死）会被当成 0，
+            // 于是「超时/被杀」在测试里变成成功。用属性存在性判断。
+            const exitCode = 'exitCode' in out ? out.exitCode : 0
+            const sandbox = out.sandbox
+            const result = {
+              exitCode,
               signal: null, timedOut: out.timedOut === true, aborted: false, timeoutMs: 1,
               stdout: { text: out.stdout ?? '', truncated: false },
               stderr: { text: out.stderr ?? '', truncated: false },
               // 沙箱事实按**服务形状**透传（`{ mode, denied, runnerFailed }`）；不给就是不上沙箱。
-              ...(out.sandbox === undefined ? {} : { sandbox: out.sandbox }),
-            }) }
+              ...(sandbox === undefined ? {} : { sandbox }),
+            }
+            // 同一个 execute 要能当**前台**（读 `result()`）也要能当**后台**（读增量 + status）：
+            // "前台/后台只是调用方要不要 await 结果"，替身必须照这个语义来，否则会在替身上
+            // 造出一台真机上不存在的机器。
+            let drained = false
+            return {
+              result: async () => result,
+              readOutput() {
+                if (drained) return { delta: '', lossy: false }
+                drained = true
+                // 真契约是**合并流**（`ShellProcessRead.delta`：stderr 在一个带标记的段落里）。
+                // 替身把 stderr 放前面，好让「只回尾部」那条断言仍然盯得住 stdout 的结尾。
+                return { delta: `${out.stderr ?? ''}${out.stdout ?? ''}`, lossy: false }
+              },
+              // 与 DSH 契约一致：杀掉"还在跑"的才回 true，已经结束的回 false。
+              kill() { return out.pending === true },
+              done: Promise.resolve(),
+              get exitCode() { return 'exitCode' in out ? out.exitCode : 0 },
+              // `pending: true` = 这条命令永远不结束（用来验超时收尾）。
+              get status() { return out.pending === true ? 'running' : 'completed' },
+              // `execution.sandbox` 是**值**（`run.ts` 取 `execution.sandbox`），不是方法。
+              sandbox,
+            }
           },
         }
       }
@@ -233,7 +258,7 @@ test('every escalated command carries a working directory', async () => {
 
 // ── 登录与会话 ──────────────────────────────────────────────────────────────
 
-test('dwsLogin 只跑 `dws auth login`（系统浏览器），**没有**设备码分支，并只回尾部', async () => {
+test('dwsLogin 只跑 `dws auth login`（系统浏览器），**没有**设备流分支，并只回尾部', async () => {
   const ctx = makeCtx({ shell: () => ({ stdout: 'x'.repeat(900) + 'TAIL', stderr: 'err' }) })
   const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
   assert.equal(result.ok, true)
@@ -241,18 +266,55 @@ test('dwsLogin 只跑 `dws auth login`（系统浏览器），**没有**设备�
   assert.equal(result.stdoutTail.endsWith('TAIL'), true)
   assert.ok(result.stdoutTail.length <= 600, '只回尾部，避免把整段输出塞进响应')
 
-  // 2026-09-30：DSH 不再提供设备码登录 —— 即使调用方传 `device: true`（旧客户端），
-  // 也**不会**拼出 `--device`（需要设备码的走终端里的 CLI）。
+  // loopback 这条路**不认** `device` 入参：设备流走协议 32 的三条独立操作
+  // （`dws-login-device-*`），不是给这个同步方法加分支 —— 两者的生命周期完全不同。
   const legacy = makeCtx({ shell: () => ({ stdout: '' }) })
   await dwsLogin(depsOf(legacy), { device: true }, TEST_HOME)
-  assert.equal(legacy.commands[0].includes('--device'), false, '插件不提供设备码登录')
+  assert.equal(legacy.commands[0].includes('--device'), false, '设备流走独立操作，不在 loopback 上拼 --device')
 })
 
-test('dwsLogin surfaces a timeout instead of a silent failure', async () => {
-  const ctx = makeCtx({ shell: () => ({ exitCode: null, timedOut: true, stderr: 'timeout' }) })
-  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
+test('dwsLogin 到点自己收尾并报超时（不再依赖执行器的死线）', async () => {
+  // 后台跑之后超时由插件自己控（`startShell` 刻意不武装执行器的默认死线：
+  // 登录要等人，60 秒的默认值会把一次正常等待变成超时）。
+  const ctx = makeCtx({ shell: () => ({ pending: true, stderr: 'timeout' }) })
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME, { pollMs: 1, limitMs: 5 })
   assert.equal(result.ok, false)
   assert.equal(result.timedOut, true)
+})
+
+test('钉钉登录由插件打开扫码页，且不让 dws 自己开（--no-browser）', async () => {
+  const ctx = makeCtx({
+    shell: (command) => (command.startsWith('open ')
+      ? { stdout: '' }
+      : { stdout: '请在浏览器中完成扫码授权。\n如果浏览器未自动打开，请手动访问:\n  https://login.dingtalk.com/oauth2/auth?client_id=x\n⏳ 等待授权中...\n' }),
+  })
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
+  assert.equal(result.ok, true)
+  const login = ctx.commands.find((command) => command.includes('dws auth login'))
+  assert.match(login, /--no-browser/, 'dws 自己那次开浏览器失败是静默的，改由插件开')
+  const opens = ctx.commands.filter((command) => command.startsWith('open '))
+  assert.equal(opens.length, 1, '只开一次')
+  assert.match(opens[0], /^open -n /, '必须强制新实例：别人挂着的无头浏览器会把 URL 吞掉且退出码仍是 0')
+  assert.match(opens[0], /login\.dingtalk\.com\/oauth2\/auth/)
+  assert.equal(result.opened, true)
+  assert.equal(result.openError, '')
+  // 链接要跟着结果回来：`open` 退出 0 **不**等于页面真的出现了，面板得有得可显示 / 可复制。
+  assert.equal(result.url, 'https://login.dingtalk.com/oauth2/auth?client_id=x')
+})
+
+test('登录被取消时立刻收尾，不再干等到 5 分钟（面板才能"改用设备流登录"）', async () => {
+  // 现场：点了「登录钉钉」之后最长要等 5 分钟，那期间设备流按钮是灰的 —— 员工没有出路。
+  // 现在 Host 手里有可杀的句柄，取消后这条调用必须马上返回。
+  const ctx = makeCtx({ shell: () => ({ pending: true, stdout: '⏳ 等待授权中...\n' }) })
+  const holder = createLoginHandleHolder()
+  const running = dwsLogin({ ...depsOf(ctx), loginHandles: holder }, {}, TEST_HOME, { pollMs: 1, limitMs: 300_000 })
+  // 等它把句柄登记上（startShell 是异步的）。
+  await new Promise((resolve) => { setTimeout(resolve, 5) })
+  assert.equal(holder.cancel(), true, '这时应该有一个在跑的 dws 被登记过')
+  const result = await running
+  assert.equal(result.ok, false)
+  assert.equal(result.cancelled, true)
+  assert.match(result.error, /取消/)
 })
 
 test('relogin runs the whitelisted crwu session login and parses the session', async () => {
@@ -267,7 +329,7 @@ test('relogin runs the whitelisted crwu session login and parses the session', a
   assert.equal(result.error, '')
 })
 
-// ── 登录命令的形状（协议 22 起：DSH 只触发 CLI，不自己指定目录 / 不提供设备码）────
+// ── 登录命令的形状（协议 22 起：DSH 只触发 CLI，不自指定目录；协议 32 起设备流走独立操作）──
 
 test('登录命令不再替 CLI 指定任何目录（临时目录与配置目录都用默认）', async () => {
   const ctx = makeCtx({ shell: () => ({ stdout: '' }) })
@@ -322,8 +384,8 @@ test('dwsLogin attributes the .dws lock denial instead of echoing the CLI', asyn
   assert.equal(result.ok, false)
   assert.equal(result.sandboxBlocked, true)
   assert.match(result.error, /被这台机器拒绝/)
-  // 设备码那条要抢同一个锁：动作里必须点明它**不是**绕过办法。
-  assert.match(result.advice, /设备码登录/)
+  // 设备流那条要抢同一个锁：动作里必须点明它**不是**绕过办法。
+  assert.match(result.advice, /设备流登录/)
   assert.match(result.advice, /不是绕过办法/)
 })
 
