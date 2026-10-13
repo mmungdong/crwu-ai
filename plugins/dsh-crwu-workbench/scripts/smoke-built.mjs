@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from '../src/host/tools/consts.ts'
+import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from '../src/host/tools/report-audit/consts.ts'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -53,7 +53,7 @@ function fakeHostContext() {
   const listeners = new Map()
   // `tools` 是硬依赖：`apply()` 会把必需 CRWU 工具注册进去（缺注册表直接抛）。
   // 替身只收集注册名并返回 disposer；「注册进真实注册表后的 schema/pipeline 行为」
-  // 由 `tests/unit/host-tools.test.mjs` 对着真实契约覆盖。
+  // 由 `tests/unit/host/host-tools.test.mjs` 对着真实契约覆盖。
   const registeredTools = []
   const tools = {
     register(definition) {
@@ -358,7 +358,7 @@ await check(`Host 产物：包含 ${String(REQUIRED_AUDIT_TOOLS.length)} 个 CRW
   assert.equal(/require\(\s*["']node:child_process["']\s*\)/.test(bundle), false, '产物里不许 require node:child_process')
   // 回传脚本的名字只出现在注释里（讲"为什么删掉它"），执行路径里不存在：
   // 审核链路的业务命令只有 `ctx.shell` + 包内二进制这一条，Python 不在其中。
-  // 「不再依赖 Python 回传脚本 / 不再有裸命令拼接」由 `tests/unit/host-tools.test.mjs` 与
+  // 「不再依赖 Python 回传脚本 / 不再有裸命令拼接」由 `tests/unit/host/host-tools.test.mjs` 与
   // `host-audit-prompt.test.mjs` 对着**源码**与**提示词**逐条断言：产物里这些词会出现在
   // 讲"为什么删掉它们"的注释中，对 bundle 做文本包含式断言只会得到假红。
   return `lib/index.js → ${String(REQUIRED_AUDIT_TOOLS.length)} 个 crwu_* 工具，无路径注入指纹`

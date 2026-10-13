@@ -296,7 +296,7 @@ async function main() {
   log(`\nDSH 兼容矩阵：${String(passed)}/${String(results.length)} 通过（${options.runtimes.join(' / ')}）`)
   if (passed !== results.length) {
     log('提示：真实 DSH 会按 `evaluatePluginCompatibility` 判定并可能直接禁用插件；')
-    log('      修 peer 区间后要同时更新 `engines.dsh` 与 tests/unit/host-package.test.mjs 的支持矩阵。')
+    log('      修 peer 区间后要同时更新 `engines.dsh` 与 tests/unit/host/host-package.test.mjs 的支持矩阵。')
     return 1
   }
   return 0

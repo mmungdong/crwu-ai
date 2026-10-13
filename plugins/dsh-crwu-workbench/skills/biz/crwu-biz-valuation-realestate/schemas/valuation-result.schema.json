@@ -1,0 +1,231 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.result.v1",
+  "title": "房地产估值结果（估值结果.json）",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "valuationId",
+    "method",
+    "methodReason",
+    "baseDate",
+    "unitPrice",
+    "totalValue",
+    "pricingArea",
+    "priceUnit",
+    "manual_confirmation_items",
+    "capability_gaps",
+    "knowledge_sources",
+    "cases",
+    "artifacts",
+    "methodScreening",
+    "methodConflict"
+  ],
+  "properties": {
+    "valuationId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "本轮估值 ID（Host 生成，目录名同源）"
+    },
+    "method": {
+      "enum": [
+        "market",
+        "income",
+        "cost"
+      ],
+      "description": "**采用结论的方法**。`auto` 只是用户的输入（由 AI 判定），不许出现在结论里"
+    },
+    "methodReason": {
+      "type": "string",
+      "description": "采用该方法的理由；未采用的方法与排除理由一并写在这里"
+    },
+    "baseDate": {
+      "type": "string",
+      "description": "用户确认的评估基准日（YYYY-MM-DD）。未指定时必须是空串，**不许**从资料里识别到的日期补一个"
+    },
+    "unitPrice": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "单价（元/㎡）。与 totalValue 至少一个非空；拿不到就是 null，不许填 0"
+    },
+    "totalValue": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "总价（元）。同上"
+    },
+    "manual_confirmation_items": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "待人工确认事项。baseDate 为空时**必须**包含「本次未指定评估基准日」"
+    },
+    "capability_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "能力缺口（未解析资料、知识缺失、来源失败、无截图…）。不许把缺口伪装成「已按规范完成」"
+    },
+    "knowledge_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "route",
+          "source",
+          "updatedAt",
+          "digest"
+        ],
+        "properties": {
+          "route": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "enum": [
+              "dws",
+              "local"
+            ],
+            "description": "`missing` 不许出现在来源清单里"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "来源端给出的更新时间；拿不到就是空串"
+          },
+          "digest": {
+            "type": "string",
+            "minLength": 1,
+            "description": "正文指纹，用于事后核对"
+          }
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "valuation-case.schema.json"
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "html",
+        "xlsx",
+        "json"
+      ],
+      "properties": {
+        "html": {
+          "type": "string",
+          "description": "估值报告.html（相对案例目录）"
+        },
+        "xlsx": {
+          "type": "string",
+          "description": "估值底稿.xlsx（相对案例目录）"
+        },
+        "json": {
+          "type": "string",
+          "description": "估值结果.json（相对案例目录）"
+        }
+      }
+    },
+    "pricingArea": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "计价面积（㎡）= 建筑面积，权证面积优先；拿不到写 null。有 unitPrice 时**必须**给正数（否则总价无法与单价勾稽）"
+    },
+    "priceUnit": {
+      "type": "string",
+      "description": "计价单位，统一为「元/㎡」（人民币元/建筑平方米）。按套内面积或按套计价的先换算，不在这里写别种口径"
+    },
+    "methodScreening": {
+      "type": "array",
+      "minItems": 1,
+      "description": "方法判断记录（§7.2）：**采用的方法及依据** + **其他方法不采用的原因**。恰好一条 `adopted`，且与 `method` 一致；每条都要写依据。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "method",
+          "verdict",
+          "reason"
+        ],
+        "properties": {
+          "method": {
+            "enum": [
+              "market",
+              "income",
+              "cost"
+            ]
+          },
+          "verdict": {
+            "enum": [
+              "adopted",
+              "not-adopted"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "依据（规范条款 / 资料条件 / 数据充分性）"
+          }
+        }
+      }
+    },
+    "methodConflict": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "userMethod",
+            "adoptedMethod",
+            "reason"
+          ],
+          "description": "**用户指定的方法与规则或数据不足的冲突**（§7.2）。用户指定了方法、结论却用了别的方法时必须给出来（不许静默切换）；没有冲突时为 null。",
+          "properties": {
+            "userMethod": {
+              "enum": [
+                "market",
+                "income",
+                "cost"
+              ]
+            },
+            "adoptedMethod": {
+              "enum": [
+                "market",
+                "income",
+                "cost"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -11,10 +11,10 @@
  * 缺省是**已授权**：绝大多数用例关心的是业务行为，不是授权闸门；需要验闸门的用例
  * 显式传 `consentOf: () => missingConsent()`。
  */
-import { createLocalAccessBroker } from '../../src/host/access/broker.ts'
-import { workbenchConfigPath } from '../../src/host/state/persist.ts'
-import { ifindCredentialPath } from '../../src/host/ifind/store.ts'
-import { ossConfigPath } from '../../src/host/oss/cred.ts'
+import { createLocalAccessBroker } from '../../src/host/core/access/broker.ts'
+import { workbenchConfigPath } from '../../src/host/core/state/persist.ts'
+import { ifindCredentialPath } from '../../src/host/integrations/ifind/store.ts'
+import { ossConfigPath } from '../../src/host/integrations/oss/cred.ts'
 import { grantedConsent, missingConsent } from './local-access-fixture.mjs'
 
 export const TEST_HOME = '/Users/x'

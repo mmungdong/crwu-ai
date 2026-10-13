@@ -14,11 +14,33 @@ DSH 对每个 Skill 根只扫描一层，因此每一层都必须单独注册。
 | 层 | 源目录 | 维护方式 |
 | --- | --- | --- |
 | 自研 | `plugins/dsh-crwu-workbench/skills/crwu/` | 本仓维护；修改后运行自洽性校验 |
+| 自研·业务 | `plugins/dsh-crwu-workbench/skills/biz/` | 本仓维护；业务技能（估值等）独立执行，不依赖 `crwu-audit` 编排 |
 | 上游 | `plugins/dsh-crwu-workbench/skills/dws/` | vendored `dingtalk-workspace-cli` 内容；只通过 `npm run dws:sync` 更新 |
 | 公共 | `plugins/common/skills/` | 跨插件共享；通过 `npm run skills:sync` 同步进插件包 |
 
 包内落点和 DSH 注册方式见
 [`plugins/dsh-crwu-workbench/AGENTS.md`](../plugins/dsh-crwu-workbench/AGENTS.md)。
+
+### 业务层的估值技能（`skills/biz/crwu-biz-valuation-realestate/`）
+
+它是**房地产估值**的作业承包方：由工作台的「报告评估」模块发起，在一轮估值案例目录里完成
+资料整理、案例选取、市场法/收益法/成本法测算与交付件生成。目录按**产物职责**分工：
+
+| 目录 | 放什么 | 规矩 |
+| --- | --- | --- |
+| `references/` | 业务知识、计算规则与输出契约（含知识路由与降级口径） | 正文来自业务知识库；本地文件是**降级备份**，编号与库内路由不一致是刻意的（见 `references/08`） |
+| `template/` | 要被填充或渲染的正式模板（`valuation-workbook.xlsx` / `valuation-report.html` / `valuation-result.json`） | **只读**：产物一律写进估值案例目录，不许回写模板 |
+| `schemas/` | 结果 / 案例 / 对象的结构契约 | AI 输出的 JSON 结构校验 |
+| `examples/` | 通过校验的样例 | 样例必须**真的过**契约测试 |
+| `assets/` | logo / 字体 / 图标等静态资源 | 只放可再分发且注明来源的资源；现在是空占位 |
+| `scripts/` | 提取、构建、校验脚本与它们的测试 | 不含裸 `crwu` / `dws` / `ossutil` 调用（本仓技能守卫扫描） |
+
+调用方式是**结构化 Tool**，不是命令行：`crwu_valuation_case_bootstrap`（读冻结输入）、
+`crwu_valuation_file_extract`、`crwu_valuation_knowledge_materialize`、`crwu_valuation_browser_preflight`、
+`crwu_valuation_market_search` / `crwu_valuation_market_capture`（外部案例与证据）、
+`crwu_valuation_artifact_validate`（交付前两道校验），以及跑技能脚本的 `crwu_run_python_script`。
+这份名单（`VALUATION_CHILD_TOOLS`）在起估值**之前**会拿去问宿主注册表：缺任何一条就拒绝启动 ——
+写在常量里不等于宿主真的注册了它们。
 
 ## 查看当前 Skill
 

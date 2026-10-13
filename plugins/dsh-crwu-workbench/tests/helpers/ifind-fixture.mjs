@@ -9,7 +9,7 @@
  * `ifind-credential-save`、环境自检的 ⑥ 层），各自的测试必须用**同一份**协议替身，
  * 否则会出现"探测说已认证、取数说 401"这种只有真机能发现的漂移。
  */
-import { ifindCredentialPath } from '../../src/host/ifind/store.ts'
+import { ifindCredentialPath } from '../../src/host/integrations/ifind/store.ts'
 import { consentFor, missingConsent } from './local-access-fixture.mjs'
 import { makeTestAccess } from './local-access-broker-fixture.mjs'
 

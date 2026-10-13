@@ -7,6 +7,1044 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.42 · 2026-10-13 · feat · 工作区会话统一（协议 32）+ 报告评估资料入口与输入交接 + 导航分模块 / 单工作面 / 样式作用域（协议 33）
+
+用户报的「会话没创建在我环境信息里选中的工作区下面」在四条链路上各有成因。这一版把
+"会话该落在哪儿"收敛成**一个**判据来源，并把所有降级路径删除。
+
+- 新增 `src/host/core/workspace-session/`（协议 32）：唯一的工作区解析与建会话入口。
+  `resolveSelectedWorkspace` 逐条核对 **id 非空 → 目录未丢 → 自检已完成 → 注册表能查到 id →
+  注册表路径与选中路径是同一目录 → 确实是目录**；`createWorkspaceSession` 只发
+  `sessionController.create({ workspaceId })`，随后回读会话 cwd 与工作区成员关系。
+  失败给**可分类的原因**（`no-workspace` / `workspace-unregistered` / `workspace-path-mismatch` /
+  `session-attach-failed` / `session-membership-missing` …）与一句人话。
+- 新增 `src/client/core/workspace-session.ts`：客户端门禁 —— `workspaceId` 为空就不建会话。
+- **审核根**改走统一入口：不再自己 `agents.create({ meta: { cwd } })`、不再用
+  `workspacePath || caseRoot`（`caseRoot` 是部署配置目录，不是用户选的工作区）、不再 mkdir 补建、
+  不再替用户登记工作区；`attachSession` 失败**不再只记一条 notes 继续跑**，而是停掉刚建的会话并失败；
+  预检/策略/工具可见性任一步失败也释放该会话。根记录新增 `workspaceId`，复用前重新核对
+  工作区一致性 + Agent 存活 + 会话 cwd + 成员关系 + 沙箱/审批策略。
+- **审核子会话**建完**显式挂到同一工作区**并回读 `sessionIds`（DSH 的 `subagents.start` 不替
+  child 做这件事），并校验 child cwd 与父会话一致；挂不上就 abort + 有界 dispose 释放它，不返回成功。
+- **报告讨论 / 本地审核**删除 `cwd` 降级：`workspaceId` 为空时直接返回"工作区未就绪"，
+  包含 `cwd: ''`（真机上是 `failed to ensure project directory "": mkdir ''`）与
+  `cwd: workspacePath`（落在对的目录、却挂到侧栏「未分组」下）两种旧写法。
+- `audit-start` 的工作区门禁改由统一解析器给结论，`errorKind: 'workspace'`；指令与案例目录
+  一律用已核对的工作区路径。
+- 协议 31 → 32（四条链路的跨进程行为都变了，旧客户端/旧宿主的组合正是用户看到的现象）。
+  新增 5 条工作区会话单元断言组、3 条子会话挂载断言、3 条"`caseRoot` 不再是降级"断言。
+
+**报告评估（房地产估值）资料入口与输入交接（2026-10-12，同一版）**
+
+- 新增 `src/host/domains/report-evaluation/intake/`：多类型资料入口的**纯逻辑层**。
+  类型判定（PDF / Word / Excel / 图片，另有 text / archive / unknown）、内容类型、人话类型名；
+  选择校验（**空文件 / 越界路径 / 超单份上限 / 重复选择**逐条拒绝、理由分类，不支持的类型
+  不算选择错误而是"未解析"）；输入清单与**排序无关**的 `sha256` 指纹；提取编排
+  （每份文件交给第一个能处理它的提取器，读不出来的**不阻塞**其他文件并进 `capability_gaps`，
+  提取器报的缺口与观察保序去重上浮，空结果无缺口时记一条观察而不是假装读到了空内容）。
+- 新增 `src/host/domains/report-evaluation/scope.ts`：估值**案例 scope**。
+  `ValuationScope` 持有 `valuationId` / 案例目录 / 会话 / 工作区 / **冻结输入快照**；
+  `ValuationScopes` 双向索引 + 有界淘汰；`mintValuationId`（`估值-<yyyymmdd>-<hhmmss>-<4 hex>`）
+  与 `isSafeValuationId`（`..` / 分隔符 / 绝对路径一律不合法）。
+- 案例门禁（`audit/case-access.ts`）新增 `kind: 'valuation'` 分支：托管 scope 注册表收成一个
+  `CaseScopeRegistries` 对象（`localAudit` / `valuation`），六个案例内 Tool 统一经
+  `caseScopes(deps)` 传入 —— 归属按**会话 id 逐字相等**钉死，模型提交的 `caseDir`
+  必须与那一份规范解析后相等（普通会话判据认的是形状，认不出归属）。
+- 新增模型可见 Tool `crwu_valuation_case_bootstrap`：把**已冻结**的输入落盘到案例目录
+  （`材料-源/`、`来源证据/`、`知识快照/` + `估值输入.json`），返回方法 / 基准日 / 资料清单 / 指纹。
+  方法、基准日与用户补充要求**只来自冻结快照** —— 这个工具没有任何参数能让调用方改写它们，
+  于是"确认后输入快照不可变"是结构性的，不是靠提示词。基准日未选时落盘与回传都是空串。
+  它**不进** `REQUIRED_AUDIT_TOOLS`（审核能力门禁不该被另一条业务线的工具左右）。
+- 新增技能脚本 `skills/biz/crwu-biz-valuation-realestate/scripts/extract_files.py` 与它的契约测试：
+  PDF 文本（有 pypdf/PyPDF2/pdfminer 就用，没有就**如实报缺库**，绝不自己解析 PDF 内容流 ——
+  字形编码读错会产出"看起来像正文的乱码"，而乱码会被下游当成坐落与面积）、Word（python-docx，
+  段落 + 表格）、Excel（openpyxl，`data_only` 取公式值）、图片（Pillow 登记尺寸格式，
+  内容识别进 `capabilityGaps` 等人工/OCR）；旧版 `.doc`/`.xls`、压缩包、未知扩展名各自给具体缺口。
+  `extractedFields` 只做**标签锚定**（`坐落：…`），没有标签的正文一个字段都不产生；
+  空文件是 `error` 而不是缺口；单份读不出来不影响脚本本身（退出码 0 + 结果文件必存在）。
+- 新增 `src/host/domains/report-evaluation/intake/python-extractor.ts`：Python 后端。
+  **先把脚本落到案例目录的 `scripts/`** 再执行（`python.script.run` 只接受案例内脚本路径，
+  Host 自己也不开后门）；argv 逐个传参、不经 shell；结果写成案例目录里的 JSON 再读回来
+  （不走 stdout —— 表格可能很大，被截断的 JSON 会变成误导性的"解析失败"）。
+  读的是**插件自己的包文件**（`node:fs`），输出才走 `ctx.fs`（那是员工目录）。
+- 新增模型可见 Tool `crwu_valuation_file_extract`：校验案例归属 → 收窄相对路径
+  （空 / 绝对 / `..` 一律拒绝在起进程之前）→ 调编排 → **只回紧凑摘要**，
+  完整正文与表格落盘 `<案例目录>/提取结果/提取汇总.json`。一份都没解析出来时
+  `ok:false` + `capability-gap`，不说成"成功但结果为空"。
+- `packageRootFrom` 的向上查找上限 4 → 6 层：分域模块 `src/host/domains/<域>/<子域>/*.ts`
+  距包根 5 层，4 层会让"包内技能脚本"解析成空串（表现为"插件包可能不完整"这种误导性结论）。
+- `make plugin-check` 增跑业务层的脚本契约测试（缺依赖的运行时会**跳过**对应用例，
+  缺口分支照常断言）。新增 13 条 Host 侧断言 + 12 条脚本契约断言。
+
+**报告评估的业务知识路由（2026-10-12，同一版）**
+
+- 新增 `src/host/domains/report-evaluation/knowledge/`：知识路由的**决策层**（纯逻辑 + 注入探针）。
+  `route.ts` 写死七条库内节点与**本地 fallback 映射**（`04-成本法 → references/07-cost-method.md`
+  这类编号不一致逐个列明，绝不按编号或文件名推导）；`snapshot.ts` 给每条来源配
+  `source` / `updatedAt` / **正文指纹**与整份快照指纹（按路由排序算，取数顺序无关）；
+  `resolve.ts` 实现降级口径：知识库优先 → 本地参考 → 必需知识（`01-房地产估值通用`）
+  两边都缺则**停止估值**，其余单份缺失记 `capability_gaps` 继续；`fallback.ts` 读包内参考
+  并做存在性自检（重命名不许让 fallback 静默失效）。
+- 三条容易静默出错的规则做成了显式判据并各有断言：**空正文不算命中**（节点在但导出为空时
+  若算命中，子会话会拿一段空上下文去"按规范"编）、**探测失败 ≠ 节点不存在**
+  （前者进能力缺口，否则"知识库挂过"永远查不出来）、**必需知识缺失是停止而不是降级**。
+- 新增模型可见 Tool `crwu_valuation_knowledge_materialize`：一次遍历知识库树（组织库 + 个人库，
+  与审核链路同一组范围与同一套通道）、命中节点按 `extension` 走 `doc +export` / `drive +download`，
+  正文落 `<案例目录>/知识快照/`，来源写 `.知识来源.json`（库名、是否读到库、方法、指纹、逐条来源、
+  失败与缺口）；知识库不可达时**退到技能自带参考文件**并如实标注 `source: local` 与失败证据。
+  同样**不进** `REQUIRED_AUDIT_TOOLS`。
+- 修正技能 `SKILL.md` 与 `references/` 里的**库内编号漂移**：此前表格与交叉引用用的是本地写作顺序
+  （`04-案例选取` / `07-成本法`），与业务知识库的真实路由（`04-成本法` / `05-案例选取` /
+  `06-参数与税费` / `07-计算表模板`）不一致 —— AI 按那张表寻址会取到**错的**正文而不报错。
+  已按业务路由对齐，并加两条防漂移断言（SKILL.md 映射表与路由表逐行一致；references 里出现的
+  节点名必须都是合法节点）。新增 22 + 7 条断言。
+
+**报告评估的外部案例来源与浏览器预检（2026-10-12，同一版）**
+
+- 新增 `src/host/domains/report-evaluation/browser/`：来源框架与预检的**纯逻辑**。
+  `retry.ts`（每个分页**恰好**三次尝试，成功即停、失败留证据、最后一次之后不再多等）、
+  `login-state.ts`（三态登录 × 失败页数 → 阶段：未确认登录 → `browser-login-required`，
+  已确认登录 → 记缺口继续其他来源）、`login-probe.ts`（网络失败 > 验证码 > 登录墙 > 状态码 > 正常）、
+  `provider.ts`（来源白名单 + 注入式抓取通道 + 明确不做的事）、`providers.ts`（三个站点的 URL 模板）、
+  `fetch-transport.ts`（默认 `fetch`：不伪装 UA、不跟随到白名单之外的 host、响应体有上限）、
+  `capture.ts`（证据落 `<案例目录>/来源证据/`，文件名带内容指纹）。
+- 新增 `src/host/domains/report-evaluation/market/`：**字段标准化**与挂牌纪律。
+  `jsonld.ts` 只从页面里**明确声明**的结构化数据取案例（不按 CSS 选择器猜 DOM、不让模型自由发挥）；
+  `normalize.ts` 做跨站点字段别名、价格/面积解析与 `transactionType` 判定 ——
+  **只有**页面明写"成交"才算成交，缺省是"未知"而不是"成交"，挂牌案例`caseIsComparable=false`。
+- 新增三个模型可见 Tool：`crwu_valuation_browser_preflight`（逐家给"可用 / 需要登录 / 无法检查"
+  与原因，并在返回里写明"这里回答的是站点是否放行公开检索，不是插件知道你的账号状态"）、
+  `crwu_valuation_market_search`（逐页三次尝试 + 证据落盘 + `估值案例.json` + 阶段判定）、
+  `crwu_valuation_market_capture`（单页取证）。三者都**不是**审核必需集成员。
+- **授权门禁**：三个 Tool 都先过本机访问授权，未授权时**零外部请求、零落盘**（与协议 18
+  对氚云 / 钉钉 / OSS / iFinD 的口径一致）。"在默认浏览器登录"**不**在这些 Tool 里 ——
+  打开系统浏览器是面板来源的特权操作（`system.browser.open` 的 `allowedSources` 只有 `panel`），
+  Tool 借面板身份开浏览器正是操作表要防的提权。
+- **修正别名表漏项**：`floorSize`（schema.org 里建筑面积的规范字段）不在别名表里，导致
+  JSON-LD 来源的面积永远拿不到 → 单价永远为 null → 市场法失去唯一的可比指标，而且**不报错**。
+  同时收进了 `url` / `currency` 别名，并对非人民币标价给出人工核对提醒（本工具不做汇率换算）。
+  新增一条防漂移断言：**JSON-LD 产出的每个键都必须能被别名表消费**（收了死数据、或漏了字段，都会红）。
+- 截图能力如实上报：本部署没有无头浏览器，证据是页面字节 + 指纹，**每次**都写进 `capabilityGaps`，
+  避免"有证据文件"被读成"有截图"。新增 24 + 17 条断言。
+
+**报告评估的交付模板与契约校验（2026-10-12，同一版）**
+
+- **Skill 目录按产物职责归位**：`assets/valuation-workbook-template.xlsx` → `template/valuation-workbook.xlsx`
+  （`template/` = 要被填充或渲染的正式模板，`schemas/` = AI 输出的结构校验，`examples/` = 样例，
+  `assets/` = 图片字体等静态资源）。`assets/` 已清空。生成脚本与契约脚本的默认路径同步改到 `template/`，
+  并加了一条断言：**默认路径必须指向 `template/`**（指错了会让"不带参数"的调用静默校验别的文件）。
+- 新增 `schemas/valuation-result.schema.json` / `valuation-case.schema.json` / `valuation-object.schema.json`：
+  结果、案例与对象的结构契约。案例 schema 里 `transaction_type` 是四值枚举，
+  并新增 `used_as_comparable` —— 只有 `成交` 才允许为 true（挂牌价是卖方要价，不得直接当成交价）。
+- 新增 `examples/valuation-result.sample.json` / `valuation-case.sample.json`：一份**通过校验**的完整样例
+  （含 dws 与 local 两种知识来源、挂牌与成交各一条案例、以及真实的能力缺口文案）。
+- 新增 `references/08-knowledge-routing.md`（路由、来源标注与降级口径）与
+  `references/09-output-contract.md`（案例目录、结果 JSON 的硬性规则、交付前的两道校验）。
+  `SKILL.md` 的执行步骤随之补上"模板复制到案例目录、不许回写 `template/`"与"交付前必须过两道校验"。
+- 新增 `scripts/validate_result.py`：结果契约校验。**每条硬规则都真的会让它失败**（有 15 条反例断言）：
+  `method=auto`（那是输入不是结论）、`baseDate` 为空但没登记「本次未指定评估基准日」、
+  基准日形状不是 `YYYY-MM-DD`、数字填 0、两个金额都为 null、`source=missing` 混进来源清单、
+  来源缺 `digest`、挂牌案例被标为可直接作可比实例、案例没有保留/剔除理由、缺 `url`/`captured_at`、
+  交付件不存在、交付件跑到案例目录之外；带 `--html` / `--workbook` 时还做一致性抽查
+  （报告里必须找得到 JSON 里的数字；底稿不许有隐藏表或 `#REF!`/`#VALUE!`/`#DIV/0!`）。
+- 新增 `scripts/test_valuation_contracts.py`：上面两个脚本的契约测试（19 条），
+  并断言**随包发布的底稿模板过工作簿契约**、缺文件时返回非零而不是静默通过。已接入 `make plugin-check`。
+- 新增模型可见 Tool `crwu_valuation_artifact_validate`（第七个估值 Tool）：把两个校验脚本落到
+  `<案例目录>/scripts/` 再执行（`python.script.run` 只接受案例内的脚本路径，Host 也不开后门），
+  逐条把问题原样带回；缺交付件时**直接报缺哪一件**且不去跑那一份校验。
+  同样**不进** `REQUIRED_AUDIT_TOOLS`。`pack:assert` 增补模板 / schema / 两个校验脚本的存在性断言。
+
+**报告评估的轮次状态机、子会话指令与八个 Host 操作（2026-10-12，同一版）**
+
+- 新增 `domains/report-evaluation/lifecycle/`：估值轮次的**状态机**与进程内注册表。
+  `draft → extracting → confirmation → queued → running → completed`，另有 `failed` / `cancelled` /
+  `browser-login-required`（可恢复）与 `stale-host`（协议代数不匹配时的页面结论，**不由 Host 返回**）。
+  **非法转移一律拒绝并给出原因**：没有转移表时任何一处写入都能改状态，典型后果是
+  "已经失败的轮次被后续心跳改回 running"、界面永远转圈而没有任何地方报错。
+  进度归一化把 `completed` 夹在 `total` 之内（跑过头是"页面在编进度"的第一个信号）；
+  `total` 无效时都归 0 而不是显示 `3/0`。注册表有界：超限时**先删终态**、全是活动轮次时删最旧的
+  （写这条时先试过"只标成失败"，用例当场抓出标记不减少条目数、会一路把每一轮都标花）。
+- 新增 `domains/report-evaluation/prompt.ts`：估值子会话的**固定指令**（方案 §12）。
+  逐段写全：估值 ID、案例目录、输入资料与提取结果（未解析的**逐条列出**原因）、知识来源与
+  "必需知识缺失就停止测算"、外部来源状态、按方法分派的口径、底稿的复制与"只填输入区"纪律、
+  三个交付件、交付前的两道校验。用户补充要求**单独成段**并明确"不得覆盖安全规则 / 工具边界 /
+  目录范围 / 公式契约 / 输出结构"—— 直接拼进指令等于让一份被投喂的资料改写边界。
+- 新增 `ops/report-evaluation.ts`：八个 Host 操作（`valuation-files-scan` / `valuation-intake` /
+  `valuation-browser-preflight` / `valuation-start` / `valuation-status` / `valuation-cancel` /
+  `valuation-result` / `valuation-open-artifact`）。三条硬口径：
+  ① `valuation-start` 核对**确认指纹**（资料在确认后被改过就拒绝启动，避免"确认的是 A、算的是 B"）；
+  ② 基准日空就是空，**绝不**从资料里识别到的日期补一个；
+  ③ 会话落点只走统一会话服务（`workspaceId`），工作区不成立就不建会话、不留下半截轮次。
+  操作清单 42 → 50；`valuation-intake` 把轮次推到 `confirmation`（抽屉即"待确认"阶段），
+  `valuation-start` 沿**合法路径**推到 `queued` 再 `running`（一步到位会被转移表拦下，
+  这条也是被用例抓出来的）。
+- **资料按字节复制**：新增 `copyCommand()`（`cp -f` / `Copy-Item -Force`）并通过 Broker 的
+  `system.case-file.write` 执行，指纹按源文件字节算。原先的 `readText` + `writeText` 会把
+  `.pdf` / `.xlsx` / 图片按 UTF-8 解码再编码 —— 得到一个**看起来正常、内容已损坏**的副本，
+  而下游只会说"这份读不出来"。
+- 新增 `browser/preflight.ts`：把来源预检抽成面板与 Tool **共用**的一份。两处各写一遍循环的后果
+  不是重复，而是结论不一致（抽屉说"可用"、工具说"需要登录"）。
+- Client 门面（`report-audit/api.ts`）声明这八个操作，冻结清单同步到 50 条。
+  新增 20 + 12 条断言（状态机 / 指令契约 / 操作接线）。
+
+**报告评估页（房地产估值 UI）（2026-10-12，同一版）**
+
+- 新增 `client/modules/report-evaluation/`：`model/valuation-state.ts`（页面状态机）、
+  `controller.ts`（无 React 的控制器）、`api.ts`（本模块的八个操作）、`index.ts`（组装）、
+  `model/styles.ts`（类名与样式文本）、以及 `ui/` 下的四个界面件。
+- **只读确认抽屉是结构性的**（方案 §5.4）：`canEditInputs(phase)` 只在 `draft` / `extracting`
+  为真，进入 `confirmation` 后所有改输入的动作被状态机**拒绝并给出原因**；组件也只接收
+  一个 `intake` 与三个回调 —— 没有 `onChange`、没有输入框 / 下拉 / 日期选择器，
+  于是"在抽屉里改方法 / 基准日 / 提示词"在类型上就写不出来。动作区**恰好三个按钮**
+  （返回修改 / 确认并开始估值 / 取消）。有 20 + 15 条断言盯着这两件事。
+- **确认后输入冻结，且基准日逐字提交**：`确认并开始估值` 提交的是提交那一刻的方法 / 基准日 /
+  补充要求与确认指纹；未选基准日时提交**空串**，客户端不许拿资料里识别到的日期补一个。
+  指纹不符时 Host 拒绝启动（见上一节的 `valuation-start`）。
+- **失败不丢输入**：资料入口失败时选择 / 方法 / 基准日 / 补充要求全部保留（用户改一句再试，
+  而不是从头再选一遍资料）；切换模块也保留（控制器是实例级、只有一份，与本地审核同一口径）。
+- **不伪造进度**：阶段与进度只来自 Host；`total <= 0`（宿主没给总数）时**不画进度条**，
+  只写文字阶段。阶段词认不出来时**不推进**页面状态（不猜）。协议代数不匹配 → `stale-host`，
+  此后不再接受任何状态变化。
+- 报告评估从「Coming Soon」变成**正式模块**：`MODULE_META.eval.underDevelopment` 改 false，
+  侧栏不再画「开发中」标签（标签机制保留，判据仍是 `isUnderDevelopment`）；
+  `WorkbenchPanel` 渲染 `ReportEvaluationPane`，控制器由 `apply()` 注入（缺省就地建一份，
+  这一页在任何挂载方式下都能渲染）。**环境门禁不变**：仍由统一导航层拦（`requirement: global`）。
+- 文件 / 文件夹选择**复用本地审核那一套**：把 `pickFilesFromInput`（隐藏 input + 宿主
+  `pathFor`）从 `LocalAuditPane` 移到 `features/local-audit/pick.ts` 并导出，估值页与本地审核
+  共用同一个系统对话框入口 —— 两套各写一遍迟早会在"回什么形状的路径"上分叉。
+- 测试脚手架抽出 `tests/helpers/render.mjs`（`render` / `rerender` / `find` / `findAll` / `textOf`）：
+  同一套渲染语义此前只在 `client-package.test.mjs` 内部，估值页的用例也用得上；
+  `client-package.test.mjs` 改为引用它（191 条断言原样通过）。
+- 样式只用 `--crwu-*` 语义 token（`client-package` 的"不许硬编码颜色"断言把第一版里的
+  `#b3261e` 当场抓了出来），动画只碰 opacity / width 且在 `prefers-reduced-motion` 下关闭。
+
+**估值 Skill 的两个构建脚本与报告模板（2026-10-12，同一版）**
+
+- 新增 `scripts/build_workbook.py`：把 `填入值.json` 填进计算底稿。**"只填输入区、保护公式区"
+  变成了可执行的判据** —— 模板自己用填充色声明区域（浅绿 = 输入区，浅黄 = 公式区，见
+  `references/06` 第 2 节的图例），所以脚本能判：写公式区拒绝、写没声明为输入区的单元格拒绝、
+  输入区里写 `=` 开头的值拒绝（那是把结论硬编码进输入）、空值写成**空单元格而不是 0**
+  （0 是结论，未填是另一件事）。任一处被拒就**不输出底稿**：半填的底稿比没有更危险，
+  公式会算出看起来正常的数。另外还拒绝把产物写回 `template/`（生成件覆盖母版），
+  以及默认拒绝覆盖已存在的底稿（`--force` 才覆盖）。
+- 新增 `scripts/build_report.py`：从 `估值结果.json` 渲染 HTML 报告。**报告不自己算数** ——
+  连"万元换算"都不做（换算会引入第二套取整口径），数字逐字来自结果 JSON，
+  于是 `validate_result.py --html` 能核对报告里找不找得到单价与总价。
+  外部文本（案例标题、小区名来自网页）一律转义，且只把 `http/https` 渲染成可点链接。
+  `capability_gaps` / `manual_confirmation_items` 为空时**照实写"没有…"**，而不是留白
+  （留白会被读成漏印）。`method = auto` 直接拒绝：那是用户输入，渲染报告前必须已经判定。
+- 新增 `template/valuation-report.html`（带占位符的报告模板）与 `template/valuation-result.json`
+  （结果骨架）；新增 `assets/README.md` 与 `logo/`、`fonts/`、`icons/` 三个占位目录，说明资源
+  准入规则（可再分发、注明来源、小写连字符命名、按相对路径内联进报告）。
+- `SKILL.md` 执行步骤补上两个脚本的调用方式与"脚本不重算公式、交付前必须真打开重算一次"的提醒。
+- 契约测试 19 → **34 条**：新增「填底稿」9 条（只填输入区、拒公式区、拒非输入区、拒输入区里的公式、
+  空值不写成 0、拒绝未知表/区域/坏引用、拒绝写回模板、默认不覆盖、缺 cells 报错）与
+  「渲染报告」6 条（样例跑通真链路、数字逐字一致、外部文本转义、拒绝 auto、缺口照实写、
+  未指定基准日渲染出那句固定文案、默认不覆盖且不写回模板）。已接入 `make plugin-check`。
+
+**共享层按领域拆分 + 环境模块解除对审核门面的依赖（2026-10-12，协议 32 · Task 3 第一批）**
+
+- `shared/types.ts`（627 行、31 个声明）按领域拆成 `shared/contracts/`：`common`（环境自检零件、
+  OSS 视图、脱敏凭据、本机访问诊断）/ `environment`（`env` 应答与工作区视图）/
+  `report-audit`（列表、审核视图、交付件、审核根与占用）/ `report-evaluation`（协议 32 的
+  阶段 / 方法 / 确认抽屉 / 状态 / 结果视图）/ `local-audit` / `update`。
+  `shared/types.ts` 改为**整体 re-export** 的兼容别名（迁移期 29 个旧导入点不必一次改完），
+  且新增断言：别名文件里不许再出现真实定义。
+- `shared/wire-contract.ts` 按领域拆成 `shared/wire/`（`common` / `environment` / `report-audit` /
+  `report-evaluation`），入口整体 re-export，旧路径不断。一处红就知道是哪条链路漂了。
+- **修掉一处反向依赖**：`OSS_BATCH_FROM_HOST` 原先的右侧类型写的是
+  `WorkbenchApi['ossBatchIndex']` —— 契约层从 **Client** 取类型。方向反了两层坏处：
+  ① 契约层本该两端都不依赖、只被两端依赖，反向依赖会让"Client 改一个字段"悄悄放宽契约；
+  ② 打包形态上 Client 与 Host 分开构建，共享层引用 Client 类型把两个边界缝在一起。
+  现在用线协议自己的 `OssBatchIndexResult`。
+- **修掉方案 §4.1 点名的禁止项**：新增 `client/modules/environment/api.ts` + `model/state.ts` +
+  `model/types.ts`，把环境页真正需要的东西（`environmentApi`、`environmentStateOf`、`headlineOf`、
+  `IfindProbeResult/IfindStatusResult/IfindSaveResult/LocalAccessResult`、`BootResult` 的环境那一半）
+  从 `features/report-audit/api.ts` 搬进环境模块，8 个环境文件改为从环境模块导入。
+  报告审核门面**转出**这些名字（旧导入路径继续可用），依赖方向变成 **环境 ← 审核**。
+  `BootResult` 拆成 `EnvironmentBootView`（环境模块）+ `interface BootResult extends …`（审核侧补
+  审核根 / 占用 / 已迁移操作清单）；`gatingOf` 与 `Gating` 留在审核侧（它算的是报告页的门禁），
+  改为 import 环境模块的 `environmentStateOf`。
+- 新增 `tests/unit/shared-contracts-layout.test.mjs`（8 条）：共享层不许引用 Client 任何东西、
+  引用 Host 只能引类型、按领域的契约与 Wire 层都在且入口都导出了、兼容别名是整体 re-export
+  且仍有真实消费者、Wire 常量导出真的存在、协议 32 的三套词（阶段 / 交易性质 / 结论方法）、
+  环境模块不许反向依赖报告审核门面、环境 API 存在且门面转出它。
+
+**Host 侧目录分层：tools/ 四层归位 + ops/ → operations/（2026-10-12，协议 32 · Task 3 第二批）**
+
+- `host/tools/` 从 21 个平铺文件分成四个层次，根下**只留** `register.ts`：
+  `common/`（capabilities / case-dir / case-files / python-script / snapshot / outcome / types）、
+  `report-audit/`（bootstrap / h3yun / knowledge / oss / dingtalk / local-claim / dws-json /
+  case-scopes / consts）、`report-evaluation/`（上一批已在）、`integrations/`（ifind / ifind-ops）。
+  `host/ops/` 改名为 `host/operations/`（方案 §4.2 的目录名）。
+- 搬模块用了一个**按模块图重写**的脚本，而不是手工 sed：搬文件会同时改变两件事 ——
+  被搬文件内部的相对路径（深度 +1）与所有引用者的路径；手工只改一半，而 import 指错在
+  Node 里的表现是"模块找不到"，只有类型检查或跑到那一步才看得见。脚本把每个相对 specifier
+  解析成绝对路径、过一遍映射、再相对新位置写回去。
+- ⚠️ **一次真实的漏改**：脚本只扫了 `src/` 与 `tests/`，于是 `scripts/smoke-built.mjs` 里那句
+  `import '../src/host/tools/consts.ts'` 没跟着改 —— `npm test` 全绿、`make plugin-check`
+  跑到冒烟那一步才炸。因此新增 `tests/unit/host-module-layout.test.mjs`（6 条）：
+  ① `tools/` 根下只有 `register.ts` 与四个分层目录；② `register.ts` 只做组装（不许出现
+  `runShell(` / `ctx.shell`）；③ 每个分层目录都有真实内容（空目录 = 搬了个壳）；
+  ④ `ops/` 已不存在且 `operations/` 内容对得上；⑤ **`src` / `tests` / `scripts` 里不许再出现
+  旧路径字符串**（按"出现过旧路径"扫，不按某一种语法扫 —— 路径引用有相对 import、
+  `new URL('src/...', ROOT)`、`'../src/host/...'` 三种写法）；⑥ 抽查每个分层的入口文件真的在。
+- 顺带修掉 8 处**注释里的旧路径**（活跃代码的注释指向不存在的文件，正是"读的人去找一个没有的文件"）。
+  历史文档（`docs/review-0.0.15.md`、`docs/superpowers/specs/*`）按仓库规矩保持原样。
+
+**Client 侧目录分层：features/ 拆成 modules/，components/ → ui/，workbench → shell（2026-10-12，协议 32 · Task 3 第三批）**
+
+- `client/features/`（5 个子目录、50 个文件）按业务拆成 `client/modules/*`：`report-audit/`
+  （api / types / model / session / ui）、`local-audit/`（api / consts / controller / pick / model /
+  session / ui）、`environment/`（api / model / ui）、`update/`（api / model / ui）、
+  `report-evaluation/`（上一批已在）。`client/features/`、`client/components/`、`client/api/`
+  三个"什么都放"的目录**整体消失**。
+- `client/components/*` → `client/ui/*`；`client/features/workbench/*` → `client/shell/*`
+  （面板、侧栏入口、模块 store、服务、样式）；`client/api/client.ts` → `client/core/rpc.ts`
+  （只保留底层 `rpc()`）。
+- **删掉死代码**：`features/report-eval/ReportEvalPane.tsx`（Coming Soon 页）已无任何引用者
+  （协议 32 起由 `modules/report-evaluation/ui/ReportEvaluationPane.tsx` 取代），连同它专用的
+  5 个文案键与 3 个类名一起删除。
+- 新增 `modules/local-audit/api.ts`：本地审核的三个操作原先借报告审核门面
+  （`workbenchApi.localAuditStatus/Start/Claim`），现在写在自己的 `api.ts` 里；剪贴板这类环境通用
+  能力改从 `modules/environment/api.ts` 拿。**借门的后果不是"多一层"，而是改审核门面会牵动本地审核页。**
+- 新增 4 条 Client 侧护栏（`tests/unit/host-module-layout.test.mjs` 扩到 10 条）：
+  ① `client/` 只剩 `core / locales / modules / shell / ui` 五个目录（+ 三个入口文件）；
+  ② 底层 `rpc()` 只在 `core/rpc.ts`（不许再有文件从旧 `api/client.ts` 导入）；
+  ③ 每个业务模块都有 `api.ts` 与 `model/` 或 `ui/`；④ 没有指向旧 client 目录的引用。
+- 修掉三处**随搬迁暴露的守卫失效**：本地审核的源码守卫只 `readdirSync` 顶层（模块化后实现文件在
+  `ui/`、`model/`、`session/` 里，文件数从 12 掉到 3，守卫报"扫描根可能不对"）→ 改成递归；
+  Update 的静态边界扫的是旧平铺文件名 → 改成 `model/` 下的新路径；
+  两处"被删组件不许复活"的断言只盯旧路径（**挪个目录就能让守卫失效**）→ 改成断言新分层下也不存在。
+  另外修掉 10 处注释里的旧路径。
+
+**估值工具可见性预检 + 文档同步（2026-10-12，协议 32 · Task 9 第一批）**
+
+- **`VALUATION_CHILD_TOOLS` 从"写在常量里"变成真的会用**：新增
+  `tools/report-evaluation/visibility.ts`，`valuation-start` 在**创建会话之前**拿这份名单去问宿主
+  注册表（与审核侧共用同一个 `missingAuditTools` 实现 —— 两处各写一遍"怎么算可见"迟早会分叉，
+  而分叉的表现是两条链路对同一个部署给出不同结论）。缺任何一条就**拒绝启动**并**点名**是哪一条：
+  "把缺工具说成'环境不对'"会把用户指到错的处置上；让估值会话跑到一半才发现工具调不到更糟。
+  新增 1 条断言钉住这条 fail-closed 行为（不可见时既不建会话也不开轮次）。
+  ⚠️ 为什么估值这条链路**不是**工具过滤：估值会话是经统一会话服务建的**顶层会话**
+  （`sessionController.create({ workspaceId })`），那条路径没有 `toolFilter` 入口。所以它的边界是
+  ① 每个估值 Tool 的案例归属门禁、② 审核 Tool 自己的作用域门禁、③ 这次的可见性预检 ——
+  `visibility.ts` 的文件头把这三条写清楚了，免得后来的人以为这里漏了一层。
+- `README.md` / `README.en.md`：开头补上「报告评估 = 房地产估值」当前形态的说明（上传多类型资料、
+  只读确认抽屉、冻结输入、自动取数与勾稽、三件交付件、未指定基准日的口径、以重算底稿为准）。
+  2026-09-20 那节**真实浏览器验收记录**按仓库规矩**保持原样**，只在两处加了"当时标开发中、
+  2026-10-12 起已交付"的注记 —— 历史快照不重写，但也不让它冒充当前行为。
+- `docs/skills.md`：新增业务层估值技能的**目录职责表**（`references` / `template` / `schemas` /
+  `examples` / `assets` / `scripts` 各放什么、各有什么规矩）与**调用方式**（7 个结构化 Tool +
+  `crwu_run_python_script`，以及"这份名单会被用来预检"这件事）。
+
+**Host 操作表按域拆分（2026-10-12，协议 32 · Task 3 第四批）**
+
+- `operations/core.ts`（696 行、38 个 handler）拆成方案 §4.2 列的那套文件：
+  `register.ts`（**组装**：构造共享依赖 + 拼四张域操作表 + `boot` 里那份 `ported.done`）、
+  `common.ts`（**共享依赖与闭包**：门禁快照、OSS 依赖与批量队列、上传看门狗、身份缓存、
+  环境自检入口）、`environment.ts`（21 条：环境自检 / 工作空间 / 本机访问授权 / DWS 目录体检与修复 /
+  账号登录 / OSS 凭据 / iFinD 凭据生命周期）、`report-audit.ts`（13 条：待审核列表 / 审核生命周期 /
+  报告讨论材料 / 交付件 / `crwu` 直通）、`local-audit.ts`（3 条）、`types-export.ts`（注入面两个类型）。
+  `core.ts` 只剩**兼容转出**（`createCoreOperations` / `CoreDeps` / `HostResolvers` 的旧导入路径不断）。
+- **拆分的动机不是"文件太长"**，而是这些闭包被三个域共用：门禁快照（`gate`）、OSS 依赖与队列、
+  看门狗、身份缓存、自检入口。**每域各建一份**的后果是"授权之后只有环境页看到新事实、
+  审核页还在用旧快照"，而那种不一致在任何地方都不会报错。所以 `common.ts` 构造**一次**，
+  域文件通过 `OperationHost` 取用 —— 域文件里看不到 `create*` 调用，只看到 `host.gate` 这样的引用。
+- `boot` 留在组装处：`ported.done` 那份"声明必须跟着实现走"的名单按**真实注入的操作表**推导
+  （`Object.keys(updateOperations)` 这类），放在组装处才不会出现"某个域加了操作、声明忘了加"的漂移
+  （`clipboard` 那次就是这么踩的：声明里有它、操作表里没有，客户端点「复制提示词」拿到 404）。
+- 布局护栏同步收紧（`host-module-layout` 扩到 10 条）：`operations/` 的九个文件逐个点名，
+  并断言 `core.ts` **只剩兼容转出**（不许再出现 handler 定义、必须转出 `createCoreOperations`）。
+- 搬运是**按块提取**（不是手抄）：脚本按顶层键切分原文件、把紧邻的注释一起带走，再按域重组；
+  imports 由"该文件真实用到的名字"过滤后生成 —— 手工重排 38 个 handler 必然会掉一处注释或漏一个
+  import，而后者要到类型检查阶段才暴露。
+
+**Host 目录按运行时边界归位：integrations/ · domains/ · core/（2026-10-12，协议 32 · Task 3 第五批）**
+
+- 方案 §4.2 的 Host 目录树现在**逐条对得上**：
+  `host/integrations/{h3yun,ifind,oss,dws,crwu}`（外部提供方）、
+  `host/domains/{report-audit,report-evaluation,local-audit}`（业务域，`report/files.ts` 归到
+  `domains/report-audit/material/`）、
+  `host/core/{access,environment,fs,http,platform,runtime,shell,state,system,workspace,workspace-session}`
+  （机制层）。`host/` 顶层只剩 `apply.ts` / `build-info.ts` / `consts.ts` + 五个分层目录
+  + 两个子系统（`update/` 自助更新、`config/` 部署配置解析 —— 它们不是"按运行时边界分的目录"，
+  所以照旧留在顶层，这一点写进了护栏注释）。
+- 搬运仍然走**按模块图重写**的脚本（86 个文件的映射、约 150 处引用），并同步修掉
+  21 个源码文件 + 4 份活跃文档里的旧路径引用。
+- 布局护栏扩到 11 条：新增"`host/` 顶层只剩哪些目录"、"`integrations/` 与 `domains/` 的名字逐个点名"、
+  "`core/` 的十一个机制目录都在"，并把这一批旧路径全部加进"不许再出现"的清单。
+- 顺带修掉一处**随搬迁失效的守卫**：OSS 的"每一次 `ossutil` 都必须经 Broker"那条断言
+  按 `host/oss/` 前缀扫描文件（搬迁后扫到 0 个文件、守卫静默失效），现在按
+  `host/integrations/oss/` 扫，并把执行器 `run.ts` 的豁免路径一起更新。
+
+**「JSON 通过 Schema」从一句话变成真的校验（2026-10-12，协议 32 · 验收 §16）**
+
+- 对方案 §16 逐条做验收审计时发现一处**假满足**：`schemas/*.json` 被提示词、`SKILL.md` 与
+  报告骨架三处引用为"结构契约"，但**没有任何代码或测试读过它们**。真正把关的是
+  `validate_result.py`，于是 schema 可以悄悄漂移成一份没人执行、也没人校对的文件。
+- 新增 `SchemaSubsetTest`（契约测试 34 → 39 条）：自带一个**最小 JSON Schema 校验器**
+  （本机与 DSH 自带 Python 都没有 `jsonschema`），并让
+  `examples/valuation-result.sample.json` / `valuation-case.sample.json` **真的过 schema**。
+  校验器的关键设计是**遇到不认识的 keyword 就报错**：只认识一半 keyword 的校验器会给出
+  **假通过**（schema 里写了 `pattern` 而校验器忽略它，样例照样"通过"），所以支持面是白名单，
+  扩展 schema 的人必须同时扩展校验器。
+- 同一批加了**防漂移**断言：schema 的 `required` 必须是校验脚本必需字段的子集；
+  `method` / `transaction_type` / 知识来源 `source` 三个枚举按**从校验脚本里解析出来的值**比对
+  （故意不把那些取值写进测试文件：技能脚本里出现业务 CLI 字面量会被 CLI 守卫判成"间接旁路"，
+  实测被拦下两次）。负向断言也在：`method=auto` / 缺 `capability_gaps` / `unitPrice` 写成字符串
+  三种改法都必须被判不合格。
+- 修掉审计中发现的**第二处漂移**：抽屉要核对的 12 个估值要素此前写在两个地方
+  （Host 的 `VALUATION_FIELD_KEYS`、界面的 `VALUATION_FIELD_LABELS`），schema 里没有。
+  现在 `valuation-object.schema.json` 新增 `fieldLabels`（12 项逐字、顺序固定），
+  并加一条 TS 断言把 **schema ↔ Host ↔ 界面**三处钉成同一套标签 —— 三处各写一份的后果
+  是"用户核对的那份清单与结果文件里的口径不同"，而那种不一致谁也不知道该信哪个。
+
+**估值工具把结论写回轮次状态（2026-10-12，协议 32 · 验收 §16）**
+
+- 验收审计抓出**第二处假满足**：`market-search` 工具会回 `phase: browser-login-required`、
+  `needsLogin` 与来源状态，但**没有任何东西把它写进轮次注册表** —— 于是面板轮询的
+  `valuation-status` 永远说"正在跑"，界面**根本进不到** `browser-login-required`，
+  §16 的"登录异常时进入可恢复的 browser-login-required"在用户视角是不存在的。
+  阶段与来源状态只有**发请求的那一方**（工具）知道，模型转述一遍不算"界面看得到"。
+- 新增 `tools/report-evaluation/record.ts`：把工具侧结论写回轮次的三个入口
+  （来源状态 / 能力缺口 / 阶段）。**身份只从 Agent 取**（`callerIdentity(exec)`，与案例归属门禁
+  同一个来源），所以"把状态写到别人的轮次上"在结构上写不出来。`market-search` 与
+  `browser-preflight` 都接上了（后者写来源状态与缺口 —— 那是面板"即将访问的数据源"的事实来源）。
+- **写不回去要如实说**：工具本身的结论照旧返回，但会往 `warnings` 里写一句
+  "轮次状态没能回写（界面会少一条状态）：…"。静默的后果是**界面与子会话看到的事实不一致
+  而没有任何地方会提这件事**。非法阶段转移同理：不算错误，但要回报。
+- `ToolDeps` 增加 `valuationLifecycles`，`apply.ts` 让操作表与 Tool 闭包共用**同一个**注册表实例。
+  测试夹具也照真实流程改成"先开一轮再跑工具"（否则这条回归会变成假绿：没有接收方，
+  写回永远"成功"地写进空气里），并新增两条断言：阶段/来源状态/缺口**真的落到注册表上**；
+  轮次记录被抹掉时检索照样成功且 `warnings` 里有那句话。
+
+**输入快照从"天然不可变"变成"篡改可见"（2026-10-12，协议 32 · 验收 §16）**
+
+- 验收审计抓出**第三处纸面承诺**：§16 写"确认后输入快照不可变"，实现只有两层保障 ——
+  ① 子会话没有参数能改方法 / 基准日 / 补充要求；② `valuation-start` 在建会话**之前**核对一次
+  确认指纹。两层都对，但都管不到一件事：**`估值输入.json` 是案例目录里的普通文件，
+  而估值会话对案例目录有写权限**。谁都可以改它，而改完之后没有任何地方会知道 ——
+  子会话读的正是这份文件。
+- 新增 `frozenInputMismatch()`（纯函数，在 `domains/report-evaluation/scope.ts`）：
+  把磁盘上的文件与**宿主内存里那一份**逐字段比对（方法 / 基准日 / 补充要求 / 输入清单指纹 ——
+  只比会影响结论的字段，`frozenAt` 之类不参与）。不一致返回一句能读懂的话并指出**以宿主记录为准**。
+- `valuation-result` 每次读结果时都核对一次：被改过 → `ok:false` + `error` +
+  `snapshotTampered:true`，并把这件事写进轮次的能力缺口（结果页与交付件复核都读它）。
+  **文件不见了同样要报**（它不是"没问题"：本轮输入没了）。
+- `ValuationRecord` 增加 `supplementalPrompt`：不把当时那一份留在宿主内存里，
+  "文件被改过"这件事就永远发现不了。`valuation-intake` 与 `valuation-start` 都写它。
+- 新增 2 条断言：改基准日与补充要求后必须报出**改了哪一项**且进能力缺口；删掉文件也要报。
+
+**完成由宿主判定（2026-10-12，协议 32 · 验收 §16）**
+
+- 验收审计抓出**第四处断链**：状态机里有 `completed`、工具侧允许写它，但**没有任何地方真的推过去** ——
+  于是面板轮询的 `valuation-status` 永远说 `running`，客户端控制器只在 `completed` 时去取结果，
+  **结果页永远不出现**。§16 的"正常情况下确认后自动完成"在用户视角是不成立的。
+- 判据放在 `valuation-status`（面板轮询的那一份事实）：**三件交付件齐备 + `估值结果.json` 读得懂**
+  才收成 `completed`，进度同时走到头。两个理由：
+  ① 子会话没法"报告完成"—— 它写完文件就结束了、没有回调，而模型说一句"我完成了"不是事实；
+  ② 只看文件在不在会把"报告刚写了一半"判成完成，而结果页要拿这份 JSON 渲染结论，
+     所以额外要求它解析得出来且带 `method`。读不懂就**不动阶段**（留在 running，下次轮询再看），
+     这不是错误：本轮还没做完。
+- `completed` 是**终态**：删掉一件交付件之后再轮询仍然是 `completed`（已交付过的东西不撤回，
+  `advance` 本来就拒绝从终态回退）。
+- 新增 1 条断言覆盖三段：两件 → 留在 running；三件齐但 JSON 读不懂 → 仍 running；
+  三件齐且可解析 → `completed` 且进度走满；随后删一件 → 仍是 `completed`。
+
+**工作簿契约补一条「静默空结论」检查（2026-10-12，协议 32 · 验收 §16）**
+
+- 验收审计抓出**第五处**：§16 要求"方法选择必须进入 XLSX 的**采用的方法**"，但工作簿契约
+  只管结构、公式链与收益法链，**从不检查汇总表的 J 列**。而 K 列的公式是
+  `=IF(ISNUMBER(SEARCH("收益法",J5)),G5, IF(…"市场法"…, IF(…"成本法"…,"")))` ——
+  **J 为空或写成"市场"这类非逐字名称时，三个分支全部落空，K 一声不响地回空串**，
+  L（评估价值）也跟着空。
+  于是：汇总表没有结论，而报告与结果 JSON 里可能写着数字 —— 两边不一致，却没有任何一处报错。
+- `check_workbook_contract.py` 新增 `check_conclusion_method`：填了建筑面积的行必须写明
+  「采用的方法」，且只能是 `市场法` / `收益法` / `成本法` 三个逐字名称；合计行不是数据行
+  （它的 F 是 `=SUM(…)`），不参与检查。`references/06` 同步补上这条规则（契约正文与校验脚本一致）。
+- 新增 3 条断言：填了面积没写方法 → 红且说清"静默回空串"；写了"市场"这种非逐字名 → 红；
+  逐字写对 → 通过（证明前两条不是因为别的原因红的）。另加 1 条：**随包模板自己必须过这条新规** ——
+  第一版忘了排掉合计行，模板当场被判不合格，那正是这条断言的来历。
+
+**「三者一致」补上 JSON ↔ 底稿的方法一致性（2026-10-12，协议 32 · 验收 §16）**
+
+- §16 写"HTML、JSON、XLSX 三者结论一致"。实际只做到两半：HTML↔JSON 由 `--html` 严格核对；
+  XLSX 那一侧只有结构检查（隐藏表、错误值、关键公式在不在）。**JSON 的 `method` 与底稿汇总表的
+  「采用的方法」列从未比过** —— 而这两者不一致比数字不一致更早出问题：汇总表按 `J` 列选单价
+  （`SEARCH("收益法",J)`），J 写错等于结论来自另一个方法。
+- `validate_result.py --workbook` 新增 `check_method_agreement`：JSON 的 `method` 必须出现在
+  汇总表「采用的方法」列里（逐字映射 `market→市场法` 等）；没有数据行时不参与检查
+  （模板本身就是那种形态）。新增 2 条断言：方法不一致 → 红且说清"口径必须一致"；
+  写成 JSON 那一份 → 通过（证明前一条不是因为别的原因红的）。
+- `references/09` 新增一张**能力边界表**，把"三者一致"到底查到哪一步逐格写明：
+  报告↔JSON 严格、JSON↔底稿只查**方法与结构**、**底稿数字↔JSON 数字本机查不了**
+  （比较需要重算后的值，而 openpyxl 不算公式）—— 最后一格是**已记录的能力缺口**，
+  不是"已经查过了"，所以交付前要真打开一次底稿重算，由人核对汇总表结论。
+
+**测试目录分层（2026-10-12，协议 32 · Task 3 第六批 / 方案 §4.4）**
+
+- `tests/unit/` 的 93 个平铺测试文件按**被测的那一侧**分成三层：`client/`（18）、`host/`（71）、
+  `shared/`（4，含契约与 Wire 层）。测试发现用 `tests/**/*.test.mjs` 递归 glob，不动就能找到。
+- 搬迁本身是机械的，**代价在路径基准**：测试下沉一层之后
+  `new URL('../../', import.meta.url)` 会指到 `tests/` 而不是插件根 —— 报错是"找不到模块"，
+  而真正的信息是"你少写了一级 `../`"。这一版一共修了三类基准：
+  ① `new URL('../../../', import.meta.url)`（86 个文件）；② `new URL('../helpers/...')` → `'../../helpers/...'`（19 处）；
+  ③ `dirname(dirname(dirname(...)))` → 四层（2 处，`host-bin-manifest` / `host-skills-guard`，
+  它们按 dirname 算插件根）。另有 2 个文件按仓库根算路径（CI workflow 与文本卫生），各加一级。
+- 新增 2 条护栏：`tests/unit/` 根下不许再有测试文件、三层都要有真实数量；
+  **测试文件的路径基准必须与它的深度一致**（扫 `new URL('../../', …)` 与 dirname 层数）。
+  这条护栏自己踩了两次坑，都记在代码注释里：① 自排除写成硬编码路径，文件一搬排除就失效，
+  于是守卫开始报自己那份"旧路径清单"——改成按 `import.meta.url` 算；② 判据用
+  "匹配三级 dirname" 会命中四级形态的**尾巴**（`d2(d3(d4(fileURLToPath`），于是把修好的也报出来 ——
+  改成**数 `dirname(` 的个数**。
+- `scripts/` 与 `src/host/consts.ts` 里 4 处指向测试文件的注释路径同步跟上。
+
+**指令补齐 §12 的清单项：案例筛选规则与压缩包口径（2026-10-12，协议 32 · 验收 §16/§12）**
+
+- 逐条比对 §12 的 Prompt 契约清单时发现两项**只在别处存在、指令里没有**：
+  ① **案例筛选规则** —— 指令只说了"不许编造案例、只用有证据的"，没写**判据**（可比性三条件、
+     挂牌≠成交、剔除也要留痕、数量不足照实说）。这些判据在 `references/04` 里有，但子会话
+     按指令办事：指令不说，它就会自己定一套，而"自己定的一套"事后无法复核；
+  ② **压缩包不自动展开**（§5.1 的口径）—— 资料里出现压缩包时没有任何交代，子会话很可能去试着解压。
+- 指令新增两段：`## 案例筛选规则`（五条硬规则 + 指向 `references/04-case-selection.md` 的细则）
+  与 `## 压缩包`（按未解析登记、写进 `capability_gaps[]`、不要尝试解压、不要按文件名猜内容）。
+  只写"要判可比性"是没用的 —— 判据本身必须在指令里，细则才指向 references。
+- 新增 1 条断言逐字钉住这两段的 11 个要点（缺哪一条就等于让子会话自己定规矩）。
+
+**知识来源可追溯从"写在 JSON 里"变成"对着快照核"（2026-10-12，协议 32 · 验收 §16/§1）**
+
+- 验收审计抓出**第六处**：§1 要求"所有结果可追溯到…知识来源"，§16 要求"每次结果记录知识来源"。
+  但 `knowledge_sources` 是子会话**自己写进结果 JSON** 的，而本轮实际取到的正文在
+  `知识快照/.知识来源.json`（取数工具落盘）。**两者从未比对过** —— 结果里可以出现一份
+  根本没取到的路由、或者把 `digest` 抄错，格式完全合法，事后复核的人只能去翻目录。
+- `validate_result.py` 新增 `check_knowledge_traceability`：结果里的每条路由都必须在快照里、
+  指纹必须一致；**快照里有 `dws` 来源却没写进结果同样不合格**（那等于把"用了降级备份"
+  说成"用了知识库"）。快照不存在时**只提醒跳过**（老案例没有这个文件，协议 32 之前的产物）。
+- 新增 2 条断言覆盖四种情形：一致 → 通过；凭空捏造的路由 → 红；指纹不一致 → 红；
+  漏登知识库来源 → 红；无快照 → 只警告不失败。`references/09` 的规则 4 同步补上这条口径。
+- 写测试时第二次撞上 CLI 守卫（脚本里出现知识来源的**字面量**被判成"间接旁路"）——
+  解法仍是**从拥有这些取值的地方读**（`validate_result.py` 的常量元组），而不是把字面量拆开写。
+
+**案例证据：从"字段在那儿"到"点得开、标得清"（2026-10-12，协议 32 · 验收 §16/§10.3）**
+
+- 验收审计抓出**第七处**：§10.3 把「证据截图或页面快照」列为案例必备字段，§16 要求
+  「案例有 URL、抓取时间和证据」—— 但**校验从不看 `evidence`**：`url` / `captured_at` /
+  保留剔除理由都查，唯独证据不查。而工具在证据落盘失败时只把一个**空串**留在案例上，
+  同时推一条 capability gap —— 于是"页面取到了、案例也解析出来了、证据其实没留存"这条路径
+  产出的是**格式完全合法**的结果，且引用为空。
+- **空串分不出两件事**："没留存"和"这段代码漏了赋值"。所以 Host 侧新增 `evidence_missing`
+  显式标记（`evidence.trim() === ''` 即 true），缺口文案同时点明"该页案例不得直接当可比实例使用"。
+- `validate_result.py` 补两条：① 案例必须有 `evidence`，或显式标 `evidence_missing`
+  （且标了就**不许** `used_as_comparable`）；② `evidence` 指向的文件必须在案例目录内**真的存在**，
+  越界（`..` / 绝对路径）一律不合格 —— 「证据丢了却说有」比「没有证据」更危险。
+- 三处一起绑：`market-search` 的 `SearchCase`、`valuation-case.schema.json`
+  （新增 `evidence` / `evidence_missing` 两个必需字段）、`validate_result.py`。
+  第 15 轮建立的 schema↔样例绑定当场生效：**案例样例因为少了 `evidence_missing` 被判红**，
+  补齐后通过 —— 这正是那条绑定存在的意义。
+- 新增 3 条技能断言（空串且未标记 → 红；显式标记且不当可比 → 通过；标记了却当可比 → 红；
+  证据文件被删 → 红；`..` 越界 → 红）与 2 条 Host 断言（有证据的案例不得标成缺证据；
+  注入写失败后案例必须显式标记且缺口文案点明不得当可比）。夹具补了"写失败注入"能力，
+  并把"案例目录里的证据文件"真造出来 —— 不然所有用例都会因为新规则而红。
+
+**§16 验收矩阵成文，并给"表变旧"加了守卫（2026-10-12，协议 32 · 方案 §17）**
+
+- 新增 `docs/acceptance-0.0.42.md`：把 §16 的每一条验收标准对应到**删掉它就放走什么**的那一处
+  强制点，逐条写断言原话；**对应不上强制点的一律记成能力缺口**，不写成"已满足"。
+  这正是 §17 要的那份验收报告，只不过落在文件里而不是只出现在对话里 —— 它下次还能被复核。
+- 写这张表的过程本身筛出了东西：**第 7 节"能力缺口"一节能列这么长**（截图、真机 URL 模板、
+  默认浏览器登录、扫描 PDF/图片、底稿数字↔JSON 数字、DSW 七节点是否真实存在），
+  说明前 6 节的"已满足"是**有边界**的，边界必须一起写出来，否则读者会以为"三者一致"是全查的。
+- 新增 `tests/unit/host/host-acceptance-matrix.test.mjs`（2 条）守住这张表：本文件里每个 `「…」`
+  引用必须是**测试源码或技能校验脚本里逐字存在**的断言原话；数据行必须有第三列；
+  能力缺口必须单独成节。约定写进正文：「`「…」` 只用来引用真实断言，UI 文案/字段名用引号」。
+- 这条守卫当场抓出 **5 处不实引用**（我按记忆写的断言名）：`host-valuation-providers.test.mjs`
+  这个文件根本不存在、`01 缺失时停止` 的实际名字是「必需知识「01-房地产估值通用」两边都缺 →
+  **停止估值**」、`host-audit-spawn` 的成员关系断言名、客户端"不伪造进度"的完整用例名、
+  以及两条把**描述**当成断言原话的写法。**一张声称"某处有强制"的表，最危险的就是它自己变旧** ——
+  这种错在没有守卫时只会在事后复核时暴露，而那时它已经骗过了一次验收。
+
+**装配漏接从"默默降级"变成"编译不过"（2026-10-12，协议 32）**
+
+- `apply.ts` 给 Tool 闭包的依赖加了一个**全字段必需**的类型视图 `AssembledToolDeps`
+  （`ToolDeps & Required<Omit<ToolDeps, 'ctx' | 注入点>>`）。动机来自第 16 轮那次真实险情：
+  给估值工具加 `valuationLifecycles` 时，如果漏改 `apply.ts`，**所有测试照样全绿** ——
+  因为工具会优雅降级成一句 warning（"轮次状态没能回写"），界面则永远停在"正在跑"。
+  这类漏接不崩、不报错，只让某个功能默默降级，是最难发现的一类问题。
+- 加这个类型视图**当场就找出两处**：`ifind` 与 `ifindTimeoutMs` 从来没有在 `apply()` 里接过。
+  查过之后确认它们是**故意不接**的（前者是测试注入点，缺省就是真实传输；后者是有默认值的调优项），
+  于是把这两个名字写进 `InjectionOnlyToolDeps` 并说明"没有第三条"：新加的可选依赖若不属于这两类，
+  就必须在 `apply()` 里接上。**名单本身就是"我们想过这两个字段"的记录**，比散在注释里可靠。
+- 验证方式是**让守卫响一次**：临时往 `ToolDeps` 加一个 `probeForAssemblyGuard?: string`，
+  `npm run typecheck` 立刻在 `apply.ts` 报 TS2322；撤销后恢复干净。没响过的守卫不算守卫。
+- `docs/acceptance-0.0.42.md` 新增第 7 节"构建期保证"，把这条与 `smoke-built.mjs` 的
+  "注册面 = 业务工具集"一起写明 —— §16 之外还有一类失败是靠**编译期与构建产物**挡住的。
+
+**估值 intake 真正跑起来了：两处"没人跑过所以没人发现"的缺陷（2026-10-12，协议 32 · §5.1/§5.4）**
+
+- 起因是给 `valuation-intake`（确认抽屉的唯一数据来源）**补第一条测试** —— 这个操作此前
+  **一条测试都没有**（现有 intake 测试全是纯函数：扩展名判定、清单指纹、去重）。补测试的过程
+  直接抓出两个真实缺陷：
+- **① 复制被 Broker 拒掉（功能整个不成立）**：intake 是**面板**操作，却借用了审核子代理的
+  `system.case-file.write` —— 那条的来源只允许 `audit-tool`。于是生产里**每一份资料**都会得到
+  "不接受来自「panel」的调用"，用户看到的是"所有文件都没解析"，而单测全绿。
+  修法是给面板这条能力**自己的名字**：新增操作 `system.valuation-material.copy`
+  （`capability: system-integration` · `transport: shell` · `privileged: true` · 只允许 `panel`），
+  与 `system.local-audit-material.snapshot` 同一条判据（源路径是用户选的本机文件，可能在工作空间之外）。
+  **不把 `panel` 加进 `system.case-file.write`**：那会把"审核子代理在案例目录内建/删文件"这条窄边界
+  悄悄放宽成"面板也能借它跑复制命令"。
+- **② 抽屉的"已知信息"永远是空的**：`extractedFields` 一开始就初始化为空对象、**再没被填过**，
+  而每份文件都写 `status: 'parsed'`（那个 `parsed` 实际只表示"复制成功"）；`deps.python` 一直装配着
+  却没人用。于是抽屉必然是"12 项全缺 + 每份都写着已解析"——那不是让用户核对输入，是让他对着空表点确认。
+  现在 intake 会**真的跑一次提取**（复用 `runExtraction` + `pythonFileExtractor`），填出已知信息与
+  缺失清单，并把预览落盘成 `资料提取预览.json`（确认与结果之间要有据可查）。
+  「复制成功 != 解析成功」：提取器没读过的那一份状态改成 `unparsed` 并写清原因。
+- 新增 2 条 intake 断言：提取成功 → 已知信息进抽屉、`missingFields` 不再是 12 项全缺、文件
+  `fieldCount > 0`；没有 Python 提取能力 → 文件照样归档但**不许**写 `parsed`，且 12 项全缺（不编造）。
+- 新增 `tests/unit/host/host-access-source-policy.test.mjs`（2 条）：把 `src/host` 里每个调用点声明的
+  `{ operation, source }` 与操作描述表对一遍 —— **借错操作当场变红**。验证方式是**让守卫响一次**：
+  把 op 名改回 `system.case-file.write`，它立刻报
+  「src/host/operations/report-evaluation.ts:638 system.case-file.write 不允许来源 panel（允许：audit-tool）」。
+  第二条反向查"登记了没人用"（保留项要显式列出来并写原因）。
+
+**估值操作的外部抓取通道改为可注入（2026-10-12，协议 32）**
+
+- 沿着上一轮那条教训往下查：8 条估值 RPC 里**只有 `valuation-browser-preflight` 一次都没被测过**
+  （正好是 §16 的「页面可通过默认浏览器登录」）。补它的测试时发现根因是**通道写死了**：
+  `createValuationOperations` 里 `const transport = fetchTransport({})`，于是
+  ① `valuation-intake` 每开一次确认抽屉都要**等三家站点的真实网络**（离线就等到超时），
+  ② 这两条操作在测试里根本没法跑 —— 而"没人跑过的操作"正是最容易坏的那一类。
+  改为与估值 Tool 同一条口径：`ValuationOpsDeps.transport?`，缺省仍是真实 `fetch`。
+  **实测效果**：`host-valuation-ops.test.mjs` 从 ~13 秒（每条 intake 用例 6 秒网络等待）降到 0.16 秒。
+- 新增 3 条断言：预检只打开**该站点自己的**登录页（逐字比对 `siteOf(id).loginUrl`），
+  结果里**不许出现任何令牌类字段**（cookie / authorization / token / sign=），
+  三家状态都要回给抽屉；未知来源 → 拒绝且**一个 shell 命令都不发**；
+  没授权 → **不许真的打开浏览器**，且如实回 Broker 的原话（不许静默）。
+- 修夹具一处自欺：把 `state`（内含 `grantedConsent()`）递给 Broker 会**覆盖**未授权默认值，
+  于是"未授权"用例实际跑在已授权状态下 —— 第一次写就是这么错的，现在显式换成 `missingConsent()`。
+- 新增静态守卫（上一轮那条）当场发挥作用：`system.browser.open` 的来源声明若与操作表不符，
+  它会在跑测试之前就报出来。
+
+**交付件链路打通一层集成测试（2026-10-12，协议 32 · §4.4 / §14）**
+
+- 新增 `tests/integration/report-evaluation/valuation-deliverable-chain.test.mjs`：五步真实链路 ——
+  **真 docx + 真 xlsx → `extract_files.py` → `build_workbook.py` → `check_workbook_contract.py`
+  → `build_report.py` → `validate_result.py --html --workbook`**。
+  为什么需要这一层：各脚本自己的用例都过，也不代表**它们之间**对得上 ——
+  字段名、值 JSON 的形状、结果 JSON 的字段，在各脚本用例里都是被夹具"喂"出来的，
+  任何一处改名，单脚本用例照样全绿。（这也把方案 §4.4 的 `tests/integration/` 填上了真内容。）
+- Python 解释器**按 glob 找 DSH 自带运行时**（`~/.dsh/dsh-runtimes/*/dependencies/python/bin/python3`），
+  不强写绝对路径、不假设系统 `python3` 有 openpyxl/python-docx；找不到就 `skip` ——
+  跳过好过用错解释器得出假结论。
+- **这条测试第一版是"永远绿"的**（值得记）：`extractedFields` 的值一律是**原文**
+  （"120.5 平方米"），我直接 `Number(...)` 得到 NaN，而 `JSON.stringify(NaN)` **静默变成 `null`**
+  → 底稿那一格空着 → 汇总表没有数据行 → 方法一致性检查**整条跳过**。改成真的解析（并断言解析成功）
+  之后，注入"底稿写市场法、JSON 说收益法"立刻变红。**没响过的测试不算测试**，这一条也一样。
+- 顺带修掉链路暴露的一处**假计数**：`build_workbook.py` 把 `None`（"这一项未知"是合法输入）
+  也算进"填入 N 个输入单元格"，而那一格其实是空的 —— 复核的人正是照着这句话判断"该填的都填了"。
+  现在分开报「填入 N 个 / M 处按未填置空」，并新增 1 条断言（技能契约测试 47 → 48）。
+- 另一处小发现：`extract_files.py` 的结果写在**文件**里而不在 stdout（表格可能被截断），
+  集成测试第一版读 stdout 只得到 `Unexpected end of JSON input` —— 这个约定本身是对的，
+  记下来是因为它正是"接口约定"那类只有跨脚本才暴露的东西。
+
+**真实浏览器验收跟上已实现的模块（2026-10-12，协议 32 · §4.4 `tests/browser/`）**
+
+- 抓出一处**没人会发现的漂移**：`install/browser-check.mjs`（真机验收的唯一自动化手段）
+  还在断言「报告评估」是 **Coming Soon 占位页**（"整页只写开发中"），而那个模块早已实现。
+  它一直没红的原因是这条验收**必须有人起一个装了插件的 DSH profile、再装 playwright 才能跑** ——
+  于是"唯一能自动验收真机行为"的脚本，自己没人跑。
+- 按已实现的面板重写那一段断言（这些是**只有真浏览器**能证明的）：面板真的画出来
+  （`.crwu-valuation`）；**四种方法**都在且是可选的单选组；**打开页面不弹确认抽屉**
+  （确认是用户的动作，不是页面的）；没选资料时「开始估值」**是禁用的**并说清缺什么；
+  禁用状态下点了也**不弹抽屉、不造假进度**。
+- 侧栏那枚「开发中」小标签的断言**反过来了**（现在三个子项都不该有）——
+  "反过来这件事本身"也要断言：旧断言会一直绿到有人真跑一遍为止。
+- 新增 `tests/unit/client/client-browser-check-drift.test.mjs`（2 条）做**静态交叉核对**：
+  注册表说 `underDevelopment: false`，浏览器验收里就不许还留着占位页文案与「开发中」标签断言
+  （反之亦然）；并要求脚本里存在面板的真实断言。另加一条：脚本里**任何 `.click(` 都不许**
+  落在「AI 审核 / 开始审核 / audit-start」上 —— 那会跑一次真实审核、写真实工作空间与 OSS。
+  验证方式是**让守卫响一次**：把注册表改回 `underDevelopment: true`，它立刻报
+  「报告评估还是占位页，浏览器验收却没有断言它是 Coming Soon」；恢复后绿。
+- 写断言时还改正了自己一处**想当然**：本以为是"点了「开始估值」应当报错"，
+  实际面板是**禁用按钮 + 一句说明**（比点了再报错更强）。浏览器断言必须照真实 DOM 写。
+
+**面板建案例子目录必须提权（2026-10-13，协议 32 · 用户实测）**
+
+- 症状（用户原话）：创建资料目录失败 `mkdir: /Users/…/中瑞世联工作空间/估值-…/材料-源: Operation not permitted`，
+  诊断行是「操作 `system.case-file.write` · 来源 `audit-tool` · 解析为 workspace-write · 实际 workspace-write · 沙箱拒绝=是」，
+  估值会话因此建不出来。
+- 根因在 `broker.ts` 的一行：`const escalated = decision.sandboxPolicy !== undefined` ——
+  **特权**操作逐次声明 `danger-full-access`（不依赖会话）；**非特权**操作要把`调用方会话`的策略放进请求
+  （`callerSessionPolicy(ctx, options.session)`），而**面板没有会话** → 策略 undefined → 执行器落回
+  部署默认（进程 cwd）→ 案例目录不在可写根之下 → 系统拒绝。
+  `ensureDirectory` / `removeFileIfExists` / `probeCasePath` 这套 helper 的判据正是
+  "审核子代理的沙箱边界本来就是本轮案例目录"，所以它们**只对子代理成立**。
+- 这是我上一轮那次修复的**兄弟调用点**：round 27 我给资料的**复制**加了面板专属的提权操作
+  （`system.valuation-material.copy`），却漏了它**前面**的建目录 —— 同一次交互里改了一处、漏了邻座。
+- 修法：新增 `system.valuation-case.directory.write`（`capability: system-integration` ·
+  `transport: shell` · `privileged: true` · 只允许 `panel`）与 `ensurePanelCaseDirectory()`，
+  与案例目录本身（`system.case-directory.write`，提权）和资料复制同一口径：
+  **面板来源的能力各自有名、各自声明提权**，不借子代理那套。边界仍由路径决定 ——
+  路径由 Host 从工作空间与估值 ID 推出，模型提交不了。
+- 两条守卫，都**验证过会响**：
+  ① 行为断言（`host-valuation-ops.test.mjs`）：`材料-源` 相关的每条命令都必须是 `danger-full-access`；
+     把调用改回 `ensureDirectory` 后，它当场报「（无策略）· mkdir …/材料-源」——与线上症状逐字对应；
+  ② 静态断言（`host-access-source-policy.test.mjs`）：**操作层**不许出现
+     `ensureDirectory(` / `removeFileIfExists(` / `probeCasePath(`，防止下一个面板操作再犯。
+- 夹具补了"记录每次 shell 调用的沙箱模式"（`shellCalls`）——没有这个观察点，这类缺陷只能靠真机撞。
+
+**面板本机选择器的接线（2026-10-13，协议 32 · 用户实测）**
+
+- 症状（用户原话）：插件页出现「当前运行环境拿不到本机绝对路径，无法选择文件：请在 DeepSeek Harness 桌面端打开本页」。
+- **三处漏法**（都在"线有没有接上"，不在选择器本身）：
+  ① `hostPaths` **从未接线**（`apply.ts` 与 `WorkbenchPanel.tsx` 都只传了 `fileInput`）——
+     现代 Electron 已移除 `File.path`，绝对路径只能由 `__DSH_HOST_PATHS__.pathFor` 提供，
+     所以**桌面端也拿不到**：那句"请在桌面端打开本页"是个无法兑现的承诺；
+  ② `uiWorkspace.pickDirectory` 在装配时**快照**（`...(services.uiWorkspace?.pickDirectory === undefined ? {} : …)`）——
+     服务晚注册就永远不可用（2026-10-11 本地审核为此专门改过 getter，这次又犯了一遍）；
+  ③ 端口对象 `{ ...services }` **展开**会把 getter 求值一次——即使调用方改成 getter 也没用。
+- 修法：把两条能力做成**活的**适配器 `hostPickerCapabilities(source, extra)`（getter 现读），
+  两个装配点共用一份；控制器端口改为逐条 getter 转发（不再展开）。
+- 顺带补上**漏接的环境门禁**：`port.ready` 两个装配点都没给，而控制器里是
+  `port.ready?.() ?? { ok: true }` —— 于是"环境没就绪也能起估值"。现在两边都按
+  「自检拿到结论且全部通过」现读判定，文案新增 `valuationNeedEnvironment`。
+- 新增 `tests/unit/client/client-picker-wiring.test.mjs`（5 条）：接了路径桥就必须拿到绝对路径、
+  **能力晚于装配才出现也要认**、控制器端口不许展开成快照、门禁不过时一个请求都不发、
+  两个装配点必须走同一份适配器。两处注入原缺陷都验证过会红。
+
+**工作台导航改成「一级目录 + 二级目录」（2026-10-13，同一版）**
+
+用户口径：面包屑不如两级页签 —— 一级目录表达业务大类、二级目录表达该业务下的功能页面，
+页面内容始终跟着二级目录。改动**只在客户端**（估值 RPC、状态机、只读确认抽屉与结果字段一个没动）。
+
+- 新增 `src/client/shell/navigation.ts`：唯一的结构来源。一级 `估值 / 审核 / 其他业务`，
+  二级 `房地产 / 土地 / 机器设备`（后两项 `enabled: false` = 灰态「开发中」）与
+  `报告审核 / 本地审核`。节点声明 `label`（页签）/ `page`（画哪一页）/ `enabled` / 页面标题；
+  **门禁判据仍从 `MODULE_META` 派生**（`requiresEnvironmentOf` / `requirementOfNode`），
+  不在表里再抄一份布尔量 —— 加一级 / 二级目录 = 只加一条元数据。
+- `module-store` 的落点从"一个模块"变成"一级 + 二级 + 正文"：`navigateParent()` 在**一次 `emit`**
+  里改完整组（订阅者只收到一次通知），所以不存在"一级已经切了、二级还显示旧目录"的中间帧；
+  每次切一级目录都**默认选中第一个可用页面**（不记忆上一次的二级页面）；空目录落到
+  `kind: 'empty'` 并显示「该业务目录暂未开放」；`enabled: false` 的二级目录**不可进入**
+  （判据在 store 里，不是只把按钮画灰）。
+- `WorkbenchPanel`：面板顶部固定两级页签（一级沿用既有报告审核页那种 44px + 底部强调线的页签，
+  二级是更轻的浅色胶囊），两级都是标准 Tab 语义（`role="tablist"` / `role="tab"`、`aria-selected`、
+  全部指向**同一个内容区**的 `aria-controls`、roving tabindex、左右键循环、Home / End）；
+  页面标题按导航元数据渲染（估值 / 房地产 → 「房地产估值」），写死的「报告评估 / 房地产估值」抬头删掉。
+  只有一个 tabpanel（内容区在切换时**不重建**），滚动位置与宽度因此稳定；目录条长在滚动容器外面，
+  所以始终留在页面顶部。
+- **环境信息不再是目录里的一页**：它是外层门禁态（环境没过时的统一落点 + 员工自己去看配置的入口），
+  不占页签；从它回工作台给一颗「返回工作台」。环境已通过后估值 / 审核页面不再展示任何环境信息
+  （没有「环境已就绪」胶囊、没有检查详情）。
+- **草稿与轮询的持有者**：估值控制器仍在 `apply()` 层，切一级目录不丢已选资料 / 方法 / 基准日 /
+  补充要求；估值阶段轮询改由**面板**持有（`useValuationPhase`，只在 queued / running / 等登录时开定时器），
+  切到别的目录不会把它停掉 —— 顺带修掉一个真缺陷：`controller.poll()` 此前没有任何地方调用，
+  页面会永远停在「估值进行中」。
+- 估值输入页按用户给的结构重排：抬头（导航元数据）+ 双栏（左：资料 / 文件列表 / 份数统计与解析状态，
+  右：方法 / 基准日 / 补充要求），窄屏（<960px）自动单栏；主按钮文案改成「开始提取资料」
+  （确认抽屉里那颗才是「确认并开始估值」）。
+- 测试：`client-module-gate.test.mjs` 重写为两级目录 + 落点的断言组（含"一次通知改完整组"、
+  "默认选第一个可用页面"、"开发中不可进入"、"空目录"、"恢复被拦目标只恢复最近一次"）；
+  `client-package.test.mjs` 新增面板级渲染断言（两级页签结构与切换、空目录、开发中、
+  估值页不展示环境信息、切目录不丢草稿、轮询不被切目录停掉）；`install/browser-check.mjs`
+  的真机断言同步改成两级目录（一级 44px + 3px 强调线、二级更轻的胶囊、`aria-controls`
+  指向同一内容区、纸里的 surface 不画第二层框）。
+
+
+### 导航分模块 + 估值单工作面 + 样式作用域（2026-10-13，协议 32 → 33）
+
+用户在截图里点出的问题：左右 50%/50% 双栏内容失衡、卡片过多、方法选项过高、主操作被挤到屏幕下方；
+以及点「开始提取资料」之后**没有反应**。这一批按"单个工作面 + 纵向任务流"重做输入页，
+并把之前靠"命名前缀"顶着的样式隔离升级成真正的组件作用域。
+
+**导航：按模块分属两棵树**
+
+- `NavigationNode` 新增 `module` 字段，`PARENT_IDS` 拆成 `PARENT_IDS_BY_MODULE`，`parentNodes(module)`
+  只返回**这个模块**的一级目录。报告评估树里不再出现「审核」，报告审核树里也不再出现「估值」——
+  以前一棵混着的树让用户看不出自己在哪个模块（截图里那个重复入口）。
+- **没有已配置业务项的一级目录不画**：「其他业务」的元数据留着，但底下没有业务项，所以不出现在目录条上，
+  不留"点进去什么都没有"的空占位入口。
+- **页面身份变化时归零滚动位置**：内容区外壳不重建，`scrollTop` 会原样留到下一页。新增纯函数
+  `pageIdentityOf()`（可断言），组件那侧只剩"身份变了就归零"这一句动作。
+
+**输入页：一个工作面、一条纵向任务流**
+
+- 删除 `.crwu-valuation-cols` 的 1:1 双栏：表单改单列、上限宽 1120px、宽屏居中；不再给资料区与设置区
+  强设同一高度（那正是左边一大片空白的来源）；不再给每个字段套"卡片标题 + 卡片正文"，改用分区标题、
+  间距与一条轻分隔线。
+- 文件行改成：类型图标 + **文件名**（主标题）+ 大小 + 读取状态 + 移除；同名文件附目录摘要，
+  完整路径留在 `title` 与详情里。文件列表有界高度（内部滚动），超过 8 份给「查看全部 N 份」。
+- 四种方法改成**紧凑四项选择组**（容器查询：面板够宽一行四项、窄面板纵向），原生 radio 语义，
+  当前选项的说明只在选择组下出现一次。
+- 操作区是**面板内粘性**（`position: sticky`，不是宿主页面的全局固定底栏），始终显示资料数量与主操作；
+  没选资料时主按钮禁用并在旁边写出原因（`aria-describedby` 关联）。
+- 响应式以**面板实际可用宽度**为准（`@container crwu-valuation`），不是浏览器窗口宽度 ——
+  宿主侧栏展开后窗口可能很宽、面板却只有 500px。
+
+**「开始提取资料」没有反应：把长 RPC 拆成有反馈、可取消、可超时的链路**
+
+- 根因：`valuation-intake` 在返回确认数据**之前**串行预检房天下 / 安居客 / 链家，每家最多 20 秒 ——
+  三家连续失败时按钮要等约一分钟才有反应。现在 intake **不碰外部站点**：宿主只回三行
+  「尚未检查」，真正的探测由 `valuation-browser-preflight` 在**抽屉打开之后**异步跑，逐家独立更新
+  （一家超时不拖累另外两家），结果局部更新到抽屉里。
+- 点击「检查并确认」**同一帧**就进入 `extracting`：按钮变「正在提取资料…」并禁用，输入全部锁定，
+  页面出现 `role="status"` 的进度区。进度区显示的是**宿主报的真实阶段**（`valuation-status` 的
+  `progress.stage`：正在检查资料 / 正在复制资料 / 正在提取文件内容 / 正在读取业务规范 / 正在准备确认信息），
+  客户端不按计时器编阶段、不画百分比。
+- 控制器加请求序号：`state.intakeRequestId`，只接受**当前**请求的响应；取消 / 返回修改后迟到的响应被丢掉，
+  不会把抽屉重新弹出来。提取请求有有限超时（缺省 120s，可注入），超时进入**可恢复**的失败态，
+  并明确说"不再等"而不是谎称宿主已停止。
+- `valuationId` 在**点下去的那一刻**就写进 state（不再是 `start()` 的局部变量），所以提取过程中
+  「取消提取」拿得到 id、能真的调 `valuation-cancel`。失败不丢资料 / 方法 / 基准日 / 补充要求。
+- **基准日契约补全**：`valuation-intake` 入参新增 `baseDate`，宿主应答从写死的空串改成回显用户提交的那一份
+  （旧宿主会静默丢掉用户选的基准日，结果里却写着"未指定基准日"）。客户端仍逐字提交、不拿资料里的日期补。
+
+**样式分层与作用域（§6）**
+
+- `shell/consts.ts` 不再承载全部业务 CSS：样式按所有者拆到 `styles/`（tokens / base / scope / scope-css /
+  bundle / install）、`ui/styles/`（button / card / drawer / dialog）、`shell/styles/`（layout / navigation /
+  sidebar）、`modules/<模块>/styles/`。类名常量留在各自模块。一级 / 二级目录的样式从本地审核模块搬回 shell。
+- 每个**独立挂载点**（主面板、侧栏展开态与轨道态、会话头按钮、Cordis 运行卡片、抽屉）都带
+  `data-crwu-scope="workbench"`；主题变量定义在**作用域节点**上（不是 `.crwu-audit-root`，那个类还带布局规则），
+  深色读 `body[data-ds-dark-theme] [data-crwu-scope="workbench"]`；变量**不**挪到 `body` / `:root`。
+- 规则由 `scopeCss()` 统一加 `:where([data-crwu-scope="workbench"]) ` 前缀：`:where()` 权重为 0，
+  所以加作用域**不改变原有层叠关系**，不需要 `!important`。作用域节点自身的规则
+  （`.crwu-audit-root` 与 token 块）写成"作用域在自身上"的形式 —— 后代式前缀对它们永远不命中。
+- 清理：删掉末尾补丁式的"迁移覆盖层"（把取值并回原规则）、删掉报告评估 Coming Soon 占位页与它的
+  12 个类名常量（已被真实面板取代）等死代码。
+- 安装：单一入口 + **按 document 引用计数** + **内容始终刷新**（以前查到同 id 节点就直接返回，
+  开发重载改了 CSS 也看不到变化）；清理函数幂等，多个活跃实例互不误删。
+
+**只读确认抽屉：把方案 §5.4 的十条补齐**
+
+- **完整业务提示词可折叠查看**：`valuation-intake` 用**与 `valuation-start` 同一个构造器、同一批参数**
+  生成提示词并回传，所以只要快照指纹一致（`valuation-start` 会核对），用户看到的就是执行时逐字发出去的那一份；
+  宿主没回传时如实说"没有回传"，不编一份像提示词的东西。
+- **每项关键事实的来源**：`valuation-intake` 新增 `fieldSources`（标签 → 文件名），来源与取值走**同一条判据**
+  （谁的值被采用，来源就是谁）。提取器以文件为粒度、不回页码 / 工作表位置，抽屉里如实写明这一限制。
+- 知识来源逐条给出**路由 + 来源 + 更新时间 + 正文指纹**；自动判定时写明「执行时按规则判断」；
+  取证能力如实说明（本部署没有页面截图能力，证据是页面字节与指纹，不是截图）。
+- **焦点管理**：抽屉打开时焦点进入「确认并开始估值」；关闭 / 返回修改后焦点回到「检查并确认」
+  （抽屉整个卸载后，只能由仍在的那一侧接手）。
+
+**用用户实际模板 + 模板可追溯（方案 §7.1）**
+
+- `build_workbook.py` 在动手**之前**先拿工作簿契约验一遍**模板本身**（表名、表序、公式链、
+  勾稽行、汇总依据三行）：不合格就拒绝生成并列出问题。§7.1 的"不能自行生成一个外观类似但结构不同的
+  替代模板"因此是可执行的 —— 少一张表或表名不同的仿制模板不会再填完一轮才被发现。
+- 加 `--template` 就必须用它：模板缺失会**直接报错**，不静默回退到随包模板；生成结果里打印实际用的
+  模板路径与 `sha256` 指纹（并标注"随包模板 / 用户·知识库模板"），事后能分辨底稿出自哪一份。
+- 新增 3 条测试：给定模板必须被真的使用（改一处表头，产物里要带着那处改动）、仿制模板被拦下且
+  **不留半成品**、模板缺失报错不回退。
+- `references/06` 补「用哪一份模板」一节（下载的模板与填好的底稿都留在案例目录，不写回技能安装目录）。
+
+**底稿补上「汇总依据与限制」三行（方案 §8「计算表填写」）**
+
+- `估值结果汇总` 表新增「三、汇总依据与限制」：**权重 / 汇总依据**（多方法或多案例怎么汇总到最终采用单价）、
+  **已知限制**、**待确认事项**。§8 点名要填的三项此前在前两表里放不下（逐案例字段承载不了"整体怎么汇总"
+  与"整体有什么没定"）。三行是**输入区**，`build_workbook.py` 可写。
+- 工作簿契约新增 `REQUIRED_SUMMARY_ROWS`：三行必须存在（整行删掉 → 报"缺少该行"），
+  不是"记得填"。
+- `validate_result.py --workbook` 新增 `check_confirmation_items_in_workbook`：`manual_confirmation_items`
+  每一条都要出现在底稿的「待确认事项」行里 —— 报告上写了限制、交出去的底稿上看不出来，
+  是复核时最难发现的一类不一致。
+- `references/06` / `references/09` / `SKILL.md` 同步；`references/09` 的「三者一致」表补一行"留痕一致"。
+
+**把视觉验收的要求落进真机脚本（方案 §10）**
+
+- `install/browser-check.mjs` 新增两段：**主题作用域**（逐个挂载点读 `--crwu-*` 的计算值；
+  把 `body[data-ds-dark-theme]` 翻一次、确认取值**真的变了**（证明深色块命中作用域节点）再原样还原；
+  顺带量一个宿主自己的普通按钮，确认插件没有改动宿主的字号与盒模型）与**面板窄宽切换**
+  （收起侧栏让**面板**变窄，断言工作面两态都无横向溢出，并记下方法组的排布方向）。
+  三张截图（工作面宽 / 窄、侧栏轨道）落进验收产物目录。
+- 本机没有浏览器，所以视觉验收只能由人跑 —— 但**要求本身**现在落在脚本里（并有一条测试盯着它别被删掉），
+  人工执行时不会漏项。抽屉打开态与运行/失败/结果三态自动化做不到（要先选真实文件 / 真跑一轮），
+  已在 §6 能力缺口里单列。
+
+**结果页给出案例来源 + 规则只在适用方法里执行（方案 §9 第 3 条 / §8）**
+
+- 结果页的「规则校验摘要」补上**按来源汇总**（每家共几条、其中采用几条）与案例表的**来源**列 ——
+  §9 第 3 条要的是"最终采用案例数量、**来源**及规则校验摘要"，只给总数看不出"结论压在几个站点上"。
+  来源与展示名都空时不参与分组（不制造一行没有来源名的假分组）。
+- `validate_result.py` 新增 `check_rules_match_method`：**比较案例的调整规则（20% / 30% / 1.2）只在市场法里执行**。
+  套到收益法 / 成本法上是真实会发生的错误 —— 那两条方法里没有"可比实例修正系数积"这一层，
+  判定看着像做了校验，实际是拿错口径在自证。
+
+**方法判断记录与「不许静默切换」（方案 §7.2）**
+
+- 结果契约新增两项必填：**`methodScreening`**（每条给出「采用 / 不采用 + 依据」，恰好一条 `adopted` 且与
+  `method` 一致）与 **`methodConflict`**（用户指定的方法与结论不一致时必须给出双方与原因，没有冲突时显式 `null`）。
+  "只写一句采用市场法"从此在契约层就缺了"其他方法为什么不采用"。
+- `validate_result.py` 新增 `check_method_screening`：它会把结果与案例目录里的 `估值输入.json`
+  （**冻结输入**，用户确认那一刻写死的那一份）对一遍 —— 用户指定 `market` 而结论是 `income`、
+  `methodConflict` 又是 `null` → **判不合格**。§7.2 的"指定方法不适用时不能静默切换"因此是**可强制**的，
+  而不是靠模型自觉。宿主完成门槛加同一条兜底（子会话跳过校验脚本也拦得住）。
+- 结果页在结论**之前**给出方法冲突（`role="alert"`），并在「采用方法」下逐条列出方法判断记录
+  （采用 / 不采用 + 依据）—— 用户选收益法、结果按市场法给数时，必须在第一屏看见。
+- `references/09` 补第 1.1 条（两项的字段与判据）；schema 子集校验器补 `minItems` 支持
+  （守卫要求"不许让不支持的 keyword 被静默忽略"）。
+
+**交付校验进完成门槛（方案 §9：模板改坏 / 报告与结果对不上都不得完成）**
+
+- 轮次记录新增 `validationPassed` / `validationProblems`，注册表新增 `setValidation`；
+  `crwu_valuation_artifact_validate` 跑完两道校验后**把结论写回轮次** ——
+  在此之前"交付前两道校验都过了吗"只有模型自己知道，而 §9 明确要求 `completed` 不能靠模型声称。
+- 完成门槛因此多一条硬判据：**没跑过交付校验不算完成**（提示写明去跑哪个 Tool）；
+  没过时把逐条原因带进 `progress.detail`（用户看得到差在哪）。
+- **两道校验都跑过才算一次有效结论**：脚本没跑成（staging 失败）时按"没通过"记，
+  不把"没跑成"当成"过了"。
+- 写回失败**不影响校验本身的结论**（与其它工具写回同一条口径）：后果是这一轮停在 `running`，
+  用户看得见，不该把一次成功的校验说成没过。
+
+**抓取失败分类 + 跨站去重 + 案例扩展顺序（方案 §7.3）**
+
+- 抓取通道新增 **`failureKind`**：`login` / `captcha` / `rate-limited` / `not-found` /
+  `server-error` / `network` / `blocked` / `unreadable` / `unknown`，并带上人话与 HTTP 状态。
+  排序原则是 **验证码优先于登录墙**（被验证码挡住时页面里常有登录表单痕迹，说成"需要登录"
+  会让用户反复登录而永远过不去）。三次重试的记录因此可区分，而不是三行一样的 `HTTP 403`。
+  「网络不可达」与「被拦到白名单之外」也各是一类 —— 前者换网络、后者是白名单的漏口要查。
+- 新增 **跨站去重** `dedupeAcrossSources`：同一套房源（链家 / 贝壳、以及房天下与链家之间）
+  按「小区 + 建筑面积 + 价格档」合并成一条，只留先出现的那条，并在留下那条的 `notes` 里写
+  "与 <来源> 的同一房源重复"，检索应答给出 `dedupedAway`。
+  三条口径都写进了测试：按 URL 去重是不够的（URL 本来就不同）；同小区**不同**房源（面积 / 价格不同）
+  不合并；**拿不到面积或价格时不参与合并**（靠"小区相同"合并会把不同房源误判成一套 —— 比重复更危险）。
+- `references/04` 补两节：案例扩展的**顺序与留痕**（同小区 → 同片区 → 面积段 → 时间，每轮记放宽了什么；
+  "硬条件"任何一轮都不许放宽），以及跨站去重的口径（去重不等于删过程）。
+
+**底稿与结果 JSON 的证据一致性（方案 §8「截图编号」/ §9 三者一致）**
+
+- `validate_result.py --workbook` 新增 `check_case_evidence_agreement`：每个采用案例的 `evidence`
+  必须出现在底稿「案例」表的**「案例截图 / 证据留档」**行里（整行被删掉也算不合格，不是"找不到就跳过"）。
+  两处各写一份而没人比过，就会出现"报告说留了证据、底稿上却是空的"。
+- `references/06` 补上这条规则；测试夹具同步把证据写进底稿（并记下一个 openpyxl 的坑：
+  `cell(row, column, value=None)` 是"读"，清空单元格必须显式赋值）。
+
+**抽屉动作按 §5 对齐 + 来源预检分类可断言（方案 §5 / §11.2）**
+
+- 只读确认抽屉的动作改成 §5 点名的三个：**返回修改 / 重新检查 / 确认并开始估值**
+  （原先第三个是"取消"）。「取消本轮」留在进度页与结果页 —— 那时才真的有一轮在跑 / 已跑完；
+  确认之前用户要走开，返回修改就够了，而且那时还没建会话。
+- 顶部「重新检查」与来源行里的那个重复，来源行只留「在默认浏览器登录」。
+- 新增预检分类断言：网络不可达 / 超时、验证码或人机校验、登录墙、站点返回错误
+  四类各给不同的话与不同的处置方向；验证码单独标 `captcha` 且明说"不绕过验证"。
+  「页面结构无法识别」不在预检这一层报（预检看的是"站点放不放行公开检索"，首页本来就没有房源列表），
+  它由检索那一步报「没有可用的结构化房源数据（不猜测）」—— 这一点写进了验收矩阵。
+
+**规则检查记录与案例状态进契约（方案 §8）**
+
+- 案例契约新增必填 **`status`**（六态：采用 / 条件不匹配 / 资料或证据不足 / 单项规则未通过 /
+  综合规则未通过 / 组内一致性未通过）与 **`rule_checks[]`**（规则 ID、实际值、阈值、判定、理由）。
+  "只写一句符合要求"从此在契约层就写不出来 —— 复核的人要能自己重算一遍。
+- `validate_result.py` 新增 `check_rule_checks` / `check_case_status` / `check_group_ratio`：
+  - 规则 ID 只能取那五个；阈值**逐字**等于知识库口径（0.2 / 0.3 / 1.2），不许自行放宽；
+  - 数值型判定必须给出实际值；每条剔除案例至少要有一条 `fail` 且能对上它的 `status`；
+  - `status` 与 `used_as_comparable` 必须一致；采用案例不许带着没通过的规则
+    （例外只有 `R-GROUP-1.2`：规范允许"说明处置方式后保留"）；
+  - **`R-GROUP-1.2` 的比值必须能从采用案例的比准价重算得到**（写一个好看的比值蒙不过去）；
+    超过 1.2 却没有处置说明 → 红。
+- 规则词表（ID / 状态 / 阈值映射）在 `market_rules.py` 里定义一次，契约侧比对同一套词
+  （有一条测试盯着两边一致，避免"计算模块说超限、结果里记成别的"）。
+- 宿主完成门槛加一条同样的兜底：子会话可能没跑校验脚本就结束。
+- 结果页新增「规则校验摘要」：最终采用案例数、组内比值与阈值（超限明说并指向待确认事项）、
+  逐条规则的通过 / 未通过数；案例表新增「案例状态」列。
+- `references/02` / `references/09` 补上三条约束的计算口径与 `rule_checks` 的落法。
+
+**市场法规则进可测试的计算模块（方案 §8 / §10）**
+
+- 新增 `skills/biz/crwu-biz-valuation-realestate/scripts/market_rules.py`：把
+  「单项修正 20% / 共同修正 30% / 修正后最高价与最低价比值 1.2」三条阈值做成**确定性、可测试、
+  无第三方依赖**的计算模块。阈值与口径都有出处（`references/02-market-method.md` 第 9 节），
+  不是照着提示词抄的：
+  - 「不宜」是**软约束**：判定是 `within` / `at-limit` / `over`，超限要求说明处置方式，
+    不是抛错、也不是把案例直接删掉；
+  - **边界是"不超过"**：等于阈值算 `at-limit`（通过但要标注），带一个很小的相对容差吸收浮点误差
+    （否则 1.2 会因为二进制表示被判成超限）；
+  - **综合修正是各系数的连乘**，不是把百分比相加（两项各 +10% 是 21%，不是 20%）；
+  - 取整用 Excel 的 `ROUND_HALF_UP`（比准价格 / 评估单价到十位、评估值到百位），
+    不是 Python 的银行家舍入 —— 后者会让底稿（Excel）与 JSON 的数字对不上。
+- 新增 `scripts/test_market_rules.py`（16 条）：三条阈值的等于 / 略低 / 略高、
+  浮点边界、连乘 vs 相加、修正方向、取整口径、**阈值与知识库参考逐字一致**。已接入 `make plugin-check`。
+- 完成门槛补两条（§8）：市场法**采用案例少于 3 条**时不许给出正式单价 / 总价
+  （规范：不少于 3 个，且不得用 2 个案例直接平均后当结论）；**单价 × 计价面积与总价对不上**不算完成。
+- `SKILL.md` 增加一节：这三条约束用 `market_rules.py` **算**，不要心算；`over` 要说明处置方式，
+  组内比值超 1.2 时不许反复删高价低价去凑一个想要的估值。
+
+**文件列表的四种形态（方案 §4 / §10）**
+
+- 新增 5 条断言：少量文件逐份画出不折叠、大量文件（20 份）只画前 8 份 + 「查看全部 20 份」、
+  长文件名的完整名称在 `title` 里查得到、解析失败逐份给出具体原因（而不是含糊的"未完成"）、
+  扫描失败说清是"清单读不出来"而不是"你还没选"。
+
+**结果契约补「计价面积 / 计价单位」，完成门槛加金额勾稽（方案 §8 / §9 第 1 条）**
+
+- `估值结果.json` 新增必填 `pricingArea`（计价面积，㎡）与 `priceUnit`（计价单位，统一 `元/㎡`）：
+  §9 第 1 条要的是"单价、总价**及计价面积、单位**"，只给一个数字、不说按多少面积算的，读的人没法复核。
+- `validate_result.py` 新增 `check_pricing_area`：单位必须统一为 `元/㎡`（按套内面积 / 按套计价先换算）；
+  有单价就必须有正数计价面积；**单价 × 计价面积 ≈ 总价**（允许 1 元舍入差）。
+- 宿主完成门槛同步加一条：金额口径对不上不推 `completed`（三个数各说一套说明至少一个错了）。
+- 结果页把计价面积与计价单位摆在单价 / 总价旁边。
+
+**「部分结果」与失败阶段（方案 §4）**
+
+- 状态机新增 `artifacts`（宿主报的交付件存在性）、`failedStage`（宿主最后报过的阶段）、
+  `applyPartialResult` / `hasAnyArtifact`：轮次**失败或已取消但已有交付件**时，把宿主给的结果落下来，
+  **阶段保持原样** —— 结果页打上「这是阶段结果，不是正式结论」的标记，数字照旧只给 `—`（不给 0）。
+- 失败时把**失败阶段**写出来（"失败阶段：正在提取文件内容"）：阶段是宿主报的，客户端不猜。
+- 修掉一处真问题：轮询会用空字符串**擦掉**上一份失败原因（界面只剩"原因见下"而没有原因）。
+  现在宿主给了就用宿主的、没给就保留上一份、只有走到 `completed` 才清。
+
+**资料冲突：不再静默取第一个（方案 §4 / §5 第 7 条）**
+
+- `valuation-intake` 以前是"首个非空值胜出"、后面不同的一律丢弃 —— 两份资料对"建筑面积"给出两个数时，
+  用户看到的是一张干净的表，而系统已经替他做了一个他没看见的选择。
+- 现在逐要素收集全部取值，值不一致就进 `fieldConflicts`（附双方文件名与取值）、写进 `warnings`
+  说明"当前采用哪一份"；值一致**不算**冲突（不制造噪音）。
+- 抽屉新增「资料冲突」区块（标出当前采用的那一份）与「补充要求的性质」说明：
+  补充要求里的事实记为「用户提供」，**不**当作文件原文。
+
+**宿主隔离（方案 §10「插件加载前后，宿主普通按钮、输入框及文字样式不被改变」）**
+
+- 作用域节点新增盒模型基线（`box-sizing: border-box`）：任何挂载点都不依赖宿主的盒模型。
+- 估值按钮显式声明 `box-sizing`：作用域挡得住"插件的规则命中谁"，挡不住宿主把布局属性**继承**下来。
+- 新增四条守卫：每条规则都在作用域内、主角不许是裸元素（`button { … }` 一类）、
+  不许在 `:root` / `body` 上声明插件变量、插件控件自带盒模型与字体基线。
+
+**完成门槛：`completed` 不再只靠"三个文件在"**
+
+- `confirmCompletion` 逐条要求（每条对应 §9 的一条）：三件齐备 + 结果 JSON 读得懂 + 方法非空 +
+  **采用规则可追溯**（`knowledge_sources` 非空）+ **采用案例都有页面证据** + **输入与冻结记录一致**
+  （`估值输入.json` 被改过就不算完成）。
+- 不满足时**不推 completed**，留在 `running` 并把"还差什么"写进 `progress.detail` ——
+  面板读到的是"正在跑 + 差 X"，比一个假的"已完成"有用。
+- 底稿重算（打开 Excel 让公式算值再与 JSON 核对）本部署做不到，所以它**不**作为自动完成的判据，
+  而是在完成时作为**能力缺口**写进这一轮：`completed` 表示"三件齐备且可追溯"，
+  不表示"数字已重算核对过"。
+
+**中介联系方式（方案 §7.5）**
+
+- 案例契约新增 `contact`（必填对象）：`state` 五态枚举 `public` / `not-published` / `masked` /
+  `login-required` / `failed`，另有 `agency` / `person` / `phone` / `source` / `captured_at` / `detail`。
+- `validate_result.py` 新增 `check_contact`：状态必须是那五个值；`public` 必须有取值与取得时刻；
+  **号码带脱敏符却标成 `public` 判不合格**；`masked` 必须把页面展示的脱敏号码原样留下来；
+  `login-required` / `failed` 必须写一句人话原因。**没有公开联系方式不排除案例**。
+- Skill 的 `references/04-case-selection.md` 补第 1.1 节：五态含义、必填项与四条边界
+ （脱敏原样保留、不得自动联系、`public` 要写清页面位置）。
+- 结果页新增「公开中介联系方式」区块与案例表联系方式列：按状态呈现、号码按页面原样写出，
+  **没有任何**拨号 / 发消息 / 联系入口（可断言：没有 `tel:` / `sms:` 链接，也没有联系类按钮）。
+
+**结果页（方案 §9）**
+
+- 证据不完整（缺交付件 / 采用案例没留存证据 / 有能力缺口）时**先**给一句提示，不拿数字装成已核实的正式结论；
+  证据齐备时**不显示**这条提示（否则用户不再信它）。
+- 剔除 / 需修正的案例改为**可折叠**（`details`）但**不删** —— "这条为什么没算进去"必须查得到。
+- 案例表逐行给出**证据文件相对路径**与**抓取时刻**；明确没留存证据的如实标成「没有留存证据」，
+  不留空单元格（空单元格会被读成"证据是个空文件"）。
+
+**测试**：新增 `client-style-scope.test.mjs`（16 条：作用域常量 / 限定不改变权重 / 每个挂载点都带作用域 /
+无裸重置规则 / 模块隔离 / 导航归 shell / 共享控件归共享 UI / 合成表结构与色值扫描），
+`client-valuation-pane.test.mjs` 增补 16 条时序与契约断言（首帧反馈 / 进度来自宿主 / baseDate 贯通 /
+失败与超时不丢输入 / 取消与迟到响应 / 来源不阻塞抽屉），验收矩阵新增第 13、14 节。
+
 ## package · 0.0.41 · 2026-10-11 · feat · 本地审核（选本机文件、一次性交接给一条新对话）+ 报告审核页重构
 
 - 通用准则公共能力逐项执行本次报告披露根内已启用的报告与评估说明校对 CHK，保留检查状态、本项目证据与无法核验原因；内部表单检查只形成内部质控意见，外部正式缺陷仍须独立的已核验依据。

@@ -1,0 +1,75 @@
+{
+  "source": "fang",
+  "source_label": "房天下",
+  "url": "https://example.invalid/fang/12345",
+  "title": "阳光小区 3室2厅 成交价 180 万",
+  "community": "阳光小区",
+  "purpose": "住宅",
+  "property_nature": "商品房",
+  "building_area": 90,
+  "floor": "6",
+  "total_floors": "18",
+  "built_year": "2010",
+  "decoration": "精装",
+  "price": 1800000,
+  "unit_price": 20000,
+  "transaction_type": "成交",
+  "used_as_comparable": true,
+  "status": "adopted",
+  "rule_checks": [
+    {
+      "rule_id": "R-COMPARABILITY",
+      "actual": null,
+      "threshold": null,
+      "verdict": "pass",
+      "reason": "用途相同、结构相近、同一供需圈，成交日期在基准日前 6 个月内"
+    },
+    {
+      "rule_id": "R-EVIDENCE",
+      "actual": null,
+      "threshold": null,
+      "verdict": "pass",
+      "reason": "页面证据已留存（来源证据/fang-12345.html）"
+    },
+    {
+      "rule_id": "R-SINGLE-20",
+      "actual": 0.08,
+      "threshold": 0.2,
+      "verdict": "pass",
+      "reason": "最大单项修正为楼层因素 +8%"
+    },
+    {
+      "rule_id": "R-COMBINED-30",
+      "actual": 0.1448,
+      "threshold": 0.3,
+      "verdict": "pass",
+      "reason": "共同修正 1.08×1.06−1＝14.48%"
+    },
+    {
+      "rule_id": "R-GROUP-1.2",
+      "actual": 1.0,
+      "threshold": 1.2,
+      "verdict": "pass",
+      "reason": "本轮只有一条采用案例，组内比值 1.0"
+    }
+  ],
+  "published_at": "2026-09-01",
+  "captured_at": "2026-10-12T02:00:00.000Z",
+  "evidence": "来源证据/fang-12345.html",
+  "evidence_missing": false,
+  "screenshot": "",
+  "screenshot_digest": "",
+  "screenshot_captured_at": "",
+  "screenshot_missing": true,
+  "keep_reason": "同小区、同用途、面积接近，成交案例可直接作可比实例",
+  "drop_reason": "",
+  "contact": {
+    "state": "public",
+    "agency": "示例房产经纪有限公司",
+    "person": "王经理",
+    "phone": "010-00000000",
+    "source": "经纪人卡片",
+    "captured_at": "2026-10-13 10:00"
+  },
+  "notes": []
+}

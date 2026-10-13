@@ -6,6 +6,7 @@ DSH 技能根（`@deepseek-ai/dsh-skill-filesystem` 的 `customSkillDirs`）。
 | 层 | 目录 | 归属 | 改动方式 |
 | --- | --- | --- | --- |
 | `crwu` | `skills/crwu/` | 本仓自研的审核能力族 | 正常评审后改；必须过 Skill 自洽性 lint |
+| `biz` | `skills/biz/` | 本仓自研的业务能力族（估值等） | 正常评审后改；不依赖 `crwu-audit` 编排，独立执行 |
 | `dws` | `skills/dws/` | 上游 `dingtalk-workspace-cli` 的钉钉技能（vendored） | **只能**由 `npm run dws:sync` 改写 |
 | 公共 | 包内 `common/skills/`（源在 `plugins/common/skills/`） | 跨插件公共技能 | 改源仓，再 `npm run skills:sync` |
 

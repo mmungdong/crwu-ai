@@ -306,14 +306,13 @@ export function environmentGate(
   const detail = blockers.length === 0 ? '' : `：${blockers.join('；')}`
   // 名称里带上目标页名与方括号：整句就是「进入【报告审核】前，请先完成环境配置：…」——
   // 用户一眼能看出"本来要去哪"，测试也按这一句钉住（页面直接把 `reason` 原样显示）。
-  const names: Record<Exclude<EnvironmentRequirement, 'external-data'>, string> = {
-    global: '使用【工作台】',
-    audit: '进入【报告审核】',
-    delivery: '使用【交付回传】',
-  }
+  //
+  // 页名一律取调用方注入的 `labels.target`（工作台的导航树传**二级目录名**，例如
+  // 「报告审核」「房地产」）：以前这里按严格度查一张写死的表（global → 「使用【工作台】」），
+  // 于是二级页面的门禁文案只能说"工作台"，说不出用户点的是哪一页。
   // 阻断项一律是**基础环境**的必需项（iFinD 已不在其中，所以这里不再为它写专门话术）：
   // 员工看到的是「哪一步没过 + 该做什么」，不再有"请先完成 iFinD API-Key 验证"这种整句。
-  return { allowed: false, reason: `${names[requirement]}前，请先完成环境配置${detail}。`, status }
+  return { allowed: false, reason: `进入【${labels.target}】前，请先完成环境配置${detail}。`, status }
 }
 
 /**
@@ -343,6 +342,14 @@ export interface NavigateInput {
   requires?: boolean
   /** 需要的严格度；缺省 `global`。 */
   requirement?: EnvironmentRequirement
+  /**
+   * 门禁文案里那个**目标页名**（「进入【报告审核】前…」）。
+   *
+   * 缺省用 `labelOf(target)`（模块级名字）。工作台的导航树按**二级目录**判门禁，
+   * 所以要能把「报告审核 / 房地产」这个名字传进来 —— 用户是从那一页被挡回来的，
+   * 说"工作台"等于没说清他本来要去哪。
+   */
+  label?: string
 }
 
 export interface NavigateResult {
@@ -371,10 +378,12 @@ export function navigateModuleIn(
   const requirement = input.requirement ?? 'global'
   if (!requires) return { module: input.target, blocked: false, pending: null, reason: '' }
 
+  // 目标页名：调用方给了就用自己的（工作台按二级目录判门禁），否则退回模块名。
+  const target = input.label ?? labelOf(input.target)
   const gate = environmentGate(view, requirement, {
     // 「先去看环境页」这句里要出现目标页名 —— 用户是从那一页被挡回来的。
-    runCheck: `进入【${labelOf(input.target)}】前，请先完成环境检查。`,
-    target: labelOf(input.target),
+    runCheck: `进入【${target}】前，请先完成环境检查。`,
+    target,
   })
   if (gate.allowed) return { module: input.target, blocked: false, pending: null, reason: '' }
   return {
@@ -385,7 +394,7 @@ export function navigateModuleIn(
     // 这里**只做兜底**：门禁没给理由时才套通用模板。以前无脑套一层，结果是
     // 「请先完成环境配置。（…请先完成 X。）」—— 第一眼仍然是一句笼统的话。
     reason: gate.reason === ''
-      ? `进入【${labelOf(input.target)}】前，请先完成环境配置。`
+      ? `进入【${target}】前，请先完成环境配置。`
       : gate.reason,
   }
 }

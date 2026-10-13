@@ -17,6 +17,7 @@ DSH scans one level below each registered Skill root. Every layer is therefore r
 | Layer | Ownership | Change path |
 | --- | --- | --- |
 | `dsh-crwu-workbench/skills/crwu/` | Repository-owned audit and maintenance Skills | Edit in place; run self-containment and audit contract gates. |
+| `dsh-crwu-workbench/skills/biz/` | Repository-owned business Skills (valuation, …) | Edit in place; run independently of `crwu-audit` routing. |
 | `dsh-crwu-workbench/skills/dws/` | Vendored `dingtalk-workspace-cli` content | Change only through `npm run dws:sync`; verify provenance with `npm run dws:check`. |
 | `common/skills/` | Repository-owned shared Skills | Edit the source layer; synchronize the package copy with `npm run skills:sync`. |
 | `dsh-crwu-workbench/common/skills/` | Generated package copy | Never edit directly. |

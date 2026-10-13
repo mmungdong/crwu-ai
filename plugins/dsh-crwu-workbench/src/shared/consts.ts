@@ -52,7 +52,7 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *       「完全退出并重新打开 DeepSeek Harness」（macOS 关闭窗口不等于退出，要从菜单退出或 Command-Q），
  *       而不是拿旧宿主干新活。旧宿主没有这四个操作，新界面点下去只会拿到 404 ——
  *       这一代同样必须由协议号自己显形。
- * 14：**删除 `install-prompt` 操作**（连同 `src/host/environment/install-prompt.ts` 与界面上的
+ * 14：**删除 `install-prompt` 操作**（连同 `src/host/core/environment/install-prompt.ts` 与界面上的
  *    「复制安装提示词」入口）。为什么这也算契约变更：旧客户端挂载时会调这个操作，新宿主没有它 ——
  *    不靠协议号喊出来的话，用户会看到一条与真实原因无关的「未知 op」报错。同理，
  *    环境信息页 ① 去掉了「在新会话中打开」按钮（纯界面删减，不涉及契约）。
@@ -110,6 +110,19 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    客户端把从内嵌浏览器页面里读到的 `h3_token` 经它交给 Host，Host 再走
  *    `crwu h3yun session bind --token-stdin` 落到 OS 凭据存储。旧宿主没有这个操作，
  *    新界面点下去只会 404 —— 必须靠协议号把「界面是新的、宿主是旧的」喊出来。
+ * 32：**工作区会话统一**（2026-10-12）。会话落点在四条链路上原来各不相同，现在只有一条：
+ *    唯一来源是【环境信息】选中的 `env.workspace`，唯一落点参数是 `workspaceId`，
+ *    建完必须回读会话 cwd 与工作区成员关系。跨进程行为变了四处，必须 +1：
+ *    ① 审核根**不再退到 `caseRoot`**、也不再自己 `agents.create`：改走
+ *       `sessionController.create({ workspaceId })`；`attachSession` 失败**不再只记一条 notes**
+ *       就继续跑，而是停掉刚建的会话并返回失败；根记录新增 `workspaceId`，复用前要重新核对
+ *       工作区一致性 + Agent 存活 + cwd + 成员关系 + 沙箱/审批策略。
+ *    ② 审核子会话建完**显式挂到工作区**（`subagents.start` 不替 child 做这件事），
+ *       挂不上就停掉它、不返回成功 —— 这是"审核在跑、对话却在「未分组」下"的直接原因。
+ *    ③ 报告讨论：`workspaceId` 为空时**直接失败**，删除了 `cwd: workspacePath` 降级。
+ *    ④ 本地审核：同上，空 `workspaceId` 不再退到 `cwd`（含 `cwd: ''`）。
+ *    旧客户端仍然会发 `cwd`（落「未分组」而不报错），旧宿主仍然会静默继续用错了边界的根 ——
+ *    两种组合都会让用户看到"会话没建在我选的工作区下面"，所以这一代必须由协议号喊出来。
  * 21：钉钉登录拆成 `dws-login-start` / `dws-login-status`（`dws auth login` 改后台跑）。
  *    旧客户端只知道同步的 `dws-login`：它会在 CLI 还在等浏览器回调时一直阻塞到超时，
  *    拿到的 URL 也没有用。新契约加进来就要 +1，让旧界面被明确挡住而不是白等 5 分钟。
@@ -170,8 +183,18 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    模型可见 Tool `crwu_audit_local_claim`。必须 +1 的理由：旧宿主没有这三个操作，
  *    新界面点下去只会 404 —— 而"能不能在本地审核里建会话"正是这一代的行为；
  *    反过来旧界面不知道这条链路，只会把用户留在报告审核里（不会误用新宿主的能力）。
+ * 33：**资料提取的反馈与基准日契约**（2026-10-13，用户点「开始提取资料」没有反应之后）。
+ *    三处跨进程改动：
+ *    ① `valuation-intake` 的**入参新增 `baseDate`**，应答的 `baseDate` 从写死的空串改成
+ *       回显用户提交的那一份 —— 旧宿主不认这个入参，用户选的基准日会被静默丢掉（结果里
+ *       却写着"未指定基准日"）；
+ *    ② `valuation-intake` **不再在返回前串行预检三家站点**，应答的 `providers` 改为三行
+ *       「尚未检查」，真正的探测挪到抽屉打开之后 —— 旧界面拿不到这个区别，会一直等；
+ *    ③ `valuation-status` 的 `progress.stage` 开始承载提取阶段（正在检查资料 / 正在复制资料 /
+ *       …）—— 旧宿主不回阶段，新界面的进度区只能显示"正在提取资料…"这一句。
+ *    必须 +1 的理由：①会让**业务结果**变错（基准日丢了但界面不报错），这正是协议号该喊出来的。
  */
-export const WORKBENCH_PROTOCOL = 31
+export const WORKBENCH_PROTOCOL = 33
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

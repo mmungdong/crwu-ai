@@ -130,6 +130,14 @@ plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
+	# 业务层（skills/biz）：报告评估的多类型资料提取脚本契约。缺 openpyxl / python-docx / Pillow
+	# 时对应用例**跳过**（那是运行时能力差异，不是脚本缺陷），缺口分支照常断言。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_extract_files.py
+	# 估值交付契约：结果 JSON 的每条硬规则都必须真的让校验失败，随包发布的底稿模板必须过工作簿契约。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_valuation_contracts.py
+	# 市场法规则：20% / 30% / 1.2 三条阈值的等于、略低、略高边界，以及"综合修正是连乘不是相加"
+	# 与 Excel 口径的取整（银行家舍入会让底稿与 JSON 的数字对不上）。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_market_rules.py
 
 # 打成可直接分发的 tgz（`npm publish` 的对象，也是接收方自测的输入）。
 # 包内已含全部技能层（skills/crwu、skills/dws、common/skills）与两个平台的自带二进制。

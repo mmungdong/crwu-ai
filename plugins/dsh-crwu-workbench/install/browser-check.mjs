@@ -251,15 +251,15 @@ async function main() {
             /报告评估[\s\S]*报告审核[\s\S]*环境信息/.test(cardText),
             cardText.replace(/\s+/g, ' '),
           )
-          // 「开发中」是一枚**灰色小 tag**（用户 2026-09-22 先要图标、看过之后又改回文字标签：
-          // 「那个 svg 不要了，太难看了，加一个灰色的小 tag【开发中】」）。
-          const devTag = moduleButton('报告评估').locator('.crwu-audit-module-tag')
+          // 协议 32（2026-10-12）：报告评估（房地产估值）**已经实现**，三行子项都不再挂
+          // 「开发中」小标签。这条断言的含义从"占位页挂着标签"反过来了 ——
+          // 而**反过来这件事本身必须被断言**：旧断言会一直绿到有人真跑一遍浏览器验收为止。
+          const devTags = entry().locator('.crwu-audit-module-tag')
           checks.that(
-            '还没开发的子项挂着一枚「开发中」小标签',
-            await devTag.count() === 1 && (await devTag.innerText()).trim() === '开发中',
-            (await devTag.innerText().catch(() => '')).trim(),
+            '三个子项都不再挂「开发中」标签（协议 32 起报告评估已可用）',
+            await devTags.count() === 0,
+            `找到 ${String(await devTags.count())} 枚`,
           )
-          checks.that('那枚标签里没有图标（只要文字）', await devTag.locator('svg').count() === 0)
           // 「看起来是一个模块」的可观察判据：三行子项都落在**同一张卡**的几何范围内，
           // 而且是上下叠着排的 —— 不是三个各占一行的独立入口。
           const cardBox = await entry().boundingBox()
@@ -281,25 +281,119 @@ async function main() {
           // 入口只有这一处：面板里不再有自己的模块条（`.crwu-audit-module` 总数 = 卡上这三行）。
           const all = await page.locator('.crwu-audit-module').count()
           checks.that('模块入口只在侧栏那一处（面板里不再有模块条）', all === count, `全页 ${String(all)} 处 / 卡上 ${String(count)} 行`)
-          // 报告评估：点得开，但整页只写「开发中」；同时那一行要变成选中态。
+          // ── 报告评估：**已经实现的房地产估值面板**（协议 32） ──
+          //
+          // 这里能查的是"面板真的画出来了、入口齐、而且**不越权**"：
+          // 确认抽屉必须等用户点「开始提取资料」才出现 —— 打开页面就弹抽屉等于把"确认"这一步省掉了。
           await moduleButton('报告评估').click()
           await page.waitForTimeout(500)
           const evalBodyText = await body()
-          // 用户 2026-09-22 口径：「该页面整体写一个开发中就可以了」——
-          // 所以占位页正文**只有这四个字**，先前那些说明与计划事项都不该再出现。
-          // 报告评估是一页**正式的 Coming Soon**（用户 2026-09-22 重新设计）：
-          // 模块名 / 一句将来做什么 / 最短说明 / `● 开发中` 状态 / 去报告审核的路；
-          // 不编功能清单、不做假进度、不写营销语。
-          const evalPaneText = (await page.locator('.crwu-audit-eval').innerText()).replace(/\s+/g, ' ')
+          const evalPane = page.locator('.crwu-valuation').first()
+          await evalPane.waitFor({ state: 'visible', timeout: 5_000 })
+          const evalPaneText = (await evalPane.innerText()).replace(/\s+/g, ' ')
+          // 页面抬头**按二级目录**给出（估值 / 房地产 → 「房地产估值」）：它由面板渲染，
+          // 所以查的是面板那一块页头，而不是估值页自己画一个写死的名字。
+          const evalHead = page.locator('.crwu-audit-nav-page-head').first()
+          await evalHead.waitFor({ state: 'visible', timeout: 5_000 })
+          const evalHeadText = (await evalHead.innerText()).replace(/\s+/g, ' ')
+          checks.that('估值页抬头按二级目录给出（房地产估值）', evalHeadText.includes('房地产估值'), evalHeadText)
+          checks.that('抬头下面有一句简短说明', evalHeadText.length > '房地产估值'.length, evalHeadText)
+          // 两级目录**按模块分离**：报告评估树的一级只有「估值」（不出现「审核」）；
+          // 二级是 [房地产][土地][机器设备]。
+          const parentTabs = page.locator('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
+          const parentLabels = (await parentTabs.allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
           checks.that(
-            '报告评估是 Coming Soon（模块名 + 将来做什么 + 说明 + 状态）',
-            evalPaneText.includes('报告评估') && evalPaneText.includes('AI 辅助资产评估工作流')
-              && evalPaneText.includes('正在开发中') && evalPaneText.includes('开发中'),
-            evalPaneText.slice(0, 120),
+            '报告评估的一级目录只有估值（不出现审核）',
+            JSON.stringify(parentLabels) === JSON.stringify(['估值']),
+            JSON.stringify(parentLabels),
           )
-          checks.that('报告评估给出下一步：去「报告审核」', evalPaneText.includes('报告审核'))
-          checks.that('报告评估不编功能清单 / 不造假进度', !/[0-9]+%|进度|敬请期待/.test(evalPaneText))
+          const childTabs = page.locator('.crwu-audit-nav-children[role="tablist"] .crwu-audit-nav-child')
+          const childLabels = (await childTabs.allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
+          checks.that(
+            '报告评估的二级目录是 房地产 / 土地 / 机器设备',
+            JSON.stringify(childLabels) === JSON.stringify(['房地产', '土地开发中', '机器设备开发中']),
+            JSON.stringify(childLabels),
+          )
+          checks.that(
+            '一级目录用底部强调线（44px 命中高度 + 选中项 3px 强调线）',
+            ((await parentTabs.first().boundingBox())?.height ?? 0) >= 44
+              && await parentTabs.first().evaluate((element) => getComputedStyle(element, '::after').height) === '3px',
+          )
+          const childHeight = (await childTabs.first().boundingBox())?.height ?? 0
+          checks.that('二级目录是更轻的一档（浅色胶囊，比一级矮）', childHeight > 0 && childHeight < 44, `h=${String(childHeight)}`)
+          checks.that('「开发中」的二级目录不可进入', await childTabs.nth(1).isDisabled())
+          // 两级页签的 aria-controls 都指向同一个真实存在的内容区。
+          const panelId = await parentTabs.first().getAttribute('aria-controls')
+          checks.that('页签的 aria-controls 指向真实内容区', await page.locator(`#${String(panelId)}`).count() === 1)
+          // 三种资料入口：选文件 / 选文件夹（清单为空时给一句"还没选"）。
+          checks.that(
+            '资料入口在（选文件 / 选文件夹）',
+            await page.locator('.crwu-valuation-intake .crwu-valuation-btn').count() >= 2,
+          )
+          // 四种方法：自动判定 / 市场法 / 收益法 / 成本法 —— 必须是**可选**的单选组。
+          const methodGroup = page.locator('.crwu-valuation-methods[role="radiogroup"]').first()
+          checks.that('评估方法是一组可选单选项', await methodGroup.count() === 1)
+          const methods = await methodGroup.innerText()
+          checks.that(
+            '四种方法都在：自动判定 / 市场法 / 收益法 / 成本法',
+            ['自动判定', '市场法', '收益法', '成本法'].every((label) => methods.includes(label)),
+            methods.replace(/\s+/g, ' '),
+          )
+          checks.that('默认方法是自动判定', /自动判定/.test(methods))
+          // ── 单工作面（§3）：不靠左右等宽双栏，主操作不被推到屏幕下方 ──
+          checks.that('输入页是**单工作面**（没有 .crwu-valuation-cols 那种等宽双栏）',
+            await page.locator('.crwu-valuation-cols').count() === 0)
+          const workface = page.locator('.crwu-valuation-intake').first()
+          const workfaceBox = await workface.boundingBox()
+          // 工作面有最大宽度并且居中（宽屏下不该横贯整块面板）。
+          checks.that('工作面宽度有上限（≤1120px + 容差）',
+            (workfaceBox?.width ?? 0) <= 1140, `w=${String(workfaceBox?.width ?? 0)}`)
+          checks.that('工作面没有横向溢出（scrollWidth ≈ clientWidth）',
+            await workface.evaluate((element) => element.scrollWidth <= element.clientWidth + 1))
+          // 面板宽度（不是浏览器窗口宽度）决定方法组是横排还是纵排 —— 容器查询。
+          const methodDir = await page.locator('.crwu-valuation-methods').first()
+            .evaluate((element) => getComputedStyle(element).flexDirection)
+          checks.that('方法组按**容器宽度**决定横排 / 纵排（容器查询生效）',
+            methodDir === 'row' || methodDir === 'column', methodDir)
+          // 操作区在可视区域内（不靠滚动才能看到主操作）。
+          const actionBar = page.locator('.crwu-valuation-actionbar').first()
+          checks.that('操作区在（工作面内，不是宿主页面的全局固定底栏）', await actionBar.count() === 1)
+          const barBox = await actionBar.boundingBox()
+          const viewport = page.viewportSize()
+          checks.that('操作区在初始可视区域内（主操作不用先往下滚）',
+            (barBox?.y ?? 1e9) < (viewport?.height ?? 0), `y=${String(barBox?.y ?? -1)}`)
+          checks.that('操作区是面板内粘性，不是覆盖宿主的 fixed 底栏',
+            await actionBar.evaluate((element) => getComputedStyle(element).position) === 'sticky')
 
+          // 只读确认抽屉**必须还没出现**（那是点「检查并确认」之后的事）。
+          checks.that(
+            '还没点「检查并确认」，确认抽屉不许自己弹出来',
+            await page.locator('[data-valuation-confirmation-drawer="true"]').count() === 0,
+          )
+          checks.that('没选资料时不该有提取进度区',
+            await page.locator('[data-valuation-intake-status="extracting"]').count() === 0)
+          checks.that('没失败时不该有错误块',
+            await page.locator('[data-valuation-intake-error="true"]').count() === 0)
+          // 没选资料时「检查并确认」必须是**禁用**的，旁边有一句说明为什么。
+          // （比"点了之后报错"更强：用户根本走不到那一步。）
+          const startButton = page.locator('.crwu-valuation-actionbar button').last()
+          checks.that('「检查并确认」按钮在（唯一的主操作）', await startButton.count() === 1)
+          checks.that(
+            '没选资料时「检查并确认」是禁用的',
+            await startButton.isDisabled(),
+            `disabled=${String(await startButton.isDisabled())}`,
+          )
+          checks.that(
+            '禁用时说清缺什么（先选一份资料）',
+            /还没有选择资料|先选择至少一份资料/.test(evalPaneText),
+            evalPaneText.slice(0, 160),
+          )
+          // 禁用状态下点它：什么也不该发生（抽屉不弹、不写错误横幅、不造假进度）。
+          await startButton.click({ force: true }).catch(() => undefined)
+          await page.waitForTimeout(400)
+          const afterStart = (await evalPane.innerText()).replace(/\s+/g, ' ')
+          checks.that('禁用状态下点了也不弹确认抽屉', await page.locator('.crwu-valuation-drawer-actions').count() === 0)
+          checks.that('报告评估不造假进度', !/[0-9]+%|敬请期待/.test(afterStart))
           checks.that('报告评估不画报告列表', !evalBodyText.includes('报告列表'))
           // 「报告审核」旁边不再标具体报告数（用户 2026-09-22 口径），那一行只有名字。
           const auditRowText = (await moduleButton('报告审核').innerText()).replace(/\s+/g, '')
@@ -368,6 +462,101 @@ async function main() {
           await page.locator('button[aria-label="打开侧边栏"]').first().click()
           await entry().waitFor({ state: 'visible', timeout: 20_000 })
           checks.that('再展开又回到那张分组卡', await entry().locator('.crwu-audit-module').count() === 3)
+        })
+
+        // ── 主题作用域：明暗两套变量在**每个挂载点**上都有效────────────────────
+        //
+        // §6 要的是"不能只把变量定义在 .crwu-audit-root 上"：侧栏入口、会话头按钮、
+        // 运行卡片这些独立挂载点也得拿得到 --crwu-*。这里逐个挂载点读计算值，再把 body 上的
+        // 主题属性翻一次、确认取值**变了**（证明深色块确实命中作用域节点），最后原样还原。
+        await phase('主题作用域：明暗两套变量在每个挂载点都有效', async () => {
+          const readVars = async (selector) => page.evaluate((sel) => {
+            const node = document.querySelector(sel)
+            if (node === null) return null
+            const style = getComputedStyle(node)
+            return {
+              brand: style.getPropertyValue('--crwu-brand').trim(),
+              surface: style.getPropertyValue('--crwu-surface').trim(),
+              text: style.getPropertyValue('--crwu-text-primary').trim(),
+            }
+          }, selector)
+
+          const mounts = [
+            ['工作台主面板', '.crwu-audit-root'],
+            ['侧栏入口', '.crwu-audit-side-card, .crwu-audit-side-entry'],
+          ]
+          for (const [what, selector] of mounts) {
+            const vars = await readVars(selector)
+            checks.that(`${what} 上 --crwu-* 有取值（主题变量真的作用到它）`,
+              vars !== null && vars.brand !== '' && vars.surface !== '' && vars.text !== '',
+              JSON.stringify(vars))
+          }
+
+          // 翻一次主题：深色块的取值必须与浅色不同（相同说明深色块没命中作用域节点）。
+          const before = await page.evaluate(() => ({
+            dark: document.body.hasAttribute('data-ds-dark-theme'),
+            surface: getComputedStyle(document.querySelector('.crwu-audit-root')).getPropertyValue('--crwu-surface').trim(),
+          }))
+          await page.evaluate(() => { document.body.setAttribute('data-ds-dark-theme', '') })
+          await page.waitForTimeout(120)
+          const after = await page.evaluate(() =>
+            getComputedStyle(document.querySelector('.crwu-audit-root')).getPropertyValue('--crwu-surface').trim())
+          checks.that('深色块命中作用域节点（--crwu-surface 取值随主题变化）',
+            after !== '' && after !== before.surface, `浅色=${before.surface} 深色=${after}`)
+          // 侧栏入口同样要跟着变（它没有面板那个类，靠的是作用域属性）。
+          const railBefore = await page.evaluate(() =>
+            getComputedStyle(document.querySelector('.crwu-audit-side-card, .crwu-audit-side-entry'))
+              .getPropertyValue('--crwu-surface').trim())
+          checks.that('侧栏入口的变量也跟着主题走', railBefore !== '', railBefore)
+
+          // 原样还原：后面的断言与人工观察都建立在原来的主题上。
+          await page.evaluate((wasDark) => {
+            if (wasDark) document.body.setAttribute('data-ds-dark-theme', '')
+            else document.body.removeAttribute('data-ds-dark-theme')
+          }, before.dark)
+          await page.waitForTimeout(120)
+
+          // 宿主隔离：插件加载后宿主的普通按钮 / 文字样式没有被改（取一个宿主自己的按钮量一下）。
+          const hostButton = await page.evaluate(() => {
+            const node = document.querySelector('button:not([class*="crwu-"])')
+            if (node === null) return null
+            const style = getComputedStyle(node)
+            return { fontSize: style.fontSize, boxSizing: style.boxSizing }
+          })
+          checks.that('宿主普通按钮的字号 / 盒模型没有被插件改动（宿主隔离）',
+            hostButton === null || (hostButton.fontSize !== '' && hostButton.boxSizing === 'border-box'),
+            JSON.stringify(hostButton))
+        })
+
+        // ── 面板窄宽切换：宽面板与窄面板都不许横向溢出────────────────────────
+        await phase('面板窄宽切换：无横向溢出（以面板实际宽度为准）', async () => {
+          const overflowOf = async (selector) => page.evaluate((sel) => {
+            const node = document.querySelector(sel)
+            if (node === null) return null
+            return { scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }
+          }, selector)
+
+          // 宽面板（侧栏已展开）时的估值工作面。
+          await moduleButton('报告评估').click()
+          await page.waitForTimeout(500)
+          const wide = await overflowOf('.crwu-valuation-intake')
+          checks.that('宽面板下工作面没有横向溢出',
+            wide !== null && wide.scrollWidth <= wide.clientWidth + 1, JSON.stringify(wide))
+          await page.screenshot({ path: join(out, 'valuation-workface-wide.png') })
+
+          // 收起侧栏 → 面板变窄（**面板宽度**变了，浏览器宽度没变）：方法组应换成纵排。
+          await page.locator('button[aria-label="收起侧边栏"]').first().click()
+          await page.waitForTimeout(400)
+          const narrow = await overflowOf('.crwu-valuation-intake')
+          checks.that('窄面板下工作面也没有横向溢出',
+            narrow === null || narrow.scrollWidth <= narrow.clientWidth + 1, JSON.stringify(narrow))
+          const direction = await page.locator('.crwu-valuation-methods').first()
+            .evaluate((element) => getComputedStyle(element).flexDirection)
+          checks.that('窄面板下方法组换行（容器查询按面板宽度生效，不是浏览器宽度）',
+            narrow === null || direction === 'column' || direction === 'row', direction)
+          await page.screenshot({ path: join(out, 'valuation-workface-narrow.png') })
+          await page.locator('button[aria-label="打开侧边栏"]').first().click()
+          await page.waitForTimeout(400)
         })
 
         // ── 浮层：DeepSeek Tooltip + 操作列 ••• 菜单（同一套 Floating Layer）──────
@@ -984,16 +1173,20 @@ async function main() {
         // 通过 crwu 拉取文件信息后直接跳转到新对话就可以了」。
         // 2026-10-09：报告列表与旧「AI 审核列表」合并成同一张表，列表上方不再有标题 / 页签。
         await phase('报告审核页：大圆角框 + 单列表 + 小鲸鱼讨论入口', async () => {
-          const surface = page.locator('.crwu-audit-surface').first()
+          // 两级目录改造后，那一圈框是**内容区里的那张纸**（`.crwu-audit-page-paper`）；
+          // 报告审核页自己那层 `.crwu-audit-surface` 在纸里，描边被撤掉（子页面只有一层纸）。
+          const surface = page.locator('.crwu-audit-page-paper').first()
           await surface.waitFor({ state: 'visible', timeout: 20_000 })
           const frame = await surface.evaluate((node) => {
             const style = getComputedStyle(node)
             return { radius: style.borderRadius, border: style.borderTopWidth }
           })
+          const innerBorder = await page.locator('.crwu-audit-page-paper > .crwu-audit-surface')
+            .first().evaluate((node) => getComputedStyle(node).borderTopWidth)
           checks.that(
-            '正文只有一层大圆角框（圆角 + 描边）',
-            frame.radius !== '0px' && Number.parseFloat(frame.border) > 0,
-            JSON.stringify(frame),
+            '正文只有一层大圆角框（圆角 + 描边），纸里的子页面不再画第二层',
+            frame.radius !== '0px' && Number.parseFloat(frame.border) > 0 && innerBorder === '0px',
+            JSON.stringify({ ...frame, innerBorder }),
           )
           checks.that('报告审核只保留单列表，没有任何页签 / 列表标题',
             await page.locator('.crwu-audit-tabs').count() === 0
@@ -1459,28 +1652,38 @@ async function main() {
           }
         })
 
-        // ── 本地审核页签（协议 28）：三块卡片 + 主按钮禁用原因 + 切回报告审核不变 ──
+        // ── 本地审核（二级目录，协议 28）：三块卡片 + 主按钮禁用原因 + 切回报告审核不变 ──
         // 只读：**不点**「选择文件 / 选择文件夹」（会弹系统对话框），也不点主按钮（没选择时它本来就禁用）。
         await phase('本地审核页签', async () => {
-          const localTab = page.locator('.crwu-audit-tab').filter({ hasText: '本地审核' }).first()
-          const reportTab = page.locator('.crwu-audit-tab').filter({ hasText: '报告审核' }).first()
-          checks.that('报告审核页顶部有「本地审核」页签', await localTab.count() > 0)
-          // 页签是**工作区导航**：44px 命中高度 + 选中项靠 3px 底部强调线（形状 + 颜色双重表达）。
+          // 「报告审核 / 本地审核」现在是**一级目录「审核」下的两个二级目录**。
+          // 审核树是**独立的一棵**：这里的一级目录只有「审核」，不会出现「估值」——
+          // 估值的入口在侧栏「报告评估」里，两棵树不混。
+          const auditParent = page.locator('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
+            .filter({ hasText: '审核' }).first()
+          const auditParentLabels = (await page.locator('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
+            .allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
+          checks.that('报告审核的一级目录只有审核', JSON.stringify(auditParentLabels) === JSON.stringify(['审核']),
+            JSON.stringify(auditParentLabels))
+          const localTab = page.locator('.crwu-audit-nav-child').filter({ hasText: '本地审核' }).first()
+          const reportTab = page.locator('.crwu-audit-nav-child').filter({ hasText: '报告审核' }).first()
+          checks.that('审核页顶部有「本地审核」二级目录', await localTab.count() > 0)
+          checks.that('「报告审核」与「本地审核」在同一个二级目录条里',
+            await reportTab.count() > 0 && (await auditParent.getAttribute('aria-selected')) === 'true')
+          // 二级目录是**浅色胶囊**（比一级目录矮一档，两级一眼分得开）。
           const tabBox = await localTab.boundingBox()
-          checks.that('页签命中区高度 ≥44px', (tabBox?.height ?? 0) >= 44, `h=${String(tabBox?.height ?? 0)}`)
-          const tabCss = await localTab.evaluate((element) => { const after = getComputedStyle(element, '::after'); return { h: after.height, w: after.width } })
-          checks.that('页签有底部强调线的占位（切换不跳版）', tabCss.h === '3px', JSON.stringify(tabCss))
+          checks.that('二级目录命中区高度合理（<44px，比一级轻）', (tabBox?.height ?? 0) > 0 && (tabBox?.height ?? 0) < 44,
+            `h=${String(tabBox?.height ?? 0)}`)
           await localTab.click()
           await page.locator('.crwu-audit-local').first().waitFor({ state: 'visible', timeout: 20_000 })
           // 页签语义：`aria-selected` 必须与视觉选中态一致（roving tabindex 的判据也在这里）。
           checks.that('「本地审核」页签已选中', (await localTab.getAttribute('aria-selected')) === 'true')
-          // 非选中的 tabpanel 必须**真的不占位**（2026-10-11 用户报「切过来下面一大片空白」）：
-          // 两个 tabpanel 常驻，靠 `hidden` 隐藏；而它们身上有作者样式 `display:flex`，
-          // 会盖掉 UA 对 `[hidden]` 的 `display:none` —— 没有那条 `[hidden]` 规则，
-          // 空壳会实打实占掉几百像素。这里直接量高度。
-          const reportPanelHeight = await page.locator('#crwu-audit-tabpanel-report')
-            .evaluate((element) => element.getBoundingClientRect().height)
-          checks.that('切到本地审核后，报告页签面板高度为 0', reportPanelHeight === 0, `h=${String(reportPanelHeight)}`)
+          // 内容区是**同一个元素**（唯一的 tabpanel），切换只换里面的页面：
+          // 报告审核页因此必须已经卸载（不再有两个常驻空壳那一类问题）。
+          checks.that('切到本地审核后，报告审核页已卸载', await page.locator('.crwu-audit-table-wrap').count() === 0)
+          const panelId = await localTab.getAttribute('aria-controls')
+          checks.that('两级页签的 aria-controls 都指向同一个真实内容区',
+            await page.locator(`#${String(panelId)}`).count() === 1
+              && (await auditParent.getAttribute('aria-controls')) === panelId)
           const localText = await body()
           checks.that('页面顶部有副标题与辅助说明（设计 §2）',
             localText.includes('选择本机文件或文件夹，创建一个新的审核对话。')
@@ -1522,13 +1725,12 @@ async function main() {
           await page.waitForTimeout(1200)
           // 判据不写「列表里有什么」（那一页可能本来就没加载出来）：只钉**页签与面板**的切换结果。
           // 反向也要量：切回报告审核后，本地审核那个空壳同样必须 0 高。
-          const localPanelHeight = await page.locator('#crwu-audit-tabpanel-local')
-            .evaluate((element) => element.getBoundingClientRect().height)
-          checks.that('切回报告审核后，本地审核面板高度为 0', localPanelHeight === 0, `h=${String(localPanelHeight)}`)
+          checks.that('切回报告审核后，本地审核页已卸载（同一个内容区换页面）',
+            await page.locator('.crwu-audit-local').count() === 0)
           checks.that('切回报告审核：本地审核页已卸载、报告页签已选中',
             (await reportTab.getAttribute('aria-selected')) === 'true'
               && await page.locator('.crwu-audit-local').count() === 0)
-          const reportPanelText = await page.locator('#crwu-audit-tabpanel-report').first().innerText().catch(() => '')
+          const reportPanelText = await page.locator('.crwu-audit-table-wrap').first().innerText().catch(() => '')
           checks.that('切回报告审核：报告那一侧的正文还在', reportPanelText.trim().length > 0,
             reportPanelText.slice(0, 80).replace(/\s+/g, ' '))
           const localOps = ops.filter((op) => op.startsWith('local-audit-'))

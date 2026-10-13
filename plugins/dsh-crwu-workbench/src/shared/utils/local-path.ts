@@ -17,7 +17,7 @@ import { text } from './value.ts'
  * ## 边界（改这个文件前先读）
  *
  * - 这里处理的是**本地路径**：盘符、UNC、POSIX 根。**OSS object key 永远用 `/`**，
- *   不属于这里（见 `host/oss/ops.ts` 里 `objectKey` 的命名）。
+ *   不属于这里（见 `host/integrations/oss/ops.ts` 里 `objectKey` 的命名）。
  * - **安全性判断不要用这里的函数**：`..`、符号链接、Windows 盘符大小写都会让字符串比较失效，
  *   父目录/子目录判定一律走 `ctx.fs.contains`（后端 realpath 之后比较）。
  *   这里只负责「拼一条给人看、给命令用的路径」。

@@ -1,0 +1,206 @@
+{
+  "valuationId": "估值-20261012-101500-ab12",
+  "method": "market",
+  "methodReason": "同小区、同用途、面积接近的成交案例 3 个，可直接比价；租金数据不足 6 个月，收益法依据不充分，故不采用",
+  "methodScreening": [
+    {
+      "method": "market",
+      "verdict": "adopted",
+      "reason": "同小区与同片区有 3 条可核成交案例，成交日期在基准日前 6 个月内（references/02 第 2 节）"
+    },
+    {
+      "method": "income",
+      "verdict": "not-adopted",
+      "reason": "对象为空置住宅、无租赁合同与租金记录：收益法缺租金与空置率数据，无法形成净收益序列"
+    },
+    {
+      "method": "cost",
+      "verdict": "not-adopted",
+      "reason": "对象为二手住宅，重置成本与土地取得成本资料不足，且市场案例充分，无采用成本法的必要"
+    }
+  ],
+  "methodConflict": null,
+  "baseDate": "2026-06-30",
+  "unitPrice": 53000,
+  "totalValue": 5056200.0,
+  "pricingArea": 95.4,
+  "priceUnit": "元/㎡",
+  "manual_confirmation_items": [
+    "本次未指定评估基准日",
+    "本轮只取到 1 条采用案例（规范要求不少于 3 条）：结论仅供参考，需补搜可比实例后复核"
+  ],
+  "capability_gaps": [
+    "本部署没有可用的页面截图能力：来源证据是页面字节（HTML）与指纹，不是截图。需要可视证据时请在默认浏览器人工打开该页面并另存。",
+    "安居客：页面取到了，但没有可用的结构化房源数据（不猜测）"
+  ],
+  "knowledge_sources": [
+    {
+      "route": "估值与测算/房地产/01-房地产估值通用",
+      "source": "dws",
+      "updatedAt": "2026-09-20T00:00:00.000Z",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "route": "估值与测算/房地产/02-市场法",
+      "source": "local",
+      "updatedAt": "",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "cases": [
+    {
+      "source": "fang",
+      "source_label": "房天下",
+      "url": "https://example.invalid/fang/12345",
+      "title": "阳光小区 3室2厅 成交价 180 万",
+      "community": "阳光小区",
+      "purpose": "住宅",
+      "property_nature": "商品房",
+      "building_area": 90,
+      "floor": "6",
+      "total_floors": "18",
+      "built_year": "2010",
+      "decoration": "精装",
+      "price": 1800000,
+      "unit_price": 20000,
+      "transaction_type": "成交",
+      "used_as_comparable": true,
+      "published_at": "2026-09-01",
+      "captured_at": "2026-10-12T02:00:00.000Z",
+      "evidence": "来源证据/fang-12345.html",
+      "keep_reason": "同小区、同用途、面积接近，成交案例可直接作可比实例",
+      "drop_reason": "",
+      "notes": [],
+      "contact": {
+        "state": "public",
+        "agency": "示例房产经纪有限公司",
+        "person": "王经理",
+        "phone": "010-00000000",
+        "source": "经纪人卡片",
+        "captured_at": "2026-10-13 10:00"
+      },
+      "status": "adopted",
+      "rule_checks": [
+        {
+          "rule_id": "R-COMPARABILITY",
+          "actual": null,
+          "threshold": null,
+          "verdict": "pass",
+          "reason": "用途相同、结构相近、同一供需圈，成交日期在基准日前 6 个月内"
+        },
+        {
+          "rule_id": "R-EVIDENCE",
+          "actual": null,
+          "threshold": null,
+          "verdict": "pass",
+          "reason": "页面证据已留存（来源证据/…html）"
+        },
+        {
+          "rule_id": "R-SINGLE-20",
+          "actual": 0.08,
+          "threshold": 0.2,
+          "verdict": "pass",
+          "reason": "最大单项修正为楼层因素 +8%"
+        },
+        {
+          "rule_id": "R-COMBINED-30",
+          "actual": 0.14,
+          "threshold": 0.3,
+          "verdict": "pass",
+          "reason": "共同修正 1.08×1.06−1＝14.48%"
+        },
+        {
+          "rule_id": "R-GROUP-1.2",
+          "actual": 1.0,
+          "threshold": 1.2,
+          "verdict": "pass",
+          "reason": "本轮只有一条采用案例：组内比值只有 1.0；案例数量不足已写进待确认事项"
+        }
+      ],
+      "screenshot": "",
+      "screenshot_digest": "",
+      "screenshot_captured_at": "",
+      "screenshot_missing": true
+    },
+    {
+      "source": "anjuke",
+      "source_label": "安居客",
+      "url": "https://example.invalid/anjuke/6",
+      "title": "阳光小区 3室 挂牌价 210 万",
+      "community": "阳光小区",
+      "purpose": "住宅",
+      "property_nature": "商品房",
+      "building_area": 92,
+      "floor": "9",
+      "total_floors": "18",
+      "built_year": "2010",
+      "decoration": "简装",
+      "price": 2100000,
+      "unit_price": 22826,
+      "transaction_type": "挂牌",
+      "used_as_comparable": false,
+      "published_at": "2026-09-15",
+      "captured_at": "2026-10-12T02:00:00.000Z",
+      "evidence": "来源证据/anjuke-6.html",
+      "keep_reason": "",
+      "drop_reason": "挂牌价是卖方要价，不作为成交可比实例；仅用于观察可比小区的在售水平",
+      "notes": [
+        "页面未标明成交：按挂牌处理"
+      ],
+      "contact": {
+        "state": "masked",
+        "agency": "示例房产经纪有限公司",
+        "phone": "138****1234",
+        "source": "经纪人卡片",
+        "captured_at": "2026-10-13 10:05"
+      },
+      "status": "single-rule-failed",
+      "rule_checks": [
+        {
+          "rule_id": "R-COMPARABILITY",
+          "actual": null,
+          "threshold": null,
+          "verdict": "pass",
+          "reason": "用途与结构可比"
+        },
+        {
+          "rule_id": "R-EVIDENCE",
+          "actual": null,
+          "threshold": null,
+          "verdict": "pass",
+          "reason": "页面证据已留存"
+        },
+        {
+          "rule_id": "R-SINGLE-20",
+          "actual": 0.26,
+          "threshold": 0.2,
+          "verdict": "fail",
+          "reason": "装修因素单项修正 26%，超过 20%：案例装修状况与对象差异过大，剔除并补搜"
+        },
+        {
+          "rule_id": "R-COMBINED-30",
+          "actual": 0.31,
+          "threshold": 0.3,
+          "verdict": "fail",
+          "reason": "共同修正 31%，超过 30%：与单项超限同源"
+        },
+        {
+          "rule_id": "R-GROUP-1.2",
+          "actual": 1.0,
+          "threshold": 1.2,
+          "verdict": "pass",
+          "reason": "本轮只有一条采用案例：组内比值只有 1.0；案例数量不足已写进待确认事项"
+        }
+      ],
+      "screenshot": "",
+      "screenshot_digest": "",
+      "screenshot_captured_at": "",
+      "screenshot_missing": true
+    }
+  ],
+  "artifacts": {
+    "html": "估值报告.html",
+    "xlsx": "估值底稿.xlsx",
+    "json": "估值结果.json"
+  }
+}

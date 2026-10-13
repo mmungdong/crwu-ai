@@ -130,7 +130,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 
 - 姓名来源是钉钉 CLI：`dws contact user get-self --format json` →
   `result[0].orgEmployeeModel.orgUserName` / `orgName` / `userId`（实现：
-  `src/host/system/identity.ts` 的 `dwsSelf` / `readSelfDocument`）；
+  `src/host/core/system/identity.ts` 的 `dwsSelf` / `readSelfDocument`）；
 - 它**跟着环境自检一起取**（`env.me`），不单独开操作 —— 用户口径：「这个钉钉 cli 环境监测一遍
   就可以了，不需要每次切换页面都去调，本质就是从环境信息把这个人的信息拿到」；
 - 宿主侧**只缓存成功结果**（姓名在一次登录周期里不变），失败不缓存：员工登录后刷一下就有；
@@ -141,7 +141,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 
 最容易漏的是 2~4：
 
-1. `src/host/ops/core.ts` 的操作表加一项；
+1. `src/host/operations/` 对应域的操作表加一项（组装处 `register.ts` 的 `ported.done` 也要加）；
 2. 同一文件 `boot.ported.done` 加名字（漏了 → 「操作表 ↔ ported 声明一一对应」红）；
 3. `tests/unit/host-package.test.mjs` 的 `FROZEN` 清单加名字并改数量注释（漏了 → 冻结清单红）；
 4. 客户端要调用 → 门面加方法 + `OPERATION_OF`；不打算给客户端用 → 加进
@@ -152,7 +152,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 
 ### 7.1 增删一个**本机访问操作**（`LOCAL_ACCESS_OPERATIONS`）的最小清单
 
-这张表是**另一张表**（`src/host/access/operations.ts`）：跨工作区边界的每一条命令 / 文件写入
+这张表是**另一张表**（`src/host/core/access/operations.ts`）：跨工作区边界的每一条命令 / 文件写入
 都必须在它上面登记，判据是「需要哪个 capability / 走哪条通道 / 要不要逐次提权 / 允许哪些来源」。
 加一项时：
 
@@ -170,9 +170,11 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 （本文件历史上同时写过 30 与 29 两个互相矛盾的值，就是这么来的）。各测试各写一个裸数字的结果是：
 加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
 
-**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前 = 25，
-25 是**把「授权收据读不出来」从「需要授权」里分出来**：`localAccess.state` 新增 `unreadable`，
-见 §21）。
+**协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前值以那一行
+为准，**不要**在这里抄数字 —— 它每加一代就变一次，抄进来必然漂）。最新一代是 32：
+**工作区会话统一**（会话落点只有一条路：唯一来源是【环境信息】选中的 `env.workspace`，
+唯一落点参数是 `workspaceId`，建完回读会话 cwd 与工作区成员关系；`caseRoot` / `cwd` 降级全部删除），
+见本文件末尾「工作区会话」一节。
 历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
 14：删除 `install-prompt`；15：iFinD 改为必需项；18：本机访问授权收据 + 诊断 + DWS 本机目录体检；
 19：审核 scope 收紧到本轮案例目录；20：内置浏览器扫码的凭据出口；21：钉钉登录两阶段；
@@ -225,8 +227,8 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 升级 DSH 到同一条线里的新 rc（例如桌面端自动升到 `0.2.0-rc.2`），想确认插件还支持 | 插件声明的区间（`^0.2.0-rc.1`）本来就覆盖整条 0.2.0 线，**先别急着改代码**；要的是把新版本纳入验证矩阵 | ① 逐包比对：`npm pack` 两条 rc 的全部 `@deepseek-ai/dsh-*`，解包后逐文件 diff。0.2.0-rc.1 → 0.2.0-rc.2 的实测结论：16 个包**所有 `.d.ts` 零差异**，13 个只有 `package.json` 版本号变化，另 3 个只有运行时代码小改动（`dsh-subagent` 多一条 `user-question-reply` typert 声明、`dsh-client-ui-renderer` 加一个 `useMemo`、`dsh-client-ui-sidebar` 去掉品牌按钮外层 `Tooltip`）→ 业务代码零改动；② 把代表版本换进 `scripts/check-dsh-compat.mjs` 的 `RUNTIMES` 与 `tests/unit/host-package.test.mjs` 的 `SUPPORTED_DSH_RUNTIMES`（**一条线一个代表版本**，同线后续 rc/正式版由区间语义覆盖）；③ `devDependencies` 跟着挪到该线（`^0.2.0-rc.2`），否则 `npm run typecheck` 验的还是旧线；④ 把结论写进 `CHANGELOG.md` 与本节 |
 | 插件管理器弹「`dsh-crwu-workbench@0.0.13` 与 DSH `0.2.0-rc.1` 不兼容（要求 …），请安装与当前 DSH 兼容的插件版本」，或装上了却被禁用 | `^0.1.7-rc.2` 的语义是 `>=0.1.7-rc.2 <0.2.0-0`，**不含** `0.2.0-rc.1`；而 Windows 那台机器已经升到 DSH 0.2.0-rc.1（当时本机 macOS 桌面端还是 0.1.7-rc.2，所以本机看不出来） | 与上一条同一个修法（加一条 `\|\| ^0.2.0-rc.1`）。**别用 `>=0.1.7-rc.2 <0.3.0` 图省事** —— 会顺带放行没验证过的 0.3 线。0.1.7-rc.2 → 0.2.0-rc.1 的逐包比对结论：7 个 peer 里 5 个字节相同，`dsh-client-ui-sidebar` 只多 1 行埋点、`dsh-client-ui-layout` 只多一段 Windows 标题栏 CSS |
 | 加宽 peer 之后，`npm install`（新鲜解析，没有 lock）在**本仓自己**报 `ERESOLVE`：`peer @deepseek-ai/dsh-fs@0.2.0-rc.1 from @deepseek-ai/dsh-skill-filesystem@0.2.0-rc.1` 撞上 devDep 的 `0.1.7-rc.2` | npm 的 peer 自动安装会为「只有 peer、树里没有具体实例」的包去解析**最新**匹配版本，而新线里有些包把 `peerDependencies` 写成**精确版本** | 把**全部 7 个 peer** 也写进 `devDependencies`（哪怕并不 import）：树里有了实例，npm 就钉在我们开发所对的那条线上。**接收方不受影响** —— profile 的 pnpm 配了 `autoInstallPeers: false`，`@deepseek-ai/dsh-*` 从来不由包管理器安装（DSH 运行时自己提供）。`host-package.test.mjs` 那条真装 tarball 的回归会拦住这个 |
-| 所有命令都失败，报 `shell.execute is not a function`（或 `run is not a function`） | 0.1.7 的 shell 契约变更：`ShellExecutor.run(spec)` → `execute(spec)` + 句柄的 `result()` | 改 `src/host/shell/run.ts`；**测试替身也要一起改**，否则单测里每个 shell 调用都会静默变成「执行失败」 |
-| 想让员工零安装（把 `crwu`/`dws`/`ossutil` 放进插件 `bin/`，指望 DSH 挂上 PATH） | **DSH 没有这个机制**：`dsh-package-manifest` 不认 `bin` 字段、`dsh-bash-local` 的 `Config` 无 env/PATH、`dsh-shell-env` 只收 `DSH_*` 键（前缀校验抛错）、`.env` 明确拒绝 `PATH` | 插件按平台自己解析包内绝对路径（`src/host/platform/bin-dir.ts`）；**再加一条 export 到 PATH**（见下条） |
+| 所有命令都失败，报 `shell.execute is not a function`（或 `run is not a function`） | 0.1.7 的 shell 契约变更：`ShellExecutor.run(spec)` → `execute(spec)` + 句柄的 `result()` | 改 `src/host/core/shell/run.ts`；**测试替身也要一起改**，否则单测里每个 shell 调用都会静默变成「执行失败」 |
+| 想让员工零安装（把 `crwu`/`dws`/`ossutil` 放进插件 `bin/`，指望 DSH 挂上 PATH） | **DSH 没有这个机制**：`dsh-package-manifest` 不认 `bin` 字段、`dsh-bash-local` 的 `Config` 无 env/PATH、`dsh-shell-env` 只收 `DSH_*` 键（前缀校验抛错）、`.env` 明确拒绝 `PATH` | 插件按平台自己解析包内绝对路径（`src/host/core/platform/bin-dir.ts`）；**再加一条 export 到 PATH**（见下条） |
 | 审核子代理里 `dws: command not found`，而插件自己的调用正常（**2026-09-25 前的旧症状**） | 那时审核子代理要自己拼命令行，而它跑的是 **DSH shell 的 PATH**（实测 `/usr/bin:/bin:/usr/sbin:/sbin`） | **不要再用「给用户 export PATH」这条路**（那等于把执行世界的要求推给员工，还把沙箱/审批绕开了）。现在自研审核链路只走结构化 Tool，命令由插件用**包内绝对路径**经 `ctx.shell` 发出 —— 见 §12 |
 | 本机 `bin/` 里明明有二进制，员工装上却没有 | `npm pack` **静默丢弃符号链接**（相对/绝对都不进 tarball，只有真实文件会） | 一律落真实文件；`assert-pack` 在本地装配了 `bin/` 时逐个断言真在 tarball 里 |
 | `make plugin-pack` 打出来的包缺自带二进制 | `plugin-bin` 没跑，或并列 prerequisites 在 `make -j` 下并行、门禁跑在了装配之前 | `plugin-pack` 用配方**显式**依次跑 `plugin-bin` → `plugin-check` → `npm pack`；`pack:assert` 会逐个断言 |
@@ -291,7 +293,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 体检的结论永远是"没确诊" | `dwsLocalDoctor` 自己也要跑几条特权命令，它们会进诊断环形缓冲；等体检跑完再读 `lastDiagnostic()` 拿到的是**体检自己**那一条 | 进体检第一件事就把上一次失败抓在手里（`const failure = deps.access.lastDiagnostic()`），再用它 + 本次探测结论做归因 |
 | "不许改权限"的用例删掉某条判据后**照样绿** | 真正的守门人是"必须正向确诊 `os-filesystem-permission`"那条白名单判据，前面几条具体拒绝只是更早的文案 | 证伪这类断言时要把**白名单判据**放宽（不是删黑名单项），否则证明不了任何东西（2026-09-29 实测：删掉钥匙串判据两次都不红，放宽正向确诊立刻红 2 条） |
 | 提示词里删掉了"未登录就停下"的要求，测试**照样绿** | 断言用的是整篇 `text.includes('立即停止本次审核')`，而同一句话在"数据边界"那一条里也出现过 | 提示词断言先 `indexOf('**登录与授权（必须照做）**')` 定位段落，再在**段内**逐句查（`host-audit-prompt.test.mjs` 的 C-08 用例就是这么写的）。同类风险：任何"整篇包含式"断言 |
-| 审核子会话跑到工作区外面去了 | 只写了提示词、没设会话策略；DSH 的沙箱是 `session 覆盖 ?? 部署默认`，而部署默认可能是 `danger-full-access` | `host/audit/policy.ts` 显式写 + 回读 + 按委派口径预测（§4.8）；`auto` / `danger-full-access` preset 的根**不可复用** |
+| 审核子会话跑到工作区外面去了 | 只写了提示词、没设会话策略；DSH 的沙箱是 `session 覆盖 ?? 部署默认`，而部署默认可能是 `danger-full-access` | `host/domains/report-audit/policy.ts` 显式写 + 回读 + 按委派口径预测（§4.8）；`auto` / `danger-full-access` preset 的根**不可复用** |
 | 加了 Broker 之后，环境自检里的 `dws auth status` 还是自己拼命令 | 它把 `shellInvoke(dws, ...)` 直接交给 Broker —— 提权走对了，但**绕开了 `runDws` 的 argv 白名单** | 业务 CLI 一律经登记的执行器（`runDws` / `runCrwu`）；`host-access-migration.test.mjs` 的 B-01 守卫会红（2026-09-29 实测抓到两处） |
 | 授权类测试全绿，但"未授权不放行"永远测不到 | 夹具给 Broker 传的是 `state` 的**副本**，测试改 `state.localAccess` 时 Broker 看不到 | `makeTestAccess(ctx, { state })` 直接复用同一个对象（见 `tests/helpers/local-access-broker-fixture.mjs`） |
 | 提权断言"没有沙箱策略"在 OSS 上失效 | 协议 18 把 `ossutil` 也归入本机凭据访问（它**每次**都读 `~/.ossutilconfig`） | 这类断言的判据是"要不要碰工作区外的凭据"，不是"这条命令看起来像不像读凭据"。改断言时写清原因，别只改期望值 |
@@ -309,7 +311,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 想在插件面板里内嵌 DSH 原生对话 | `main` 槽位只有保留键 `conversation` 有会话绑定；客户端产物只能 `require('react')`，装不进 `ui-chat`；右栏是资源标签页、没有对话类型 | 自绘外壳 + 挂**真实会话**：`services.sessions` 的 `create/open/binding/list`（见下条），对话正文按会话事件流自己渲染 |
 | 自绘面板里读会话事件流总是空 | 会话的**事件窗口只对当前会话打开**（stage 语义），而且绑定与历史是**异步**就绪的 | 绑定/发问前调 `sessions.open(id)`（只切会话选中，**不动主面板**）；读一次 + 挂订阅不够 —— 再加一路 1.2s 轮询（引用比较，没变化不重渲染）；`create` 不支持标题，建完要 `rename`，会话名就是复用凭据 |
 | 事件映射一条都匹配不上（面板空着，控制台也不报错） | 会话事件是**信封 + data**：`{type, seq, time, data:{…}}`，字段在 `data` 里，不在顶层 | 先取 `event.data` 再读 `content/source/message/name`；**单测样本抄真实事件**（真机探针打印一条即可），想当然的平铺样本会让单测全绿而真机全空 |
-| **Windows 上环境页/按钮报 `ParserError`、`意外的标记`，macOS 全绿** | 有调用点**绕过**了中央适配器自己拼命令（模板以 `` `${shellQuote(` `` 开头、`argv.map(…).join(' ')`、`cmd /c …`） | 所有经 `ctx.shell` 的命令只从 `src/host/platform/shell.ts` 生成；`host-platform-shell.test.mjs` 有两条静态门禁盯着（一条历史守卫在 `host-shell-fs.test.mjs`）。新增调用点先看这两处 |
+| **Windows 上环境页/按钮报 `ParserError`、`意外的标记`，macOS 全绿** | 有调用点**绕过**了中央适配器自己拼命令（模板以 `` `${shellQuote(` `` 开头、`argv.map(…).join(' ')`、`cmd /c …`） | 所有经 `ctx.shell` 的命令只从 `src/host/core/platform/shell.ts` 生成；`host-platform-shell.test.mjs` 有两条静态门禁盯着（一条历史守卫在 `host-shell-fs.test.mjs`）。新增调用点先看这两处 |
 | 命令返回 0，但目录其实没建出来 / 文件其实没删掉 | 只信退出码 | `ensureDirectory` / `removeFileIfExists` 会**回读后置条件**（只读路径探测，见下一条）；只有「目标已是我们要的状态」才算成功。测试替身必须模拟 shell 副作用（`tests/helpers/shell-effects.mjs`），否则替身会造出「命令成功但文件系统没变」的假机器 |
 | 只读探测要不要也全走 Broker（`ensureAuditRoot` 的 `fs.stat`、`report/files.ts` 的本地列举） | DSH 的 `workspace-write`（以及默认的 `read-only`）只限制**写**：可写根由 `dsh-sandbox` 的 `writableRoots()` 推导（工作区 + 临时区），**读没有这条限制** | 案例目录那一条链路（建 + 回读后置条件）**必须**走 Broker，因为它是写；其余的只读探测继续用 `ctx.fs`（2026-09-30 决策：不为"可能的读限制"加一层没有证据的间接层）。**实测**：本机 `workspace-write` 下读工作区之外的路径正常（`cat ~/.dsh/profiles/desktop/package.json`、`stat ~/.dsh` 都成功）。真机上如果出现"读不到外部工作空间"，先看那条命令的沙箱事实，再决定要不要把 `system.workspace-directory.read` 铺到那两处 |
 | **案例目录建出来了，紧接着 `mkdir <案例目录>/输入快照` 回 `Operation not permitted（沙箱拒绝=是）`** | **DSH 的执行器不持有会话**：请求里不带 `sandboxPolicy` 时它只用部署默认（`workspace-write` + 兜底根 = 进程 cwd），而案例目录是**调用方那条会话**的 cwd。⚠️ 换 `ctx` 没用（第一次就是这么修的，真机原样复现） | 案例内的调用点把 `exec.agent.session` 交给 Broker（`BrokerShellOptions.session`，**不是权限开关**），Broker 用 `ctx.sandboxPolicy.resolve({ session })` 算出策略放进请求。替身必须**按策略拦人**（`tests/helpers/fs-sandbox-stub.mjs`），否则这类缺陷在单测里永远看不见 |
@@ -337,12 +339,12 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 客户端适配器把服务方法「取出来再调」后第一个调用就 `TypeError` | `ClientSessions.create/using/binding` 都依赖 `this`（`this.manager` / `this.scopes`） | 适配器里一律 `svc.create(...)` 经接收者调用；也不要 `{ ...sessions }`（方法在原型上，展开只剩字段） |
 | 安装提示词还让 agent 手工跑 `crwu h3yun session login` / `dws auth login` | 旧文案把「本机零安装」只做了一半：二进制随包了，但登录仍交给 agent 拼命令行 | 改成在面板 ③ 登录认证 里点按钮（`install-prompt.ts` + `install/INSTALL-PROMPT.md`），`host-install-prompt.test.mjs` 里有一条「不许出现可直接照抄的登录命令」 |
 | 想「顺手」把插件 `bin/<平台>/` 挂进用户 shell PATH（或往 `~/bin` 拷副本） | 那会让「手工拼命令行」看起来可用，绕开沙箱/审批；插件升级后该路径还可能失效 | **不要这么做**。插件用包内绝对路径启动；`~/.zshrc` 里那条 PATH 注入已按此口径删除，并留了「为什么不要再加回来」的注释 |
-| 审核子代理自己去 `which crwu` / `command -v dws` / `find … ossutil` | 提示词里写着「命令在哪」，或某个 Tool 不可见时它自然去找退路 | 审核链路只给结构化 Tool；插件在**创建子代理之前**做确定性能力门禁（`host/audit/preflight.ts`），缺 Tool 直接失败并点名 |
+| 审核子代理自己去 `which crwu` / `command -v dws` / `find … ossutil` | 提示词里写着「命令在哪」，或某个 Tool 不可见时它自然去找退路 | 审核链路只给结构化 Tool；插件在**创建子代理之前**做确定性能力门禁（`host/domains/report-audit/preflight.ts`），缺 Tool 直接失败并点名 |
 | 某个 Tool 在根 Agent 可见、在**子代理**却不可见 | 子代理是新的 scope，预设/委托运行时可以再加一层 restriction | 子代理发布后按**它自己的 scope** 复查（`missingAuditTools(ctx, childAgent)`），被收窄就立刻停掉该子会话并失败 |
 | `ctx.tools.get(name, agent)` 老是返回 undefined | scope 传错了：DSH 的 scoped 路由 key **就是 agent 对象**（`scopeTarget(base, exec.agent)`），不是 `agent.ctx` | 传 Agent 对象本身；`agent.ctx` 只用于「优先用调用者的 Context 执行 shell」 |
 | Tool 的输出 schema 校验总是失败 | `defineTool` 的 schema DSL **没有 `required: [...]` 数组**：必填是**每个属性上的 `required: true`**；也不支持 `type: ['integer','null']` | 见 `src/host/tools/*.ts` 的写法；`type` 只允许单一类型，联合用 `oneOf` |
 | shell 取消不生效，`exec.signal` 像是被丢掉 | `runShell` 直到 2026-09-25 才接收 `signal` | Tool 把 `exec.signal` 传进 `runShell` → `ShellExecRequest.signal`；`ShellResult.aborted` 单独一位，别和 `error`（基础设施故障）混用 |
-| 审批拒绝被报成「沙箱不可用」 | DSH 的三类失败文案不同：审批是 `approval / rejected / cancelled`，基础设施是 spawn/服务缺失 | `src/host/tools/outcome.ts` 的 `APPROVAL_FAILURE` 一处收口；`classifyRun` 先看 `aborted`，再看审批，最后才是退出码 |
+| 审批拒绝被报成「沙箱不可用」 | DSH 的三类失败文案不同：审批是 `approval / rejected / cancelled`，基础设施是 spawn/服务缺失 | `src/host/tools/common/outcome.ts` 的 `APPROVAL_FAILURE` 一处收口；`classifyRun` 先看 `aborted`，再看审批，最后才是退出码 |
 | `assert-pack` 说通过，员工装到的二进制却是坏的 | 旧判据只看「文件在不在、非不空」—— 内容无关 | `bin/manifest.json` 记**最终文件**的 size + sha256，`sync-binaries --check` 与 `assert-pack --strict` 都按清单重算 |
 | 干净发布机上打出来的包没有 `bin/` | `bin/` 是 gitignore 的构建产物，发布作业自己没装配 | `release.yml` 先跑 `binaries` job（macOS 交叉编译 + 装配 + 自检），artifact 交给发布 job；发布作业跑 `pack:assert:strict`，缺一个平台/工具/manifest 就红 |
 | 悬停操作列的「AI 审核 / 重新审核」时整个按钮**全黑** | 选择器特异性 + 顺序：基础 `.crwu-audit-btn` 是 (0,1,0)，§20 迁移覆盖层把它写在样式表**最后**；单类变体 `.crwu-audit-btn-primary` 也是 (0,1,0) → 变体底色与字色被基础规则吃掉（主按钮看起来就是普通按钮），而变体那条 `:hover` (0,3,0) 反倒生效 —— 深底 + 深字 | 变体改用**双类** `.crwu-audit-btn.crwu-audit-btn-primary`（(0,2,0)）把顺序依赖去掉；hover 的选择器组里带上基础按钮的 `:hover:not(:disabled)`；hover 里**不要**写 `opacity`（会盖掉 `:disabled` 的 0.45）。分辨"是色值不对还是规则没生效"直接用 CSSOM：遍历 `document.styleSheets` + `element.matches(sel)`，按顺序打印所有命中该元素的 `background/color` 声明（`getComputedStyle` 只看结果，看不出谁赢了） |
@@ -367,7 +369,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | | 抽屉/浮层里的菜单项点了没反应（脚本里 `getByRole('button', { name })` 超时） | 菜单项挂的是 `role="menuitem"`，可访问角色不是 button | 用类名 + 文案定位（`.crwu-audit-float-item` + hasText）；`install/browser-check.mjs` 里已经踩过两次 |
 | 用户报「界面颜色不对」，但自己本地看是对的 | 主题是**服务端设置**（`~/.dsh/settings.yaml` 的 `ui-theme.preference`），用户切到 dark 之后整页观感全变（主操作会从深色实心翻成近白实心） | 改配色先在**当前真实主题**下量一遍：读 `~/.dsh/settings.yaml` 或用浏览器会话里 `document.body.hasAttribute('data-ds-dark-theme')` 确认，不要默认浅色 |
 | Windows 上环境页「氚云员工会话」「钉钉认证」两行一起红，报 `表达式或语句中包含意外的标记"h3yun"` / `ParserError` / `UnexpectedToken`（macOS 上一切正常） | 拼命令时按 `cmd.exe` 的规矩办事，而 **DSH 在 Windows 挂的执行器是 PowerShell**（`@deepseek-ai/dsh-pwsh-local` 把整条命令当**一个 argv 元素**交给 `pwsh -Command`）。于是在 PowerShell 里「引号包住可执行文件」是**字符串表达式**、不是命令调用，紧随其后的第一个参数就成了意外标记。同一类错还有 `chmod`（Windows 根本没有这个命令）、`rm -f`（`-f` 在 `Remove-Item` 上同时匹配 `-Force` 与 `-Filter`）、`mkdir -p`（靠参数名缩写） | ① 命令位置一律走 `shellInvoke(exe, args, platform)`（`environment/probe.ts`），它只在 Windows 补调用运算符 `&`；**参数位置**用 `shellQuote`，Windows 走 PowerShell 单引号字面量（双引号会插值 `$`）；② 平台方言跟着**同一个 `platform` 键**走，不要读 `process.platform`（否则 Windows CI 上跑 stubbed `darwin-arm64` 的用例也会被加上 `&`）；③ POSIX-only 命令按平台分支（`ifind/store.ts` / `oss/ops.ts` 已有样例）。`host-shell-fs.test.mjs` 有一条静态守卫盯着「模板以 `${shellQuote(` 开头」与「`argv.map(…shellQuote…).join(' ')`」这两种会复发的写法 |
-| **首次使用点「扫码登录氚云 / 钉钉登录」浏览器起不来**，面板给的是 `mkdir …\Temp\crwu-scan-…: Access is denied.` 或 `acquiring file lock: …\.dws\.data.lock: Access is denied.`（看着像 CLI 自己坏了） | 登录**必须写工作区之外**：氚云的临时浏览器 profile（`$TMPDIR`/`%TEMP%\crwu-scan-*`，再经 CDP 读会话）、钉钉的 `<HOME>/.dws/.data.lock`（拿登录态前先抢锁）、以及两者收尾的操作系统凭据存储。宿主按完全访问跑、操作系统的 ACL/受限令牌仍然拒绝时就是这两句；受限沙箱下浏览器起来了也会在几毫秒内 renderer 崩溃（CDP 只回 `close 1006` / `Target crashed`）。**设备码登录不是退路**：它同样要抢 `~/.dws` 的锁 | 归因只看结构化事实**加一条**登录专用的文本判据：`src/host/system/login-failure.ts` 的 `loginFailureAdvice()` —— 顺序是 `runnerFailed` → 提权被降级 → `denied`/实际受限 → 「点名了登录必须写的工作区外目标 **且** 带拒绝字样」。它由 `dwsLogin` / `relogin` 填进 `error` 与 `sandboxBlocked`，界面据此说"把访问模式切到「完全权限」再点一次"，**原始报错保留**。⚠️ 这是 `sandboxDenialNote()`「事实干净就不猜文本」的**唯一例外**，理由是目标集合已知（别把它推广成通用规则）；**目标词与拒绝字样必须同时命中**，否则 `secret not found in keyring` 这种"真没条目 / 钥匙串被锁"会被说成权限问题。⚠️ 还分**两支**（`policyBlocked`）：事实说降级/拒绝 → 让人切「完全权限」；**事实干净却仍被拒 → 是这台机器在拒，必须说"切权限没有用"**（2026-09-29 实测：三个模式都是完全访问，第一版却在让人去切权限）。登录的临时目录也改由插件指定（`<home>/.dsh/crwu-workbench/auth-tmp`，见 `system/auth-scratch.ts`），不再依赖系统 TEMP |
+| **首次使用点「扫码登录氚云 / 钉钉登录」浏览器起不来**，面板给的是 `mkdir …\Temp\crwu-scan-…: Access is denied.` 或 `acquiring file lock: …\.dws\.data.lock: Access is denied.`（看着像 CLI 自己坏了） | 登录**必须写工作区之外**：氚云的临时浏览器 profile（`$TMPDIR`/`%TEMP%\crwu-scan-*`，再经 CDP 读会话）、钉钉的 `<HOME>/.dws/.data.lock`（拿登录态前先抢锁）、以及两者收尾的操作系统凭据存储。宿主按完全访问跑、操作系统的 ACL/受限令牌仍然拒绝时就是这两句；受限沙箱下浏览器起来了也会在几毫秒内 renderer 崩溃（CDP 只回 `close 1006` / `Target crashed`）。**设备码登录不是退路**：它同样要抢 `~/.dws` 的锁 | 归因只看结构化事实**加一条**登录专用的文本判据：`src/host/core/system/login-failure.ts` 的 `loginFailureAdvice()` —— 顺序是 `runnerFailed` → 提权被降级 → `denied`/实际受限 → 「点名了登录必须写的工作区外目标 **且** 带拒绝字样」。它由 `dwsLogin` / `relogin` 填进 `error` 与 `sandboxBlocked`，界面据此说"把访问模式切到「完全权限」再点一次"，**原始报错保留**。⚠️ 这是 `sandboxDenialNote()`「事实干净就不猜文本」的**唯一例外**，理由是目标集合已知（别把它推广成通用规则）；**目标词与拒绝字样必须同时命中**，否则 `secret not found in keyring` 这种"真没条目 / 钥匙串被锁"会被说成权限问题。⚠️ 还分**两支**（`policyBlocked`）：事实说降级/拒绝 → 让人切「完全权限」；**事实干净却仍被拒 → 是这台机器在拒，必须说"切权限没有用"**（2026-09-29 实测：三个模式都是完全访问，第一版却在让人去切权限）。登录的临时目录也改由插件指定（`<home>/.dsh/crwu-workbench/auth-tmp`，见 `system/auth-scratch.ts`），不再依赖系统 TEMP |
 
 ## 11.1 环境领域模型与统一门禁（2026-09-26）
 
@@ -396,15 +398,16 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | 部署配置缺 bucket | `admin-required`（owner=admin） |
 | 通过率 | 只统计必需项，`passed/total` 与 `status` 永远自洽 |
 
-**统一导航门禁**：`features/workbench/modules.ts` 的 `requiresEnvironment` / `requirement` +
-`module-store.ts` 的 `navigate(target)` 是**唯一**入口（侧栏子项、报告页内跳转、环境页
-「进入报告审核」、以后新增的页）。被拦时不进入目标页 → 记 `pendingTarget` → 落到 `env` →
-显示「进入【目标页】前…」；检查通过后**只恢复最近一次**被拦的目标；用户中途改去别处即取消
-自动恢复。**踩过的坑**：面板里那条 `envChanged` effect 的依赖一开始写的是解出来的 `env`，
-两次刷新之间 `env.state` 的引用不变时它就不跑 —— 表现是「重新检查通过了、人还卡在环境页」。
-依赖要用**模型对象的引用**（Host 每次应答都是新对象）。
+**统一导航门禁**：结构在 `shell/navigation.ts`（一级 / 二级目录 + 页面 id），门禁判据由
+`shell/modules.ts` 的 `requiresEnvironment` / `requirement` **派生**，入口只有 `shell/module-store.ts`
+一处（`navigate(module)` 给侧栏那张分组卡；`navigateParent` / `navigateNode` / `navigateEnv`
+给面板里的两级目录）。被拦时不进入目标页 → 记 `pendingNode` → 落到环境信息（`kind: 'env'`）→
+显示「进入【目标页名】前…」（页名取二级目录名）；检查通过后**只恢复最近一次**被拦的目标；
+用户中途改去别处即取消自动恢复。**踩过的坑**：面板里那条 `envChanged` effect 的依赖一开始写的是
+解出来的 `env`，两次刷新之间 `env.state` 的引用不变时它就不跑 —— 表现是「重新检查通过了、人还卡在
+环境页」。依赖要用**模型对象的引用**（Host 每次应答都是新对象）。
 
-**Host 侧另有能力门禁**（`src/host/environment/gate.ts`）：界面门禁管体验，Host 门禁管真实性与
+**Host 侧另有能力门禁**（`src/host/core/environment/gate.ts`）：界面门禁管体验，Host 门禁管真实性与
 绕过防护（同源路由是公开契约）。`audit-start` 判 `auditCore`，判据是**同一份 60s 快照**
 （授权 / 换工作空间 / 存凭据 / 登录之后 `invalidate()`），**不为每个操作重跑一遍完整自检**；
 拿不到快照或自检失败一律 fail closed。**停止审核与释放占用锁刻意不判门禁** —— 它们是安全出口，
@@ -420,7 +423,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 2. **拦截说明要当场出现**。环境页原来只在 `gate === 'blocked'` **且** `gateTarget` 存在时画那条提示，
    而 `gate` 只在面板自己点过「重新检查 / 进入报告审核」之后才会变成 `blocked` ——
    于是"侧栏点子项被拦回来"这条最常走的路径上，页面**什么都不说**。
-   现在 `WorkbenchPanel` 把统一导航层的 `blocked` / `pendingTarget` / `gateReason` 直接下发给
+   现在 `WorkbenchPanel` 把统一导航层的 `blocked` / `pendingNode` / `gateReason` 直接下发给
    环境页（`gate` 的优先级：界面刚点的动作 > 导航层结论），页面原样显示 `gateReason`。
 
 ### 11.2 iFinD 凭据：插件自己的状态文件（2026-09-26）
@@ -454,9 +457,9 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 | --- | --- | --- |
 | Tool 定义 | 模型可见的 schema、输出契约、失败分类 | `src/host/tools/{capabilities,h3yun,knowledge,oss,dingtalk}.ts` |
 | 注册与生命周期 | `ctx.tools.register()` + 注销、可见性判据 | `src/host/tools/register.ts` |
-| 命令构造 | `dws` argv 白名单、包内绝对路径、`ctx.shell` | `src/host/dws/run.ts`、`src/host/crwu/run.ts` |
-| 纯逻辑 | 回传计划、知识库目录树寻址（可单测，不碰 IO） | `src/host/dws/{plan,knowledge-tree}.ts` |
-| 门禁 | 案例目录包含、失败分类、能力预检 | `src/host/tools/{case-dir,outcome}.ts`、`src/host/audit/preflight.ts` |
+| 命令构造 | `dws` argv 白名单、包内绝对路径、`ctx.shell` | `src/host/integrations/dws/run.ts`、`src/host/integrations/crwu/run.ts` |
+| 纯逻辑 | 回传计划、知识库目录树寻址（可单测，不碰 IO） | `src/host/integrations/dws/{plan,knowledge-tree}.ts` |
+| 门禁 | 案例目录包含、失败分类、能力预检 | `src/host/tools/{case-dir,outcome}.ts`、`src/host/domains/report-audit/preflight.ts` |
 
 ### 12.2 三条不许破的边界
 
@@ -493,9 +496,9 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 
 | 关注点 | 唯一实现 | 不许再出现 |
 | --- | --- | --- |
-| 命令方言（引用、命令位置、建目录/删除/打开/剪贴板/主目录探测/权限命令） | `src/host/platform/shell.ts` | `cmd /c …`、`SilentlyContinue`、`Start-Process`、`New-Item`/`Remove-Item`、`mkdir -p`、`rm -f`、`chmod`、`xdg-open`/`pbcopy`/`xclip`、旧 `quoteArg`（静态门禁逐条钉住） |
+| 命令方言（引用、命令位置、建目录/删除/打开/剪贴板/主目录探测/权限命令） | `src/host/core/platform/shell.ts` | `cmd /c …`、`SilentlyContinue`、`Start-Process`、`New-Item`/`Remove-Item`、`mkdir -p`、`rm -f`、`chmod`、`xdg-open`/`pbcopy`/`xclip`、旧 `quoteArg`（静态门禁逐条钉住） |
 | 本地展示路径 | `src/shared/utils/local-path.ts` | `split('/')`、`+ '/'`、`replace(/[\\/]+$/,'')`、`startsWith(parent + '/')` |
-| 凭据文件权限结论 | `src/host/platform/credential-permission.ts` | 任何形式的 `chmodOk: boolean` |
+| 凭据文件权限结论 | `src/host/core/platform/credential-permission.ts` | 任何形式的 `chmodOk: boolean` |
 
 `platform` 一律**由调用方注入**（`world.platform()` / 操作参数）：业务函数里回退 `process.platform`
 会让单测与真实运行使用不同方言，Windows 分支永远测不到 —— 静态门禁会红。
@@ -534,7 +537,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 > 但**不得**据此恢复任何内置登录入口或设备码流程。取代后的口径见插件 `AGENTS.md` §4.6 / §4.8。
 
 背景：Windows 上 `crwu h3yun session login` 要自己拉起一个带 CDP 的 Chromium，机器策略与 ACL 会拒它
-（真实报错见 `src/host/system/auth-scratch.ts` 顶部）。目标是两个登录都改走 **DSH 桌面内置浏览器**，
+（真实报错见 `src/host/core/system/auth-scratch.ts` 顶部）。目标是两个登录都改走 **DSH 桌面内置浏览器**，
 并回答「员工扫码后凭证存到哪里」。
 
 ### 14.1 DSH 侧只有三条入口，能力边界完全不同
@@ -617,7 +620,7 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 - A 段（本地控制页）那次没成：控制页服务跑在沙箱里，Electron 进程连不上它（`chrome-error://chromewebdata/`）。
   A 段要证的事已由「`executeJavaScriptWorks` + 氚云页同页标定」覆盖，**下次不要再依赖那个本地控制页**。
 - 因此 §14.4 的「主」通道不再是「未确认」：**主通道已验证**，备通道也已观测到。
-- **实现已落地（协议 20）**：Host 侧 `browser-session-bind`（`src/host/system/ops.ts` 的
+- **实现已落地（协议 20）**：Host 侧 `browser-session-bind`（`src/host/core/system/ops.ts` 的
   `bindH3yunSession` + `ops/core.ts` 的入口，操作名不许带数字，所以不叫 `h3yun-session-bind`），
   客户端侧 `features/environment/login-browser.ts`（lease + `<webview>` 驱动，DOM 与时钟注入以便单测）
   + `H3yunBrowserLogin.tsx`（环境页卡片）。令牌经 `runCrwu` 的 `stdinText` 走
@@ -634,8 +637,8 @@ CLI 那边也超时了。所以拆成两阶段。
 
 | 部件 | 位置 | 要点 |
 | --- | --- | --- |
-| 后台执行 | `src/host/shell/run.ts` 的 `startShell` + `src/host/access/broker.ts` 的 `startShell` | 用 `execute()` **但不 await `result()`**（DSH 的契约：「前台」是调用方要不要 await 结果，不是 spawn 的性质）。请求带 `onExpiry: 'none'` —— 执行器的默认死线只适合前台命令，会把一次正常等待变成超时 |
-| 登录会话 | `src/host/system/ops.ts` 的 `createDwsLoginRegistry()` | 句柄**挂在会话对象上**（不许用模块级变量：第二次登录会把第一次串掉）；`start` 立刻回快照，`status` 读快照；5 分钟上限到点 `kill()` |
+| 后台执行 | `src/host/core/shell/run.ts` 的 `startShell` + `src/host/core/access/broker.ts` 的 `startShell` | 用 `execute()` **但不 await `result()`**（DSH 的契约：「前台」是调用方要不要 await 结果，不是 spawn 的性质）。请求带 `onExpiry: 'none'` —— 执行器的默认死线只适合前台命令，会把一次正常等待变成超时 |
+| 登录会话 | `src/host/core/system/ops.ts` 的 `createDwsLoginRegistry()` | 句柄**挂在会话对象上**（不许用模块级变量：第二次登录会把第一次串掉）；`start` 立刻回快照，`status` 读快照；5 分钟上限到点 `kill()` |
 | 界面 | `src/client/features/environment/DwsLoginCard.tsx` | 先把**动作**摆出来（打开授权链接 / 复制设备码），再给 CLI 原文；`running` 时轮询，进入终态停止，成功**只通知一次**刷新 |
 
 #### 打开方式：内置浏览器优先，系统浏览器兜底
@@ -668,8 +671,8 @@ CLI 那边也超时了。所以拆成两阶段。
 
 **决定：`dws` 的配置目录与登录的临时目录都用各自默认值，插件不再自指定。**
 
-- `DWS_CONFIG_DIR` 这条通道**整体下掉**（`src/host/dws/config-dir.ts` 已删除，所有调用点不再传目录）；
-- `TMPDIR`/`TEMP`/`TMP` 那条通道同样下掉（`src/host/system/auth-scratch.ts` 已删除；
+- `DWS_CONFIG_DIR` 这条通道**整体下掉**（`src/host/integrations/dws/config-dir.ts` 已删除，所有调用点不再传目录）；
+- `TMPDIR`/`TEMP`/`TMP` 那条通道同样下掉（`src/host/core/system/auth-scratch.ts` 已删除；
   `runCrwu` 的 `scratchDir` 选项一并移除）；
 - 登录命令因此回到 CLI 的默认形状：`crwu h3yun session login`、`dws auth login [--device]` 原样执行。
 
@@ -707,7 +710,7 @@ CLI 那边也超时了。所以拆成两阶段。
    拿它当判据实测会漏判；
 3. **失败就如实报告**：文案给出两条可执行路径（**以管理员身份运行 DSH 完成登录** /
    **让管理员按程序放行随插件发布的 `dws.exe`**），并写明"换目录没用""设备码不是绕过办法"。
-   判据与文案在 `src/host/system/login-failure.ts`（两支：策略支 vs 机器支，见 §16.4）。
+   判据与文案在 `src/host/core/system/login-failure.ts`（两支：策略支 vs 机器支，见 §16.4）。
 
 ### 16.4 影响面（不止登录）
 
@@ -814,7 +817,7 @@ DSH Runtime: （未设置） ·  · DSH 自带运行时（load_workspace_depende
 
 `shared/types.ts` 的 `RuntimeView`、`env.runtime` 分区、`EnvironmentInput.runtime/runtimeRequired`、
 `runtimeItem`、`runtime` issue、客户端三行诊断与 `unresolved` 状态词、以及对应的六条文案键。
-`src/host/runtime/python.ts`（解析器）**保留** —— 它是 `audit-start` 用的。
+`src/host/core/runtime/python.ts`（解析器）**保留** —— 它是 `audit-start` 用的。
 
 ## 19. 启动审核时的运行时门禁（0.0.29 修正）
 
@@ -1055,7 +1058,7 @@ Windows PowerShell 5.1 的 `Out-File` 默认是 **UTF-16LE**（pwsh 7 才是 UTF
 
 `oss-index({ seqNos })` 的共享应答在 `shared/types.ts`，Client 门面与 Host 队列通过 `shared/wire-contract.ts` 检查类型。
 单流水号接口仍可用于详情场景；新版报告列表不调用无参模式。Host 在读取配置、凭据或启动命令之前校验批量输入，空数组零 I/O。
-`host/oss/batch.ts` 管理实例级并发队列与整批截止时间，实际目录读取复用 `listOssDirectory` 并逐次经过 Broker。
+`host/integrations/oss/batch.ts` 管理实例级并发队列与整批截止时间，实际目录读取复用 `listOssDirectory` 并逐次经过 Broker。
 HTTP route 提供请求 AbortSignal，正常完成不取消；连接提前关闭、Client 翻页、模块退出或卸载取消旧任务。
 `page-loader.ts` 分离分页错误、逐行远端状态与页/行轮次；上传与分页查询竞争时，旧结果失去写入资格，完成当前批次后补查。
 
@@ -1134,6 +1137,11 @@ Host 侧 `agents.create` 那条路只适合带 `agentPreset` 的托管会话（�
 修法：手写 `.crwu-audit-tab-panel[hidden] { display: none; }`（不依赖 UA 样式，将来改
 `display` 也兜得住）。判据两条：**样式契约**（这条规则必须存在、且排在那条 `display:flex`
 之后）+ **真机高度断言**（browser-check 里正反两向都量 `getBoundingClientRect().height === 0`）。
+
+> **2026-10-13 更新（两级目录）**：内容区改成**只有一个** tabpanel（切换目录时换的是里面的页面，
+> 内容区本身不重建），所以常驻空壳与 `[hidden]` 兜底规则一起删掉了；样式判据相应改成
+> "内容区是唯一的滚动容器，且把高度接下去"（`client-local-audit.test.mjs`）。
+> 这条记录保留原样，因为它记的是那一类陷阱本身：**任何后续 `display` 声明都会废掉 `hidden`**。
 
 ### 「查看报告」为什么慢：先量，再改（2026-10-11）
 
@@ -1449,3 +1457,682 @@ if (typeof services.uiWorkspace?.pickDirectory === 'function') port.pickDirector
 TTL 30 分钟，过期或本轮用完后由 `local-audit-start` 顺手清、以及 10 分钟一次的兜底定时器清
 （定时器 `unref()` 并挂 `ctx.effect` 释放）。删的只有 Host 自己在系统临时目录下拼出来的案例目录，
 **不碰用户原始文件**。
+
+## 工作区会话（2026-10-12，协议 32）
+
+### 为什么要有这一层
+
+插件里有**四条**各自建会话的路径（审核根、审核子会话、报告讨论、本地审核），每条都自己决定
+"会话落在哪个目录"。于是同一个"我选中的工作区"在四条路径上含义不同：一条用 `workspaceId`、
+一条用 `cwd`、一条两者都用、一条什么都不传（让 DSH 落到部署默认目录）。用户看到的就是
+**"会话没创建在我环境信息里选中的工作区下面"**。
+
+### 唯一口径
+
+| 事实 | 唯一来源 |
+| --- | --- |
+| 工作区身份 | 【环境信息】的 `env.workspace`（Host 侧落盘在 `WorkbenchState.workspace*`） |
+| 会话落点参数 | `workspaceId`（Host 走 `ctx.sessionController.create({ workspaceId })`） |
+| 归属判据 | 工作区注册表记录的 `sessionIds`（**不是** cwd；DSH 侧栏「未分组」就看它） |
+| 沙箱边界 | = 会话 cwd = 工作区路径（DSH 的两条硬规则：边界就是 cwd，`attachSession` 要求 cwd 逐字相等） |
+
+Host 侧统一在 `src/host/core/workspace-session/`：
+
+- `resolve.ts` —— `resolveSelectedWorkspace`：逐条核对 id 非空 → 目录未丢 → 自检已完成 →
+  注册表能查到 id → 注册表路径与选中路径**规范键**相等（`fs.resolve().targetKey`，不做字符串猜测，
+  否则 Windows 的 `C:\` 会被裁成盘符相对路径）→ 确实是目录。
+- `create.ts` —— 只发 `workspaceId`；建完先查 cwd、再挂载、再回读成员关系、最后改名。
+- `attach.ts` / `verify.ts` —— `attachSession` + 回读；缺任一条都不算成功。
+- `reuse.ts` —— 复用旧会话之前重新核：记录的 `workspaceId` / `workspacePath`、Agent 存活、
+  会话不是子代理、cwd 与成员关系。
+- `errors.ts` —— 可分类的原因（`no-workspace` / `workspace-unregistered` / `workspace-path-mismatch` /
+  `session-attach-failed` / `session-membership-missing` …）+ 一句人话。
+
+Client 侧统一在 `src/client/core/workspace-session.ts`：`workspaceId` 为空就不建会话
+（客户端读不到工作区注册表与文件系统，回读由 Host 负责）。
+
+### 删掉的降级（都是真实故障源）
+
+| 旧写法 | 现场 |
+| --- | --- |
+| `cwd: ''` | `failed to ensure project directory "": mkdir ''`（2026-10-11 员工实测） |
+| `cwd: workspacePath` | 会话落在对的目录里，却挂在侧栏「未分组」下 |
+| `workspacePath \|\| caseRoot` | 忘了选工作区 → 审核照跑，产物写进**部署配置**里的案例根 |
+| `agents.create({ meta: { cwd } })` | 审核根挂不上工作区（只能落「未分组」），且 attach 失败只记一条 notes 就继续跑 |
+| `subagents.start` 后不管归组 | 审核子会话同样落「未分组」——`subagents.start` **不会**替 child 调 `attachSession` |
+
+### 失败必须显形
+
+- 审核根：`attachSession` / 策略收敛 / hello 预检 / 工具可见性任一步失败 → **释放**刚建的会话并返回失败，**不落钩子**。
+- 审核子会话：挂载或回读失败 → `abort` + 有界 `dispose` 释放它，返回 `ok: false`（上层据此回滚 pending 记录）。
+- 复用旧根：工作区一致性 / Agent 存活 / cwd / 成员关系 / 沙箱审批策略任一条不成立 → 不复用，新建一个。
+
+`auditRoot` 状态新增 `workspaceId` 并落盘：会话 id 会跨进程重启活下来，工作区选择不会，
+两者不同步时复用等于把内容写进用户以为早已换掉的目录。老状态文件没有这个字段时退回按路径比较。
+
+## 报告评估（房地产估值）资料入口与输入交接（2026-10-12，协议 32）
+
+### 分层
+
+| 位置 | 负责 | 不负责 |
+| --- | --- | --- |
+| `host/domains/report-evaluation/intake/` | 类型判定、选择校验、输入清单与指纹、提取编排 | 不碰 shell / fs / 网络（有静态断言） |
+| `host/domains/report-evaluation/scope.ts` | 估值案例 scope、冻结输入快照、id 铸号与合法性 | 不认识界面与 RPC |
+| `host/tools/report-evaluation/*` | 结构化 Tool（bootstrap 已落地；提取 / 知识 / 市场 / 校验待建） | 不写业务规则 |
+
+### 为什么估值也要自己的案例 scope
+
+普通会话判据（`<工作空间>/<流水号>`、不等于工作空间根）认的是**形状**，不是**归属**：
+同一条会话因此可以把 `caseDir` 指向另一个案例目录。估值会话的归属必须钉死在
+**本轮估值自己那一个目录**上，所以按会话 id 逐字绑定（`ValuationScopes`）。
+
+托管 scope 注册表收成一个 `CaseScopeRegistries` 对象（`localAudit` / `valuation`），
+所有案例内 Tool 都经 `tools/case-scopes.ts` 的 `caseScopes(deps)` 传入 —— 每个 Tool 只写一次，
+少一处手写就少一处"新加了 scope 却忘了传"（那种遗漏的后果是门禁**静默失效**）。
+
+### 冻结输入为什么是结构性的
+
+`crwu_valuation_case_bootstrap` 只有两个参数（`valuationId` / `caseDir`）。方法、基准日、
+用户补充要求、资料清单全部来自 `ValuationScope.snapshot`（确认抽屉确认那一刻写下的）。
+子会话**没有**任何参数能改写它们 —— "确认后输入快照不可变"因此不是提示词约定，而是接口形状。
+基准日未选时落盘与回传都是**空串**：绝不用资料里识别到的日期冒充用户确认的基准日。
+
+### 为什么 Python 后端要"先落脚本再执行"
+
+`python.script.run`（以及模型的 `crwu_run_python_script`）只接受**案例目录之内**的脚本路径 ——
+那是一条安全边界（不让调用方提交任意可执行路径）。Host 自己也不给自己开后门：
+`pythonFileExtractor` 先把包内的 `extract_files.py` 写进 `<案例目录>/scripts/`，再按同一条路执行。
+每次 `extract` 都重写一遍，因为插件升级后案例目录里的旧副本会过期（拿旧脚本解析新格式会得到
+"读不出来"，很难归因）。
+
+结果走**文件**而不是 stdout：一张估值明细表几百行，命令输出有上限，被截断的 JSON 会变成
+"解析失败"这种误导性结论。读的是插件自己的包文件（`node:fs`），写/读的是员工的案例目录
+（`ctx.fs`）—— 两者不是同一个边界，别混。
+
+### 本部署的 PDF 能力缺口（诚实记录）
+
+DSH 自带 Python 有 `python-docx` / `openpyxl` / `Pillow` / `XlsxWriter`，**没有** PDF 文本库。
+所以 `.pdf` 的当前行为是：能 import `pypdf`/`PyPDF2`/`pdfminer` 就用，否则**如实报缺库**
+（`capabilityGaps`），一条字段都不产出。刻意不自己实现 PDF 文本解析：字形编码（CID / ToUnicode）
+读错会产出看起来像正文的乱码，而乱码会被标签提取当成坐落与面积 —— 那比"读不出来"危险得多。
+补上这个缺口有两条路：运行时加装 `pypdf`，或对扫描件走 OCR（当前都没有）。
+
+### 业务知识路由（2026-10-12）
+
+分工：`domains/report-evaluation/knowledge/` 只做**决策**（纯逻辑 + 注入探针），
+`tools/report-evaluation/knowledge.ts` 做**取数**（知识库树 + 通道）与落盘。
+
+三条判据值得单独记下来（都做成了显式分支，各有断言）：
+
+| 情形 | 处理 | 为什么 |
+| --- | --- | --- |
+| 节点存在但导出**空正文** | 当"没有"，退到本地 | 算命中会让子会话拿一段空上下文去"按规范"编 |
+| 探针**失败**（库不可达/权限） | 记 `capability_gaps`，再退到本地 | 与"没有这个节点"混同，就永远查不出知识库挂过 |
+| 必需知识 `01-房地产估值通用` 两边都缺 | **停止估值** | 缺通用口径的结果无法核对 |
+
+**本地 fallback 映射逐个写死**，因为库内编号与本地文件名**故意不一致**：成本法在库里是 `04`、
+本地是 `07-cost-method.md`。按编号或文件名推导的话，成本法会读到"案例选取"的正文，而且不报错。
+`fallback.ts` 的 `missingLocalReferences()` 把"文件被改名"提前到自检阶段 —— 否则 fallback
+会静默失效，症状是"知识库不可达时估值莫名停止"，与真实原因毫不相干。
+
+技能侧的 `SKILL.md` 与 `references/` 曾经用本地编号描述库内节点（`04-案例选取` / `07-成本法`），
+已按业务知识库的真实路由对齐；两条防漂移断言盯着它（映射表逐行一致、references 里的节点名必须合法）。
+
+### 外部案例来源（2026-10-12，协议 32）
+
+三家站点都没有公开稳定的检索 API，而插件**没有**无头浏览器，所以能力边界必须在设计里写死：
+
+| 想做的事 | 本版的做法 |
+| --- | --- |
+| 抓房源 | 只读页面里**明确声明**的结构化数据（JSON-LD）。不写 CSS 选择器解析 DOM —— 站点改版会静默失效，更糟的是抓错（把小区均价当成这套房的价）；也不让模型自由发挥 |
+| 判登录 | **不读 Cookie、不碰凭据**。`LoginState` 回答的是"站点是否放行公开检索"（放行 / 被登录墙挡住 / 无法检查），不是"插件知道你的账号状态" —— 这句语义写在 Tool 返回值里，防止被误读 |
+| 登录动作 | 打开系统默认浏览器是**面板来源**的特权操作（`system.browser.open` 的 `allowedSources` 只有 `panel`）。Tool 不经手，也不借面板身份去开浏览器 |
+| 重试 | 每个分页**恰好**三次（`MARKET_ATTEMPTS`）。风控按频率封禁，无限重试是最容易把员工 IP 送进黑名单的做法 |
+| 三次失败 | 未确认登录 → `phase=browser-login-required`（可恢复：去登录再点"重新检查并继续"）；已确认登录 → 只记能力缺口、继续其他来源。**不许静默继续**：拿一份"案例不足"的结论回去，没人会想到真实原因是没登录 |
+| 截图 | **没有**。证据是页面字节 + 内容指纹（可核对，但证明力不等于截图），每次都写进 `capabilityGaps` |
+| 挂牌价 | 每条案例带 `transactionType`；**只有**页面明写"成交"才算成交，缺省"未知"。挂牌案例 `caseIsComparable=false` —— 挂牌是卖方要价，系统性高于成交价 |
+
+一条教训值得单独记：`floorSize`（schema.org 里建筑面积的规范字段）曾经不在别名表里，
+于是 JSON-LD 来源的面积永远为 null、单价永远算不出来，而**没有任何地方报错**。
+现在有一条断言盯着"JSON-LD 产出的每个键都必须能被别名表消费" —— 收死数据与漏字段都会红。
+
+### 交付模板与契约校验（2026-10-12，协议 32）
+
+Skill 目录按**产物职责**归位：`template/` 放要被填充的正式模板，`schemas/` 放结果结构契约，
+`examples/` 放通过校验的样例，`assets/` 只放静态资源。`template/` 是**只读**的 ——
+子会话必须把它复制到案例目录（`估值底稿.xlsx`）再填，任何情况下都不许回写。
+
+校验分两份脚本，都在技能里（跟着业务规范走，插件只负责执行与转述）：
+
+| 脚本 | 校验 | 为什么不能省 |
+| --- | --- | --- |
+| `check_workbook_contract.py` | 七张可见表、无隐藏表、无跨工作簿链接、公式链不断 | 结论数字必须能从底稿重算出来；断链或隐藏表会让"重算"变成"抄一遍" |
+| `validate_result.py` | 结果 JSON 的结构与**口径** | 这些错读起来完全正常，只有逐条比规则才看得出来 |
+
+`validate_result.py` 盯的是口径而不是语法，例如：`method=auto` 是**输入**不是结论；
+`baseDate` 为空时必须登记「本次未指定评估基准日」（不许从资料里补一个）；
+拿不到的数字写 `null` 而**不是 0**；`source=missing` 不许混进知识来源清单；
+**挂牌案例不许被标为可直接作可比实例**。每条规则都有一个"改坏它必须变红"的反例断言 ——
+校验脚本最糟的失效模式是"永远说 OK"。
+
+工具侧的执行纪律与提取脚本同一条：先把脚本落到 `<案例目录>/scripts/` 再跑
+（`python.script.run` 只接受案例内的脚本路径），argv 逐个传参、不经 shell。
+
+### 估值轮次的状态机与八个操作（2026-10-12，协议 32）
+
+状态与转移只在 `domains/report-evaluation/lifecycle/state.ts` 里声明一处：
+
+```text
+draft → extracting → confirmation → queued → running → completed
+                                     ↘ failed / cancelled
+                                     ↘ browser-login-required → running
+```
+
+**非法转移一律拒绝并说明原因**。这一条不是洁癖：没有转移表时任何一处写入都能改状态，
+典型后果是"已经失败的轮次被后续心跳改回 running" —— 界面永远转圈，而没有任何地方报错。
+两个真实的踩点（都是被用例当场抓出来的）：
+
+1. `valuation-start` 想一步把 `draft` 改成 `queued`，被转移表拦下 → 状态停在 `draft` 而界面以为在跑；
+   现在沿 `extracting → confirmation → queued` 逐段推进。
+2. 有界淘汰最初写成"把最旧的标成 `failed`"，而标记**不减少条目数** → 循环一路把每一轮都标花。
+   现在先删终态、全是活动轮次时删最旧的；被淘汰的轮次在 `valuation-status` 里表现为 `known:false`，
+   界面据此说"宿主没有这一轮的记录（重启或已被更新的轮次挤掉）"。
+
+**资料必须按字节复制**：估值资料的主力是 `.pdf` / `.xlsx` / 图片，走 fs 的文本通道
+（`readText` + `writeText`）会按 UTF-8 解码再编码，得到一个**看起来正常、内容已损坏**的副本，
+而下游只会说"这份读不出来"。所以新增 `copyCommand()`（`cp -f` / `Copy-Item -Force`），
+经 Broker 的 `system.case-file.write` 执行，指纹按源文件字节算。
+
+**报告与底稿的一致性**以底稿为权威：报告是一次性渲染的人读件，不参与计算；
+两者数字不一致时改报告，而不是改底稿去凑报告（`validate_result.py --html` 会抽查这一条）。
+
+### 估值页：只读确认抽屉为什么长在状态机里（2026-10-12）
+
+方案对抽屉的要求是"只读"：不许改字段、不许改提示词、不许改方法、不许改基准日。
+把这条写成"按钮不带 onClick"只是**界面约定** —— 改一次渲染就可能悄悄失效。所以判据放在状态机里：
+
+```ts
+canEditInputs(phase) === (phase === 'draft' || phase === 'extracting')
+```
+
+`confirmation` 之后所有改输入的动作都被**拒绝并给出原因**（`输入已经冻结：要改请点「返回修改」`），
+而抽屉组件本身只接收 `intake` + 三个回调：没有 `onChange`、没有输入框 / 下拉 / 日期选择器。
+"在抽屉里改方法"于是不是被劝阻，而是**写不出来**。
+
+另外两条同源的口径：
+
+- **进度不许伪造**：`total <= 0` 时**不画**进度条（只写文字阶段），`completed` 由 Host 给，
+  页面不自己推进百分比。阶段词认不出来就不改状态 —— 猜一个阶段的后果是页面显示的事实
+  与宿主真实状态不一致，而那种不一致没有任何地方会报错。
+- **失败不丢输入**：资料入口失败时保留选择 / 方法 / 基准日 / 补充要求；控制器是**实例级**的
+  （与本地审核同一口径），切模块再回来也不会清空。
+
+文件与文件夹选择复用本地审核的 `pickFilesFromInput` / `pickDirectory`（`features/local-audit/pick.ts`）：
+浏览器拿不到绝对路径，必须走宿主原生对话框；两套各写一遍迟早会在"回什么形状的路径"上分叉。
+
+渲染测试用共享的 `tests/helpers/render.mjs`（不引 react-dom）：它把函数组件展开成宿主元素树，
+于是"抽屉里没有任何 input/textarea/select"这类断言可以直接写成结构断言。
+
+### 「只填输入区」为什么能变成判据（2026-10-12）
+
+底稿契约里最容易失守的一条是"公式区不被覆盖" —— 靠"记得别覆盖"是记不住的。模板自己用
+**填充色**声明了区域（浅绿 = 输入区，浅黄 = 公式区，图例就写在工作簿第二行），
+于是 `scripts/build_workbook.py` 可以真的判：
+
+| 情况 | 处理 |
+| --- | --- |
+| 目标是公式区（浅黄，或以 `=` 开头） | 拒绝 |
+| 目标不在输入区（浅绿） | 拒绝 |
+| 输入区里写 `=` 开头的值 | 拒绝（把结论硬编码进输入） |
+| 值是空串 / `null` | 写**空单元格**，不写 0（0 是结论，未填是另一件事） |
+| 任一处被拒 | **不输出底稿**（半填的底稿比没有更危险：公式会算出看起来正常的数） |
+| 产物路径就是 `template/` 里的母版 | 拒绝 |
+
+报告侧同理：`build_report.py` **只读结果 JSON**，连"万元换算"都不做 —— 换算会引入第二套
+取整口径，而三者不一致时没有任何东西会报错。所以报告里的数字逐字来自结果 JSON，
+`validate_result.py --html` 就能核对报告里找不找得到单价与总价。
+
+⚠️ 两个脚本都**不重算公式**（openpyxl 只改值、不动公式链与缓存）。所以交付前必须真打开一次
+底稿让它重算 —— 这也是 `references/09` 的口径：所有数字结论以**重算后**的底稿为准。
+
+### schema 与校验脚本：两个事实源必须绑在一起（2026-10-12）
+
+`schemas/*.json` 是给模型看的**结构契约**，`validate_result.py` 是真正的**门**。两者都描述同一份
+JSON —— 但 schema 曾经**没有任何代码读过它**（提示词、`SKILL.md`、报告骨架三处引用它，却没人执行）。
+于是它可以悄悄漂移成一份没人校对的文件，而"照 schema 写的 JSON 过不了校验"是最伤信任的一种失败。
+
+现在它们被绑在一起（`SchemaSubsetTest`，5 条）：
+
+- 样例**真的过 schema**（结果样例 + 案例样例）；
+- 三种改坏法**真的被判不合格**（`method=auto` / 缺字段 / 数字写成字符串）；
+- schema 的 `required` ⊆ 校验脚本的必需字段；
+- 三个枚举（结论方法 / 交易性质 / 知识来源）按**从校验脚本解析出来的值**比对 schema。
+
+本机与 DSH 自带 Python 都没有 `jsonschema`，所以契约测试里自带一个最小校验器。它的关键设计是
+**遇到不认识的 keyword 就报错** —— 只认识一半 keyword 的校验器会给出**假通过**
+（schema 里写了 `pattern`、校验器当没看见，样例照样"通过"）。支持面是白名单，
+扩展 schema 的人必须同时扩展校验器，那正是我们要的提醒。
+
+⚠️ 写这些断言时踩了一次 CLI 守卫：技能脚本里出现业务 CLI 的字面量会被判成"间接旁路执行"。
+解法不是把字面量拆开写（那是混淆），而是**从拥有这些取值的地方读出来**（校验脚本）再比对 ——
+这顺带说明了"谁拥有这些取值"。
+
+### 共享层按领域拆分与依赖方向（2026-10-12，协议 32）
+
+`shared/` 是 Client 与 Host 的**唯一共同点**，所以它的方向必须是单向的：
+
+```text
+        ┌──────────── shared/contracts（线协议类型）+ shared/wire（编译期契约）────────────┐
+        │                                                                                 │
+     Client ──────────────────► Host（运行时通过同源 RPC）                                  │
+        └──────────────── 两侧都依赖共享层，共享层谁也不依赖（Wire 层引 Host **只引类型**）──┘
+```
+
+拆分时修掉的两处方向错误，都不是"洁癖"，各自有具体后果：
+
+1. `OSS_BATCH_FROM_HOST` 的右侧曾经写成 `WorkbenchApi['ossBatchIndex']` —— 契约层从 **Client**
+   取类型。后果是"Client 改一个字段"会**悄悄放宽**契约（契约检查看起来还在跑），
+   而且打包形态上 Client 与 Host 分开构建，共享层引用 Client 类型等于把两个边界缝在一起。
+2. 环境页（`features/environment/*`）曾经 import `features/report-audit/api.ts` 拿 `workbenchApi`
+   与 `EnvResult`。后果是**审核门面动一个字段就牵动环境页** —— 而环境页是修复入口
+  （工作区没就绪时它是唯一能进的页面），最不该被业务改动波及。现在环境模块自带
+   `modules/environment/api.ts`，报告审核门面转出它的名字，方向变成 **环境 ← 审核**。
+
+迁移期用**整体 re-export 的兼容别名**（`shared/types.ts`、`shared/wire-contract.ts`）保住旧导入
+路径，而不是一次性改几十个文件。代价是这个别名会长期存在 —— 所以有一条断言盯着
+"别名文件里不许再出现真实定义"，删它的时候必须是一次有意识的迁移。
+
+### Host `tools/` 分层与"按模块图搬文件"（2026-10-12）
+
+`host/tools/` 现在根下只有 `register.ts`，其余按**谁在用**分成四层：`common/`（跨域工具与
+类型）、`report-audit/`、`report-evaluation/`、`integrations/`。`host/ops/` 改名 `host/operations/`。
+
+搬文件不是"挪个位置"：它同时改变**被搬文件内部的相对路径**（深度 +1）与**所有引用者的路径**。
+手工 sed 只会改一半，而 import 指错在 Node 里的表现是"模块找不到"—— 只有类型检查或跑到那一步
+才看得见。所以搬运走的是按模块图重写的脚本：每个相对 specifier 解析成绝对路径 → 过一遍移动映射
+→ 相对新位置写回去。
+
+⚠️ 那次搬运漏了一处，值得记下来：脚本只扫了 `src/` 与 `tests/`，于是
+`scripts/smoke-built.mjs` 里的 `import '../src/host/tools/consts.ts'` 没跟着改 ——
+**`npm test` 全绿，`make plugin-check` 跑到冒烟那一步才炸**。路径引用有三种写法
+（相对 import、`new URL('src/...', ROOT)`、从插件根写的 `'../src/host/...'`），所以现在的
+护栏按"文本里出现过旧路径"扫，而不是按某一种语法扫（`tests/unit/host-module-layout.test.mjs`）。
+
+同一条护栏还盯着 `register.ts` **只做组装**（不许出现 `runShell(` 或 `ctx.shell`）：
+组装层里混进业务执行是"改一处业务要去改装配文件"的开端。
+
+### `operations/` 为什么按域拆、以及共享依赖为什么必须只有一份（2026-10-12）
+
+```text
+operations/
+  register.ts       组装：构造共享依赖 → 拼四张域操作表 → boot（ported.done 也从这里推导）
+  common.ts         共享依赖与闭包：gate / ossDeps / ossBatch / watch / identity / loadEnv / guard
+  environment.ts    21 条：环境自检、工作空间、本机访问授权、DWS 目录体检与修复、登录、凭据生命周期
+  report-audit.ts   13 条：待审核列表、审核生命周期、报告讨论材料、交付件、crwu 直通
+  local-audit.ts     3 条
+  report-evaluation.ts  8 条（上一批）
+  types-export.ts   注入面（CoreDeps / HostResolvers），调用方与测试夹具用
+  core.ts           兼容转出（旧导入路径不断）
+```
+
+**拆分的动机不是"文件太长"**，而是这几个闭包被多个域共用：能力门禁快照、OSS 依赖与批量队列、
+上传看门狗、身份缓存、环境自检入口。每个域各建一份的后果是**"授权之后只有环境页看到新事实、
+审核页还在用旧快照"** —— 而那种不一致在任何地方都不会报错。所以 `common.ts` 构造一次，
+域文件通过 `OperationHost` 取用。
+
+`boot` 留在组装处：`ported.done` 按**真实注入的操作表**推导，放在组装处才不会出现
+"某个域加了操作、声明忘了加"的漂移（`clipboard` 那次就是这么踩的）。
+
+搬运方式是**按块提取**：脚本按顶层键切分原文件、把紧邻的注释一起带走，再按域重组，
+imports 按"该文件真实用到的名字"过滤后生成。手工重排 38 个 handler 必然会掉一处注释或漏一个
+import —— 后者只在类型检查阶段暴露，而前者根本不会报错。
+
+### Host 目录的四个分层（2026-10-12）
+
+```text
+src/host/
+  core/          机制：access（本机访问代理）· environment（环境自检）· fs · http · platform
+                 runtime（DSH 自带 Python）· shell（命令封装）· state · system（剪贴板/登录等动作）
+                 workspace · workspace-session（协议 32 的统一会话服务）
+  integrations/  外部提供方：h3yun · ifind · oss · dws · crwu
+  domains/       业务：report-audit（`material/` 放报告文件解析）· report-evaluation · local-audit
+  operations/    操作表：register（组装）· common（共享依赖）· 四个域
+  tools/         模型可见的结构化 Tool：common · report-audit · report-evaluation · integrations
+  update/        自助更新子系统（检查器 / 安装器 / 持久化）
+  config/        部署配置解析（`config/crwu-workbench.yml` 的唯一解析处）
+```
+
+判据是**"它属于哪一类"**而不是"文件多大"：`integrations/` 里的东西都在跟外部系统说话
+（氚云 / iFinD / OSS / DWS / crwu 二进制），`domains/` 里的都在回答某个业务的问题，
+`core/` 里的都是与宿主通信的机制。一个文件同时像两类时，看**它被谁依赖**：被多个域依赖的机制
+进 `core/`，只被一个业务依赖的进那个业务。
+
+⚠️ 又一次**随搬迁失效的守卫**：OSS 的"每一次 `ossutil` 都必须经 Broker"那条断言按 `host/oss/`
+前缀扫文件。搬进 `host/integrations/oss/` 之后它扫到 **0 个文件** —— 断言里那句
+`ossFiles.length >= 3` 恰好是为此留的（"扫描面太小"），否则这条守卫会永远绿着而什么都不查。
+凡是"按目录前缀扫文件"的守卫，搬迁后都要问一句：**它还扫得到东西吗**。
+
+### Client 分层：`features/` → `modules/`（2026-10-12）
+
+```text
+src/client/
+  core/      rpc.ts（唯一的底层 HTTP 入口）、workspace-session.ts
+  shell/     面板、侧栏入口、模块 store、服务读取、样式、构建/工作区视图
+  ui/        BrandMark / SideDrawer / icons / primitives（纯展示，不含业务）
+  modules/   environment · local-audit · report-audit · report-evaluation · update
+             （每个模块：api.ts + model/ + ui/ [+ session/]）
+  locales/   apply.ts · index.ts · consts.ts
+```
+
+每个业务模块**自己的操作写在自己的 `api.ts`**。这不是"多一层"：借门的真实代价是
+**改审核门面会牵动本地审核页 / 环境页**，而那几件事在业务上没有关系。环境页尤其经不起这个 ——
+它是修复入口（工作区没就绪时唯一能进的页面）。
+
+三层分工：`core/` 是与宿主通信的机制，`shell/` 是装配与导航，`modules/` 是一个个业务。
+`ui/` 放**跨模块**的纯展示组件；只服务某一个模块的组件留在那个模块的 `ui/` 里。
+
+### 估值链路的三层边界（2026-10-12）
+
+审核子会话靠 DSH 的 `toolFilter` 把工具集**真的收窄**（provider 在创建窗口里做 scoped 路由），
+但**估值会话不是子会话** —— 它是经统一会话服务建的**顶层会话**
+（`sessionController.create({ workspaceId })`），那条路径没有工具过滤入口。所以估值这条链路的边界
+在别处，而且是可验证的三层：
+
+| 边界 | 在哪 | 作用 |
+| --- | --- | --- |
+| 案例归属门禁 | 每个估值 Tool 的 `requireCaseAccess` | 非本轮估值会话调用一律拒绝 |
+| 作用域门禁 | 审核 Tool 自己的 scope 检查 | 估值会话调不到审核记录 / 附件 |
+| **可见性预检** | `tools/report-evaluation/visibility.ts` | 起估值**之前**确认本轮要用的 Tool 在宿主里确实可见 |
+
+### 同一段交互里改了一处、漏了邻座（2026-10-13）
+
+用户实测：估值 intake 报 `mkdir …/材料-源: Operation not permitted`，会话建不出来。诊断行写得很清楚：
+`操作 system.case-file.write · 来源 audit-tool · 解析为 workspace-write · 沙箱拒绝=是`。
+
+根因是 `broker.ts` 里的一行：
+
+```ts
+const escalated = decision.sandboxPolicy !== undefined
+const sessionPolicy = escalated ? undefined : callerSessionPolicy(deps.ctx, options.session)
+```
+
+**特权**操作逐次声明 `danger-full-access`，不依赖会话；**非特权**操作要把*调用方会话*的策略放进请求。
+面板没有会话 → 策略 undefined → 执行器落回部署默认（进程 cwd）→ 案例目录不在可写根之下 → 拒绝。
+`ensureDirectory` 这套 helper 的判据是"审核子代理的沙箱边界本来就是本轮案例目录"，**只对子代理成立**。
+
+⚠️ 这是上一轮那次修复的**兄弟调用点**：round 27 我给资料的*复制*加了面板专属提权操作，却漏了它*前面*的建目录。
+同一个函数里相邻的两行，改了一行、忘了另一行 —— 而两次的失败形态完全不同（复制那条会被 Broker 按来源拒，
+建目录这条能过策略、却被沙箱拒），所以"修过一个"完全不代表"邻座也修了"。
+**修完一个调用点，要把同一段里所有的同族调用点列一遍。**
+
+守卫也补成两层：行为断言（那几条命令必须是 `danger-full-access`）+ 静态断言（操作层不许用依赖会话沙箱的 helper）。
+夹具加了"记录每次 shell 调用的沙箱模式"这个观察点 —— 没有它，这类缺陷只能靠真机撞。
+
+### 没人跑的验收 = 描述旧产品的验收（2026-10-12）
+
+`install/browser-check.mjs` 是**真机行为唯一的自动化验收**（面板画得出来、单列表可用、分页只补本页）。
+它需要有人起一个装了插件的 DSH profile、再装 playwright —— 于是它自己没人跑。
+后果是它还在断言「报告评估」是 **Coming Soon 占位页**，而那个模块早已实现。
+
+修法不只是改那几行断言，而是**让这类漂移能被静态发现**：
+`tests/unit/client/client-browser-check-drift.test.mjs` 交叉核对注册表与脚本 ——
+注册表说 `underDevelopment: false`，脚本里就不许还有占位页文案（反之亦然），
+且脚本里必须存在面板的真实断言、任何 `.click(` 都不许落在「AI 审核」上（那一击会跑真实审核、
+写真实工作空间与 OSS）。
+
+⚠️ 写这些断言时改正了自己一处**想当然**：本以为是"点了「开始估值」应当报错"，
+实际面板是**禁用按钮 + 一句说明**（比点了再报错更强）。**浏览器断言必须照真实 DOM 写** ——
+凭印象写出来的断言，要么当场红、要么永远假绿。
+
+同类教训已经出现四次（装配、来源策略、验收矩阵、链路测试、现在是浏览器验收），
+共同点都是：**判据本身没人跑过**。
+
+### 集成层为什么必要：脚本各自绿，接口照样能漂（2026-10-12）
+
+`tests/integration/report-evaluation/valuation-deliverable-chain.test.mjs` 跑的是真实链路：
+
+```text
+真 docx + 真 xlsx → extract_files.py → build_workbook.py → check_workbook_contract.py
+                  → build_report.py → validate_result.py --html --workbook
+```
+
+各脚本自己的用例都过，不代表**它们之间**对得上：字段名、值 JSON 的形状、结果 JSON 的字段，
+在各脚本用例里都是被夹具"喂"出来的，任何一处改名都照样全绿。
+
+⚠️ **这条测试第一版是"永远绿"的**，值得记下来：`extractedFields` 的值一律是**原文**
+（"120.5 平方米"），直接 `Number(...)` 得到 NaN，而 `JSON.stringify(NaN)` **静默变成 `null`**
+→ 底稿那一格空着 → 汇总表没有数据行 → 方法一致性检查**整条跳过**。
+注入"底稿写市场法、JSON 说收益法"本该变红，却是绿的。改成真的解析（并断言解析成功）之后才响。
+
+**"没响过的测试不算测试"** 这条已经在好几种守卫上重复出现：装配守卫、来源策略守卫、
+验收矩阵守卫、链路测试。写完任何判据，都要真的让它红一次。
+
+链路还顺手暴露一处**假计数**：`build_workbook.py` 把 `None`（"这一项未知"是合法输入）
+也算进"填入 N 个输入单元格"，而那一格是空的。计数的读者是复核的人 —— 他正照着这句话判断
+"该填的都填了"。
+
+### 写死的通道 = 测不了的操作 = 没人知道它坏着（2026-10-12）
+
+接着上一轮的教训往下查：8 条估值 RPC 里**只有 `valuation-browser-preflight` 一次都没被测过**
+（正好是 §16 的「页面可通过默认浏览器登录」）。补测试时发现根因不在那条操作本身，而在装配：
+
+```ts
+const transport = fetchTransport({})   // 写死在 createValuationOperations 里
+```
+
+于是 ① 面板每开一次确认抽屉都要**等三家站点的真实网络**（离线就等到超时）；
+② 这两条操作在单测里根本没法跑。改为与估值 Tool 同一条口径（`deps.transport?`，缺省真实 fetch）后，
+`host-valuation-ops.test.mjs` 从 ~13 秒降到 **0.16 秒** —— 那 13 秒就是"每开一次抽屉等一次网络"。
+
+⚠️ 同一轮还修掉夹具的一处**自欺**：把 `state`（内含 `grantedConsent()`）递给 Broker 会覆盖
+未授权默认值，"未授权"用例于是实际跑在已授权状态下 —— 它当然一直是绿的。
+**夹具的默认值也是一种断言**：它决定了那些"没显式设置的路径"到底测了什么。
+
+### 没有人跑过的操作 = 没有人知道它坏着（2026-10-12）
+
+`valuation-intake` 是确认抽屉的**唯一**数据来源，而它此前**一条测试都没有**（intake 现有的测试
+全是纯函数：扩展名判定、清单指纹、去重）。补第一条测试时立刻抓出两处：
+
+```text
+① 复制被 Broker 拒掉   intake 是面板操作，却借了只允许 audit-tool 的 system.case-file.write
+                       → 生产里每一份资料都"复制失败"，用户看到"所有文件都没解析"
+② 已知信息永远是空的   extractedFields 初始化为空后再没被填过；每份文件却都写 status: 'parsed'
+                       （那个 parsed 实际只表示"复制成功"）→ 抽屉永远是"12 项全缺 + 都已解析"
+```
+
+①的修法不是把 `panel` 加进那条操作的允许列表（那会把"审核子代理在案例目录内建/删文件"这条窄边界
+悄悄放宽），而是给面板这条能力**自己的名字**：`system.valuation-material.copy`，与
+`system.local-audit-material.snapshot` 同一条判据。②的关键区分是**复制成功 != 解析成功**：
+那个 `parsed` 是从"命令跑通了"推出来的，而用户读到的是"这份资料看过了"。
+
+⚠️ Broker 的判据是调用点**声明的** `source`（能力归属，不是运行期身份），所以①完全可以在静态层面查：
+新增的 `host-access-source-policy.test.mjs` 把每个调用点的 `{ operation, source }` 与描述表对一遍。
+**验证方式仍是让它响一次** —— 把 op 名改回去，它当场报出文件、行号、允许的来源。
+
+教训很直白：**只要一个操作没有任何测试，它坏掉的方式就不会有人知道**。
+"单测全绿"在这里什么都不能说明。
+
+### 装配漏接：让它在编译期响，而不是在界面上晃（2026-10-12）
+
+第 16 轮给估值工具加 `valuationLifecycles` 时有一次真实险情：如果漏改 `apply.ts`，
+**所有测试照样全绿** —— 工具会优雅降级成一句 warning，而界面永远停在"正在跑"。
+"优雅降级"是好事，但它同时意味着**漏接不会自己暴露**。
+
+解法不是再加一条断言，而是让类型说话：`apply.ts` 里给 Tool 依赖的视图是
+
+```ts
+type AssembledToolDeps = ToolDeps & Required<Omit<ToolDeps, 'ctx' | InjectionOnlyToolDeps>>
+```
+
+`ToolDeps` 的可选字段是给**手搭夹具**用的（单测只给被测那几项），而**真实装配漏一项就编译不过**。
+加这个视图当场找出两处从未接过的字段（`ifind` / `ifindTimeoutMs`）—— 查过后确认它们是
+故意不接的（测试注入点 + 有默认值的调优项），于是把它们写进 `InjectionOnlyToolDeps` 并注明
+"没有第三条"。**这份名单本身就是"我们想过这两个字段"的记录**。
+
+⚠️ 守卫要**响过一次**才算守卫：临时加一个 `probeForAssemblyGuard?: string` 到 `ToolDeps`，
+`npm run typecheck` 立刻在 `apply.ts` 报 TS2322；撤销后恢复。这一步别省 ——
+没验证过的守卫和没有守卫，在出事那天是一样的。
+
+### 验收矩阵也会变旧 —— 所以要给它加守卫（2026-10-12）
+
+`docs/acceptance-0.0.42.md` 把 §16 每条标准对应到"删掉它就放走什么"的那一处强制点。写它的过程
+本身有价值（找不到强制点的条目就暴露了），但它有一个特有的失败模式：**断言改名、文件搬走、
+某条被删掉之后，表格照样写着"已强制"** —— 那比没有文档更坏，因为它让人以为查过了。
+
+所以 `tests/unit/host/host-acceptance-matrix.test.mjs` 把每个 `「…」` 引用拿回测试源码与技能
+校验脚本里找一遍。**第一次跑就抓出 5 处不实引用**（都是我按记忆写的）：引用了一个不存在的
+测试文件、两条把"描述"当成断言原话、两条把断言名记成了简写。
+
+⚠️ 约定要严格才守得住：`「…」` 只用来引用**逐字存在**的断言原话，UI 文案与字段名用引号。
+第一版就是因为把按钮名写成 `「在默认浏览器登录」` 而被自己判红 —— 松一点的约定等于没有守卫。
+
+同类经验：**凡是"引用别处事实"的文档，都要能机械核对**。写在正文里靠人记得，就等于迟早漂移。
+
+### 空串分不出"没留存"和"忘了赋值"（2026-10-12）
+
+证据字段（`evidence`）原先在契约里"有位置但不被检查"：`url`、`captured_at`、保留/剔除理由都查，
+唯独它不查。而工具在证据落盘失败时只留一个**空串** —— 于是"页面取到了、案例也解析出来了、
+证据其实没留存"这条路产出的是格式完全合法、引用为空的结果。
+
+两处一起改：**谁缺证据要显式说**（Host 侧 `evidence_missing: true`），**缺了就不许当可比实例**
+（契约侧：标了 `evidence_missing` 就不能 `used_as_comparable`）。再加一条"点得开"：
+引用的证据文件必须在案例目录里真的存在，`..` 越界一律不合格 ——
+「证据丢了却说有」比「没有证据」更危险。
+
+⚠️ 加这条规则时三处夹具全红了一次（它们都没造证据文件）。这不是规则错，而是夹具此前一直在
+**造不完整的案例目录**：一个引用着不存在证据的结果，本来就是不合格的产物。
+夹具补了"证据文件真落盘"与"写失败注入"，后者顺手让"看着成功、其实不可复核"那条路径有了测试。
+
+### 知识来源：从"写在 JSON 里"到"对着快照核"（2026-10-12）
+
+`knowledge_sources` 是子会话**自己写进结果 JSON** 的；本轮实际取到的正文在
+`知识快照/.知识来源.json`（取数工具落盘）。两者不比对的话，结果里可以出现一份**根本没取到**的路由，
+或者把 `digest` 抄错 —— 格式完全合法，而"结论建立在哪一版正文上"这件事事后只能靠翻目录。
+
+现在 `validate_result.py` 对着快照核三件事：① 结果里每条路由都在快照里；② 指纹一致；
+③ **快照里有知识库来源却没写进结果也算不合格** —— 那等于把"用了降级备份"说成"用了知识库"。
+快照不存在时只提醒跳过（协议 32 之前的案例没有这个文件）。
+
+这一类检查的共同点：**两个交付件都声称同一件事时，就必须有一处把它们对起来**。
+写在各自文件里、格式都合法、互不矛盾 —— 那正是"看起来没问题"的样子。
+
+### 指令里必须写**判据**，不能只写"要判断"（2026-10-12）
+
+子会话按**指令**办事，不按技能正文办事（技能是"细则在哪"，指令是"这次做什么"）。所以像
+"案例要判可比性"这种话等于没说：它没给判据，子会话就自己定一套，而**自己定的一套事后无法复核**。
+
+对齐 §12 的清单时发现两处正是这个毛病：案例筛选只有"不许编造"没有**判据**；
+压缩包（§5.1 说不自动展开）在指令里完全没提。现在指令里有两段：
+
+- `## 案例筛选规则`：可比性三条件同时满足 / **挂牌 ≠ 成交**（只有成交可直接作可比实例）/
+  剔除不等于删除（留在清单里写明理由）/ 每条都要有 URL 与抓取时间 / 数量不足照实说 +
+  指向 `references/04-case-selection.md` 的细则；
+- `## 压缩包`：不自动展开，按未解析登记并写进 `capability_gaps[]`，不要按文件名猜内容。
+
+分寸是：**判据进指令，细则留 references**。判据写全了子会话才有统一的尺子；
+细则（打分表、修正方法）写进指令只会把指令撑爆，而且与 references 双份必然漂移。
+
+### 测试目录分层与"路径基准"（2026-10-12）
+
+```text
+tests/unit/{client,host,shared}/   ← 按**被测的那一侧**分层（方案 §4.4）
+tests/helpers/                     ← 夹具，跨层共用
+tests/windows/                     ← Windows 专属
+```
+
+搬迁是机械的，**代价在路径基准**：测试下沉一层之后 `new URL('../../', import.meta.url)` 会指到
+`tests/` 而不是插件根。这不会报"少写了一级 `../`"，只会报"找不到模块"。所以搬完要按**文本**扫一遍
+所有"从测试文件出发的相对路径"：`new URL('../../', …)`、`new URL('../helpers/…')`、
+`dirname(dirname(dirname(fileURLToPath)))`（按 dirname 算根的那种）、以及按**仓库根**算的
+（CI workflow / 文本卫生那几个）。现在有一条护栏按深度核对它们。
+
+⚠️ 写这条护栏时自己踩了两次，都值得记：
+① **自排除不能写死路径** —— 写了 `tests/unit/host-module-layout.test.mjs`，文件一搬排除就失效，
+   守卫开始报它自己那份"旧路径清单"；
+② **判据别用"匹配三级 dirname"** —— 正则不锚定时，四级形态的尾巴恰好是三级
+   （`d2(d3(d4(fileURLToPath`），于是把**修好**的文件也报出来。改成数 `dirname(` 的个数。
+
+两次都不是"逻辑写错了"，而是**判据本身也依赖被搬迁的事实**。凡是守卫的判据里出现具体路径，
+都要问一句：这个路径会不会跟着被搬。
+
+### 「三者一致」的可查边界（2026-10-12）
+
+`references/09` 里那句"报告、结果 JSON、底稿三者结论一致"如果不写清查到哪一步，就会被读成
+"已经全查过了"。实际能自动查的只有：
+
+| 两两 | 查到什么 |
+| --- | --- |
+| 报告 ↔ 结果 JSON | **严格**（报告里必须找得到 JSON 的两个数） |
+| 结果 JSON ↔ 底稿 | **方法严格**（JSON 的 `method` 必须在汇总表「采用的方法」列里）+ 结构与错误值 |
+| 底稿数字 ↔ JSON 数字 | ⚠️ **查不了**：比较需要**重算后**的单元格值，而 openpyxl 不算公式 |
+
+最后一格是**已记录的能力缺口**。规矩是：交付前真打开一次底稿让它重算，由人核对汇总表结论。
+把这条写进契约正文而不是留在实现里，是因为"以为查过了"比"知道没查"危险得多。
+
+### 「静默空结论」：为什么一个字段没填也要红（2026-10-12）
+
+汇总表的 K 列是 `=IF(ISNUMBER(SEARCH("收益法",J5)),G5, IF(ISNUMBER(SEARCH("市场法",J5)),H5,
+IF(ISNUMBER(SEARCH("成本法",J5)),I5,"")))`。这条公式有一个**安静**的失败模式：
+`J`（采用的方法）为空或写得不逐字（比如"市场"），三个 `SEARCH` 全部落空 → `K` 回空串 →
+`L`（评估价值）也空。**汇总表没有结论，而报告与结果 JSON 里可能写着数字** —— 两边不一致，
+却没有任何一处报错。
+
+所以工作簿契约现在检查它：填了建筑面积的行必须写明采用的方法，且只能是三个逐字名称。
+⚠️ 加这条检查时第一版忘了排掉**合计行**（它的 `F` 是 `=SUM(F5:F14)` 而不是填进去的面积），
+于是**随包发布的模板自己**被判不合格 —— 现在有一条断言专门钉这件事：
+"模板必须过契约"。凡是新增契约规则，先问问"模板自己过不过"。
+
+### 谁来说"这一轮完成了"（2026-10-12）
+
+状态机里有 `completed`、工具允许写它，但**没有任何地方真的推过去** —— 于是面板永远看到
+`running`，而客户端只在 `completed` 时去取结果，**结果页永远不出现**。这类断链的共同形状是：
+*每一段都在，缺的是"谁负责跨过那一步"*。
+
+判据放在 `valuation-status`（面板轮询的那一份事实），而且**由宿主判定、不由子会话声称**：
+
+```text
+三件交付件齐备 且 估值结果.json 解析得出来（带 method）  → completed（进度走满）
+否则                                    → 留在 running（不是错误：还没做完）
+```
+
+两个理由：① 子会话写完文件就结束了、**没有回调**，模型说一句"我完成了"不是事实；
+② 只看文件在不在会把"报告刚写了一半"判成完成，而结果页要拿这份 JSON 渲染结论。
+`completed` 是终态：删掉一件之后再轮询仍然是它（已交付过的东西不撤回）。
+
+### 冻结输入：三层保障，最后一层是"篡改可见"（2026-10-12）
+
+```text
+① 接口形状   子会话没有参数能改方法 / 基准日 / 补充要求（Host 从内存里的快照读）
+② 启动核对   valuation-start 在建会话**之前**核对一次确认指纹（资料在确认后被改过就拒绝启动）
+③ 篡改可见   valuation-result 每次读结果都把磁盘上的 估值输入.json 与宿主记录逐字段比一次
+```
+
+前两层都对，但都管不到一件事：**`估值输入.json` 是案例目录里的普通文件，而估值会话对案例目录
+有写权限**。谁都可以改它，而改完之后没有任何地方会知道 —— 子会话读的正是这份文件，
+于是"按冻结输入执行"会变成"按被改过的输入执行"，且没有任何地方报错。
+
+第三层不是去阻止写入（同一个目录里子会话本来就要写报告与底稿），而是**让篡改可见**：
+不一致就 `ok:false` + 一句能读懂的话（改的是哪一项、宿主记录是什么、以哪一份为准），
+并写进轮次的能力缺口。`ValuationRecord` 因此要留着当时的 `supplementalPrompt` ——
+不在宿主内存里留一份，"文件被改过"就永远发现不了。
+
+⚠️ 还有一条**只有工具知道**的事实必须写回宿主：`browser-login-required` 与每个来源的登录/失败状态。
+面板轮询的是 `valuation-status`（读注册表），而"请求失败、需要用户去登录"这件事**只有发请求的一方**
+（工具）知道。工具只把 `phase` 回给模型的话，界面**永远进不到**那个阶段 —— 状态机里有一个阶段、
+工具返回值里有它、唯独没有任何路径把它落到注册表上。现在 `tools/report-evaluation/record.ts`
+负责这一步：身份只从 Agent 取（与案例归属门禁同一个来源），写不回去就**如实写进 `warnings`**
+（静默的后果是界面与子会话看到的事实不一致，而没有任何地方会提这件事）。
+
+第三条是这轮补的：`VALUATION_CHILD_TOOLS` 列了 8 条工具名，但**名字写在常量里不等于宿主注册了它们**
+（打包漏一个、注册表收窄、部署降级都会让名单变成一纸空文）。`valuation-start` 在创建会话之前拿
+同一份名单去问注册表，缺任何一条就拒绝启动并**点名**缺哪条 —— 与审核根会话"看不到必需工具就
+在创建子代理之前失败"同一条口径。判据与审核侧**共用同一个实现**（`missingAuditTools` 的 `required`
+参数），两处各写一遍"怎么算可见"迟早会分叉，而分叉的表现是两条链路对同一个部署给出不同结论。
+
+⚠️ 搬迁暴露了三处**守卫失效**（都是"看起来还在跑，其实已经查不到东西"）：
+① 本地审核的源码守卫只 `readdirSync` 顶层，模块化后实现文件进了子目录，文件数从 12 掉到 3，
+守卫直接报"扫描根可能不对"—— 这类守卫**扫描范围**和**断言内容**一样重要；
+② Update 的静态边界按旧平铺文件名读文件；
+③ 两处"被删组件不许复活"的断言只盯旧路径 —— **把文件挪个目录就能让守卫失效**，现在改成断言
+新分层下也不存在。所以 `tests/unit/host-module-layout.test.mjs` 里那几条"没有指向旧路径的引用"
+是按**文本里出现过旧路径**扫的，不按某一种语法扫。

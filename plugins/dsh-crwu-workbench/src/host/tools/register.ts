@@ -1,17 +1,23 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolDefinition, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { bootstrapTools } from './bootstrap.ts'
-import { capabilitiesTool } from './capabilities.ts'
-import { dingtalkTools } from './dingtalk.ts'
-import { h3yunTools } from './h3yun.ts'
-import { ifindTool } from './ifind.ts'
-import { knowledgeTools } from './knowledge.ts'
-import { localClaimTools } from './local-claim.ts'
-import { ossTools } from './oss.ts'
-import { pythonScriptTools } from './python-script.ts'
-import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from './consts.ts'
-import type { ToolDeps } from './types.ts'
+import { bootstrapTools } from './report-audit/bootstrap.ts'
+import { capabilitiesTool } from './common/capabilities.ts'
+import { dingtalkTools } from './report-audit/dingtalk.ts'
+import { h3yunTools } from './report-audit/h3yun.ts'
+import { ifindTool } from './integrations/ifind.ts'
+import { knowledgeTools } from './report-audit/knowledge.ts'
+import { localClaimTools } from './report-audit/local-claim.ts'
+import { ossTools } from './report-audit/oss.ts'
+import { pythonScriptTools } from './common/python-script.ts'
+import { valuationBootstrapTools } from './report-evaluation/bootstrap.ts'
+import { valuationFileExtractTools } from './report-evaluation/file-extract.ts'
+import { valuationKnowledgeTools } from './report-evaluation/knowledge.ts'
+import { valuationBrowserPreflightTools } from './report-evaluation/browser-preflight.ts'
+import { valuationMarketSearchTools } from './report-evaluation/market-search.ts'
+import { valuationArtifactValidateTools } from './report-evaluation/artifact-validate.ts'
+import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from './report-audit/consts.ts'
+import type { ToolDeps } from './common/types.ts'
 
 /**
  * CRWU Tool 的注册与注销。
@@ -42,6 +48,14 @@ export function registerCrwuTools(ctx: Context, deps: ToolDeps): () => void {
     ...dingtalkTools(deps),
     ...pythonScriptTools(deps),
     ...localClaimTools(deps),
+    // 报告评估（房地产估值）链路。**不并进 REQUIRED_AUDIT_TOOLS**：那是审核的能力门禁，
+    // 混进去会让审核因为"估值工具不在"而拒绝启动。
+    ...valuationBootstrapTools(deps),
+    ...valuationFileExtractTools(deps),
+    ...valuationKnowledgeTools(deps),
+    ...valuationBrowserPreflightTools(deps),
+    ...valuationMarketSearchTools(deps),
+    ...valuationArtifactValidateTools(deps),
   ]
 
   const disposers = definitions.map((definition) => registry.register(definition))

@@ -35,9 +35,9 @@ if (home === '') {
   process.exit(2)
 }
 
-const { workbenchConfigPath } = await import(new URL('../src/host/state/persist.ts', import.meta.url).href)
+const { workbenchConfigPath } = await import(new URL('../src/host/core/state/persist.ts', import.meta.url).href)
 const { LOCAL_ACCESS_CONFIG_KEY, LEGACY_TRUST_CONFIG_KEY, localAccessViewOf } =
-  await import(new URL('../src/host/access/consent.ts', import.meta.url).href)
+  await import(new URL('../src/host/core/access/consent.ts', import.meta.url).href)
 const { LOCAL_ACCESS_CAPABILITIES, LOCAL_ACCESS_SCHEMA_VERSION } =
   await import(new URL('../src/shared/access/types.ts', import.meta.url).href)
 
@@ -85,7 +85,7 @@ const fsStub = {
 }
 const ctx = { get: (name) => (name === 'fs' ? fsStub : undefined) }
 
-const { writeWorkbenchConfig } = await import(new URL('../src/host/state/persist.ts', import.meta.url).href)
+const { writeWorkbenchConfig } = await import(new URL('../src/host/core/state/persist.ts', import.meta.url).href)
 const access = {
   writeText: async (_call, target, content) => {
     files[target.path] = content

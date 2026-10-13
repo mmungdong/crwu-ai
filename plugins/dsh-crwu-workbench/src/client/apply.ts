@@ -3,19 +3,21 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import { AuditParentButton } from './features/workbench/AuditParentButton.tsx'
-import { RunCardAction } from './features/workbench/RunCardAction.tsx'
-import { WorkbenchPanel } from './features/workbench/WorkbenchPanel.tsx'
-import { createLocalAuditPaneController } from './features/local-audit/LocalAuditPane.tsx'
-import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './features/workbench/WorkbenchSidebarEntry.tsx'
-import { createBuildStore } from './features/workbench/build-store.ts'
-import { createModuleStore } from './features/workbench/module-store.ts'
-import { createEnvStatusStore } from './features/environment/status.ts'
-import { updateApi } from './features/update/api.ts'
-import { createUpdateDialogStore } from './features/update/dialog-store.ts'
-import { createUpdateStore } from './features/update/update-store.ts'
-import { readClientServices } from './features/workbench/services.ts'
-import { installWorkbenchStyles } from './features/workbench/styles.ts'
+import { AuditParentButton } from './modules/report-audit/ui/AuditParentButton.tsx'
+import { RunCardAction } from './shell/RunCardAction.tsx'
+import { WorkbenchPanel } from './shell/WorkbenchPanel.tsx'
+import { createLocalAuditPaneController } from './modules/local-audit/ui/LocalAuditPane.tsx'
+import { createReportEvaluationPaneController } from './modules/report-evaluation/index.ts'
+import { hostPickerCapabilities } from './modules/local-audit/pick.ts'
+import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './shell/WorkbenchSidebarEntry.tsx'
+import { createBuildStore } from './shell/build-store.ts'
+import { createModuleStore } from './shell/module-store.ts'
+import { createEnvStatusStore } from './modules/environment/model/status.ts'
+import { updateApi } from './modules/update/api.ts'
+import { createUpdateDialogStore } from './modules/update/model/dialog-store.ts'
+import { createUpdateStore } from './modules/update/model/update-store.ts'
+import { readClientServices } from './shell/services.ts'
+import { installWorkbenchStyles } from './styles/install.ts'
 import { zhCN } from './locales/zh-CN.ts'
 
 /**
@@ -73,6 +75,28 @@ export function apply(ctx: ClientContext): void {
    * **实例级、只有一份，不放在模块顶层**（模块级单例会在插件卸载后残留）。
    */
   const localAudit = createLocalAuditPaneController(services)
+  /**
+   * 「报告评估」的估值控制器（协议 32）。与 `localAudit` 同一条口径：实例级、只有一份，
+   * 于是切模块 / 离开面板再回来时，用户选的文件、方法、基准日与补充要求都还在。
+   */
+  const evaluation = createReportEvaluationPaneController(hostPickerCapabilities(
+    () => services,
+    {
+      /**
+       * 环境门禁：与面板同一条判据（自检拿到结论且全部通过）。
+       *
+       * 为什么必须**现读**：自检结论会变（用户修完再自检就通过了）。
+       * 为什么必须**给**：`controller.start()` 里 `port.ready?.() ?? { ok: true }` ——
+       * 不传这条，门禁就默认放行，于是"环境没就绪也能起估值"。
+       */
+      ready: () => {
+        const snapshot = envStatus.get()
+        return snapshot.env !== null && snapshot.env.allOk === true
+          ? { ok: true, error: '' }
+          : { ok: false, error: zhCN.valuationNeedEnvironment }
+      },
+    },
+  ))
   // 自助更新同理，而且这条是**硬要求**：侧栏那枚版本徽标与面板里的更新面板必须共用
   // 唯一一份更新状态（各自建 store 就会各发一次 status/check，还会出现"徽标说有更新、
   // 面板说已是最新"）。开关状态也挂在实例上（侧栏徽标要能打开面板里的那只 Dialog）。
@@ -126,6 +150,7 @@ export function apply(ctx: ClientContext): void {
       services,
       envStatus,
       localAudit,
+      evaluation,
       build: buildStore,
       modules,
       update: updateStore,

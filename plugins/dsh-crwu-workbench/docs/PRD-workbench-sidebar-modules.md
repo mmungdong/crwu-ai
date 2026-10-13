@@ -345,7 +345,7 @@ DSH 侧栏可加的席位只有两个，且都是**平铺列表**：
   `dws contact user get-self --format json`，把 `result[0].orgEmployeeModel.orgUserName` / `orgName` /
   `userId` 放进应答的 `me` 字段。独立操作、门面方法、协议声明与对应单测全部删除（协议号仍 6 → 7，
   因为 `env` 应答多了字段）。
-  实现放在新文件 `host/system/identity.ts`（`dwsSelf` + `readSelfDocument`），与「钉钉认证」探测同源的
+  实现放在新文件 `host/core/system/identity.ts`（`dwsSelf` + `readSelfDocument`），与「钉钉认证」探测同源的
   三条约束：读钥匙串必须**提权**（`sandboxPolicy: danger-full-access`）、提权命令必须**带工作目录**、
   失败一律降级成空姓名而**不抛**；宿主侧只缓存成功结果，反复自检也只跑一次 dws。
 - **自检一次就够**：面板挂载 effect 从「无条件 `envStatus.refresh()`」改成「只在还没有结论时补一次」。
@@ -498,7 +498,7 @@ DSH 侧栏可加的席位只有两个，且都是**平铺列表**：
   `fill="currentColor"`），逐字用他的路径、按比例算高度（不拉成正方形）；自绘那版鲸尾删掉。
 - **入口放到操作列最后面** + 悬停文案改成用户原话「与Deepseek一起讨论这份报告」。
 - **打开面板就查这份报告的全部文件（只列举、不下载）**：新增第 26 个 Host 操作 `report-files`
-  （`src/host/report/files.ts`）：云端复用 `ossIndex({ seqNo })`，本地扫
+  （`src/host/domains/report-audit/material/files.ts`）：云端复用 `ossIndex({ seqNo })`，本地扫
   `<工作空间>/<流水号>`（递归 ≤3 层、≤300 个文件，只回名字/路径/大小）。
   面板每打开一个流水号查一次（收起不查）；**不下载正文** —— 要正文由 AI 在讨论里按需取。
 - **查询期间是「中瑞世联的 Loading 页面」**：`WorkbenchLoading` 现在带 `title`/`hint`/`size`
@@ -724,7 +724,7 @@ Drawer 交互 / 时间格式；不重算命中率与复核算法，不发明字�
    可点击的钉钉个人名片链接，员工无法正常运行时可直接联系开发同学排查；
 6. 「复制安装提示词」整块**删除**（同日追加：二进制随包发布、登录与密钥都在界面上完成之后，
    那段提示词没有运行时用途，只把员工指去绕路）；`install-prompt` 宿主操作与
-   `src/host/environment/install-prompt.ts` 一并删除。
+   `src/host/core/environment/install-prompt.ts` 一并删除。
 7. ① 工作空间的「在新会话中打开」按钮**删除**（多余：选目录那一步已经在案例根目录里打开了工作台）。
 
 已下线：`AuthorizationGate.tsx`（模态层）、`environment/layers.ts`（五层规则）、`OssAuthCard.tsx`
@@ -758,7 +758,7 @@ password 输入、保存中禁用、提交后**立刻清空本地**那一份（C
 是唯一入口。被拦时不进入目标页 → 记 `pendingTarget` → 落到 `env` → 显示「进入【目标页】前，
 请先完成环境配置」+「重新检查」；检查通过后**只恢复最近一次**被拦的目标；用户中途主动改去别处
 即取消自动恢复（`navigate('env')` 也取消）；`env` 页始终可进。Host 侧另有 60s 快照的能力门禁
-（`src/host/environment/gate.ts`），`audit-start` 复用 workspace + 授权 + 包内能力 + Runtime +
+（`src/host/core/environment/gate.ts`），`audit-start` 复用 workspace + 授权 + 包内能力 + Runtime +
 必需 Tool 的统一判据。
 
 #### 四、判据与证伪
@@ -800,7 +800,7 @@ degraded 放行」「环境页顶部不再提供『进入报告审核』按钮�
 - **OSS**：`ossutil ls oss://<bucket>/<配置前缀>/ --endpoint <配置> --limited-num 1`，只读、空目录也算
   成功、不再打桶根（只验桶根证明不了"能写交付件"）。失败结构化归因四类
   （`credential` / `permission` / `config` / `infrastructure`），四类给四种不同的员工动作。
-  探测输出与上传错误共用 `host/oss/sanitize.ts` 的脱敏器。
+  探测输出与上传错误共用 `host/integrations/oss/sanitize.ts` 的脱敏器。
 - **iFinD**：`initialize → notifications/initialized → tools/list → 选安全只读工具 → tools/call`。
   只有 `tools/call` 返回非错误、非空内容才 `dataVerified=true`；`ok`（认证）与 `dataVerified`（取数）
   分开显示。四阶段归因一致（`classifyFailure` 先看 401/403 再看消息指纹）。
@@ -925,10 +925,11 @@ degraded 放行」「环境页顶部不再提供『进入报告审核』按钮�
 - **没有任何监控面**：不保存审核历史、不加 sidecar、不轮询其他对话、不列出活动会话，
   本地审核产物也不上传/下载（交付件只落在临时案例目录里）。
 
-- **页签条**：`role="tablist"` + `role="tab"`（`aria-selected` + roving `tabindex`）+ `role="tabpanel"`，
+- **页签**：这两个页面现在是工作台**一级目录「审核」下的两个二级目录**（见文末「两级目录」一节）：
+  `role="tablist"` + `role="tab"`（`aria-selected` + roving `tabindex`）+ 同一个 `role="tabpanel"`，
   左右方向键循环、Home / End 直达两端；报告审核那一侧的内容与 `auditGate` **一个字没改**。
 - **草稿归 `apply()` 持有**：`createLocalAuditPaneController(services)` 在客户端 `apply()` 里建一份、
-  随 props 下发。状态机若长在页面组件里，切一次页签（页面被卸载重建）就会把用户刚选的文件丢掉 ——
+  随 props 下发。状态机若长在页面组件里，切一次目录（页面被卸载重建）就会把用户刚选的文件丢掉 ——
   与「失败/切换都不丢已选内容」冲突。有一条**真渲染**的回归盯着它。
 
 判据：`tests/unit/host-local-audit.test.mjs`（扫描 / 快照 / handoff / 提示词 / 操作）、
@@ -951,3 +952,54 @@ degraded 放行」「环境页顶部不再提供『进入报告审核』按钮�
 「本地审核不要求环境」只在 audit 模块已展示的范围内成立（页内那一侧确实不判 `envOk`）。
 把它拆成 per-tab 会改既有导航语义与 `client-module-gate` 的断言，属于对报告审核流程的可见改动，
 所以**不做**；环境没配好时先按环境页的引导把环境修好，与报告审核同一套前置。
+
+## 两级目录：一级「业务大类」+ 二级「功能页面」（2026-10-13，插件 0.0.42 未发布批次）
+
+用户口径（原话）：面包屑不如两级页签；一级目录表达业务大类、二级目录表达该业务下的功能页面，
+**页面内容始终跟着二级目录**；「下面页面不变」要理解成"页面布局不变"，不是业务内容不变
+（否则导航和实际页面对不上，用户会以为切换失败）。
+
+```text
+一级目录：[估值] [审核] [其他业务]
+二级目录：[房地产] [土地] [机器设备]      （估值）
+          [报告审核] [本地审核]          （审核）
+页面内容：跟着二级目录换（标题也按它给：估值 / 房地产 → 「房地产估值」）
+```
+
+> [!IMPORTANT]
+> **2026-10-13 修订（协议 33）**：上面的"一棵混着的树"已经改成**按模块分属的两棵树**。
+> 进入「报告评估」时一级目录**只有「估值」**（不再出现「审核」）；进入「报告审核」时一级目录
+> **只有「审核」**。「其他业务」的元数据留着，但底下一个业务项都没配置，所以**不画**（不留空占位入口）。
+> 模块归属写在 `NAVIGATION` 的 `module` 字段上，`parentNodes(module)` 读它 —— 不是页面里按字符串过滤。
+> 另外，内容区外壳不重建，所以**页面身份变化时要归零滚动位置**（`pageIdentityOf()`）。
+
+- **结构只有一份来源**：`src/client/shell/navigation.ts` 的 `NAVIGATION`（一级 / 二级、顺序、
+  可用性、页面 id、页面标题）。组件里不再有"现在是哪一页"的 if。
+  **门禁判据仍从 `MODULE_META` 派生**（`requiresEnvironmentOf` / `requirementOfNode`），
+  所以"导航说能进、门禁说不能进"不会分叉。
+- **切换是一次状态更新**：`module-store.navigateParent()` 在同一处算完"一级 + 二级 + 正文"，
+  一次 `emit` 改完整组。用户点一级目录时默认选中该目录下**第一个可用页面**，**不记忆**上一次的
+  二级页面；`enabled: false` 的二级目录显示为灰态「开发中」且不可进入；一级目录下没有可用页面时
+  正文说一句「该业务目录暂未开放」。
+- **环境信息不在目录树里**：它是外层门禁态（环境没过时的统一落点，也是员工自己去看配置的入口），
+  不占页签；从它回工作台给一颗「返回工作台」。环境通过后估值 / 审核页面不再展示任何环境信息。
+- **侧栏那张分组卡不动**：那三行仍然是**模块入口**（报告评估 / 报告审核 / 环境信息），
+  点「报告评估」= 估值 / 房地产，点「报告审核」= 审核 / 报告审核（既有习惯不变），
+  点「环境信息」= 外层环境页。面板内部的两级目录才是这次新增的导航。
+- **每棵树只含自己那个模块的业务**（2026-10-13 修订）：一级目录声明 `module`，评估树里不会出现
+  「审核」、审核树里也不会出现「估值」—— 一个模块里出现另一个模块的入口，用户看不出自己在哪。
+  报告审核 / 本地审核由侧栏「报告审核」进入，它们的二级目录单独维护。
+- **布局稳定**：目录条长在滚动容器（`.crwu-audit-tab-panel`）外面，所以它始终留在页面顶部；
+  内容区是同一个元素、同一个高度，切换目录**不重建**（滚动位置与宽度都不跳）。
+  审核那两页在内容区里共用一张纸（`.crwu-audit-page-paper`），纸里那层 surface 不画第二层框。
+- **草稿与运行态**：估值控制器仍在 `apply()` 层（切目录不丢已选资料 / 方法 / 基准日 / 补充要求）；
+  估值阶段轮询由**面板**持有（只在 queued / running / 等登录时开定时器），切到别的目录不会停 ——
+  顺带修掉 `controller.poll()` 从未被调用、页面永远停在「估值进行中」的缺陷。
+
+判据：`tests/unit/client/client-module-gate.test.mjs`（元数据 + 落点 + 门禁，
+含"一次通知改完整组""默认选第一个可用页面""开发中不可进入""空目录"）、
+`tests/unit/client/client-package.test.mjs`（面板级渲染：两级页签结构与切换、空目录、开发中、
+估值页不展示环境信息、切目录不丢草稿、轮询不被切目录停掉）、
+`tests/unit/client/client-local-audit.test.mjs`（纸里只有一层框 / 内容区是唯一滚动容器）、
+`install/browser-check.mjs`（真机：一级 44px + 3px 强调线、二级更轻的胶囊、`aria-controls`
+指向同一内容区、纸里的 surface 不画第二层框）。

@@ -1,0 +1,373 @@
+/**
+ * 第 5 层（零碎操作）的单元测试。
+ *
+ * 重点有两个：
+ * 1. **`openPath` 的目录包含检查**：没有它，面板就成了「让宿主机用默认程序打开任意路径」
+ *    的入口。要能反向失败 —— 案例根目录之外的文件必须被拒。
+ * 2. **提权命令必须带工作目录**：DSH 拒绝无工作区的提权执行，漏传会静默变成「命令失败」。
+ */
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+const ROOT = new URL('../../../', import.meta.url)
+const { makeTestAccess, TEST_HOME } = await import(new URL('tests/helpers/local-access-broker-fixture.mjs', ROOT).href)
+
+const { clipboard, openPath, dwsLogin, relogin, sessionStatus, ossCred, bindH3yunSession } = await import(
+  new URL('src/host/core/system/ops.ts', ROOT).href
+)
+const { sessionView, isExpired, parseSessionOutput } = await import(new URL('src/host/integrations/h3yun/session.ts', ROOT).href)
+const { createWorkbenchState } = await import(new URL('src/host/core/state/store.ts', ROOT).href)
+
+const CONFIG = {
+  caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
+  ossBucket: '', ossPrefix: '', ossEndpoint: '', ossLinkMode: 'signed', ossLinkTtlSeconds: 3600,
+  autoUpload: true, requireTopLevelParent: true,
+}
+
+/** ctx：shell 记录命令与 spec，fs 提供 stat/contains/readText。 */
+function makeCtx({ shell, inside = () => true, files = {}, dirs = [] } = {}) {
+  const commands = []
+  const specs = []
+  const directories = new Set(dirs)
+  return {
+    commands,
+    specs,
+    get(name) {
+      if (name === 'shell') {
+        return {
+          resolve(request) { specs.push(request); return request },
+          async execute(spec) {
+            commands.push(spec.command)
+            const out = shell === undefined ? { stdout: '' } : shell(spec.command, spec)
+            return { result: async () => ({
+              // 注意不能用 `?? 0`：`exitCode: null`（进程被信号杀死）会被当成 0，
+              // 于是「超时/被杀」在测试里变成成功。用属性存在性判断。
+              exitCode: 'exitCode' in out ? out.exitCode : 0,
+              signal: null, timedOut: out.timedOut === true, aborted: false, timeoutMs: 1,
+              stdout: { text: out.stdout ?? '', truncated: false },
+              stderr: { text: out.stderr ?? '', truncated: false },
+              // 沙箱事实按**服务形状**透传（`{ mode, denied, runnerFailed }`）；不给就是不上沙箱。
+              ...(out.sandbox === undefined ? {} : { sandbox: out.sandbox }),
+            }) }
+          },
+        }
+      }
+      if (name === 'fs') {
+        return {
+          async resolve(path) { return { targetKey: String(path).replace(/[\\/]+$/, ''), displayPath: path } },
+          async stat(target) {
+            if (directories.has(target.targetKey)) return { type: 'directory' }
+            return files[target.targetKey] === undefined ? undefined : { type: 'file' }
+          },
+          async readText(target) { return files[target.targetKey] ?? '' },
+          async writeText(target, content) { files[target.targetKey] = content; return { operation: 'update', version: 'v', before: null, after: content } },
+          async listDir() { return [] },
+          contains(parent, child) { return inside(parent, child) },
+        }
+      }
+      return undefined
+    },
+  }
+}
+
+function depsOf(ctx, patch = {}) {
+  const state = { ...createWorkbenchState(CONFIG), workspacePath: '/cases', caseRoot: '/cases', workspaceChosen: true, ...patch.state }
+  return { ctx, state, access: makeTestAccess(ctx).access, platform: patch.platform ?? 'darwin-arm64', workdir: async () => patch.workdir ?? '/cases/session' }
+}
+
+// ── 会话解析 ────────────────────────────────────────────────────────────────
+
+test('sessionView narrows the crwu envelope and tolerates junk', () => {
+  assert.deepEqual(sessionView({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z', expiresIn: '1h' } }),
+    { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z', expiresIn: '1h' })
+  assert.equal(sessionView({ data: null }), null)
+  assert.equal(sessionView({}), null)
+  assert.equal(sessionView(null), null)
+  assert.equal(parseSessionOutput('{oops'), null)
+  assert.equal(parseSessionOutput('{"data":{"userId":"u"}}').userId, 'u')
+})
+
+test('isExpired only judges when a parseable expiry is present', () => {
+  const now = Date.parse('2026-09-20T00:00:00Z')
+  assert.equal(isExpired({ userId: '', expiresAt: '2026-09-19T00:00:00Z', expiresIn: '' }, now), true)
+  assert.equal(isExpired({ userId: '', expiresAt: '2026-09-21T00:00:00Z', expiresIn: '' }, now), false)
+  // 解析不出时间时不算过期：宁可让用户去试，也不要误报成「未登录」。
+  assert.equal(isExpired({ userId: '', expiresAt: 'not-a-date', expiresIn: '' }, now), false)
+  assert.equal(isExpired({ userId: '', expiresAt: '', expiresIn: '' }, now), false)
+  assert.equal(isExpired(null, now), false)
+})
+
+// ── clipboard ───────────────────────────────────────────────────────────────
+
+test('clipboard sends the text on stdin, never as an argument', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: '' }) })
+  const result = await clipboard(depsOf(ctx), { text: '请审核这条报告 $(rm -rf /) `id`' })
+  assert.equal(result.ok, true)
+  // 内容拼进命令行会被 shell 解释 —— 必须走 stdin。
+  assert.deepEqual(ctx.specs[0].stdin, '请审核这条报告 $(rm -rf /) `id`')
+  assert.equal(ctx.specs[0].command, 'pbcopy')
+  assert.equal(ctx.specs[0].command.includes('rm -rf'), false)
+})
+
+test('clipboard picks the platform command and refuses empty content', async () => {
+  const mac = makeCtx({ shell: () => ({ stdout: '' }) })
+  await clipboard(depsOf(mac), { text: 'x' })
+  assert.equal(mac.commands[0], 'pbcopy')
+
+  const win = makeCtx({ shell: () => ({ stdout: '' }) })
+  await clipboard(depsOf(win, { platform: 'win32-x64' }), { text: 'x' })
+  assert.equal(win.commands[0], 'clip')
+
+  const linux = makeCtx({ shell: () => ({ stdout: '' }) })
+  await clipboard(depsOf(linux, { platform: 'linux-x64' }), { text: 'x' })
+  assert.match(linux.commands[0], /xclip/)
+
+  const empty = makeCtx({ shell: () => ({ stdout: '' }) })
+  assert.match((await clipboard(depsOf(empty), { text: '' })).error, /没有内容/)
+  assert.equal(empty.commands.length, 0)
+})
+
+test('clipboard reports a failing command instead of pretending success', async () => {
+  const ctx = makeCtx({ shell: () => ({ exitCode: 1, stderr: 'pbcopy: not found' }) })
+  const result = await clipboard(depsOf(ctx), { text: 'x' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /not found/)
+})
+
+// ── open-path：安全边界 ─────────────────────────────────────────────────────
+
+test('openPath refuses a file outside the case root', async () => {
+  // 没有这条检查，面板就是「用默认程序打开任意路径」的入口。
+  const ctx = makeCtx({
+    shell: () => ({ stdout: '' }),
+    inside: () => false,
+    files: { '/etc/passwd': { type: 'file' } },
+  })
+  const result = await openPath(depsOf(ctx), { path: '/etc/passwd' })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /只允许打开案例根目录内的文件/)
+  assert.equal(ctx.commands.some((command) => command.startsWith('open')), false, '被拒时不得执行打开命令')
+})
+
+test('openPath：案例根未知时**必须 fail closed**（不许退化成"任意路径都能打开"）', async () => {
+  // 2026-09-29 复查：`openPath` 的注释写着「只允许打开案例根目录内的文件」，但实现是
+  // `if (root !== '') { …包含检查… }` —— 案例根拿不到时**整段检查被跳过**，
+  // 于是"没有工作空间"这件事反而让边界消失：面板仍能用系统默认程序打开任意文件
+  //（macOS 上 `open` 一个 app 就等于启动它）。正确行为是拒绝。
+  const touched = []
+  const ctx = makeCtx({
+    shell: () => ({ stdout: '' }),
+    inside: () => { throw new Error('案例根未知时不该走到包含检查') },
+    files: { '/etc/passwd': { type: 'file' } },
+  })
+  // 记录对**目标**做过的 fs 探测：这是本用例可证伪的那一半 ——
+  // 当前实现里"案例根未知"这层判断排在 `resolve`/`stat` **之前**，
+  // 把判断挪到后面（或删掉显式拒绝、让 Broker 兜底）都会在这里留下痕迹。
+  const raw = ctx.get
+  ctx.get = (name) => {
+    const fs = raw(name)
+    if (name !== 'fs') return fs
+    return {
+      ...fs,
+      async resolve(path, opts) { touched.push(`resolve:${String(path)}`); return fs.resolve(path, opts) },
+      async stat(target) { touched.push(`stat:${target.targetKey}`); return fs.stat(target) },
+    }
+  }
+  // state 里没有工作空间、也没有案例根 → `defaultCaseRoot` 只剩 session 根兜底，
+  // 这里把 session 根也置空，模拟"还没选定工作空间"的现场。
+  const deps = depsOf(ctx, { state: { workspacePath: '', caseRoot: '', workspaceChosen: false }, workdir: '' })
+  const result = await openPath(deps, { path: '/etc/passwd' })
+  assert.equal(result.ok, false, '案例根未知时必须拒绝')
+  assert.match(result.error, /工作空间|案例根|范围未确定/)
+  assert.deepEqual(touched, [], '案例根未知时**不许对目标做任何 fs 探测**（判据必须在最前面）')
+  assert.equal(ctx.commands.some((command) => command.startsWith('open')), false, '被拒时不得执行打开命令')
+})
+
+test('openPath opens a file inside the case root', async () => {
+  const ctx = makeCtx({
+    shell: () => ({ stdout: '' }),
+    inside: () => true,
+    files: { '/cases/S1/审核意见.S1.html': { type: 'file' } },
+  })
+  const result = await openPath(depsOf(ctx), { path: '/cases/S1/审核意见.S1.html' })
+  assert.equal(result.ok, true)
+  assert.equal(result.platform, 'darwin-arm64')
+  assert.match(ctx.commands[0], /^open /)
+})
+
+test('openPath refuses a directory and a missing path', async () => {
+  const dir = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true, dirs: ['/cases/S1'] })
+  assert.match((await openPath(depsOf(dir), { path: '/cases/S1' })).error, /目标不是文件/)
+
+  const missing = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true })
+  assert.match((await openPath(depsOf(missing), { path: '/cases/S1/none.html' })).error, /目标不是文件/)
+
+  const empty = makeCtx({ shell: () => ({ stdout: '' }) })
+  assert.match((await openPath(depsOf(empty), { path: '' })).error, /缺少路径/)
+})
+
+test('openPath picks the platform opener', async () => {
+  const files = { '/cases/a.html': { type: 'file' } }
+  const win = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true, files })
+  await openPath(depsOf(win, { platform: 'win32-x64' }), { path: '/cases/a.html' })
+  // PowerShell 里 `cmd /c start "" <path>` 会引入第二套引号解析；`Start-Process -FilePath` 才是原生写法。
+  assert.match(win.commands[0], /^Start-Process -FilePath '/)
+
+  const linux = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true, files })
+  await openPath(depsOf(linux, { platform: 'linux-x64' }), { path: '/cases/a.html' })
+  assert.match(linux.commands[0], /^xdg-open /)
+})
+
+test('every escalated command carries a working directory', async () => {
+  // DSH 拒绝「无工作区的提权执行」；漏传会静默变成命令失败。
+  const ctx = makeCtx({ shell: () => ({ stdout: '' }), inside: () => true, files: { '/cases/a.html': { type: 'file' } } })
+  const deps = depsOf(ctx)
+  await clipboard(deps, { text: 'x' })
+  await openPath(deps, { path: '/cases/a.html' })
+  await dwsLogin(deps, {}, TEST_HOME)
+  for (const spec of ctx.specs) {
+    assert.equal(spec.sandboxPolicy?.mode, 'danger-full-access', `${spec.command} 应当在沙箱外执行`)
+    assert.equal(spec.sandboxPolicy.workspaceRoot, '/cases/session', `${spec.command} 的提权必须绑工作区`)
+  }
+})
+
+// ── 登录与会话 ──────────────────────────────────────────────────────────────
+
+test('dwsLogin 只跑 `dws auth login`（系统浏览器），**没有**设备码分支，并只回尾部', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: 'x'.repeat(900) + 'TAIL', stderr: 'err' }) })
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
+  assert.equal(result.ok, true)
+  assert.match(ctx.commands[0], /dws auth login/)
+  assert.equal(result.stdoutTail.endsWith('TAIL'), true)
+  assert.ok(result.stdoutTail.length <= 600, '只回尾部，避免把整段输出塞进响应')
+
+  // 2026-09-30：DSH 不再提供设备码登录 —— 即使调用方传 `device: true`（旧客户端），
+  // 也**不会**拼出 `--device`（需要设备码的走终端里的 CLI）。
+  const legacy = makeCtx({ shell: () => ({ stdout: '' }) })
+  await dwsLogin(depsOf(legacy), { device: true }, TEST_HOME)
+  assert.equal(legacy.commands[0].includes('--device'), false, '插件不提供设备码登录')
+})
+
+test('dwsLogin surfaces a timeout instead of a silent failure', async () => {
+  const ctx = makeCtx({ shell: () => ({ exitCode: null, timedOut: true, stderr: 'timeout' }) })
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.timedOut, true)
+})
+
+test('relogin runs the whitelisted crwu session login and parses the session', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: JSON.stringify({ data: { userId: 'u1', expiresAt: '2099-01-01T00:00:00Z' } }) }) })
+  const result = await relogin(depsOf(ctx), TEST_HOME)
+  assert.equal(result.ok, true)
+  // 现在命令前面还有"建 scratch 目录 + 指临时目录"这一段，所以用 includes 而不是行首匹配。
+  assert.match(ctx.commands[0], /crwu h3yun session login/)
+  assert.equal(result.session.userId, 'u1')
+  // 成功时不许出现归因文案（否则界面会把一次成功显示成沙箱问题）。
+  assert.equal(result.sandboxBlocked, false)
+  assert.equal(result.error, '')
+})
+
+// ── 登录命令的形状（协议 22 起：DSH 只触发 CLI，不自己指定目录 / 不提供设备码）────
+
+test('登录命令不再替 CLI 指定任何目录（临时目录与配置目录都用默认）', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: '' }) })
+  await relogin(depsOf(ctx), TEST_HOME)
+  const command = ctx.commands[0]
+  // 2026-09-29 决定：自指定目录那条通道整体下掉 —— 换目录解决不了"机器按程序拦子进程"的问题
+  // （三个位置都试过，见 docs/development-notes.md §16），所以命令形状回到 CLI 默认：
+  // 既不写 TMPDIR/TEMP，也不写 DWS_CONFIG_DIR。
+  assert.equal(command.includes('TMPDIR'), false)
+  assert.equal(command.includes('TEMP='), false)
+  assert.equal(command.includes('DWS_CONFIG_DIR'), false)
+  assert.match(command, /crwu h3yun session login/)
+})
+
+test('relogin：策略允许但机器拒绝时，不许叫人去切权限', async () => {
+  // 2026-09-29 Windows 实测原文：宿主按完全访问跑（诊断里 requested=resolved=ran=danger-full-access、
+  // denied=false），这台机器仍然拒绝临时 profile 目录。这一支**切权限没有用**，必须说清。
+  const ctx = makeCtx({
+    shell: () => ({ exitCode: 1, stderr: 'mkdir C:\\Users\\51019\\AppData\\Local\\Temp\\crwu-scan-1799287186: Access is denied.' }),
+  })
+  const result = await relogin(depsOf(ctx), TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.sandboxBlocked, true)
+  assert.match(result.error, /被这台机器拒绝/)
+  // 实测：切【DSH 访问模式】没用，但**提权**有用 —— 文案必须给提权这条路，且不许再叫去切访问模式。
+  assert.match(result.error, /以管理员身份运行/)
+  assert.doesNotMatch(result.error, /选「完全权限」/)
+  // 原始报错要留着：丢掉原因比多一句话更难查。
+  assert.match(result.error, /crwu-scan-1799287186/)
+})
+
+test('relogin：提权被降级时才让他去切「完全权限」', async () => {
+  // 结构化事实说降级：这一支切权限**才**有用。宿主替身按服务形状回 sandbox 事实。
+  const ctx = makeCtx({
+    // 服务形状：`mode` 是**实际**跑的模式；请求的 danger-full-access 由 runShell 自己拼进 resolved。
+    shell: () => ({ exitCode: 1, stderr: '', sandbox: { mode: 'workspace-write', denied: false, runnerFailed: false } }),
+  })
+  const result = await relogin(depsOf(ctx), TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.match(result.error, /被文件策略挡在工作区之外/)
+  assert.match(result.error, /完全权限/)
+})
+
+test('dwsLogin attributes the .dws lock denial instead of echoing the CLI', async () => {
+  const ctx = makeCtx({
+    shell: () => ({
+      exitCode: 2,
+      stderr: '{"error":{"category":"auth","code":2,"message":"acquiring file lock: opening lock file: open C:\\\\Users\\\\51019\\\\.dws\\\\.data.lock: Access is denied."}}',
+    }),
+  })
+  const result = await dwsLogin(depsOf(ctx), { device: true }, TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.sandboxBlocked, true)
+  assert.match(result.error, /被这台机器拒绝/)
+  // 设备码那条要抢同一个锁：动作里必须点明它**不是**绕过办法。
+  assert.match(result.advice, /设备码登录/)
+  assert.match(result.advice, /不是绕过办法/)
+})
+
+test('dwsLogin keeps a genuine business failure as-is (no sandbox claim)', async () => {
+  const ctx = makeCtx({ shell: () => ({ exitCode: 1, stderr: 'no supported browser found; install Chrome/Edge or set CRWU_BROWSER' }) })
+  const result = await dwsLogin(depsOf(ctx), {}, TEST_HOME)
+  assert.equal(result.ok, false)
+  assert.equal(result.sandboxBlocked, false)
+  assert.equal(result.advice, '')
+  assert.match(result.error, /no supported browser found/)
+})
+
+test('sessionStatus reports the failure reason when crwu cannot answer', async () => {
+  const ctx = makeCtx({ shell: () => ({ exitCode: 1, stderr: 'no session' }) })
+  const result = await sessionStatus(depsOf(ctx))
+  assert.equal(result.ok, false)
+  assert.match(result.error, /no session/)
+  assert.equal(result.session, null)
+})
+
+test('sessionStatus parses a healthy session', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: JSON.stringify({ data: { userId: 'u9', expiresAt: '2099-01-01T00:00:00Z' } }) }) })
+  const result = await sessionStatus(depsOf(ctx))
+  assert.equal(result.ok, true)
+  assert.equal(result.session.userId, 'u9')
+})
+
+// ── oss-cred ────────────────────────────────────────────────────────────────
+
+test('ossCred returns a masked view and never the secret', async () => {
+  const files = { '/Users/x/.ossutilconfig': 'accessKeyID=AKID1234567890\naccessKeySecret=TOPSECRET\n' }
+  const ctx = makeCtx({ shell: () => ({ stdout: '' }), files })
+  const result = await ossCred(depsOf(ctx), '/Users/x')
+  assert.equal(result.ok, true)
+  assert.equal(result.cred.exists, true)
+  assert.equal(result.cred.hasSecret, true)
+  assert.equal(result.cred.accessKeyIdMasked, 'AKID****7890')
+  assert.equal(JSON.stringify(result).includes('TOPSECRET'), false)
+})
+
+test('ossCred reports a missing config without throwing', async () => {
+  const ctx = makeCtx({ shell: () => ({ stdout: '' }) })
+  const result = await ossCred(depsOf(ctx), '/Users/x')
+  assert.equal(result.ok, true)
+  assert.equal(result.cred.exists, false)
+  assert.equal(result.cred.path, '/Users/x/.ossutilconfig')
+})

@@ -5,7 +5,7 @@ import { basenameLocalPath, joinLocalPath } from './local-path.ts'
  * 一条报告的**案例目录**：`<工作空间>/<流水号>`（Windows 上是 `<工作空间>\<流水号>`）。
  *
  * 这是 Host 与 Client 都依赖的唯一约定，所以只在这里定义一次：
- * - Host 的审核提示词拿它告诉审核子代理「本案例目录必须是 …」（`host/audit/prompt.ts`）；
+ * - Host 的审核提示词拿它告诉审核子代理「本案例目录必须是 …」（`host/domains/report-audit/prompt.ts`）；
  * - Client 的讨论 / 分析提示词拿它告诉模型「下载与读取只允许在这个目录里」。
  *
  * **为什么必须共用一份**：2026-09-25 实测到漂移的代价 —— 审核链路一直用

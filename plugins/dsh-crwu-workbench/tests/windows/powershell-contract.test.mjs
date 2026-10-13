@@ -32,9 +32,9 @@ const {
   removeFileCommand,
   shellInvoke, shellQuote, capturePowerShellNativeCommand, nativeCaptureNeeded, statOwnerModeCommand,
   windowsAclVerdictCommand, windowsModifyProbeCommand,
-} = await import(new URL('../../src/host/platform/shell.ts', import.meta.url).href)
+} = await import(new URL('../../src/host/core/platform/shell.ts', import.meta.url).href)
 const { text } = await import(new URL('../../src/shared/utils/value.ts', import.meta.url).href)
-const { parseAclVerdict } = await import(new URL('../../src/host/dws/local.ts', import.meta.url).href)
+const { parseAclVerdict } = await import(new URL('../../src/host/integrations/dws/local.ts', import.meta.url).href)
 
 /** 参数里把所有会出问题的形状都放进来：空格、单引号、`$`、反引号、方括号、中文、分号、命令替换。 */
 const TRICKY_ARG = "Case's $work [1] 中文 `id` $(echo pwned) ; echo INJECTED"

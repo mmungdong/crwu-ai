@@ -27,6 +27,8 @@
 |---|---|---|
 | `H3YUN_BASE_URL` | 覆盖氚云控制台地址（测试用） | `https://www.h3yun.com` |
 | `H3YUN_TOKEN` | 仅 **agent 通道**命令用（见 §6） | 无 |
+| `CRWU_BROWSER` | `crwu browser` 使用的 Chromium 系浏览器可执行文件 | 自动探测 Edge/Chrome |
+| `CRWU_BROWSER_PROFILE` | 浏览器 profile 目录（登录态所在） | `~/.crwu/browser/profile` |
 
 ## 3. 上手：绑定员工会话（一次性，每台机器每员工一次）
 
@@ -141,6 +143,38 @@ crwu h3yun session bind --token-stdin   # 从管道、密钥管理器或粘贴�
 | `crwu h3yun apps search --keyword <名称>` | 按关键字搜应用（网关工具） |
 | `crwu h3yun records query --schema <编码> --sql <只读SELECT>` | 受控只读 SQL 查询 |
 
+### 浏览器抓取（`browser`）
+
+开一个**真实可见**的浏览器读页面。CLI 不内置任何站点：站点清单由 `--sites` 指向的 JSON 给出。
+登录态存在 `~/.crwu/browser/profile`（权限 0700），**下次不用重登**。
+
+| 命令 | 说明 |
+|---|---|
+| `crwu browser profile` | 显示 profile 路径与是否存在（不启动浏览器） |
+| `crwu browser login --sites <文件> [--site <id>] [--timeout 5m]` | 打开**可见窗口**到各站登录页，等员工完成登录（含滑块）。全部站点登录成功才算通过 |
+| `crwu browser status --sites <文件> [--site <id>]` | 逐站报告 `authenticated` / `unauthenticated` / `unknown` |
+| `crwu browser fetch --url <地址> --out <文件> [--wait-ms 9000] [--scroll] [--dump <文件>]` | 取**渲染后**的 DOM 写文件 |
+| `crwu browser shot --url <地址> --out <文件> [--full-page] [--scroll] [--dump <文件>]` | 全页截图写文件 |
+
+站点清单 JSON 形状：
+
+```json
+[
+  {
+    "id": "ke",
+    "label": "贝壳",
+    "loginUrl": "https://clogin.ke.com/login",
+    "protectedUrl": "https://bj.ke.com/ershoufang/chaoyang/",
+    "authCookie": "lianjia_token",
+    "authDomains": [".ke.com"]
+  }
+]
+```
+
+**产物纪律**：页面被判为登录墙 / 验证码 / 拦截时，`--out` **不写**（避免把验证页当成房源页存证）；
+`--dump` 不受此限制，用于留下现场 DOM 排障。截图还会做真伪校验（尺寸 + 非白像素占比），
+空白页或验证页一律判失败。
+
 ### 通用
 
 | 命令 | 说明 |
@@ -179,6 +213,11 @@ crwu h3yun file get      --id <FileId> --out ./附件/估值报告.pdf
 | Agent 网关 | 个人访问凭证 `h3pat_*` | ⏳ 若氚云未开通数据面，任意 `tools/call` 会返回 `h3yun.read.upstream_error`（上游响应异常）——**这是氚云平台侧问题，不是客户端故障**，重试无意义，找氚云开通即可 |
 
 已知坑：
+- `crwu browser` **只支持有头浏览器**：无头 Chromium 会被链家/贝壳的指纹识别拦下，没有无头模式。
+  为在 DSH 文件沙箱下启动，浏览器以 `--no-sandbox` 运行。
+- `crwu browser` **不做任何验证码 / 滑块绕过**：遇到验证请在那个可见窗口里人工完成。
+- `unknown` ≠ 未登录：网络不通、出口 IP 在境外、页面被人机验证时都返回 `unknown`，
+  不要据此让员工反复重登。
 - 单条"详情"务必用 `records get`（走过滤查询）；氚云 `loaddata` 接口会返回空壳，不要用。
 - 附件下载 URL 为 `www.h3yun.com/Form/Download/?AttachmentID=<FileId>`，需带会话鉴权；`file download`（整单）与 `file get`（单件，按 FileId）均已封装。
 - 记录字段输出含 `*_Original` 冗余结构属正常；人员/部门字段同时有 `*_Name` 可读名。
@@ -188,5 +227,8 @@ crwu h3yun file get      --id <FileId> --out ./附件/估值报告.pdf
 
 - 输出：成功 = 退出码 0，stdout 为 `{"ok":true,"data":...}` 纯 JSON；任何错误（含必填参数缺失等用法错误）均退出码 1，诊断在 stderr。
 - 需要发现命令时先跑 `crwu scheme`，不要凭记忆调用参数。
-- 本 CLI 当前**全部为只读操作**；未来加入写/审批命令后，执行前必须先向用户声明并等确认。
+- 本 CLI 对企业系统**全部为只读操作**；未来加入写/审批命令后，执行前必须先向用户声明并等确认。
+- 例外说明：`crwu browser fetch/shot` 会**在本地写文件**（`--out`/`--dump`），
+  `crwu browser login` 会开一个可见浏览器窗口——这两者都不是对企业系统的写操作，
+  但调用前仍应让用户知道会落盘到哪里。
 - token 不得出现在任何工具输出/日志/会话记录里；若需重绑请用户自己执行 bind。

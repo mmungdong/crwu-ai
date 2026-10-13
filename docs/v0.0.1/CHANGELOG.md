@@ -7,6 +7,15 @@
 > 条目格式：`日期 · 类型 · 标题`，类型沿用 Angular 词表（feat / fix / refactor /
 > docs / chore），正文写明**影响命令**与关键说明。
 
+## 2026-10-13 · feat(cli) · 新增 `crwu browser` 通用浏览器抓取能力
+
+- **影响**：新增顶层命令 `crwu browser` 及其五个子命令（`profile` / `login` / `status` / `fetch` / `shot`）；不改变任何既有命令的参数或输出。
+- **行为**：开真实（有头）Chromium，经 CDP 读取渲染后的 DOM 与全页截图。站点清单由 `--sites <文件>` 提供，CLI **不内置任何站点语义**；登录态落在 `~/.crwu/browser/profile`（0700），`login` 打开可见窗口等员工完成登录，超时**保留窗口**。
+- **登录判定**：双轨。cookie 存在性做快判，访问受保护页面做**权威判定**，输出三态 `authenticated` / `unauthenticated` / `unknown`；`unknown` 与 `unauthenticated` 语义不同（前者是「查不出来」，不该让员工重登）。
+- **纪律**：不实现任何验证码 / 滑块绕过；cookie 值不出现在任何输出、日志或错误里；页面被判为登录墙/验证码/拦截时**不写 `--out`**（`--dump` 可另存现场 DOM 排障）；截图写盘前做真伪校验（尺寸 + 非白像素占比）。
+- **环境变量**：新增 `CRWU_BROWSER`（浏览器可执行文件）、`CRWU_BROWSER_PROFILE`（profile 目录）。
+- **平台说明**：只支持**有头**浏览器（无头会被站点指纹识别拦下）；为在 DSH 文件沙箱下启动，以 `--no-sandbox` 运行。
+
 ## 2026-10-05 · fix(plugin) · 普通 DSH 新会话支持完整手工审核（插件 0.0.40，协议 26）
 
 - **影响**：脚本运行、知识库材料化、氚云附件下载、OSS 发布、钉钉归档/本人通知以及登记讨论会话的记录/附件清单查询；无 CLI 命令或 Tool 参数变更。

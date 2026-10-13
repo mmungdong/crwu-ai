@@ -34,6 +34,7 @@ const REPO = dirname(dirname(ROOT))
 /** 受本守卫约束的技能根（相对插件目录）。公共层是源仓里的同一份。 */
 const SCAN_ROOTS = [
   { path: join(ROOT, 'skills', 'crwu'), label: 'skills/crwu' },
+  { path: join(ROOT, 'skills', 'biz'), label: 'skills/biz' },
   { path: join(REPO, 'plugins', 'common', 'skills'), label: 'plugins/common/skills' },
 ]
 

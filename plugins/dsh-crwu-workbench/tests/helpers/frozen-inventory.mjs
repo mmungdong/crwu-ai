@@ -9,7 +9,7 @@
  *   装出来的包）**共用同一份名字清单**，两处一起红或一起绿；
  * - 数量只出现一次（本文件），改名/加工具时改这里一处，忘记改就会被两条断言同时拦住。
  */
-import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_CHILD_TOOLS, REQUIRED_AUDIT_TOOLS } from '../../src/host/tools/consts.ts'
+import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_CHILD_TOOLS, REQUIRED_AUDIT_TOOLS } from '../../src/host/tools/report-audit/consts.ts'
 
 /**
  * 插件**注册**的全部业务 Tool：**逐字**照 `CRWU_BUSINESS_TOOLS`（单一事实源在源码里）。
@@ -61,6 +61,11 @@ export const FROZEN_OPERATIONS = [
   // 在对话里认领。它**不判环境门禁**（本地审核的意义就是不需要氚云 / OSS / 工作空间），
   // 唯一的前置是本机访问授权（由 Broker 的操作表判）。
   'local-audit-status', 'local-audit-start', 'local-audit-claim',
+  // 第 43~50 个：**报告评估（房地产估值）**（协议 32）。本机选择扫描 / 资料入口（建目录 + 复制 +
+  // 清单 + 提取）/ 外部来源预检（可代开默认浏览器登录）/ 冻结快照并启动 / 状态 / 取消 / 结果 /
+  // 打开交付件。落点一律走统一会话服务（`workspaceId`），没有 `cwd` 兜底。
+  'valuation-files-scan', 'valuation-intake', 'valuation-browser-preflight', 'valuation-start',
+  'valuation-status', 'valuation-cancel', 'valuation-result', 'valuation-open-artifact',
   // ⚠️ 协议 22（2026-09-30）**删掉**了 `browser-session-bind`（氚云内置浏览器扫码，协议 20）
   // 与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录，协议 21）：
   // DSH 只读取、检查已有凭据，登录由本机 CLI 打开系统浏览器完成。

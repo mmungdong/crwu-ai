@@ -15,7 +15,7 @@
  * | 二进制 | 来源 | 校验 |
  * | --- | --- | --- |
  * | `crwu` | 本仓构建产物 `bin/darwin/crwu`、`bin/windows/crwu.exe`（先跑 `make build`） | 无（自己构建） |
- * | `ossutil` | 阿里云官方包 | URL 与 sha256 直接取自 `src/host/environment/manifest-default.ts`，**同一事实源** |
+ * | `ossutil` | 阿里云官方包 | URL 与 sha256 直接取自 `src/host/core/environment/manifest-default.ts`，**同一事实源** |
  * | `dws` | npm 包 `dingtalk-workspace-cli` 的 `assets/dws-*` | 对照包内 `assets/checksums.txt` |
  *
  * **软链接进不了包**：npm 打包会**静默丢掉**符号链接（实测：放进去的相对/绝对链接都不在 tarball 里，

@@ -1,4 +1,4 @@
-import type { EnvManifest } from '../environment/manifest-default.ts'
+import type { EnvManifest } from '../core/environment/manifest-default.ts'
 import type { WorkbenchConfig } from './config.ts'
 
 /**

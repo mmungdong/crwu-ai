@@ -1,0 +1,138 @@
+import type { Context } from '@deepseek-ai/cordis'
+import type { LocalAccessBroker } from '../../core/access/broker.ts'
+import type { LocalAccessSource } from '../../core/access/operations.ts'
+import { text } from '../../../shared/utils/value.ts'
+import { joinLocalPath } from '../../../shared/utils/local-path.ts'
+import { isWindowsPlatform } from '../../core/platform/detect.ts'
+import { expandLocal } from '../../core/platform/home.ts'
+import { fileSystem, resolveTarget } from '../../core/fs/paths.ts'
+import { maskKey } from '../h3yun/fields.ts'
+
+/**
+ * `~/.ossutilconfig` 的读写。
+ *
+ * 两条硬约束（`AGENTS.md` §4.3）：AccessKey/STS **绝不回显** —— 读只回脱敏与「有没有」；
+ * 写完之后也不回读内容，只回路径与是否成功。文件按 600 权限落盘。
+ */
+
+/**
+ * ossutil 配置文件的路径：跟着主目录走，不写死。
+ *
+ * 分隔符随主目录风格（Windows 上是 `\`）：这条路径既进提示词与界面，也进 `chmod` / 读取命令。
+ */
+export function ossConfigPath(home: string): string {
+  if (home === '') return '~/.ossutilconfig'
+  return joinLocalPath(home, '.ossutilconfig')
+}
+
+/** 解析 ossutil 的 INI 风格配置：`key=value`，忽略注释与段名，键小写。 */
+export function parseOssConfig(content: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of text(content).split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith('[')) continue
+    const at = trimmed.indexOf('=')
+    if (at <= 0) continue
+    out[trimmed.slice(0, at).trim().toLowerCase()] = trimmed.slice(at + 1).trim()
+  }
+  return out
+}
+
+export interface OssCredView {
+  path: string
+  exists: boolean
+  endpoint: string
+  accessKeyIdMasked: string
+  hasSecret: boolean
+  hasSts: boolean
+  language: string
+  /**
+   * 读不到时的原因（未授权 / 文件不可读）。空串 = 正常读到了（或确实没有这个文件）。
+   *
+   * 未授权与"没有配置"必须分开说：把前者显示成后者，员工会去重新填一份他早就填好的密钥。
+   */
+  reason: string
+}
+
+/** 读取当前 AK 配置的**脱敏视图**；文件不存在时全部为空，不抛错。 */
+export async function readOssCred(
+  ctx: Context,
+  home: string,
+  options: { access: LocalAccessBroker; source?: LocalAccessSource; workdir?: string },
+): Promise<OssCredView> {
+  const path = ossConfigPath(home)
+  // **Host 侧门禁**（P-11）：`~/.ossutilconfig` 是本机凭据文件，读它要先过收据。
+  // 界面把入口禁掉只是体验，撤销之后直接调 RPC 也必须读不到任何东西。
+  const decision = options.access.authorize({
+    operation: 'oss.config.read',
+    source: options.source ?? 'panel',
+    workdir: options.workdir ?? home,
+  })
+  if (!decision.ok) {
+    return {
+      path, exists: false, endpoint: '', accessKeyIdMasked: '',
+      hasSecret: false, hasSts: false, language: '', reason: decision.error,
+    }
+  }
+  const view: OssCredView = {
+    path,
+    exists: false,
+    endpoint: '',
+    accessKeyIdMasked: '',
+    hasSecret: false,
+    hasSts: false,
+    language: '',
+    reason: '',
+  }
+  const fs = fileSystem(ctx)
+  if (fs === undefined) return view
+  try {
+    const target = await resolveTarget(ctx, path)
+    const info = await fs.stat(target)
+    if (info?.type !== 'file') return view
+    const config = parseOssConfig(await fs.readText(target))
+    view.exists = true
+    view.endpoint = text(config.endpoint)
+    view.accessKeyIdMasked = maskKey(config.accesskeyid)
+    view.hasSecret = text(config.accesskeysecret) !== ''
+    view.hasSts = text(config.ststoken) !== ''
+    view.language = text(config.language)
+  } catch (error) {
+    // 不存在或不可读都等价于「没有配置」；界面据 exists=false 引导用户填写。
+    void error
+  }
+  return view
+}
+
+export interface OssCredInput {
+  accessKeyId: string
+  accessKeySecret: string
+  endpoint?: string
+  language?: string
+  stsToken?: string
+}
+
+/**
+ * 生成 ossutil 配置文件内容。
+ *
+ * 只接受非空 AK：缺 secret 时**不写半份配置**（半份配置会让 ossutil 报一个和根因无关的错）。
+ */
+export function buildOssConfig(input: OssCredInput): { ok: boolean; error: string; content: string } {
+  const keyId = text(input.accessKeyId).trim()
+  const secret = text(input.accessKeySecret).trim()
+  if (keyId === '' || secret === '') {
+    return { ok: false, error: 'accessKeyId 和 accessKeySecret 都不能为空', content: '' }
+  }
+  const lines = ['[Credentials]', `language=${text(input.language) || 'CH'}`]
+  const endpoint = text(input.endpoint).trim()
+  if (endpoint !== '') lines.push(`endpoint=${endpoint}`)
+  lines.push(`accessKeyID=${keyId}`, `accessKeySecret=${secret}`)
+  const sts = text(input.stsToken).trim()
+  if (sts !== '') lines.push(`stsToken=${sts}`)
+  return { ok: true, error: '', content: `${lines.join('\n')}\n` }
+}
+
+/** 主目录展开：把配置里写的 `~/.ossutilconfig` 换成执行世界的绝对路径。 */
+export function resolveConfigPath(home: string, platform: string, path: string): string {
+  return path.startsWith('~') ? expandLocal(path, home, isWindowsPlatform(platform)) : path
+}

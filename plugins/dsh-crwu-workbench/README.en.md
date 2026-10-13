@@ -9,7 +9,18 @@ The **audit workbench** for DeepSeek Harness (DSH): self-check the environment �
 "报告审核" tasks from H3Yun → dispatch exactly one AI audit subagent → watch it, stop it, restart it →
 auto-upload deliverables to Aliyun OSS → open the cloud-hosted audit opinion.
 
-Next to the report-audit page there is a sibling tab, **本地审核 (local audit)**: pick local files or
+The workbench body opens with **two directory levels**, and there are **two separate trees — one per
+sidebar module**. Under **报告评估 (Report Evaluation)** the first level holds only **估值 (valuation)**
+(second level → 房地产 / 土地·in development / 机器设备·in development); under **报告审核 (Report Audit)**
+it holds only **审核 (audit)** (second level → 报告审核 / 本地审核). The page body and its title always
+follow the **second** level (估值 / 房地产 → 「房地产估值」); switching the first level replaces the second
+level and the body in **one** state update and defaults to the first enabled page. Module ownership lives in
+the navigation metadata, so the valuation tree never shows an audit entry and vice versa. A first-level
+directory with **no configured business item** (其他业务) is not drawn at all — no empty placeholder entry.
+**环境信息 (environment) is not a directory page**: it is the outer gate (where a failing self-check lands,
+and where you go to configure things).
+
+Under **审核 (audit)**, **本地审核 (local audit)**: pick local files or
 folders (at most 30 regular files per run); the plugin copies them into a temporary snapshot directory,
 mints a one-shot `handoffId`, then tries to open an **ordinary DSH conversation**, sends the fixed audit
 prompt, and switches to it. When the conversation cannot be created it offers a manual path instead
@@ -17,6 +28,20 @@ prompt, and switches to it. When the conversation cannot be created it offers a 
 history, no sidecar, no cross-conversation monitoring, and uploads or downloads nothing** — results live
 only in that conversation and its temporary case directory. The report-audit flow and its deliverables are
 unchanged.
+
+**估值 / 房地产** (the first sidebar card row, **报告评估 (Report Evaluation)**), is the **real-estate valuation** business module
+(available since protocol 32; since protocol 33 its input page is a **single workface** rather than a
+two-column layout)
+(available since protocol 32): upload PDF / Word / Excel / images (the Host copies them byte-for-byte into
+this run's valuation case directory and records a sha256), choose a valuation method (auto / market / income /
+cost), optionally set a valuation base date and a supplemental instruction, and review the run's inputs in a
+**read-only confirmation drawer** before confirming. After confirmation the inputs are frozen, the Host creates
+a valuation session in the selected workspace and sends it a fixed instruction; the session then gathers data
+(the real-estate rules from the DSW business knowledge base and public listings from 房天下 / 安居客 / 链家·贝壳,
+at most 3 attempts per page), fills the workbook, and cross-checks it, producing `估值结果.json`,
+`估值报告.html`, and `估值底稿.xlsx`. Valuing **without** a base date is supported: the result records
+「本次未指定评估基准日」and skips base-date filtering and date adjustment. All numeric conclusions follow the
+**recalculated** workbook, and delivery requires passing both the workbook contract and the result-contract checks.
 
 The audit process itself is **not** in this repository; the `crwu-audit` skill family runs it.
 This repository only *dispatches, watches, and ships back*.
@@ -64,7 +89,8 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
 1. Click the persistent **中瑞世联工作台** entry at the **bottom of the left sidebar** (above Settings).
    It is one grouped card: the header carries the brand mark plus a small tag saying whether this is `dev`
    (a source checkout) or the installed version (`v0.0.4`), and the body holds three sub-items —
-   Report Evaluation (marked "in development"), Report Audit, and Environment. Clicking a sub-item
+   Report Evaluation (marked "in development" at the time; **shipped 2026-10-12** — this row is the
+   historical observation), Report Audit, and Environment. Clicking a sub-item
    switches the panel to that module and opens it; the panel itself no longer has a module bar.
 2. If the panel opens on the Environment module, configure it there. The page is a **compact status
    summary plus a guided configuration workspace** with three steps on the left — **Accounts** (one-time
@@ -96,9 +122,16 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
    root — not to whichever chat session you happen to be looking at. The session-header
    "register as sub-session parent" button now only passes the **preset of the session you are using**
    to the audit root (so the audit toolchain matches your manual runs); it is **not** a prerequisite.
+   Session placement has exactly one source of truth (protocol 32): the `workspaceId` selected in
+   **Environment** — no `cwd` fallback and no deployment `caseRoot` fallback. After creating a session
+   the Host re-reads its cwd and the workspace's `sessionIds` (that membership list, not the cwd, is
+   what groups sessions in the sidebar); a root or child that fails to attach is stopped and released
+   instead of being left behind in "Ungrouped".
 
 > **The Skills ship with the package, organized in layers**: the tarball carries `skills/crwu/`
-> (27 in-repo Skills), `skills/dws/` (14 vendored `dingtalk-workspace-cli` Skills) and `common/skills/`
+> (27 in-repo audit/maintenance Skills), `skills/biz/` (in-repo business Skills such as
+> `crwu-biz-valuation-*`), `skills/dws/` (14 vendored `dingtalk-workspace-cli` Skills) and
+> `common/skills/`
 > (shared Skills `crwu-dws` / `crwu-h3yun-*`). The `crwu-workbench-skills` row in `cordis.patch.yml`
 > registers **each layer as its own skill root** (DSH scans exactly one level per root), so installing
 > the plugin is all it takes. Do **not** copy Skills into `~/.dsh/skills/` any more; the package root
@@ -116,7 +149,7 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
 > H3Yun session or the DingTalk login state, the self-check blocks the gate, and **no credential
 > process is started at all** — so it can never report a false "not logged in". Once authorized, each
 > **named operation** decides for itself whether it needs per-call `danger-full-access`
-> (`src/host/access/operations.ts`); callers cannot submit an escalation switch and neither can the
+> (`src/host/core/access/operations.ts`); callers cannot submit an escalation switch and neither can the
 > model. Only operations that genuinely touch paths outside the workspace escalate (H3Yun session,
 > DingTalk `~/.dws`, `~/.ossutilconfig`, the iFinD credential file, plugin state); package integrity
 > checks, case-directory writes and opening the browser stay in the profile's default sandbox. Audit
@@ -273,7 +306,7 @@ version in `CHANGELOG.md`.
 | Symptom | Check first | Fix |
 | --- | --- | --- |
 | Plugin installed, nothing appears, clean startup log | Whether DSH rejected it as **incompatible** (`skippedBundles`, or the plugin manager marking it "incompatible with DSH `<version>`") | The check reads `peerDependencies` (**not** `engines.dsh`); this package declares `^0.1.7-rc.2 \|\| ^0.2.0-rc.1`. Upgrade the plugin after a DSH upgrade; `npm run compat:dsh` reproduces the verdict |
-| `ParserError` / `UnexpectedToken` / "unexpected token" | A command starting with a quoted path (in PowerShell that is a string expression, not a command invocation) | Upgrade to 0.0.14+: every command is generated by `src/host/platform/shell.ts` (with `&` on Windows). If it persists, a call site bypassed the adapter — the static gate in `host-platform-shell.test.mjs` goes red first |
+| `ParserError` / `UnexpectedToken` / "unexpected token" | A command starting with a quoted path (in PowerShell that is a string expression, not a command invocation) | Upgrade to 0.0.14+: every command is generated by `src/host/core/platform/shell.ts` (with `&` on Windows). If it persists, a call site bypassed the adapter — the static gate in `host-platform-shell.test.mjs` goes red first |
 | "parameter name is ambiguous" / `mkdir` is not recognized | POSIX-only syntax leaking in (`mkdir -p`, `chmod`, `rm -f`, `cmd /c …`) | Same as above: those literals may only appear inside the adapter |
 | A command "succeeded" but the file was not touched | A swallowed failure (`-ErrorAction SilentlyContinue`) | Removed in 0.0.14+; `case-files.ts` also re-reads post-conditions with `ctx.fs.stat` |
 | Truncated paths, a directory name that is a whole path | Local paths handled with POSIX string rules | 0.0.14+ routes them through `shared/utils/local-path.ts`; containment uses `fs.contains`, never string prefixes |

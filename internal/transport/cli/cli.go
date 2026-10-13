@@ -84,6 +84,7 @@ func newRootCommand(deps Dependencies) *cobra.Command {
 	root.AddCommand(newSchemeCommand(root, examples))
 
 	root.AddCommand(newH3YunCommand(deps, examples))
+	root.AddCommand(newBrowserCommand(deps, examples))
 	return root
 }
 

@@ -7,25 +7,49 @@ import { WORKBENCH_ROUTE } from '../shared/consts.ts'
 import { HOST_BUILD_KIND } from './build-info.ts'
 import { PLUGIN_VERSION } from './consts.ts'
 import { resolveWorkbenchConfig, type PluginConfig } from './config/config.ts'
-import { registerRpcRoute } from './http/route.ts'
-import { subscribeAuditEvents } from './audit/events.ts'
-import { createCoreOperations } from './ops/core.ts'
+import { registerRpcRoute } from './core/http/route.ts'
+import { subscribeAuditEvents } from './domains/report-audit/events.ts'
+import { createCoreOperations } from './operations/core.ts'
 import { createUpdateOperations } from './update/ops.ts'
-import { createWorldFacts } from './platform/world.ts'
-import { localAccessGranted } from './access/consent.ts'
-import { createWorkbenchState } from './state/store.ts'
-import { createLocalAccessBroker } from './access/broker.ts'
-import { workbenchConfigPath } from './state/persist.ts'
-import { ifindCredentialPath } from './ifind/store.ts'
-import { ossConfigPath } from './oss/cred.ts'
+import { createWorldFacts } from './core/platform/world.ts'
+import { localAccessGranted } from './core/access/consent.ts'
+import { createWorkbenchState } from './core/state/store.ts'
+import { createLocalAccessBroker } from './core/access/broker.ts'
+import { workbenchConfigPath } from './core/state/persist.ts'
+import { ifindCredentialPath } from './integrations/ifind/store.ts'
+import { ossConfigPath } from './integrations/oss/cred.ts'
 import { WORKBENCH_PROTOCOL } from '../shared/consts.ts'
-import { H3yunFormResolver } from './h3yun/form.ts'
-import { createPythonRuntimeResolver } from './runtime/python.ts'
+import { H3yunFormResolver } from './integrations/h3yun/form.ts'
+import { createPythonRuntimeResolver } from './core/runtime/python.ts'
 import { registerCrwuTools } from './tools/register.ts'
-import { createDiscussionScopeRegistry } from './audit/discussion-scope.ts'
-import { createLocalAuditRegistry } from './local-audit/handoff.ts'
-import { nodeSnapshotIo } from './local-audit/snapshot.ts'
-import { nodeLocalAuditFs } from './local-audit/scan.ts'
+import type { ToolDeps } from './tools/common/types.ts'
+import { createValuationOperations } from './operations/report-evaluation.ts'
+import { ValuationLifecycles } from './domains/report-evaluation/lifecycle/index.ts'
+import { ValuationScopes } from './domains/report-evaluation/scope.ts'
+import { createDiscussionScopeRegistry } from './domains/report-audit/discussion-scope.ts'
+import { createLocalAuditRegistry } from './domains/local-audit/handoff.ts'
+import { nodeSnapshotIo } from './domains/local-audit/snapshot.ts'
+import { nodeLocalAuditFs } from './domains/local-audit/scan.ts'
+
+/**
+ * `ToolDeps` 的**装配视图**：所有可选依赖在这里都是必需的。
+ *
+ * 加一个可选依赖到 `ToolDeps` 之后，这里立刻编译不过 —— 必须回 `apply()` 把它接上，
+ * 或者显式写 `undefined`（那也是一个决定，而不是遗忘）。单测夹具不受影响。
+ */
+type AssembledToolDeps = ToolDeps & Required<Omit<ToolDeps, 'ctx' | InjectionOnlyToolDeps>>
+
+/**
+ * 生产装配**故意不提供**的依赖。
+ *
+ * 写在这里而不是散在注释里：这份名单本身就是"我们想过这两个字段"的记录。
+ * 三种情况 —— ① 测试注入点（`ifind` 传内存替身，缺省就是真实传输）；
+ * ② 有默认值的调优项（`ifindTimeoutMs`）；
+ * ③ **本部署确实没有的能力**（`screenshot`）：缺省 = 没有截图能力 → 每个候选案例显式写
+ *    `screenshot_missing` 并记能力缺口，而不是伪造截图。宿主提供已验证的截图通道时在这里接上。
+ * 新增的可选依赖如果不属于这三类，就必须在 `apply()` 里接上，否则上面那行类型会直接编译不过。
+ */
+type InjectionOnlyToolDeps = 'ifind' | 'ifindTimeoutMs' | 'screenshot'
 
 /** 过期快照的兜底清理间隔（面板每次准备也会顺手清一次）。 */
 const LOCAL_AUDIT_SWEEP_INTERVAL_MS = 10 * 60_000
@@ -87,7 +111,7 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   const localAudit = createLocalAuditRegistry()
   const localAuditIo = nodeSnapshotIo()
   // 过期 / 用完的快照目录要清掉：临时目录不该无限长。定时器随插件卸载释放；
-  // 面板每次调用 `local-audit-start` 也会顺手清一次（见 `ops/core.ts`），所以这里只是兜底。
+  // 面板每次调用 `local-audit-start` 也会顺手清一次（见 `operations/core.ts`），所以这里只是兜底。
   const cleanupTimer = setInterval(() => {
     void localAudit.sweep(localAuditIo).catch(() => undefined)
   }, LOCAL_AUDIT_SWEEP_INTERVAL_MS)
@@ -95,13 +119,30 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   ctx.effect(() => () => { clearInterval(cleanupTimer) }, 'crwu-workbench: local audit sweep')
   // 自研审核链路的全部业务能力都以结构化 Tool 交付（`crwu_*`）。注册进 DSH 的注册表，
   // schema 自动进 system prompt，并走同一条审批/沙箱/取消 pipeline。
-  ctx.effect(() => registerCrwuTools(ctx, {
+  // 估值轮次的状态机与案例 scope（协议 32）：**操作表与 Tool 闭包必须共用同一份实例** ——
+  // 两处各造一个的后果是"工具说这一轮在跑、状态页说没有这一轮"。
+  const valuationLifecycles = new ValuationLifecycles()
+  const valuationScopes = new ValuationScopes()
+  /**
+   * 注册给 Tool 闭包的依赖。
+   *
+   * 类型是**全字段必需**的视图（`AssembledToolDeps`）：`ToolDeps` 里的可选字段是给
+   * 手搭夹具用的（单测可以只给被测那几项），但**真实装配漏一项必须是编译错误**。
+   * 为什么不让它悄悄少一项：少一项不会崩 —— 它会退化成"某个功能默默降级"
+   *（例如估值工具写不回轮次状态，界面永远停在"正在跑"），而那正是最难发现的一类问题。
+   */
+  const toolDeps: AssembledToolDeps = {
     ctx, config, state, world, form, access, discussionScopes,
     localAudit, localAuditIo,
+    valuationScopes,
+    // 估值 Tool 也要能写轮次状态（`browser-login-required` 与来源状态是宿主的事实，
+    // 面板轮询的是它）—— 所以与操作表共用**同一个**注册表实例。
+    valuationLifecycles,
     // 与审核启动、环境自检共用同一个 Python 解析器（同一份缓存）：`crwu_run_python_script`
     // 绝不自己去猜解释器。
     python,
-  }), 'crwu-workbench: tools')
+  }
+  ctx.effect(() => registerCrwuTools(ctx, toolDeps), 'crwu-workbench: tools')
   // 自助更新（Task 4）：每个插件实例一套检查器 / 持久化 / 安装服务。
   // 这里只装配 —— 恢复与后台自动检查都在它内部启动，**不 await**（registry 故障、
   // Plugin Manager 缺失或检查挂起都不得挡住插件激活或下面的路由注册）。
@@ -121,7 +162,10 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     state,
     world,
     { form, python, access, discussionScopes, localAudit, localAuditFs: nodeLocalAuditFs(), localAuditIo },
-    { update: update.operations },
+    {
+      update: update.operations,
+      valuation: createValuationOperations({ ctx, state, access, world, python, lifecycles: valuationLifecycles, scopes: valuationScopes }),
+    },
   )
   ctx.effect(() => registerRpcRoute(ctx, operations), 'crwu-workbench: rpc route')
   ctx.logger?.info?.('中瑞世联工作台 Host 半（包形态骨架）已装配 %o', {

@@ -13,8 +13,8 @@
  *   manifestFixture({ oss: { bucket: 'bkt', prefix: 'crwu/audit' } })
  *   manifestFixture({ binaries: [{ name: 'extra', command: 'extra' }] })
  */
-import { DEFAULT_MANIFEST } from '../../src/host/environment/manifest-default.ts'
-import { normalizeOss } from '../../src/host/environment/manifest.ts'
+import { DEFAULT_MANIFEST } from '../../src/host/core/environment/manifest-default.ts'
+import { normalizeOss } from '../../src/host/core/environment/manifest.ts'
 
 export function manifestFixture(patch = {}) {
   const { oss, ...rest } = patch

@@ -35,6 +35,7 @@ const CHECKED_DOCUMENTS = [
   { path: 'docs/v0.0.1/superpowers/specs/2026-09-15-crwu-audit-optimize-gap-analysis-design.md', lineLimit: 8 },
   { path: 'docs/v0.0.1/superpowers/specs/2026-09-17-audit-report-readability-design.md', lineLimit: 8 },
   { path: 'plugins/dsh-crwu-workbench/docs/acceptance-0.0.34.md', lineLimit: 8 },
+  { path: 'plugins/dsh-crwu-workbench/docs/acceptance-0.0.42.md', lineLimit: 8 },
   { path: 'plugins/dsh-crwu-workbench/docs/desktop-acceptance-0.0.15.md', lineLimit: 8 },
   { path: 'plugins/dsh-crwu-workbench/docs/handoff-0.0.15.md', lineLimit: 8 },
   { path: 'plugins/dsh-crwu-workbench/docs/review-0.0.15.md', lineLimit: 8 },

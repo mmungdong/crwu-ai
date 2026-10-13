@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.object.v1",
+  "title": "房地产估值对象（估值对象.json）",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "valuationId",
+    "fields",
+    "missing_fields",
+    "source_files"
+  ],
+  "properties": {
+    "valuationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "**只放资料里真的读到的东西**（标签锚定提取）。读不到就不出现，不用空串冒充"
+    },
+    "fieldLabels": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "坐落",
+          "房屋性质",
+          "用途",
+          "建筑面积",
+          "楼层",
+          "总楼层",
+          "建筑结构",
+          "建成年代",
+          "权属信息",
+          "租赁信息",
+          "价格信息",
+          "已知案例线索"
+        ]
+      },
+      "description": "**抽屉里要核对的 12 个要素标签**（方案 §5.4 的清单，顺序固定）。界面、Host 的要素清单与这份 schema 必须是同一套标签 —— 三处各写一份的后果是\"资料里读到的信息\"在不同地方口径不同"
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "缺失的估值要素（坐落/用途/建筑面积/权属…）。缺失不等于失败，但必须列出来"
+    },
+    "source_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "fileName",
+          "status"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "parsed",
+              "unparsed"
+            ],
+            "description": "unparsed 的文件不许有提取字段"
+          },
+          "digest": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

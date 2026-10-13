@@ -1,0 +1,241 @@
+import type { Context } from '@deepseek-ai/cordis'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import { text } from '../../../shared/utils/value.ts'
+import { isSafeSeqNo } from '../../../shared/consts.ts'
+import { normalizeOss } from '../../core/environment/manifest.ts'
+import { sanitizeOssError } from '../../integrations/oss/sanitize.ts'
+
+// 兼容再导出：脱敏器搬到了 `host/integrations/oss/sanitize.ts`（环境探测与上传共用一份），
+// 但历史上它是从本模块导出的（Tool 层与测试按这个名字引用），所以这里保留出口。
+export { sanitizeOssError } from '../../integrations/oss/sanitize.ts'
+import { requireBundledCommand } from '../../core/platform/command.ts'
+import { parseLsEntries, type OssEntry } from '../../integrations/oss/parse.ts'
+import { basenameLocalPath } from '../../../shared/utils/local-path.ts'
+import { runOssutil, type OssExecDeps } from '../../integrations/oss/run.ts'
+import { fileSize, requireInsideCase } from '../common/case-dir.ts'
+import { localDeliveryRefused, requireCaseAccess } from '../../domains/report-audit/case-access.ts'
+import { failure, renderJson } from '../common/outcome.ts'
+import { toolContext, type ToolDeps } from '../common/types.ts'
+import { caseScopes } from './case-scopes.ts'
+
+/**
+ * OSS 交付件发布 Tool。
+ *
+ * 与旧路径的差别：bucket / endpoint / prefix **只从受信配置读**（`config/crwu-workbench.yml`
+ * → 运行时清单），模型提交的只有 `caseDir` 与 `seqNo`，或显式列出的交付件相对名。
+ * 所以模型无法把交付件传到别的桶、别的路径去。
+ *
+ * 上传后必须**真的列举一次**核对：目标对象存在、字节数与本地一致且非 0。
+ * 只凭退出码判断是本仓踩过的坑（`ossutil` 的 `elapsed` 尾巴就是这类遗漏）。
+ *
+ * sandbox：**每一次 `ossutil` 都逐次声明 `danger-full-access`**（`oss.remote.read` / `oss.remote.write`）。
+ *
+ * 旧注释写的是"OSS 是非凭据操作，走默认沙箱，不提权" —— 那个前提是**错的**：
+ * `ossutil` 每次启动都会读 `~/.ossutilconfig`，那是工作区之外的凭据文件，
+ * 受限沙箱下读不到，命令会以一个和 AK 无关的错失败（审核子会话里必然失败）。
+ * 2026-09-29 用户复查就是从这条注释 + 六处裸 `runShell` 抓到的 P1。
+ */
+
+/** 默认交付件：HTML 必传，结果 JSON 存在就一并传。 */
+export const DEFAULT_HTML_NAME = (seqNo: string): string => `审核意见.${seqNo}.html`
+export const DEFAULT_JSON_NAME = (seqNo: string): string => `审核结果.${seqNo}.json`
+
+interface UploadEntry {
+  kind: string
+  name: string
+  key: string
+  ok: boolean
+  sizeBytes: number
+  exitCode: number | null
+  error: string
+}
+
+const UPLOAD_ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { required: true, type: 'string' },
+    name: { required: true, type: 'string' },
+    key: { required: true, type: 'string' },
+    ok: { required: true, type: 'boolean' },
+    sizeBytes: { required: true, type: 'integer' },
+    exitCode: { required: true, oneOf: [{ type: 'integer' }, { type: 'null' }] },
+    error: { required: true, type: 'string' },
+  },
+  
+} as const
+
+export function ossTools(deps: ToolDeps) {
+  const ossPublish = defineTool({
+    name: 'crwu_audit_oss_publish',
+    description: [
+      '把案例目录里的审核交付件上传到受信配置的私有 OSS 桶：HTML 必传，结果 JSON 存在就一并传。',
+      '上传后真的列举一次核对目标对象与字节数（只凭退出码不算成功）。',
+      'bucket / endpoint / 对象前缀都来自受信配置，不接受模型提交；文件必须位于 caseDir 之内。',
+    ].join(' '),
+    parameters: {
+      caseDir: { type: 'string', required: true, description: '案例目录绝对路径（交付件必须位于其内）' },
+      seqNo: { type: 'string', required: true, description: '报告流水号，例如 2026-301705-LX10170-BG8746' },
+      files: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '可选的交付件相对名清单（相对 caseDir）；缺省为 审核意见.<seqNo>.html + 审核结果.<seqNo>.json（后者存在才传）',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { required: true, type: 'boolean' },
+          errorKind: { required: true, type: 'string' },
+          error: { required: true, type: 'string' },
+          bucket: { required: true, type: 'string' },
+          prefix: { required: true, type: 'string' },
+          uploaded: { required: true, type: 'integer' },
+          results: { required: true, type: 'array', items: UPLOAD_ITEM_SCHEMA },
+        },
+        
+      },
+      render: (_args, value) => renderJson(value),
+    },
+    async execute(args, exec) {
+      const ctx = toolContext(deps.ctx, exec)
+      const empty = { bucket: '', prefix: '', uploaded: 0, results: [] as UploadEntry[] }
+      const seqNo = text(args.seqNo).trim()
+      if (!isSafeSeqNo(seqNo)) {
+        return { ...failure('input', `流水号形状不对（不放进 OSS 路径）：${seqNo === '' ? '(空)' : seqNo}`), ...empty }
+      }
+      const caseCheck = await requireCaseAccess(ctx, deps.state, deps.discussionScopes, exec, {
+        caseDir: args.caseDir, seqNo: args.seqNo,
+      }, caseScopes(deps))
+      if (!caseCheck.ok) return { ...caseCheck, ...empty }
+      // 本地审核的产物不上传（协议 28）：提示词里写了不许调用，这里才是门禁。
+      const localRefused = localDeliveryRefused(caseCheck)
+      if (localRefused !== null) return { ...localRefused, ...empty }
+
+      const oss = normalizeOss(deps.state.manifest.oss, deps.state.manifest.oss)
+      if (!oss.enabled) return { ...failure('policy', 'OSS 回传未启用（受信配置里 oss.enabled 不是 true）'), ...empty }
+      if (oss.bucket === '') return { ...failure('policy', '受信配置缺 oss.bucket'), ...empty }
+
+      const platform = await deps.world.platform()
+      const caseDir = caseCheck.casePath
+      // 严格用包内 ossutil：审核链路不做 PATH 搜索（找不到就是 capability gap，不是回退裸名字）。
+      const lookup = await requireBundledCommand(ctx, platform, 'ossutil')
+      if (!lookup.ok) {
+        return { ...failure(lookup.errorKind, lookup.error), ...empty, bucket: oss.bucket, prefix: oss.prefix }
+      }
+      const ossutil = lookup.path
+
+      // 交付件清单：默认 HTML + 结果 JSON；显式清单里的每一项都要先过案例目录包含检查。
+      const requested = Array.isArray(args.files) ? args.files.map((item) => text(item)).filter((item) => item !== '') : []
+      const candidates = requested.length > 0
+        ? requested
+        : [DEFAULT_HTML_NAME(seqNo), DEFAULT_JSON_NAME(seqNo)]
+
+      const results: UploadEntry[] = []
+      const prefix = `${oss.prefix}/${seqNo}`
+      for (const relative of candidates) {
+        const isDefault = requested.length === 0
+        const kind = relative.endsWith('.json') ? 'json' : 'html'
+        const inside = await requireInsideCase(ctx, caseDir, relative)
+        if (!inside.ok) {
+          // 默认清单里的可选文件（结果 JSON）不存在时不算失败，如实记「未生成」。
+          if (isDefault) continue
+          results.push({ kind, name: relative, key: '', ok: false, sizeBytes: 0, exitCode: null, error: inside.error })
+          continue
+        }
+        const local = inside.path
+        const size = await fileSize(ctx, local)
+        if (size <= 0) {
+          if (isDefault) continue
+          results.push({ kind, name: relative, key: '', ok: false, sizeBytes: 0, exitCode: null, error: '文件不存在或为空' })
+          continue
+        }
+        // 对象键永远用 `/`；文件名那一段用 basenameLocalPath（两种分隔符都能取对）。
+        const objectKey = `${prefix}/${basenameLocalPath(relative)}`
+        const argv = [ossutil, 'cp', '-f', local, `oss://${oss.bucket}/${objectKey}`]
+        if (oss.endpoint !== '') argv.push('--endpoint', oss.endpoint)
+        for (const extra of oss.extraArgs) argv.push(extra)
+        // 逐次经 Broker（`oss.remote.write`）：`ossutil` 每次都会读 `~/.ossutilconfig`，
+        // 受限沙箱下读不到 —— 那会让审核子会话的上传以一个"和密钥无关"的错失败。
+        const run = await runOssutil(
+          { ctx, access: deps.access, platform, workdir: caseDir, source: 'audit-tool' },
+          {
+            operation: 'oss.remote.write',
+            argv,
+            timeoutMs: 180_000,
+            signal: exec.signal,
+            summary: 'ossutil cp（审核 Tool 上传）',
+          },
+        )
+        if (!run.ok) {
+          results.push({
+            kind, name: relative, key: objectKey, ok: false, sizeBytes: 0, exitCode: run.exitCode,
+            error: sanitizeOssError(run.stderr || run.error || '上传失败'),
+          })
+          continue
+        }
+        // 写后校验：列举一次，目标对象必须在、且字节数与本地一致。
+        const verify = await verifyObject(
+          { ctx, access: deps.access, platform, workdir: caseDir, source: 'audit-tool' },
+          oss.bucket, prefix, objectKey, size, ossutil, exec.signal,
+        )
+        results.push({
+          kind, name: relative, key: objectKey, ok: verify.ok, sizeBytes: verify.sizeBytes, exitCode: run.exitCode,
+          error: verify.ok ? '' : verify.error,
+        })
+      }
+
+      const uploaded = results.filter((item) => item.ok).length
+      const failed = results.filter((item) => !item.ok)
+      const htmlOk = results.some((item) => item.kind === 'html' && item.ok)
+      if (!htmlOk && failed.length === 0) {
+        return {
+          ...failure('input', '案例目录里没有找到要上传的 HTML 交付件（审核意见.<seqNo>.html）'),
+          bucket: oss.bucket, prefix, uploaded, results,
+        }
+      }
+      return {
+        ok: failed.length === 0 && uploaded > 0,
+        errorKind: failed.length === 0 ? '' as const : 'cli',
+        error: failed.length === 0 ? '' : sanitizeOssError(failed.map((item) => `${item.name}：${item.error}`).join('；')),
+        bucket: oss.bucket,
+        prefix,
+        uploaded,
+        results,
+      }
+    },
+  })
+
+  return [ossPublish]
+}
+
+/** 列举前缀并核对目标对象的字节数（同样经 Broker：`ls` 也要读 `~/.ossutilconfig`）。 */
+async function verifyObject(
+  deps: OssExecDeps,
+  bucket: string,
+  prefix: string,
+  key: string,
+  localSize: number,
+  ossutil: string,
+  signal: AbortSignal | undefined,
+): Promise<{ ok: boolean; sizeBytes: number; error: string }> {
+  const argv = [ossutil, 'ls', `oss://${bucket}/${prefix}/`]
+  const run = await runOssutil(deps, {
+    operation: 'oss.remote.read',
+    argv,
+    timeoutMs: 90_000,
+    stdoutMaxBytes: 4 * 1024 * 1024,
+    ...(signal === undefined ? {} : { signal }),
+    summary: 'ossutil ls（写后校验）',
+  })
+  if (!run.ok) return { ok: false, sizeBytes: 0, error: `写后列举失败：${sanitizeOssError(run.stderr || run.error)}` }
+  const entries: OssEntry[] = parseLsEntries(run.stdout, bucket)
+  const hit = entries.find((entry) => entry.key === key)
+  if (hit === undefined) return { ok: false, sizeBytes: 0, error: '写后列举里没有目标对象' }
+  if (hit.size !== localSize || hit.size === 0) {
+    return { ok: false, sizeBytes: hit.size, error: `写后对象字节数不符：local=${localSize}, remote=${hit.size}` }
+  }
+  return { ok: true, sizeBytes: hit.size, error: '' }
+}

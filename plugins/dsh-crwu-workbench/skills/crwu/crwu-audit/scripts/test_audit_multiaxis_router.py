@@ -96,6 +96,8 @@ EXPECTED_REFERENCE_FILES = (
     "13-dingtalk-result-publish.md",
     "14-orchestration-workflow.md",
     "15-oss-result-publish.md",
+    # 0.0.41 加的本地审核链路：报告审核页的并列页签，交接契约独立成一份正文。
+    "16-local-audit.md",
     "99-maintenance.md",
 )
 

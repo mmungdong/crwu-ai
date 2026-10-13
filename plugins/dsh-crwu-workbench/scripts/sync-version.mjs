@@ -19,7 +19,7 @@ const LOCK_FILE = 'package-lock.json'
 const CHANGELOG_FILE = 'CHANGELOG.md'
 // 包版本在代码里还有第三份：`PLUGIN_VERSION`（`ping` / `boot` 与界面版本徽章都用它）。
 // 它必须一起改 —— 只改 package.json 会让界面显示上一版的号，而排查时那正是「我装到的是哪一版」的
-// 唯一口头依据（§7.2）。`tests/unit/host-package.test.mjs` 断言它等于 package.json 的版本，
+// 唯一口头依据（§7.2）。`tests/unit/host/host-package.test.mjs` 断言它等于 package.json 的版本，
 // 所以漏改会在门禁里立刻红，而不是等用户报「面板显示的还是 v0.0.5」。
 const CONSTS_FILE = 'src/host/consts.ts'
 const PLUGIN_VERSION_RE = /(export const PLUGIN_VERSION = ')([^']*)(')/

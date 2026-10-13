@@ -9,9 +9,9 @@
  */
 import { gt, valid } from 'semver'
 
-import { readWorkbenchConfigResult, writeWorkbenchConfig } from '../state/persist.ts'
-import type { LocalAccessBroker } from '../access/broker.ts'
-import type { ConfigRead } from '../state/persist.ts'
+import { readWorkbenchConfigResult, writeWorkbenchConfig } from '../core/state/persist.ts'
+import type { LocalAccessBroker } from '../core/access/broker.ts'
+import type { ConfigRead } from '../core/state/persist.ts'
 import type { PersistedPluginUpdate, PluginUpdateStore } from './types.ts'
 import type { Context } from '@deepseek-ai/cordis'
 

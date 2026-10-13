@@ -18,7 +18,7 @@ make plugin-pack    # DSH：打成插件包，技能按层随包发布
 | workbuddy | `~/.workbuddy/skills/` | — | https://www.workbuddy.cn/docs/cli/skills |
 | codex | `~/.codex/skills/` | — | Codex CLI 官方文档 skills 一节 |
 | opencode | `~/.config/opencode/skills/` | — | https://opencode.ai/docs/skills/ |
-| deepseek harness (dsh) | 随**插件包**发布，不再手拷：插件把包内 `skills/crwu/`、`skills/dws/`、`common/skills/` **各注册成一个技能根**（一层一个根，DSH 对每个根只扫一层） | `$DSH_HOME` | 本机 DSH `@deepseek-ai/dsh-skill-filesystem`（`customSkillDirs` 配置项） |
+| deepseek harness (dsh) | 随**插件包**发布，不再手拷：插件把包内 `skills/crwu/`、`skills/biz/`、`skills/dws/`、`common/skills/` **各注册成一个技能根**（一层一个根，DSH 对每个根只扫一层） | `$DSH_HOME` | 本机 DSH `@deepseek-ai/dsh-skill-filesystem`（`customSkillDirs` 配置项） |
 
 ## 补充说明
 

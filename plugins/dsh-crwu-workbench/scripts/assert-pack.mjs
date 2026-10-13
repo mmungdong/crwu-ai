@@ -67,6 +67,19 @@ const REQUIRED = [
   // dws 层是 vendored 的上游正文，漏了任一步都只有一层能装上。
   'skills/README.md',
   'skills/crwu/crwu-audit/SKILL.md',
+  'skills/biz/crwu-biz-valuation-realestate/SKILL.md',
+  // 交付模板与结构契约随包发布：缺了模板，子会话只能自己造表（那时"公式区不许覆盖"就无从保证）。
+  'skills/biz/crwu-biz-valuation-realestate/template/valuation-workbook.xlsx',
+  'skills/biz/crwu-biz-valuation-realestate/schemas/valuation-result.schema.json',
+  'skills/biz/crwu-biz-valuation-realestate/scripts/validate_result.py',
+  'skills/biz/crwu-biz-valuation-realestate/scripts/check_workbook_contract.py',
+  // 两个构建脚本与报告模板同样随包发布：缺了它们，子会话只能手改单元格（"公式区不被覆盖"
+  // 就退回成靠自觉）。
+  'skills/biz/crwu-biz-valuation-realestate/scripts/build_workbook.py',
+  'skills/biz/crwu-biz-valuation-realestate/scripts/build_report.py',
+  'skills/biz/crwu-biz-valuation-realestate/template/valuation-report.html',
+  'skills/biz/crwu-biz-valuation-realestate/template/valuation-result.json',
+  'skills/biz/crwu-biz-valuation-realestate/assets/README.md',
   'skills/dws/dingtalk-doc/SKILL.md',
   'skills/dws/provenance.json',
   'common/skills/crwu-dws/SKILL.md',
