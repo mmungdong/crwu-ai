@@ -113,6 +113,8 @@ export interface BrokerFsTarget {
 export interface BrokerFsResult {
   ok: boolean
   error: string
+  /** 失败的**结构化**类别：调用方据此归因，不许拿 `error` 原话做文本猜测。 */
+  errorKind?: 'policy' | 'sandbox-denied' | 'permission' | 'infrastructure'
 }
 
 export interface LocalAccessBroker {
@@ -164,8 +166,9 @@ export interface LocalAccessBrokerDeps {
    * 少了它就只能靠"文本里恰好没有别的平台字样"来蒙，那正是 D1 要消灭的猜测。
    */
   platform: () => Promise<string>
-  /** 三个可写目标各自的**唯一**路径推导（由领域模块提供，Broker 不自己拼路径）。 */
-  targets: Record<LocalAccessTargetKind, (home: string) => string>
+  /** 固定路径可写目标各自的**唯一**路径推导（由领域模块提供，Broker 不自己拼路径）；
+   *  `workspace-file` 的路径随案例走、边界由调用的 workdir 声明，不从 home 推导。 */
+  targets: Record<Exclude<LocalAccessTargetKind, 'workspace-file'>, (home: string) => string>
   hostVersion: string
   protocolVersion: number
   diagnosticsLimit?: number
@@ -384,48 +387,94 @@ export function createLocalAccessBroker(deps: LocalAccessBrokerDeps): LocalAcces
     async writeText(call, target, content) {
       const descriptor = localAccessDescriptorOf(call.operation)
       if (descriptor !== undefined && descriptor.transport !== 'filesystem') {
-        return { ok: false, error: `${call.operation} 不是文件写入操作（transport=${descriptor.transport}）` }
+        return { ok: false, errorKind: 'policy', error: `${call.operation} 不是文件写入操作（transport=${descriptor.transport}）` }
       }
       const decision = authorize(call)
-      if (!decision.ok) return { ok: false, error: decision.error }
+      if (!decision.ok) return { ok: false, errorKind: 'policy', error: decision.error }
 
       // 每个操作只能写**它自己那一个**目标：种类与路径都要对得上，否则拒绝。
       const expectedKind = LOCAL_ACCESS_WRITE_TARGETS[call.operation]
       if (expectedKind === undefined) {
-        return { ok: false, error: `${call.operation} 未登记可写目标，拒绝写入` }
+        return { ok: false, errorKind: 'policy', error: `${call.operation} 未登记可写目标，拒绝写入` }
       }
       if (target.kind !== expectedKind) {
-        return { ok: false, error: `${call.operation} 只能写 ${expectedKind}，收到 ${target.kind}` }
+        return { ok: false, errorKind: 'policy', error: `${call.operation} 只能写 ${expectedKind}，收到 ${target.kind}` }
       }
-      const home = await deps.home()
-      if (home === '') return { ok: false, error: '主目录未知，拒绝写本机凭据 / 状态文件' }
-      const expectedPath = deps.targets[expectedKind](home)
-      if (normalizePath(target.path) !== normalizePath(expectedPath)) {
-        // 不回显目标路径：它在未授权语境里也是维护者信息（进诊断只看操作名与类别）。
-        return { ok: false, error: `${call.operation} 的目标路径不是该操作允许的那一个，拒绝写入` }
+
+      // 目标路径判据：固定路径的操作逐一比对；`workspace-file` 只要求落在这次调用声明的
+      // 工作目录边界之内（路径随案例走，调用方自律不是判据）。不回显目标路径：
+      // 它在未授权语境里也是维护者信息（进诊断只看操作名与类别）。
+      let targetPath: string
+      let workspaceRoot: string
+      if (expectedKind === 'workspace-file') {
+        workspaceRoot = call.workdir ?? ''
+        if (workspaceRoot.trim() === '') {
+          return { ok: false, errorKind: 'policy', error: `${call.operation} 需要显式工作目录作为沙箱边界，拒绝写入` }
+        }
+        // 包含性判定走 `fs.contains`（后端 realpath 之后比较）：字符串前缀匹配防不住
+        // `..`、符号链接与 Windows 分隔符 / 盘符大小写（`shared/utils/local-path.ts` 的边界）。
+        const fsForBoundary = fileSystem(deps.ctx)
+        if (fsForBoundary === undefined) {
+          return { ok: false, errorKind: 'infrastructure', error: 'Host 文件服务不可用' }
+        }
+        let root: Awaited<ReturnType<typeof resolveTarget>>
+        try {
+          root = await resolveTarget(deps.ctx, workspaceRoot)
+        } catch (error) {
+          return {
+            ok: false, errorKind: 'infrastructure',
+            error: `沙箱边界目录不可解析：${error instanceof Error ? error.message : String(error)}`,
+          }
+        }
+        try {
+          const wanted = await resolveTarget(deps.ctx, target.path)
+          if (await fsForBoundary.contains(root, wanted) !== true) {
+            return { ok: false, errorKind: 'policy', error: `${call.operation} 只能写工作目录之内的文件，拒绝越界写入` }
+          }
+        } catch (error) {
+          return {
+            ok: false, errorKind: 'infrastructure',
+            error: `目标路径不可解析：${error instanceof Error ? error.message : String(error)}`,
+          }
+        }
+        targetPath = target.path
+      } else {
+        const home = await deps.home()
+        if (home === '') return { ok: false, errorKind: 'policy', error: '主目录未知，拒绝写本机凭据 / 状态文件' }
+        const expectedPath = deps.targets[expectedKind](home)
+        if (normalizePath(target.path) !== normalizePath(expectedPath)) {
+          return { ok: false, errorKind: 'policy', error: `${call.operation} 的目标路径不是该操作允许的那一个，拒绝写入` }
+        }
+        targetPath = expectedPath
+        workspaceRoot = home
       }
 
       const fs = fileSystem(deps.ctx)
-      if (fs === undefined) return { ok: false, error: 'Host 文件服务不可用' }
+      if (fs === undefined) return { ok: false, errorKind: 'infrastructure', error: 'Host 文件服务不可用' }
       const requested = descriptor?.privileged === true ? 'danger-full-access' : ''
       try {
-        const resolved = await resolveTarget(deps.ctx, expectedPath)
+        const resolved = await resolveTarget(deps.ctx, targetPath)
         await fs.writeText(resolved, content, undefined, undefined, {
           mode: 'danger-full-access',
-          workspaceRoot: home,
+          workspaceRoot,
         })
         record({ ...call }, '', { requested, resolved: '', ran: '', denied: false, runnerFailed: false }, true)
         return { ok: true, error: '' }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         // DSH 自己的拒绝标记是**结构化可认**的（`file access denied under <mode> mode`）；
-        // 它是沙箱事实，不是文本猜测。除此之外只能算基础设施失败 —— 真实 ACL / 文件占用
-        // 需要平台原生检查才能定性，那是子项目 D 的 doctor，不在这里猜。
+        // 它是沙箱事实，不是文本猜测。OS 级拒绝看 `FsError` 的 `code`（EACCES / EPERM）。
+        // 其余只能算基础设施失败 —— 真实 ACL / 文件占用需要平台原生检查才能定性，
+        // 那是子项目 D 的 doctor，不在这里猜。
         const denied = /file access denied under\s+\S+\s+mode/i.test(message)
+        const code = text((error as { code?: unknown } | undefined)?.code)
+        const errorKind = denied ? 'sandbox-denied'
+          : code === 'EACCES' || code === 'EPERM' ? 'permission'
+          : 'infrastructure'
         const facts = { requested, resolved: '', ran: '', denied, runnerFailed: false }
         record({ ...call }, denied ? 'sandbox-denied' : 'infrastructure', facts, false)
         deps.ctx.logger?.warn?.('crwu-workbench: 本机文件写入失败 %o', { operation: call.operation, denied })
-        return { ok: false, error: message }
+        return { ok: false, errorKind, error: message }
       }
     },
   }

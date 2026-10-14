@@ -524,40 +524,38 @@ export async function writePanelCaseFile(
     ctx: Context
     path: string
     content: string
-    /** 沙箱边界（员工选定的工作空间根）。 */
+    /** 沙箱边界（员工选定的工作空间根）：Broker 的越界判据与提权声明都用它。 */
     workspaceRoot: string
-    workdir: string
-    signal?: AbortSignal
   },
 ): Promise<{ ok: boolean; error: string; errorKind: 'sandbox' | 'permission' | 'infrastructure' | 'policy' | '' }> {
   const operation = 'system.valuation-case.file.write' as const
   const source = 'panel' as const
-  const call = { operation, source, ...(input.workdir === '' ? {} : { workdir: input.workdir }) }
+  // 沙箱边界 = 员工选定的工作空间：目标判据（只许写边界之内）与提权声明同源。
+  const call = { operation, source, workdir: input.workspaceRoot }
   // 先问策略（零副作用）：未授权时给一句能做什么的话，而不是把拒绝包成"写不进去"。
+  // `writeText` 内部还会再判一次（策略判据只有一处），这里只是让失败类别落在 `policy` 上。
   const decision = access.authorize(call)
   if (!decision.ok) {
     return { ok: false, errorKind: 'policy', error: `写入估值案例文件没有被本机访问策略放行：${decision.error}` }
   }
-  const fs = fileSystem(input.ctx)
-  if (fs === undefined) return { ok: false, errorKind: 'infrastructure', error: 'Host 文件服务不可用' }
-  try {
-    const target = await resolveTarget(input.ctx, input.path)
-    // **逐次声明提权**：面板没有会话沙箱可依托，非提权写入会被自家沙箱拦下。
-    await fs.writeText(target, input.content, undefined, input.signal, {
-      mode: 'danger-full-access',
-      workspaceRoot: input.workspaceRoot,
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    const denied = /access denied under\s+\S+\s+mode/i.test(message)
-    access.note(call, { errorClass: denied ? 'sandbox-denied' : 'infrastructure' })
+  // 写入走 Broker 的 `workspace-file` 目标（B-02）：逐次提权、越界拒绝、失败归因与诊断
+  // 都由它一处负责（`errorKind` 是结构化事实，不拿失败原话猜）。
+  const written = await access.writeText(call, { kind: 'workspace-file', path: input.path }, input.content)
+  if (!written.ok) {
     return {
-      ok: false, errorKind: classifyWriteFailure(error, message), error: message,
+      ok: false,
+      errorKind: written.errorKind === 'sandbox-denied' ? 'sandbox'
+        : written.errorKind === 'policy' ? 'policy'
+        : written.errorKind === 'permission' ? 'permission'
+        : 'infrastructure',
+      error: written.error,
     }
   }
-  // 回读：写没写进去不靠"没抛错"推断。
+  // 回读：写没写进去不靠"没抛错"推断。（写入本身已由 Broker 记进诊断；回读是面板自己的复核。
+  // 能走到这里说明 Broker 已经用同一个 ctx 的 fs 写入成功，不必再判可用性。）
+  const fs = fileSystem(input.ctx)
   try {
-    const back = await fs.readText(await resolveTarget(input.ctx, input.path), input.signal)
+    const back = await fs?.readText(await resolveTarget(input.ctx, input.path))
     if (back !== input.content) {
       access.note(call, { errorClass: 'infrastructure' })
       return { ok: false, errorKind: 'infrastructure', error: '写入后回读内容不一致：文件可能没写完' }
@@ -569,7 +567,6 @@ export async function writePanelCaseFile(
       error: `写入后回读失败：${error instanceof Error ? error.message : String(error)}`,
     }
   }
-  access.note(call)
   return { ok: true, error: '', errorKind: '' }
 }
 

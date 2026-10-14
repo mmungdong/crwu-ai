@@ -343,7 +343,7 @@ export function createValuationOperations(deps: ValuationOpsDeps): OperationMap 
       // 沙箱拦成 `file access denied under workspace-write mode`（2026-10-13 用户实测）。
       const written = await writePanelCaseFile(access, {
         ctx, path: joinLocalPath(casePath, '资料清单.json'), content: canonicalJson(manifest),
-        workspaceRoot: workspace.workspace.path, workdir,
+        workspaceRoot: workspace.workspace.path,
       })
       if (!written.ok) {
         return {
@@ -434,7 +434,7 @@ export function createValuationOperations(deps: ValuationOpsDeps): OperationMap 
       // 记下来是为了让"用户当时看到的是哪些字段"可复核 —— 否则确认与结果之间无据可查。
       const extractWritten = await writePanelCaseFile(access, {
         ctx, path: joinLocalPath(casePath, '资料提取预览.json'),
-        workspaceRoot: workspace.workspace.path, workdir,
+        workspaceRoot: workspace.workspace.path,
         content: canonicalJson({
         schema: 'crwu.valuation.extract-preview.v1',
         files: extracted.files.map((file) => ({
@@ -602,7 +602,7 @@ export function createValuationOperations(deps: ValuationOpsDeps): OperationMap 
       if (!made.ok) return { ok: false, error: `创建估值案例目录失败：${made.error}`, valuationId, casePath }
       const inputWritten = await writePanelCaseFile(access, {
         ctx, path: joinLocalPath(casePath, '估值输入.json'), content: canonicalJson(snapshot),
-        workspaceRoot: workspace.path, workdir: await world.workdir(),
+        workspaceRoot: workspace.path,
       })
       if (!inputWritten.ok) return { ok: false, error: `冻结输入落盘失败：${inputWritten.error}`, valuationId, casePath }
 

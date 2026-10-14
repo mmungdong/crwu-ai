@@ -113,14 +113,15 @@ export interface LocalAccessDescriptor {
   allowedSources: readonly LocalAccessSource[]
 }
 
-/** 只用于 `writeText` 的三个目标：每个操作只能写**它自己那一个**路径。 */
-export type LocalAccessTargetKind = 'workbench-state' | 'ifind-credential' | 'oss-config'
+/** 只用于 `writeText` 的目标：固定路径的操作各绑定**唯一**那一个路径；`workspace-file` 绑定工作目录边界。 */
+export type LocalAccessTargetKind = 'workbench-state' | 'ifind-credential' | 'oss-config' | 'workspace-file'
 
 /** 操作 → 允许写的目标种类。没登记的操作不允许写文件。 */
 export const LOCAL_ACCESS_WRITE_TARGETS: Partial<Record<LocalAccessOperation, LocalAccessTargetKind>> = {
   'workbench.state.write': 'workbench-state',
   'ifind.credential.write': 'ifind-credential',
   'oss.config.write': 'oss-config',
+  'system.valuation-case.file.write': 'workspace-file',
 }
 
 /** 全部操作名（界面、测试与文档的单一来源）。 */

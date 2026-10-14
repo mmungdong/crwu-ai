@@ -47,9 +47,42 @@ const TARGETS = {
 function makeCtx({ sandboxFor = (spec) => spec.sandboxPolicy?.mode, denyOn = '', failOn = '' } = {}) {
   const specs = []
   const files = {}
+  const policies = []
+  const containsCalls = []
   const ctx = {
     logger: { warn: () => {} },
     get(name) {
+      if (name === 'fs') {
+        return {
+          async resolve(path) { return { targetKey: path, displayPath: path } },
+          // 替身的"后端 realpath"：词法归一（分隔符 + `..`）后比前缀 —— 够钉住
+          // "边界判定必须走 contains"这一条，平台怪癖由真实后端负责。
+          async contains(root, target) {
+            containsCalls.push([root, target])
+            const key = (t) => String(t?.targetKey ?? t?.path ?? '')
+            const dots = (p) => {
+              const out = []
+              for (const seg of p.replace(/\\/g, '/').replace(/\/+$/, '').split('/')) {
+                if (seg === '..') out.pop()
+                else if (seg !== '' && seg !== '.') out.push(seg)
+              }
+              return out.join('/')
+            }
+            const r = dots(key(root))
+            return dots(key(target)).startsWith(`${r}/`)
+          },
+          async stat(target) { return files[target.targetKey] === undefined ? undefined : { type: 'file' } },
+          async readText(target) { return files[target.targetKey] ?? '' },
+          async writeText(target, content, _expected, _signal, policy) {
+            if (policy?.mode !== 'danger-full-access') {
+              throw new Error(`file access denied under workspace-write mode`)
+            }
+            policies.push(policy)
+            files[target.targetKey] = content
+            return { operation: 'create', version: 'v', before: null, after: content }
+          },
+        }
+      }
       if (name === 'shell') {
         return {
           resolve: (request) => request,
@@ -68,24 +101,10 @@ function makeCtx({ sandboxFor = (spec) => spec.sandboxPolicy?.mode, denyOn = '',
           },
         }
       }
-      if (name === 'fs') {
-        return {
-          async resolve(path) { return { targetKey: path, displayPath: path } },
-          async stat(target) { return files[target.targetKey] === undefined ? undefined : { type: 'file' } },
-          async readText(target) { return files[target.targetKey] ?? '' },
-          async writeText(target, content, _expected, _signal, policy) {
-            if (policy?.mode !== 'danger-full-access') {
-              throw new Error(`file access denied under workspace-write mode`)
-            }
-            files[target.targetKey] = content
-            return { operation: 'create', version: 'v', before: null, after: content }
-          },
-        }
-      }
       return undefined
     },
   }
-  return { ctx, specs, files }
+  return { ctx, specs, files, policies, containsCalls }
 }
 
 function makeBroker(ctx, consent, patch = {}) {
@@ -139,15 +158,78 @@ test('B-03 · capability 只取规范清单里的五项，加上插件自己的 
   assert.equal(LOCAL_ACCESS_OPERATIONS['workbench.state.write'].transport, 'filesystem')
 })
 
-test('B-06 · 只有三个操作允许写文件，且各自绑定唯一目标种类', () => {
+test('B-06 · 只有四个操作允许写文件：三个绑定固定路径，估值案例文件绑定工作目录边界', () => {
   assert.deepEqual(Object.keys(LOCAL_ACCESS_WRITE_TARGETS).sort(),
-    ['ifind.credential.write', 'oss.config.write', 'workbench.state.write'])
-  // 登记为 write 目标的操作必须是 filesystem 通道；反过来 filesystem 操作只有这三个是写入。
+    ['ifind.credential.write', 'oss.config.write', 'system.valuation-case.file.write', 'workbench.state.write'])
+  // 登记为 write 目标的操作必须是 filesystem 通道；固定路径的三个各自有 home 推导。
   for (const [operation, kind] of Object.entries(LOCAL_ACCESS_WRITE_TARGETS)) {
     assert.equal(LOCAL_ACCESS_OPERATIONS[operation].transport, 'filesystem', operation)
-    assert.equal(TARGETS[kind] !== undefined, true, kind)
+    if (kind !== 'workspace-file') {
+      assert.equal(TARGETS[kind] !== undefined, true, kind)
+    }
   }
   assert.equal(LOCAL_ACCESS_WRITE_TARGETS['oss.remote.write'], undefined, '上传是 shell 操作，不是文件写入')
+})
+
+// ── writeText：工作区内的动态路径（估值案例文件，协议 33）─────────────────────
+
+test('B-06 · system.valuation-case.file.write 登记为 workspace-file：面板来源、filesystem 通道、特权', () => {
+  // 估值案例文件的路径随案例走（<工作空间>/<流水>/估值输入.json），不是固定路径 ——
+  // 它的目标判据是"落在这次调用声明的工作目录边界之内"，不是"等于某一个路径"。
+  assert.equal(LOCAL_ACCESS_WRITE_TARGETS['system.valuation-case.file.write'], 'workspace-file')
+  const descriptor = LOCAL_ACCESS_OPERATIONS['system.valuation-case.file.write']
+  assert.equal(descriptor.transport, 'filesystem')
+  assert.equal(descriptor.privileged, true, '面板没有会话沙箱，写入必须逐次声明提权')
+  assert.deepEqual([...descriptor.allowedSources], ['panel'])
+})
+
+test('B-06 · workspace-file：路径落在 workdir 边界之内才放行，提权声明的 workspaceRoot 就是 workdir', async () => {
+  const workspace = '/Users/x/工作空间'
+  const { ctx, files, policies } = makeCtx()
+  const { broker } = makeBroker(ctx, grantedConsent())
+
+  const inside = await broker.writeText(
+    { operation: 'system.valuation-case.file.write', source: 'panel', workdir: workspace },
+    { kind: 'workspace-file', path: `${workspace}/估值-2026-001/估值输入.json` },
+    '{"ok":true}',
+  )
+  assert.equal(inside.ok, true, inside.error)
+  assert.deepEqual(policies.at(-1), { mode: 'danger-full-access', workspaceRoot: workspace },
+    '提权逐次声明，且沙箱边界就是员工选定的工作空间')
+  assert.equal(files[`${workspace}/估值-2026-001/估值输入.json`], '{"ok":true}')
+
+  const outside = await broker.writeText(
+    { operation: 'system.valuation-case.file.write', source: 'panel', workdir: workspace },
+    { kind: 'workspace-file', path: '/Users/x/别的目录/逃逸.json' },
+    '{}',
+  )
+  assert.equal(outside.ok, false, '边界之外的路径必须拒绝 —— 路径自律不是判据')
+  assert.equal(outside.errorKind, 'policy', '越界是策略拒绝，不是基础设施故障')
+})
+
+test('B-06 · workspace-file 的边界判定走 fs.contains（后端 realpath 后比较），不做字符串前缀匹配', async () => {
+  // 字符串前缀匹配防不住 `..`、符号链接与 Windows 分隔符 / 盘符大小写 ——
+  // `shared/utils/local-path.ts` 的边界明文要求父/子目录判定一律走 `ctx.fs.contains`。
+  const workspace = '/Users/x/工作空间'
+  const { ctx, files, containsCalls } = makeCtx()
+  const { broker } = makeBroker(ctx, grantedConsent())
+
+  const escape = await broker.writeText(
+    { operation: 'system.valuation-case.file.write', source: 'panel', workdir: workspace },
+    { kind: 'workspace-file', path: `${workspace}/../逃逸.json` },
+    '{}',
+  )
+  assert.equal(escape.ok, false, '`..` 片段逃出边界的路径必须拒绝')
+  assert.equal(escape.errorKind, 'policy')
+  assert.equal(files['/Users/x/逃逸.json'], undefined, '一个字节都不许落盘')
+  assert.equal(containsCalls.length > 0, true, '边界判定必须委托给 fs.contains，而不是自己拼字符串')
+
+  const inside = await broker.writeText(
+    { operation: 'system.valuation-case.file.write', source: 'panel', workdir: workspace },
+    { kind: 'workspace-file', path: `${workspace}\\估值-001\\估值输入.json` },
+    '{}',
+  )
+  assert.equal(inside.ok, true, inside.error)
 })
 
 test('C-08 · 登录类操作**只**允许面板来源：审核链路（Tool / 后台）永远登录不了', () => {
@@ -351,10 +433,12 @@ test('B-06 · 目标种类 / 路径对不上就拒绝，且不落盘', async () 
   assert.deepEqual(files, {})
 })
 
-test('B-06 · 三个写操作都**只**能命中自己的那一个路径（成功路径）', async () => {
+test('B-06 · 三个固定路径的写操作都**只**能命中自己的那一个路径（成功路径）', async () => {
   const { ctx, files } = makeCtx()
   const { broker } = makeBroker(ctx, grantedConsent())
+  // workspace-file 的动态路径判据单独测（见上面的边界测试），这里只钉三个固定路径。
   for (const [operation, kind] of Object.entries(LOCAL_ACCESS_WRITE_TARGETS)) {
+    if (kind === 'workspace-file') continue
     const path = TARGETS[kind](HOME)
     const result = await broker.writeText({ operation, source: 'panel', workdir: HOME }, { kind, path }, `body:${kind}`)
     assert.equal(result.ok, true, operation)
@@ -378,6 +462,7 @@ test('写入被沙箱拒绝时诊断记 sandbox-denied，不假装是基础设�
     { operation: 'oss.config.write', source: 'panel', workdir: HOME },
     { kind: 'oss-config', path: TARGETS['oss-config'](HOME) }, 'AK=1')
   assert.equal(result.ok, false)
+  assert.equal(result.errorKind, 'sandbox-denied', '结构化 errorKind 让调用方不用拿失败原话猜')
   assert.equal(broker.lastDiagnostic().errorClass, 'sandbox-denied')
   assert.equal(broker.lastDiagnostic().sandboxDenied, true)
 })
