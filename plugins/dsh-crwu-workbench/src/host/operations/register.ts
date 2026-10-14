@@ -106,7 +106,7 @@ export function createCoreOperations(
           // 第 6 层：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是「读技能目录里的文件」）。
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。
-          'open-path', 'clipboard', 'relogin', 'dws-login', 'session', 'oss-cred',
+          'open-path', 'clipboard', 'relogin', 'dws-login', 'dws-login-device-start', 'dws-login-device-status', 'dws-login-device-cancel', 'dws-login-cancel', 'session', 'oss-cred',
           // 协议 18 · 子项目 D：DWS 本机目录的只读体检与最小权限修复。
           'dws-local-doctor', 'dws-local-permission-repair',
           // 协议 16：自助更新四个操作（安装目标由 Host 自己授权，调用方只能传空参数）。

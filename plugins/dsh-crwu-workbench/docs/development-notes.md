@@ -535,6 +535,13 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 > 账号连接只读取、检查已有凭据，登录由**本机 CLI 打开系统浏览器**完成。
 > 下面这一段作为**历史调研记录**保留（它解释了当年为什么这么设计、以及那些真实报错长什么样），
 > 但**不得**据此恢复任何内置登录入口或设备码流程。取代后的口径见插件 `AGENTS.md` §4.6 / §4.8。
+>
+> ⚠️ **2026-10-13 更新（协议 32）**：这段历史结论里的**设备流**部分已被用户重新提出并落地 ——
+> 场景是「loopback 回调不通 / 无头环境」，见
+> [`superpowers/specs/2026-10-13-dws-device-login-design.md`](superpowers/specs/2026-10-13-dws-device-login-design.md)。
+> 恢复的只有设备流，而且是**新操作**（`dws-login-device-start` / `-status` / `-cancel`）：
+> **氚云的内置浏览器扫码没有回来**，loopback 的 `dws-login` 语义也没变。
+> 所以上面那句"不得恢复"今天只对**内置浏览器扫码**成立。
 
 背景：Windows 上 `crwu h3yun session login` 要自己拉起一个带 CDP 的 Chromium，机器策略与 ACL 会拒它
 （真实报错见 `src/host/core/system/auth-scratch.ts` 顶部）。目标是两个登录都改走 **DSH 桌面内置浏览器**，
@@ -885,6 +892,25 @@ DSH Runtime: （未设置） ·  · DSH 自带运行时（load_workspace_depende
   `crwuOperationOf` 里的 `h3yun session bind` 映射、`dwsLogin` 的 `--device` 分支。
 - 留下：`relogin`（`crwu h3yun session login`）与 `dws-login`（`dws auth login`）—— CLI 自己拉起
   **系统浏览器**；面板只触发 + 「重新检查」。
+- **2026-10-13 补记（协议 32）**：设备流以**新操作**恢复（`dws-login-device-start` / `-status` /
+  `-cancel`），设计见
+  [`superpowers/specs/2026-10-13-dws-device-login-design.md`](superpowers/specs/2026-10-13-dws-device-login-design.md)。
+  `dwsLogin` 的 `--device` 分支**没有**回来 —— 设备流不再挂在同步方法上，而是独立的「起会话 +
+  轮询快照 + 取消」三条（后台 `dws` 进程在 Host 手里，面板秒级拿到授权码与链接）。
+  `dws-login` 在设备流进行时会被 Host 直接拒绝：两次登录会抢同一把 `.dws` 锁。
+- **2026-10-13 二次修正（同一天，用户实测「钉钉登录不能直接打开浏览器」）**：两条登录现在都由
+  **插件**打开授权页，不再依赖 CLI 自己那次 `open` —— 上游 `oauth_provider.go:647`（loopback）与
+  `device_flow.go:302`（device）确实都会自己开，但失败是**静默的**（loopback 用 nil logger、
+  device 只记 Debug），员工看到的就是"点了没反应"。现在：传 `--no-browser`，Host 轮询输出、
+  用 `system.browser.open` 打开并把 `opened` / `openError` 报回面板。`dws-login` 因此内部改成
+  两阶段（对外形状不变），设备流优先打开「已填入授权码」的那一版链接。
+- **2026-10-13 三次修正（同一天，现场根因）**：仍然"打不开浏览器"，真因不在插件也不在 `dws`：
+  WorkBuddy 的 `agent-browser` 挂着一个**无头 Edge**（`--headless=new --user-data-dir=<临时目录>`）。
+  macOS 的规则是**某个应用已在运行时，`open <url>` 把 URL 当 Apple Event 投给正在跑的那个实例**，
+  无头实例没有窗口 → URL 被吞掉，而 `open` 退出 0（所以退出码根本不能当成功判据）。
+  `crwu` 不受影响是因为它不用 `open`：直接起浏览器进程、URL 当参数、自带临时 profile。
+  **修法**：登录授权页一律用 `open -n`（强制新实例，实测恢复了），并且把授权链接回传给面板 ——
+  `open` 的退出码不能证明页面出现了，所以"没能确认打开"时把链接摆出来让人手动打开。
 - ⚠️ 判据要**两种一起**：文件已删（`existsSync === false`）+ 面板上没有任何按钮/正文承诺
   "用设备码登录 / 在内置浏览器里扫码"。"DSH 不提供内置浏览器扫码登录"这句**免责说明**是推荐文案，
   不许被"含'内置浏览器'就报错"的粗糙断言误伤（`client-package.test.mjs` 里踩过一次）。

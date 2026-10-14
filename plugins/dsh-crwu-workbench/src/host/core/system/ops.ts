@@ -9,6 +9,7 @@ import { describeLoginAdvice, loginFailureAdvice } from './login-failure.ts'
 import type { LocalAccessBroker } from '../access/broker.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
 import { runDws } from '../../integrations/dws/run.ts'
+import { parseDwsDeviceAuthorization, type LoginHandleHolder } from './device-login.ts'
 import { defaultCaseRoot } from '../../domains/report-audit/state.ts'
 import type { WorkbenchState } from '../state/types.ts'
 
@@ -30,6 +31,13 @@ export interface SystemDeps {
   workdir: () => Promise<string>
   /** Broker（协议 18）：剪贴板 / 打开文件 / 登录都是跨边界的本机动作。 */
   access: LocalAccessBroker
+  /**
+   * loopback 登录的句柄持有者（协议 32）。
+   *
+   * 有它，员工才能在"登录钉钉迟迟不回来"时**真的把那条命令杀掉**、改用设备流登录；
+   * 插件卸载时也靠它收尾（现场留下过三个占着 `~/.dws` 锁的 `dws auth login` 进程）。
+   */
+  loginHandles?: LoginHandleHolder
 }
 
 export interface SimpleResult {
@@ -126,52 +134,175 @@ export interface LoginResult {
   advice: string
 }
 
+/**
+ * 钉钉登录的结果：在 {@link LoginResult} 之上多两条**只有它需要**的事实。
+ *
+ * 「授权页由插件打开」是 dws 那条路独有的 —— 氚云走 `crwu`，浏览器由 CLI 自己拉起，
+ * 插件插不上手，所以那一条（{@link ReloginResult}）不该被迫回一个恒为 `false` 的 `opened`。
+ */
+export interface DwsLoginResult extends LoginResult {
+  /** 这次登录被员工主动取消（改用设备流登录）——界面据此说"已取消"而不是"失败"。 */
+  cancelled: boolean
+  /**
+   * 这次登录要打开的授权页链接；空串 = 命令还没打印出链接就失败了。
+   *
+   * 为什么要回传：`open` 退出 0 **不**等于页面真的出现了（见 `openExternalCommand` 的注释），
+   * 所以面板要在"没能打开"时把链接摆出来让人自己点/复制 —— 而不是让员工对着一个空窗口猜。
+   */
+  url: string
+  /**
+   * 授权页**已经由插件打开**了。
+   *
+   * 为什么要插件自己开：`dws` 自己那次 `open` 失败是**静默的**（上游 loopback 那条路用的是
+   * nil logger，device 那条只记 Debug），员工看到的就是"点了没反应"。插件走
+   * `system.browser.open`（与「查看报告」同一条已验证路径）并把结果如实报出来。
+   */
+  opened: boolean
+  /** 打开授权页失败的原因；空串 = 没失败过 / 还没到打开那一步。 */
+  openError: string
+}
+
 /** 输出可能很长（扫码登录会打印提示），只回尾部给界面。 */
 function tails(run: { stdout?: unknown; stderr?: unknown }): { stdoutTail: string; stderrTail: string } {
   return { stdoutTail: text(run.stdout).slice(-600), stderrTail: text(run.stderr).slice(-600) }
 }
 
 
+/** 轮询 dws 输出的间隔 / 总时限；测试注入小值把等待变成确定事件。 */
+export const DWS_LOGIN_POLL_MS = 300
+export const DWS_LOGIN_LIMIT_MS = 300_000
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => { setTimeout(resolve, ms) })
+
+export interface DwsLoginOptions {
+  pollMs?: number
+  limitMs?: number
+}
+
 /**
- * 钉钉登录（`dws auth login`，OAuth loopback + **系统浏览器**）。
+ * 钉钉登录（`dws auth login`，OAuth loopback）。
  *
- * ⚠️ **没有设备码分支**（2026-09-30 口径）：DSH 不再提供钉钉设备码登录 —— 入参里的 `device`
- * 被忽略（调用方也不再传它）。需要设备码的用户请在本机终端跑 `dws auth login --device`：
- * 那是 CLI 自己的能力，不属于插件界面。
+ * ## 为什么要**后台**跑，而不是一次前台 `runShell`
  *
- * CLI 自己拉起系统浏览器：插件不创建浏览器 Tab、不显示二维码 / 设备码、也不轮询登录进度。
+ * 授权页必须由**插件**打开，而链接只出现在命令的输出里 —— 前台跑要等命令结束（最长 5 分钟）
+ * 才拿得到输出，那时链接早没用了。所以：起后台进程 → 轮询输出 → 一看到链接就打开它 →
+ * 继续等命令结束（人在浏览器里完成授权需要时间）。
+ *
+ * 对外仍然是一次「点一下、等结果」的调用：返回值与从前同一形状，只多了 `opened` / `openError`。
+ *
+ * ⚠️ `--no-browser`：dws 自己那次打开失败是静默的（nil logger），所以这里明确让它别开，
+ * 免得出现"两个窗口"或"看似什么都没发生"。
  */
-export async function dwsLogin(deps: SystemDeps, _args: Record<string, unknown>, home: string): Promise<LoginResult> {
+export async function dwsLogin(
+  deps: SystemDeps,
+  _args: Record<string, unknown>,
+  home: string,
+  options: DwsLoginOptions = {},
+): Promise<DwsLoginResult> {
+  const pollMs = options.pollMs ?? DWS_LOGIN_POLL_MS
+  const limitMs = options.limitMs ?? DWS_LOGIN_LIMIT_MS
   // 用**包内绝对路径**：只按名字调用在 Finder 启动的桌面端会 `bash: dws: command not found`，
-  // 表现就是「点了钉钉登录没有任何反应」（客户端此前又把返回值丢掉了，所以连错误都看不到）。
-  const argv = [await resolveBundledCommand(deps.ctx, deps.platform, 'dws'), 'auth', 'login']
+  // 表现就是「点了钉钉登录没有任何反应」。
+  const argv = [await resolveBundledCommand(deps.ctx, deps.platform, 'dws'), 'auth', 'login', '--no-browser']
   const workdir = await deps.workdir()
-  // 目录与临时目录都用 CLI 自己的默认：插件不再替它决定位置（自指定目录那条通道已整体下掉，见 §16）。
-  const run = await deps.access.runShell(
+  const started = await deps.access.startShell(
     { operation: 'dws.auth.login', source: 'panel', workdir },
     shellInvoke(argv[0] ?? '', argv.slice(1), deps.platform),
-    // 扫码要等人，5 分钟。
-    { timeoutMs: 300_000, summary: 'dws auth login' },
+    { timeoutMs: limitMs, summary: 'dws auth login' },
   )
-  // 钉钉这条路以前**不做归因**（`runDws` 才做），于是沙箱挡住 `.dws` 锁时员工看到的是
-  // dws 的原话（像它自己的 bug）。设备码那条同样要抢同一个锁，所以归因对两条都成立。
-  const advice = loginFailureAdvice('dws', {
-    error: run.error, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode,
-    timedOut: run.timedOut, sandbox: run.sandbox,
-  })
+  if (!started.ok) {
+    const advice = loginFailureAdvice('dws', { error: started.error, sandbox: started.sandbox })
+    return {
+      ok: false,
+      error: advice.blocked ? describeLoginAdvice('dws', advice, started.error) : started.error,
+      timedOut: false, stdoutTail: '', stderrTail: '',
+      sandboxBlocked: advice.blocked, advice: advice.blocked ? advice.action : '',
+      opened: false, openError: '', url: '', cancelled: false,
+    }
+  }
+
+  const handle = started.handle
+  const holder = deps.loginHandles
+  holder?.set(handle)
+  const deadline = Date.now() + limitMs
+  let output = ''
+  let timedOut = false
+  let cancelled = false
+  let opened = false
+  let openError = ''
+  let attemptedUrl = ''
+  let authorizationUrl = ''
+  try {
+  for (;;) {
+    // `readOutput()` 是**合并流**（stderr 带标记一起给），所以报错也在这份输出里 ——
+    // 归因看得到它，不需要第二个读法。
+    const read = handle.read()
+    if (read.delta !== '') output += read.delta
+    const parsed = parseDwsDeviceAuthorization(output)
+    if (parsed.url !== '' && attemptedUrl !== parsed.url) {
+      attemptedUrl = parsed.url
+      authorizationUrl = parsed.url
+      const run = await deps.access.runShell(
+        { operation: 'system.browser.open', source: 'panel', workdir },
+        // 登录授权页用新实例：别人挂着的无头浏览器会把 URL 吞掉（且 `open` 仍退出 0）。
+        openExternalCommand(parsed.url, deps.platform, { newInstance: true }),
+        { timeoutMs: 30_000, summary: 'system.browser.open' },
+      )
+      opened = run.ok
+      openError = run.ok ? '' : (text(run.stderr) || text(run.error) || '打开命令未成功').slice(0, 200)
+    }
+    if (handle.status() !== 'running') break
+    // 员工改用设备流登录：句柄持有者已经把命令杀了，这里立刻收尾让出 `~/.dws` 锁。
+    if (holder?.cancelled === true) {
+      cancelled = true
+      break
+    }
+    if (Date.now() >= deadline) {
+      timedOut = true
+      handle.kill()
+      break
+    }
+    await delay(pollMs)
+  }
+  } finally {
+    holder?.clear()
+  }
+  const rest = handle.read()
+  if (rest.delta !== '') output += rest.delta
+
+  // 沙箱事实按 `loginFailureAdvice` 认的形状给（后台句柄只回 `{ mode, denied, runnerFailed }`）。
+  const info = handle.sandbox()
+  const sandbox = info === undefined
+    ? undefined
+    : {
+        requested: '', resolved: '', ran: text(info.mode),
+        denied: info.denied === true, runnerFailed: info.runnerFailed === true,
+      }
+  const exitCode = handle.exitCode()
+  const advice = loginFailureAdvice('dws', { error: '', stdout: output, stderr: '', exitCode, timedOut, sandbox })
   // 成功时 `error` 必须是空串（旧形状）：`describeFailure` 对成功会回「命令退出码 0」，
   // 那会让界面把一次成功显示成失败。
-  const raw = text(run.stderr).trim() || text(run.error).trim()
-  const error = run.ok
+  const raw = text(output).trim()
+  const ok = !timedOut && !cancelled && exitCode === 0
+  const error = ok
     ? ''
-    : (advice.blocked ? describeLoginAdvice('dws', advice, raw) : describeFailure(run))
+    : (cancelled
+        ? '已取消这次登录'
+        : (advice.blocked
+            ? describeLoginAdvice('dws', advice, raw)
+            : (raw !== '' ? raw.slice(-600) : `dws auth login 退出码 ${String(exitCode ?? 'unknown')}`)))
   return {
-    ok: run.ok,
+    ok,
     error,
-    timedOut: run.timedOut,
-    sandboxBlocked: advice.blocked,
-    advice: advice.blocked ? advice.action : '',
-    ...tails(run),
+    timedOut,
+    sandboxBlocked: advice.blocked && !cancelled,
+    advice: advice.blocked && !cancelled ? advice.action : '',
+    opened,
+    openError,
+    url: authorizationUrl,
+    cancelled,
+    ...tails({ stdout: output, stderr: '' }),
   }
 }
 

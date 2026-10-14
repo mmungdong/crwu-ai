@@ -45,7 +45,7 @@ Dated acceptance, review, handoff, plan, and spec files are historical evidence,
 - Construct command arguments inside the owning Tool, quote every argument, pass cancellation signals, and return structured failure kinds rather than throwing ordinary command failures.
 - Sanitize stdout, stderr, errors, diagnostics, and model-visible results. Credentials, authorization headers, signed URLs, absolute secret paths, and raw commands never leave Host internals.
 - Credential reads and writes pass a named broker operation before touching a provider, filesystem, credential store, or network. UI disablement is not an authorization boundary.
-- H3Yun, DingTalk, OSS, and iFinD identities always remain employee-scoped. Login uses the local CLI and system browser; the plugin does not collect passwords, browser cookies, QR credentials, or device codes.
+- H3Yun, DingTalk, OSS, and iFinD identities always remain employee-scoped. Login uses the local CLI and system browser; the plugin does not collect passwords, browser cookies, or QR credentials. Device-flow login (protocol 32) is the one narrow exception to "no device codes": the panel echoes the **current employee's own** `user_code` back to that same employee from the Host-parsed `dws` output, and never persists it, logs it, records it in diagnostics, or exposes it to an agent or any model-visible result.
 
 ## Audit and workspace boundaries
 

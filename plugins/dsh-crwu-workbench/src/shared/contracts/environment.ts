@@ -12,6 +12,21 @@ import type { AuditRootView } from './report-audit.ts'
 import type { LocalAccessConsentView } from '../access/types.ts'
 import type { EnvironmentStateView } from '../environment/model.ts'
 
+/** 钉钉设备流登录的一次快照（协议 32）。 */
+export interface DwsDeviceLoginView {
+  phase: 'running' | 'ok' | 'failed' | 'timeout' | 'cancelled'
+  url: string
+  urlManual: string
+  userCode: string
+  tail: string
+  error: string
+  advice: string
+  sandboxBlocked: boolean
+  deadlineAt: string
+  opened: boolean
+  openError: string
+}
+
 export interface WorkspaceView {
   chosen: boolean
   path: string

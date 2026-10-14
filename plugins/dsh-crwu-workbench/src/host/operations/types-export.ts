@@ -7,6 +7,7 @@ import type { DiscussionScopeRegistry } from '../domains/report-audit/discussion
 import type { LocalAuditRegistry } from '../domains/local-audit/handoff.ts'
 import type { LocalAuditFs } from '../domains/local-audit/scan.ts'
 import type { SnapshotIo } from '../domains/local-audit/snapshot.ts'
+import type { DwsDeviceLoginRegistry, LoginHandleHolder } from '../core/system/device-login.ts'
 
 /**
  * 操作表的**注入面**（协议 32 · Task 3 从 `core.ts` 抽出）。
@@ -47,4 +48,8 @@ export interface HostResolvers {
   localAuditFs?: LocalAuditFs
   /** 本地审核快照的 IO（测试注入内存替身）。 */
   localAuditIo?: SnapshotIo
+  /** 钉钉设备流登录会话注册表（协议 32）。 */
+  deviceLogin?: DwsDeviceLoginRegistry
+  /** 正在运行的 loopback 登录句柄（协议 32）。 */
+  loginHandles?: LoginHandleHolder
 }

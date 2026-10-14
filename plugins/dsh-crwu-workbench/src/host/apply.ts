@@ -28,6 +28,7 @@ import { ValuationLifecycles } from './domains/report-evaluation/lifecycle/index
 import { ValuationScopes } from './domains/report-evaluation/scope.ts'
 import { createDiscussionScopeRegistry } from './domains/report-audit/discussion-scope.ts'
 import { createLocalAuditRegistry } from './domains/local-audit/handoff.ts'
+import { createDwsDeviceLoginRegistry, createLoginHandleHolder } from './core/system/device-login.ts'
 import { nodeSnapshotIo } from './domains/local-audit/snapshot.ts'
 import { nodeLocalAuditFs } from './domains/local-audit/scan.ts'
 
@@ -154,14 +155,31 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     home: () => world.home(),
     access,
   })
-  // 钉钉登录会话（协议 21）：它握着后台进程与定时器，必须按插件实例持有并在卸载时收尾 ——
-  // 残留就是「看不见的进程还占着 ~/.dws 的登录态锁」，下一次登录会莫名其妙失败。
+  /**
+   * **钉钉设备流登录**（协议 32）。它握着一条后台 `dws` 进程与一个轮询定时器，必须按插件实例
+   * 持有并在卸载时收尾 —— 残留就是「看不见的进程还占着 `~/.dws` 的登录态锁」，
+   * 员工下一次登录会莫名其妙失败。
+   *
+   * （上面这一段的旧版本讲的是协议 21 的两阶段登录；协议 22 把那条链路整体删掉之后，
+   * 注释留了下来而代码没有 —— 这次它重新有了对应的东西。）
+   */
+  const deviceLogin = createDwsDeviceLoginRegistry()
+  // loopback 那条路自己不管句柄（它是一次同步调用），但同样要有东西能在卸载时收尾 ——
+  // 现场留下过三个占着 `~/.dws` 锁的 `dws auth login` 进程。
+  const loginHandles = createLoginHandleHolder()
+  ctx.effect(() => () => {
+    loginHandles.dispose()
+    void deviceLogin.dispose()
+  }, 'crwu-workbench: dws login sessions')
   const operations = createCoreOperations(
     ctx,
     config,
     state,
     world,
-    { form, python, access, discussionScopes, localAudit, localAuditFs: nodeLocalAuditFs(), localAuditIo },
+    {
+      form, python, access, discussionScopes, localAudit,
+      localAuditFs: nodeLocalAuditFs(), localAuditIo, deviceLogin, loginHandles,
+    },
     {
       update: update.operations,
       valuation: createValuationOperations({ ctx, state, access, world, python, lifecycles: valuationLifecycles, scopes: valuationScopes }),

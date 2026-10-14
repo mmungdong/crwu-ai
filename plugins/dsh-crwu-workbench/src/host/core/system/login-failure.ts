@@ -104,7 +104,7 @@ const POLICY_REASONS: Record<LoginKind, string> = {
 
 const POLICY_ACTIONS: Record<LoginKind, string> = {
   h3yun: '在输入框下方的访问模式里选「完全权限」（或输入 /permission danger-full-access），回到「账号连接」再点一次「扫码登录氚云」。',
-  dws: '在输入框下方的访问模式里选「完全权限」（或输入 /permission danger-full-access），回到「账号连接」再点一次「钉钉登录」。设备码登录同样要创建/打开这个锁文件，在这个模式下也走不通。',
+  dws: '在输入框下方的访问模式里选「完全权限」（或输入 /permission danger-full-access），回到「账号连接」再点一次「钉钉登录」。设备流登录同样要创建/打开这个锁文件，在这个模式下也走不通。',
 }
 
 /**
@@ -140,7 +140,7 @@ const MACHINE_ACTIONS: Record<LoginKind, string> = {
     + '实测这**不是一次性步骤**：非提权运行时，即使登录态文件已经存在也打不开；'
     + '因此这台机器上凡是依赖 `dws` 的功能（知识库下载、钉钉归档与通知）同样需要提权才能用。'
     + '**长期正解：让 IT 按程序放行随插件发布的 `dws.exe`**（放行后即可恢复普通权限运行）。'
-    + '「设备码登录」同样要创建这个锁文件，所以不是绕过办法。',
+    + '「设备流登录」同样要创建这个锁文件，所以不是绕过办法。',
 }
 
 function textList(values: readonly unknown[]): string {

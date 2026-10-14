@@ -197,7 +197,44 @@ function fakeWorld(patch = {}) {
   }
 }
 
-function operationsFor(config = {}, sessions, world = fakeWorld()) {
+/**
+ * 一份"只记下被要求跑什么"的 access 替身。
+ *
+ * 为什么不用真 Broker：它的判据包含授权收据，而这份测试盯的是**handler 有没有在起进程之前拦住**，
+ * 不是授权逻辑（那由 `local-access-*` 那几份测试负责）。这里数的是"桥被问了几次"。
+ */
+function recordingAccess(asked) {
+  return {
+    authorize: () => ({ ok: true, error: '' }),
+    runShell: async (_call, command) => {
+      asked.push(command)
+      return { ok: true, error: '', stdout: '', stderr: '', exitCode: 0, timedOut: false }
+    },
+    // 后台起进程也要记下来：loopback 那条路现在是"先 startShell 起 dws、再轮询输出"，
+    // 所以"有没有真的去跑 dws"要看这里。回一个"已经结束、退出码 0"的句柄让它走得完。
+    startShell: async (_call, command) => {
+      asked.push(command)
+      return {
+        ok: true,
+        handle: {
+          read: () => ({ delta: '', lossy: false }),
+          kill: () => false,
+          done: Promise.resolve(),
+          exitCode: () => 0,
+          status: () => 'completed',
+          sandbox: () => undefined,
+        },
+      }
+    },
+    writeText: async () => ({ ok: true, error: '' }),
+    note: () => {},
+    consent: () => ({ state: 'granted' }),
+    diagnostics: () => [],
+    lastDiagnostic: () => null,
+  }
+}
+
+function operationsFor(config = {}, sessions, world = fakeWorld(), extraResolvers = {}) {
   const resolved = resolveConfig(config)
   const state = createWorkbenchState(resolved)
   // ctx 必须是「服务在但答不出来」的形态：包形态的所有服务都走 `ctx.get`，
@@ -259,7 +296,7 @@ function operationsFor(config = {}, sessions, world = fakeWorld()) {
     fs: stubFs,
     operations: createCoreOperations(
       ctx, resolved, state, world,
-      { form, python, access: makeTestAccess(ctx, { state }).access },
+      { form, python, access: makeTestAccess(ctx, { state }).access, ...extraResolvers },
       { update: update.operations, valuation },
     ),
   }
@@ -356,7 +393,7 @@ test('ping and boot answer with the state the panel needs to render', async () =
   //      结果里却写"未指定基准日"，这是会把业务结果弄错的一类）；
   //   ② `valuation-intake` 不再在返回前串行预检三家站点，`providers` 初始为「尚未检查」；
   //   ③ `valuation-status` 的 `progress.stage` 开始承载提取阶段（进度区显示真实阶段）。
-  assert.equal(WORKBENCH_PROTOCOL, 33, '估值提取链路必须识别旧 Host')
+  assert.equal(WORKBENCH_PROTOCOL, 34, '估值提取链路必须识别旧 Host')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -414,9 +451,74 @@ test('the Host half still registers the frozen inventory of operations', async (
   // 38 → 39（协议 23，2026-09-30）：报告讨论会话的受限材料登记 `discussion-material-open`。
   // 39 → 42（协议 28，2026-10-11）：**本地审核**三条 —— `local-audit-status`（扫描）/
   // `local-audit-start`（建快照与一次性 handoff）/ `local-audit-claim`（在对话里认领）。
-  // 42 → 50（协议 32，2026-10-12）：**报告评估（房地产估值）** 八条 ——
-  // 本机选择扫描 / 资料入口 / 外部来源预检 / 启动 / 状态 / 取消 / 结果 / 打开交付件。
-  assert.equal(FROZEN_OPERATION_COUNT, 50)
+  // 42 → 45（协议 32，2026-10-13）：**钉钉设备流登录**三条 —— `dws-login-device-start` /
+  // `-status` / `-cancel`；45 → 46：再加 `dws-login-cancel`（取消正在跑的 loopback 登录 ——
+  // 两条路抢同一把 `.dws` 锁，没有它员工点了登录钉钉就只能干等）。协议 22 删掉的两阶段登录这次以**新操作**恢复（loopback 的
+  // `dws-login` 语义未变），旧宿主没有它们、新界面点下去只会 404，所以必须靠协议号分开。
+  assert.equal(FROZEN_OPERATION_COUNT, 54)
+})
+
+test('设备流正在跑时 dws-login 被拒，且一个进程都不起（两个登录抢同一把 .dws 锁）', async () => {
+  // 为什么要在**真实操作表**上验：判据在 `dws-login` 的 handler 里，而"拦住了"不等于
+  // "没起进程"—— 只有数到"一次 Broker 调用都没有"才证明没有第二条 `dws` 去抢那把锁。
+  const view = {
+    phase: 'running', url: '', userCode: '', tail: '', error: '', advice: '',
+    sandboxBlocked: false, deadlineAt: '2026-10-13T00:05:00.000Z',
+  }
+  const deviceLogin = {
+    running: () => true,
+    start: async () => view,
+    status: () => view,
+    cancel: () => view,
+    dispose: async () => {},
+  }
+  const asked = []
+  const { operations } = operationsFor({}, undefined, fakeWorld(), {
+    deviceLogin, access: recordingAccess(asked),
+  })
+  const result = await operations['dws-login']({})
+  assert.equal(result.ok, false)
+  assert.match(result.error, /设备流登录正在进行/)
+  assert.match(result.error, /取消/)
+  assert.deepEqual(asked, [], '被拦住还不够：一个 dws 进程都不许起')
+})
+
+test('dws-login-cancel 真的去杀正在跑的 loopback（否则设备流只能卡在同一把锁上）', async () => {
+  const calls = []
+  const loginHandles = {
+    set: () => {}, clear: () => {}, dispose: () => {},
+    cancel: () => { calls.push('cancel'); return true },
+    cancelled: false,
+  }
+  const { operations } = operationsFor({}, undefined, fakeWorld(), { loginHandles })
+  const result = await operations['dws-login-cancel']({})
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls, ['cancel'], '必须真的把那条命令杀掉 —— 它占着 ~/.dws 的锁')
+
+  // 没有在跑的登录时**不许**说取消成功：面板要靠这个事实决定"还要不要等前一次落定"。
+  const idle = operationsFor({}, undefined, fakeWorld(), {
+    loginHandles: { set: () => {}, clear: () => {}, dispose: () => {}, cancel: () => false, cancelled: false },
+  })
+  const none = await idle.operations['dws-login-cancel']({})
+  assert.equal(none.ok, false)
+  assert.match(none.error, /没有正在进行/)
+})
+
+test('设备流没在跑时 dws-login 照常走本机 CLI', async () => {
+  const deviceLogin = {
+    running: () => false,
+    start: async () => { throw new Error('不该被调到') },
+    status: () => null,
+    cancel: () => { throw new Error('不该被调到') },
+    dispose: async () => {},
+  }
+  const asked = []
+  const { operations } = operationsFor({}, undefined, fakeWorld(), {
+    deviceLogin, access: recordingAccess(asked),
+  })
+  await operations['dws-login']({})
+  assert.equal(asked.length, 1, '没有设备流在跑就不许拦 loopback')
+  assert.match(asked[0], /dws auth login/)
 })
 
 test('every operation the client facade sends is declared as ported', async () => {

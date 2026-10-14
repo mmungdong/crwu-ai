@@ -5,7 +5,7 @@ import type {
 } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
 import type {
-  AccessDiagnosticsView, AuditRootView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
+  AccessDiagnosticsView, AuditRootView, DwsDeviceLoginView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
 } from '../../../shared/types.ts'
 import type { LocalAccessConsentView } from '../../../shared/access/types.ts'
 import {
@@ -340,10 +340,18 @@ export interface WorkbenchApi extends UpdateApi {
   /**
    * 钉钉登录（`dws auth login`，CLI 自己拉起**系统浏览器**）。
    *
-   * ⚠️ 没有 `device` 入参、也没有 start/status 两阶段（2026-09-30 下掉）：DSH 不提供设备码登录，
-   * 也不轮询登录进度。需要设备码的用户在本机终端跑 `dws auth login --device`。
+   * ⚠️ 这条路**没有** `device` 入参：设备流走下面三条独立操作（协议 32），
+   * 不是给这个方法加一个分支 —— 两者的生命周期完全不同（一个同步等 5 分钟，一个是后台会话）。
    */
   dwsLogin: () => Promise<SimpleResult & { timedOut?: boolean; stdoutTail?: string; stderrTail?: string; sandboxBlocked?: boolean; advice?: string }>
+  /** 设备流登录：起一次会话并立刻回快照（秒级拿到授权码与链接）。 */
+  dwsLoginDeviceStart: () => Promise<DwsDeviceLoginView>
+  /** 设备流登录的当前快照；从没起过回 `null`。面板据此轮询到终态。 */
+  dwsLoginDeviceStatus: () => Promise<DwsDeviceLoginView | null>
+  /** 取消正在跑的设备流登录（幂等）。 */
+  dwsLoginDeviceCancel: () => Promise<DwsDeviceLoginView>
+  /** 取消正在跑的 **loopback** 登录（员工改用设备流登录时先调它，让出 `.dws` 锁）。 */
+  dwsLoginCancel: () => Promise<SimpleResult>
   clipboard: (args: { text: string }) => Promise<SimpleResult>
   openPath: (args: { path: string }) => Promise<SimpleResult & { path: string }>
   crwu: (args: { argv: string[]; workdir?: string; timeoutMs?: number }) => Promise<Record<string, unknown>>
@@ -409,6 +417,11 @@ export const workbenchApi: WorkbenchApi = {
   dwsLocalPermissionRepair: (args) => call('dws-local-permission-repair', args),
   relogin: () => call('relogin'),
   dwsLogin: () => call('dws-login'),
+  // 协议 32：设备流登录三条。入参一律为空 —— URL / 授权码 / 命令都由 Host 自己解析。
+  dwsLoginDeviceStart: () => call('dws-login-device-start'),
+  dwsLoginDeviceStatus: () => call('dws-login-device-status'),
+  dwsLoginDeviceCancel: () => call('dws-login-device-cancel'),
+  dwsLoginCancel: () => call('dws-login-cancel'),
   clipboard: (args) => call('clipboard', args),
   openPath: (args) => call('open-path', args),
   crwu: (args) => call('crwu', args),
@@ -464,6 +477,10 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   dwsLocalPermissionRepair: 'dws-local-permission-repair',
   relogin: 'relogin',
   dwsLogin: 'dws-login',
+  dwsLoginDeviceStart: 'dws-login-device-start',
+  dwsLoginDeviceStatus: 'dws-login-device-status',
+  dwsLoginDeviceCancel: 'dws-login-device-cancel',
+  dwsLoginCancel: 'dws-login-cancel',
   clipboard: 'clipboard',
   openPath: 'open-path',
   crwu: 'crwu',

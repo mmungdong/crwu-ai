@@ -193,8 +193,10 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    ③ `valuation-status` 的 `progress.stage` 开始承载提取阶段（正在检查资料 / 正在复制资料 /
  *       …）—— 旧宿主不回阶段，新界面的进度区只能显示"正在提取资料…"这一句。
  *    必须 +1 的理由：①会让**业务结果**变错（基准日丢了但界面不报错），这正是协议号该喊出来的。
+ * 34：合并钉钉设备流登录与估值提取协议，新增设备流 start / status / cancel 与 loopback cancel。
+ *    main 的协议 32 和开发分支的协议 33 均缺少合并后的完整能力，必须重启到同一代。
  */
-export const WORKBENCH_PROTOCOL = 33
+export const WORKBENCH_PROTOCOL = 34
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

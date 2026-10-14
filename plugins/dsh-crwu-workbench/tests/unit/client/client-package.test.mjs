@@ -2830,9 +2830,10 @@ function envPaneProps(env, patch = {}) {
   }
 }
 
-test('账号连接只读取、检查已有凭据：没有内置浏览器登录、没有二维码、没有设备码', async () => {
-  // §8「登录」清单 1~4：页面不存在氚云内置浏览器登录按钮 / 不存在钉钉设备码按钮 /
-  // DSH 不打开内置浏览器 Tab / 不生成二维码或设备码。四条一起用两种判据钉住：
+test('账号连接：loopback 是首选，设备流是回调不通时的备用入口（仍然没有内置浏览器扫码）', async () => {
+  // 2026-10-13（协议 32）口径变了：**设备流登录回来了**（loopback 回调不通 / 无头环境的退路），
+  // 所以"面板不提供设备码"这条不再是判据。仍然钉住的是：没有内置浏览器扫码、没有二维码、
+  // 老的两颗本机 CLI 按钮没丢、设备流按钮与它的用途说明必须在。
   // ① 相关**模块文件**已经删掉（没有 Tab、没有二维码渲染器、也没有内置浏览器优先的打开器）；
   // ② 面板上没有任何带这些字样的按钮，正文里也不出现"设备码 / 内置浏览器"这类承诺。
   for (const gone of [
@@ -2855,21 +2856,69 @@ test('账号连接只读取、检查已有凭据：没有内置浏览器登录�
   // 后者正是推荐文案（员工要知道为什么点不到二维码 / 设备码）。
   for (const forbidden of [
     '在内置浏览器里扫码登录', '准备内置浏览器', '请用钉钉扫描二维码', '已绑定氚云会话',
-    '内置浏览器登录未完成', '用设备码登录', '复制设备码', '等待浏览器授权',
+    '内置浏览器登录未完成', '等待浏览器授权',
   ]) {
     assert.equal(accountsText.includes(forbidden), false, `账号连接里不许再出现「${forbidden}」`)
   }
   const labels = findAll(accounts, (node) => node.type === 'button')
     .map((node) => String(node.props?.label ?? '') + textOf(node))
   for (const label of labels) {
-    assert.equal(/用设备码登录|设备码登录|在内置浏览器里扫码/.test(label), false, `按钮文案「${label}」不许提设备码 / 内置浏览器登录`)
+    assert.equal(/在内置浏览器里扫码/.test(label), false, `按钮文案「${label}」不许提内置浏览器登录`)
   }
   // 兼容路径仍在：走本机 CLI（打开**系统浏览器**）的两颗按钮 + 说明。
   assert.ok(findButtonLike(accounts, zhCN.envLoginH3yun), '氚云登录按钮仍在（走本机 CLI）')
   assert.ok(findButtonLike(accounts, zhCN.dwsLogin), '钉钉登录按钮仍在（走本机 CLI）')
   assert.equal(accountsText.includes(zhCN.envLoginNoBuiltinBrowser), true, '要明说 DSH 不提供内置浏览器扫码登录')
-  assert.equal(accountsText.includes(zhCN.envDwsLoginNoDeviceCode), true, '要明说 DSH 不提供设备码登录')
+  // 协议 32：设备流登录必须真的在页面上，而且**只用一句话**告诉员工什么时候该用它
+  //（2026-10-13 用户口径：这一步的说明文字太啰嗦，只留"登录钉钉不行就试设备流"）。
+  assert.ok(findButtonLike(accounts, zhCN.deviceLoginStart), '设备流登录按钮必须在「钉钉认证」那一行')
+  assert.equal(accountsText.includes(zhCN.envDwsLoginDeviceHint), true, '要有一句话指出"登录钉钉按钮一直失败就试设备流"')
+  // 两段长说明已经撤掉：它们要么与按钮文案重复，要么由 Host 的归因在**失败那一刻**按需给出。
+  // ⚠️ 判据必须是**键不存在**：键删掉之后 `accountsText.includes(zhCN.x)` 里的 `zhCN.x` 是
+  // `undefined`，`includes` 会把它转成字符串 "undefined" —— 那种断言恒为 false，什么都没守住
+  //（2026-10-13 评审抓到：它看起来像回归护栏，实际连"段落原样回来"都拦不住）。
+  for (const gone of ['envDwsLoginDeviceFallback', 'envLoginSandboxHint', 'deviceLoginStartHint']) {
+    assert.equal(Object.hasOwn(zhCN, gone), false, `${gone} 已经没人渲染了，就不该留在文案表里（死文案）`)
+  }
   assert.equal(text.includes(zhCN.loadingEnv), false)
+})
+
+test('设备流登录等待中：面板把授权码与链接原样画出来，并给出取消 / 打开 / 复制', async () => {
+  // 这条是**静态渲染**判据（替身不跑 effect）：它证明卡片是 view 的纯函数 ——
+  // 秒级出码那件事由 store 的测试负责（`client-dws-device-login.test.mjs`）。
+  const { EnvironmentPane } = await import(new URL('src/client/modules/environment/ui/EnvironmentPane.tsx', ROOT).href)
+  const deviceLogin = {
+    phase: 'running', url: 'https://s.dingtalk.com/abc?user_code=ABCD-EFGH',
+    urlManual: 'https://s.dingtalk.com/abc', userCode: 'ABCD-EFGH',
+    tail: '', error: '', advice: '', sandboxBlocked: false,
+    deadlineAt: '2099-01-01T00:05:00.000Z', opened: true, openError: '',
+  }
+  const tree = render(EnvironmentPane, envPaneProps(okEnvBody(), { deviceLogin })).tree
+  findStep(tree, 'accounts').props.onClick()
+  const accounts = rerender(EnvironmentPane, envPaneProps(okEnvBody(), { deviceLogin }))
+  const text = textOf(accounts)
+  assert.equal(text.includes('ABCD-EFGH'), true, '授权码要原样显示给本人抄写')
+  assert.equal(text.includes('https://s.dingtalk.com/abc?user_code=ABCD-EFGH'), true,
+    '首选链接（已填入授权码）要显示出来：员工只要点确认')
+  assert.equal(text.includes(zhCN.deviceLoginLinkManualLabel), true, 'dws 给的手动链接也要在（完整链接打不开时的退路）')
+  assert.ok(findButtonLike(accounts, zhCN.deviceLoginCancel), '等待中要能取消')
+  assert.ok(findButtonLike(accounts, zhCN.deviceLoginOpen), '要有手动打开授权页的按钮')
+  assert.ok(findButtonLike(accounts, zhCN.deviceLoginCopyCode), '授权码要能一键复制')
+  // 已经拿到码了就不该再显示"什么时候用它"的说明（那时它是噪音）。
+  assert.equal(text.includes(zhCN.envDwsLoginDeviceHint), false, '已经拿到码了就不用再说"不行就试设备流"')
+})
+
+test('登录钉钉在跑时：设备流那颗按钮**可用**，并写着「改用设备流登录」', async () => {
+  // 用户实测的故障：点了「登录钉钉」之后设备流按钮是**灰的**，而 loopback 最长要等 5 分钟 ——
+  // 员工没有任何出路。所以这一条钉的是"它必须能点"，而不只是"它在页面上"。
+  const { EnvironmentPane } = await import(new URL('src/client/modules/environment/ui/EnvironmentPane.tsx', ROOT).href)
+  const tree = render(EnvironmentPane, envPaneProps(okEnvBody(), { deviceLoginBusy: true })).tree
+  findStep(tree, 'accounts').props.onClick()
+  const accounts = rerender(EnvironmentPane, envPaneProps(okEnvBody(), { deviceLoginBusy: true }))
+  const button = findButtonLike(accounts, zhCN.deviceLoginSwitch)
+  assert.ok(button, '要有「改用设备流登录」这颗按钮')
+  assert.equal(button.props.disabled === true, false, '它必须是可点的 —— 灰着就等于没有出路')
+  assert.equal(typeof button.props.onClick, 'function')
 })
 
 test('可选步骤（同花顺）未配置时只说「未配置」，芯片不报红', async () => {

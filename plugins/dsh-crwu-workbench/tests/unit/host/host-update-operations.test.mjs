@@ -759,7 +759,7 @@ test('20. 协议号覆盖当前页批量 OSS 查询与请求取消', () => {
   //   `failed to ensure project directory "": ENOENT: mkdir ''`（用户实测），必须靠协议号拦住。
   // 33（2026-10-13）= 估值提取链路：`valuation-intake` 入参新增 `baseDate` 并回显、
   //   intake 不再串行预检三家站点、`valuation-status` 的 progress 承载提取阶段。
-  assert.equal(WORKBENCH_PROTOCOL, 33)
+  assert.equal(WORKBENCH_PROTOCOL, 34)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

@@ -13,6 +13,7 @@ import { PERMISSION_SCHEMA_VERSION } from '../../shared/access/types.ts'
 import { adoptWorkspace, autoWorkspace, pickWorkspace } from '../core/workspace/ops.ts'
 import { sessionWorkspaceInfo } from '../core/workspace/resolve.ts'
 import { clipboard, dwsLogin, openPath, ossCred, relogin, sessionStatus } from '../core/system/ops.ts'
+import { emptyDeviceLoginView } from '../core/system/device-login.ts'
 import { dwsLocalDoctor, dwsLocalPermissionRepair, hasAttributableDwsFailure } from '../integrations/dws/local.ts'
 import { ifindCredentialClear, ifindCredentialSave, ifindProbe, ifindStatus } from '../tools/integrations/ifind-ops.ts'
 
@@ -168,13 +169,44 @@ export function environmentOperations(host: OperationHost): OperationMap {
       source: 'panel',
     }, args),
     'dws-login': async (args) => {
+      // 两条钉钉登录共用 `~/.dws` 锁；设备流运行时不启动 loopback。
+      if (resolvers.deviceLogin?.running() === true) {
+        return {
+          ok: false,
+          error: '设备流登录正在进行：请先点上面那颗「取消」，或等它结束再试（两次登录会抢 .dws 的同一把锁）',
+          timedOut: false, stdoutTail: '', stderrTail: '', sandboxBlocked: false, advice: '',
+        }
+      }
       const result = await dwsLogin(
-        { ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() },
+        {
+          ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir(),
+          ...(resolvers.loginHandles === undefined ? {} : { loginHandles: resolvers.loginHandles }),
+        },
         args,
         await world.home(),
       )
       gate.invalidate()
       return result
+    },
+    'dws-login-device-start': async () => {
+      const registry = resolvers.deviceLogin
+      if (registry === undefined) return emptyDeviceLoginView('failed', '设备流登录不可用：宿主没有装配登录注册表')
+      const view = await registry.start({ ctx, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() })
+      gate.invalidate()
+      return view
+    },
+    'dws-login-device-status': async () => resolvers.deviceLogin?.status() ?? null,
+    'dws-login-cancel': async () => {
+      const killed = resolvers.loginHandles?.cancel() === true
+      if (killed) gate.invalidate()
+      return killed ? { ok: true, error: '' } : { ok: false, error: '没有正在进行的钉钉登录（可能已经结束）' }
+    },
+    'dws-login-device-cancel': async () => {
+      const registry = resolvers.deviceLogin
+      if (registry === undefined) return emptyDeviceLoginView('failed', '设备流登录不可用：宿主没有装配登录注册表')
+      const view = registry.cancel()
+      gate.invalidate()
+      return view
     },
     session: async () => await sessionStatus({ ctx, state, access: resolvers.access, platform: await world.platform(), workdir: () => world.workdir() }),
     // ⚠️ 2026-09-30：**没有** `browser-session-bind` / `dws-login-start` / `dws-login-status`。
