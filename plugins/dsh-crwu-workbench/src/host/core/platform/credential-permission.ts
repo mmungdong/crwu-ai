@@ -1,4 +1,3 @@
-import type { Context } from '@deepseek-ai/cordis'
 import { text } from '../../../shared/utils/value.ts'
 import { redactPaths } from './redact.ts'
 import type { CredentialPermission } from '../../../shared/types.ts'

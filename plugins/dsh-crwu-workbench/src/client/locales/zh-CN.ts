@@ -679,8 +679,8 @@ export const zhCN = {
     '处理冲突，',
     '并持续提高当前资产评估报告的质量。',
   ].join('\n'),
-  // ① 工作空间
-  wsSectionTitle: '① 中瑞世联工作空间（案例根目录 / 前置条件）',
+  // 案例工作空间（原「① 中瑞世联工作空间（案例根目录 / 前置条件）」太长，去掉编号与括号）。
+  wsSectionTitle: '案例工作空间',
   wsChosen: '已选定',
   wsNotChosen: '未选定',
   wsSourceSaved: '上次选择',
@@ -761,6 +761,8 @@ export const zhCN = {
   envGroupMaintenance: '开发者诊断',
   envDeveloperContact: '遇到问题无法正常运行？点此联系开发同学进行排查',
   envStatusVerifiedAt: '最近真实验证',
+  /** 检查时刻与验证时刻是同一瞬间时的合并标签（只显示一次）。 */
+  envStatusCheckedVerified: '最近检查与验证',
   envActionRecheck: '重新检查',
   envStatusSummary: '已完成 ',
   envStatusSummaryTail: ' 项',
@@ -783,7 +785,7 @@ export const zhCN = {
   envStepHintOss: '用于上传审核交付件，请向管理员获取 AccessKey ID 和 AccessKey Secret。',
   envStepHintIfind: '可选：用于核对报告引用的行情、财务与公开信息。不配置不影响进入报告审核。',
   envStepHintWorkspace: '审核产物写到这个目录下的「报告流水号」文件夹里。',
-  envStepDoneSummary: '基础配置都已完成。你可以从左侧进入报告审核。',
+  envStepDoneSummary: '基础配置都已完成。',
   /**
    * Windows 专属提醒（非阻塞）：钉钉 CLI（dws）要碰 `<HOME>\.dws` 的登录态与锁文件，
    * 进程权限不够时会以"锁被占用 / 拒绝访问"结束，表现却是**钉钉登录一直不成功**。
@@ -918,6 +920,8 @@ export const zhCN = {
   envDiagToolsUnknown: '尚未查询',
   envDiagOk: '正常',
   envDiagBad: '不可用',
+  /** 工作空间的技术说明（cwd / subagent）只在开发者诊断里出现。 */
+  envDiagWorkspaceExec: '工作空间执行说明',
   envDiagDetails: '包路径、清单与哈希等技术细节',
   envGateBlockedTitle: '进入目标页前，请先完成环境配置',
   envGateRunningTitle: '正在重新检查环境…',
@@ -1226,229 +1230,395 @@ export const zhCN = {
   activeSuffix: '（同一时间只允许一条，其它条目已禁用）。',
   stopHint: '停止会取消子会话剩余工作并释放占用，已产出的文件保留。',
 
-  /* ── 报告评估（房地产估值，协议 32） ───────────────────────────────────── */
+  /* ── 报告评估（房地产估值，协议 35） ───────────────────────────────────── */
   // 页面标题走**导航元数据**（`估值 / 房地产` → 「房地产估值」），不在这里写死一个
   // 「报告评估」——那正是用户点掉的"写死面包屑"。这一条是它的文案。
-  valuationPageTitle: '房地产估值',
-  valuationIntroLead: '把估值资料交给 AI，确认一遍输入之后它会自动完成测算与交付。',
-  valuationIntroNote: '确认之后不再逐步问你：案例筛选、参数取值与勾稽都由它按规范做完，'
-    + '待确认事项与能力缺口会写在结果里。',
+  valuationPageTitle: '估值',
+  /* 资产类型（协议 39）：通用入口的第一个选择，**初始为空**、由用户主动选。 */
+  valuationAssetTypeTitle: '资产类型',
+  valuationAssetTypePlaceholder: '请选择资产类型',
+  valuationAssetTypeRequired: '请选择资产类型（当前提供房地产入口）。',
+  valuationAssetTypeHint: '选定资产类型后，本轮会话按对应资产的方法与规范执行；'
+    + '切换类型会保留已选资料与共用条件。',
+  valuationAssetTypeRealEstate: '房地产',
+  valuationAssetTypeUnknown: '不认识的资产类型「{value}」：请从下拉里选择。',
+  valuationActionDisabledNoAssetType: '请选择资产类型',
+  /** 两个必填项的顺序：资产类型之后紧接着评估方法（提示也挨着出现）。 */
+  valuationActionDisabledNoMethod: '请选择评估方法',
+  /** 统一的必填标记（星号由视觉承担，"必填"二字给读屏）。 */
+  valuationFieldRequired: '必填',
 
-  /* 阶段提示 */
+  /* 阶段提示（页面自己的阶段：草稿 / 准备确认 / 确认 / 建会话 / 交接结果） */
   valuationPhaseDraft: '还没有开始：先选择资料，再补一句你的要求。',
-  valuationPhaseExtracting: '正在读取资料并整理可提取的估值要素…',
+  valuationPhasePreparing: '正在准备确认信息…',
   valuationPhaseConfirmation: '请核对下面的输入；确认之后就不能再改了。',
-  valuationPhaseQueued: '已确认，正在准备估值会话…',
-  valuationPhaseRunning: '估值会话正在工作：检索案例、填表、勾稽。',
-  valuationPhaseLogin: '有一个外部来源需要你在默认浏览器登录后才能继续。',
-  valuationPhaseCompleted: '估值已完成：结果与交付件在下面。',
-  valuationPhaseFailed: '本轮估值没有完成，原因见下。',
-  valuationPhaseCancelled: '本轮估值已取消。',
+  valuationPhaseCreating: '正在创建估值会话…',
+  valuationPhaseHandoffFailed: '会话还没有创建成功，原因见下。',
+  valuationPhaseHandedOff: '估值会话已创建，正在打开…',
   valuationPhaseStale: '宿主插件是旧构建：请完全退出并重新打开 DeepSeek Harness 后再试。',
 
   /* 表单 */
   valuationPickFiles: '选择文件',
   valuationPickFolder: '选择文件夹',
-  /** 环境自检没过时点「开始估值」要说的话（与报告审核同一条门禁口径）。 */
+  /** 环境自检没过时点「确认」要说的话（与报告审核同一条门禁口径）。 */
   valuationNeedEnvironment: '环境信息还没就绪：请先到「环境信息」完成自检，通过后再回来开始估值。',
   valuationNeedFiles: '先选择至少一份资料（PDF / Word / Excel / 图片）。',
   valuationPickFilesUnsupported: '当前运行环境拿不到本机绝对路径，无法选择文件：请在 DeepSeek Harness 桌面端打开本页。',
   valuationPickFolderUnsupported: '当前运行环境拿不到本机绝对路径，无法选择文件夹：请在 DeepSeek Harness 桌面端打开本页。',
-  valuationSelectionTitle: '本轮资料',
-  valuationSelectionEmpty: '还没有选择资料。',
   valuationScanFailed: '资料清单读不出来',
-  valuationProviderCheckUnsupported: '当前宿主没有外部来源预检能力，无法检查登录状态。',
-  valuationProviderCheckFailed: '外部来源检查失败',
-  valuationProviderChecking: '检查中',
-  valuationProviderUnchecked: '尚未检查',
-  valuationProviderOpenLogin: '在默认浏览器登录',
-  valuationProviderRecheck: '重新检查',
-  valuationProviderCannotCheck: '无法检查',
-  valuationRemove: '移除',
   valuationMethodTitle: '评估方法',
   valuationMethodAuto: '自动判定',
-  valuationMethodAutoHint: '由 AI 按规范判定，并说明采用与排除的理由',
+  /** 只讲这个方法做什么；"当前能跑到哪一步"是能力事实，不写在这里。 */
+  valuationMethodAutoHint: '由估值会话按本轮业务规范判断适用方法，可采用单一或组合方法。',
   valuationMethodMarket: '市场法',
-  valuationMethodMarketHint: '同区域、同用途的可比案例充分时优先',
+  valuationMethodMarketHint: '按市场法处理；案例条件与适用性仍需在会话内核实。',
   valuationMethodIncome: '收益法',
-  valuationMethodIncomeHint: '租金与收益数据充分时优先',
+  valuationMethodIncomeHint: '按收益法处理；适用条件与所需参数由本轮业务规范判定',
   valuationMethodCost: '成本法',
-  valuationMethodCostHint: '市场案例不足、重置成本与土地资料充分时考虑',
+  valuationMethodCostHint: '按成本法处理；范围与贬值路线由本轮业务规范判定',
+  /** 默认项的推荐标记（形状 + 文字，不只靠颜色）。 */
+  valuationMethodRecommended: '推荐',
+  /** 当前选项的一句说明（只出现一次，不重复"当前选项"前缀）。 */
+  valuationMethodHintOnce: '{label}：{hint}',
+  valuationMethodUnsupported: '这个评估方法不可用：请重新选择。',
+  /** 未知枚举：**不许**静默落回"自动判定"。 */
+  valuationMethodUnknown: '不认识的评估方法「{value}」：请重新选择。',
+  /** 方法未选时的占位与说明（自动判定是选项，不是默认值）。 */
+  valuationMethodPlaceholder: '请选择评估方法',
+  valuationMethodEmptyHint: '未选择时不做默认判定：选「自动判定」由 Agent 根据资料与知识库判断，'
+    + '可采用单一方法或组合方法。',
   valuationBaseDateTitle: '评估基准日',
   valuationBaseDateOptional: '可选',
   valuationBaseDateHint: '不选也可以：不按基准日筛选案例、不做日期修正，'
     + '结果里会写明「本次未指定评估基准日」。',
-  valuationBaseDateShape: '基准日要按 YYYY-MM-DD 填写，或者留空。',
+  /** 已填 / 未填两种帮助各一句（§8.8）。 */
+  valuationBaseDateHintFilled: '将按该基准日核实案例与时间口径。',
+  valuationBaseDateHintEmpty: '未指定时，按会话采集时点组织测算，并在结果中说明未指定基准日。',
+  valuationBaseDateClear: '清除日期',
+  /** 只校验"合法日历日期"，不自己发明"未来日期禁止"这类未获业务确认的规则。 */
+  valuationBaseDateShape: '请输入有效日期（YYYY-MM-DD）；允许留空。例如 2026-02-30 不存在，会被拒绝。',
+  /** 共享 DatePicker 上报的无效/超范围基准日：禁用主操作时的可见原因。 */
+  valuationBaseDateInvalid: '基准日无效或超出允许范围，请修正后再核对资料。',
+
+  /* 公共控件（Button / 输入 / 日期选择器）的通用文案。 */
+  uiInputClear: '清空',
+  uiFieldRequired: '必填',
+  datePickerPlaceholder: '年-月-日',
+  datePickerOpen: '打开日历',
+  datePickerClear: '清空',
+  datePickerToday: '今天',
+  datePickerPrevMonth: '上个月',
+  datePickerNextMonth: '下个月',
+  datePickerPrevYear: '上一年',
+  datePickerNextYear: '下一年',
+  datePickerDialogLabel: '选择日期',
+  datePickerInvalid: '请输入有效日期（YYYY-MM-DD）',
+  datePickerOutOfRange: '所选日期超出允许范围',
+  datePickerChooseMonth: '选择月份',
+  datePickerChooseYear: '选择年份',
+  datePickerDayLabel: '{year}年{month}月{day}日',
+  datePickerMonthLabel: '月份',
+  datePickerYearLabel: '年份',
+  datePickerYearSuffix: '年',
+  datePickerMonthSuffix: '月',
+  datePickerWeekdays: ['一', '二', '三', '四', '五', '六', '日'],
+  /* 评估目的 / 价值类型（P16）：结构化字段，未填 = 未指定，**不预置任何正式结论**。 */
+  valuationPurposeTitle: '评估目的',
+  valuationPurposeHint: '按本次委托的用途填写（例如转让、抵押、司法处置）。',
+  valuationPurposeHintEmpty: '未填写时按「未指定」处理：结果里会写明「本次未指定评估目的」，'
+    + '且不会据此声称正式估值已完成。可选口径以本轮业务规范为准。',
+  valuationPurposePlaceholder: '例如：司法拍卖处置参考',
+  valuationPurposeTooLong: '评估目的超过 {limit} 字符：请填一句口径，不要贴整段说明。',
+  valuationValueTypeTitle: '价值类型',
+  valuationValueTypeHint: '按本轮业务规范的价值类型口径填写。',
+  valuationValueTypeHintEmpty: '未填写时按「未指定」处理：结果里会写明「本次未指定价值类型」，'
+    + '且不会据此声称正式估值已完成。可选取值清单待业务方确认，界面不做预设。',
+  valuationValueTypePlaceholder: '例如：市场价值',
+  valuationValueTypeTooLong: '价值类型超过 {limit} 字符：请填一句口径，不要贴整段说明。',
+  valuationPurposeOptional: '可选',
+  valuationValueTypeOptional: '可选',
+  valuationConditionsTitle: '补充条件',
   valuationPromptTitle: '补充要求',
   valuationPromptOptional: '可选',
-  valuationPromptHint: '资产用途、特殊条件、资料说明这类信息写在这里；它不会覆盖安全规则与计算口径。',
-  valuationPromptPlaceholder: '例如：这是一套住宅，权利性质为出让，周边有地铁 2 号线；资料里缺租赁合同。',
-  // 主按钮：它起的是**资料提取**这一步（确认抽屉里的那颗才是「确认并开始估值」）。
-  valuationStartIntake: '开始提取资料',
-  // 资料区下面那行统计与解析状态（见 ValuationIntakePane 文件头：只能说这两种事实）。
-  valuationSelectionCount: '已选择 {count} 份资料',
-  valuationSelectionStateIdle: '待读取',
-  valuationSelectionStateBusy: '正在读取资料…',
-  valuationInputLocked: '输入已经冻结：要改请点「返回修改」，重新生成快照。',
-  valuationIntakeBusy: '正在按当前输入提取资料：要改请先点「取消提取」，或等它结束。',
-  valuationNotInConfirmation: '当前不在确认阶段。',
-  valuationNotExtracting: '当前没有正在进行的资料提取。',
-  valuationStaleIntake: '这是上一次提取的迟到结果，已经作废（不会覆盖当前状态）。',
-  valuationIntakeTimeout: '资料提取等待超时，可以重新提取；如果案例目录已创建，系统会复用并校验已有资料。',
-  valuationAlreadyCompleted: '本轮已经完成，不能再取消。',
-  valuationStageQueued: '准备会话',
+  valuationPromptHint: '可填写资料说明与项目要求，具体口径仍按资料和适用规范核实。',
+  valuationPromptPlaceholder: '例如：请按清单逐套测算；权属资料中面积与现场记录不一致，请在报告中说明。',
+  valuationPromptCount: '{count}/{limit} 字符',
+  valuationPromptRemaining: '还可以输入 {count} 字符',
+  valuationPromptTooLong: '补充要求超过 {limit} 字符：请精简后再确认。',
+  /** 粘贴超限时**不静默截断**：说明原因并保留原有内容。 */
+  valuationPromptOverLimit: '输入超过 {limit} 字符，请精简后重试（原有内容已保留）。',
+  valuationPromptAtLimit: '已经达到 {limit} 字符上限。',
 
-  /* 单工作面（§3）：一句介绍 + 分区标题 + 操作区 */
-  valuationWorkfaceLead: '上传资料并确认输入，系统将按知识库规则完成测算。',
+  /* 单工作面（§4.3）：分区标题 + 操作区 */
   valuationWorkfaceFiles: '估值资料',
   valuationAddFiles: '添加文件',
   valuationAddFolder: '添加文件夹',
   valuationFilesEmptyTitle: '还没有添加资料',
   // 只说**真的提供**的能力：宿主没有把拖放交给我们（面板收不到文件拖入事件），
-  // 所以这里不写"拖进来" —— 写了就是让用户去试一个不会发生的事（§4）。
+  // 所以这里不写"拖进来" —— 写了就是让用户去试一个不会发生的事（§4.3）。
   valuationFilesEmptyHint: '点上面的「添加文件」或「添加文件夹」从本机选择。支持 PDF / Word / Excel / 图片；'
     + '扫描件与图片需要 OCR，本部署不具备时会在读取结果里如实说明。',
   valuationFilesShowAll: '查看全部 {count} 份',
   valuationFilesShowLess: '收起',
-  valuationFileStatusScanned: '待读取',
-  valuationFileStatusSkipped: '未纳入',
-  valuationFileStatusUnknown: '待读取',
+  /** 已选入口 + 实际文件两层（§8.2）：入口计数来自 Host 的递归去重事实。 */
+  valuationFolderIncluded: '文件夹 · 纳入 {count} 份',
+  valuationFolderExpand: '展开 {name}',
+  valuationFolderCollapse: '收起 {name}',
+  valuationFolderRemove: '移除文件夹',
+  valuationFileRemoveFromFolder: '移除：{name}',
+  valuationFilesIncluded: '已纳入 {count} / {limit} 份',
+  valuationFilesSkippedCount: '跳过 {count} 项',
+  valuationFilesViewSkipped: '查看跳过项',
+  valuationFilesHideSkipped: '收起跳过项',
+  /** 目录遍历触及安全上限：**禁止确认**，不能把截断数量当全部数量。 */
+  valuationFilesTruncated: '资料清单未完整读取，请选择更小的文件夹。',
+  valuationFilesRemoved: '已从本次范围移除〈{name}〉，没有删除本机文件。',
+  valuationFilesRemovedFolder: '已移除文件夹〈{name}〉，没有删除本机文件。',
+  valuationFilesExcludedReadd: '此文件已从本次范围移除。',
+  valuationFilesDuplicateIgnored: '已忽略重复选择：同一个路径只算一份。',
+  valuationUndo: '撤销',
+  valuationReinclude: '重新纳入',
+  valuationRescan: '重新读取清单',
+  valuationScanRetry: '重新读取清单',
+  valuationScanRescanning: '正在重新读取清单…',
+  valuationScanPartial: '已纳入 {count} 份，跳过 {skip} 项',
+  valuationFileStatusScanned: '已纳入',
+  valuationFileStatusSkipped: '已跳过',
+  valuationFileStatusUnreadable: '无法读取',
+  valuationFileStatusOverLimit: '超过单次上限',
+  valuationFileStatusRemoved: '已从本次范围移除',
+  valuationFileStatusReading: '读取清单中',
+  valuationFileStatusUnknown: '状态待确认',
+  /** 大小未知时如实说"待确认"，不编 0 B。 */
+  valuationFileSizeUnknown: '大小待确认',
+  valuationFileFolder: '文件夹',
+  valuationKindPdf: 'PDF',
+  valuationKindWord: 'Word',
+  valuationKindExcel: 'Excel',
+  valuationKindImage: '图片',
+  valuationKindText: '文本',
+  valuationKindArchive: '压缩包',
+  valuationKindUnknown: '未知类型',
   valuationFileRemove: '移除',
   valuationFileFolderCount: '{count} 份文件',
   valuationScanRunning: '正在读取资料清单…',
+  valuationScanStale: '正在重新读取清单（下面显示的是上一次的事实）',
   valuationSelectedCount: '已添加 {count} 份资料',
-  valuationIntakeRunning: '正在提取资料…',
-  valuationIntakeStageUnknown: '正在提取资料，等待宿主返回阶段…',
-  valuationIntakeCancel: '取消提取',
-  valuationIntakeFailedTitle: '资料提取未完成',
-  valuationIntakeRetry: '重新提取',
-  valuationFailedAtStage: '失败阶段：{stage}',
-  valuationPartialTitle: '这是阶段结果，不是正式结论',
-  valuationPartialLead: '本轮没有跑完：下面是已经产出的部分。补齐缺失的资料 / 规则 / 取证能力之后重新提取，'
-    + '系统会复用已经做好的部分。',
-  valuationPartialStage: '停在「{stage}」这一步。',
-  valuationPartialTag: '阶段结果',
-  valuationCheckAndConfirm: '检查并确认',
+  /** 底栏只放"当前可行动摘要"（数量明细留在资料区，§9.1）。 */
+  valuationActionSummaryEmpty: '先添加至少一份资料',
+  valuationActionSummaryScanning: '正在读取资料清单…',
+  valuationActionSummaryReady: '已纳入 {count} 份 · 下一步核对输入',
+  valuationActionSummaryOverLimit: '共 {count} 份，请减少到 {limit} 份以内',
+  valuationActionSummaryScanFailed: '资料清单未能读取',
+  valuationActionSummaryPreparing: '正在复制资料并准备核对信息…',
+  /** 目录截断时同样禁止确认。 */
+  valuationActionDisabledTruncated: '资料清单未完整读取：请选择更小的文件夹，或移除部分资料。',
+  /** 主页面右下角**唯一** primary 的文案（逐字，有用例盯着）。 */
+  valuationConfirm: '核对资料',
+  /** 「确认」那一步的瞬时文案（不新增提取进度页）。 */
+  valuationPreparePending: '正在准备…',
   valuationActionDisabledNoFiles: '还没有选择资料，先添加至少一份。',
-  valuationMethodHintOnce: '当前选项：{label} —— {hint}',
+  valuationActionDisabledUnreadable: '选中的资料都读不出来：请重新选择可读的文件。',
+  valuationTooManyFiles: '展开后 {count} 份，超过单次上限 {limit} 份：请分批提交（不会悄悄只取前 {limit} 份）。',
 
-  /* 只读确认抽屉 */
-  valuationDrawerTitle: '确认本轮估值输入',
-  valuationDrawerReadonly: '以下内容为只读：确认之后这些输入会被冻结，子会话只能按它执行。',
-  valuationDrawerFiles: '估值文件',
-  valuationDrawerFileStatusParsed: '已解析',
-  valuationDrawerFileStatusUnparsed: '未解析',
-  valuationDrawerPrompt: '补充要求',
-  valuationDrawerNone: '（没有）',
-  valuationDrawerKnown: '资料中读到的信息',
-  valuationDrawerMissing: '缺失信息',
-  valuationDrawerUnparsed: '未解析文件',
-  valuationDrawerKnowledge: '知识库状态',
-  valuationDrawerProviders: '外部数据源',
-  valuationDrawerProviderReady: '可用',
-  valuationDrawerProviderLogin: '需要登录',
-  valuationDrawerBrowser: '浏览器登录状态',
+  /* 阶段判据的说明（被拒时给一句对症的话） */
+  valuationPrepareLocked: '正在按当前输入准备确认信息：要改请先点「返回修改」。',
+  valuationInputLocked: '输入已经冻结：要改请点「返回修改」，重新生成快照。',
+  valuationCreatingLocked: '正在创建估值会话：请等它结束，不要重复提交。',
+  valuationHandoffLocked: '这一步只处理上一次交接：请点「重试」或「打开估值会话」。',
+  valuationHandedOffLocked: '本轮已经交接完成：重新进入本页会开始一份新的草稿。',
+  valuationNotInConfirmation: '当前不在确认阶段。',
+  valuationStaleIntake: '这是上一次准备的迟到结果，已经作废（不会覆盖当前状态）。',
+  valuationIntakeFailed: '准备确认信息没有完成',
+  valuationIntakeFailedTitle: '准备确认信息没有完成',
+  valuationIntakeTimeout: '准备核对信息超时，资料选择和条件已保留。',
+  /** `ok:true` 但资产类型 / 方法缺失或非法：这不是一次可信的核对结果。 */
+  valuationPreviewIncomplete: '这次核对没有返回完整的资产类型或评估方法：请返回表单后重新核对（原输入已保留）。',
+  /** 回显与本次提交不一致：不许把旧方法当成这次 Host 确认的结果。 */
+  valuationPreviewMismatch: '这次核对回显的条件与本次提交不一致：请返回表单后重新核对（原输入已保留）。',
+  /** 准备超过 15 秒：给一句"还能做什么"，不伪造进度。 */
+  valuationPrepareSlow: '资料较多，仍在准备；你可以返回修改，原输入会保留。',
+  /** 准备期间的 `aria-busy` 状态句（持久文字，不只靠 spinner）。 */
+  valuationPrepareBusy: '正在归档所选资料，原输入已保留。',
+
+  /* 门禁（§4.2） */
+  /* 能力区（协议 39：可选能力，不是门禁）。 */
+  valuationCapabilityTitle: '信息获取辅助',
+  /** 旁边那枚轻标（这一块整体是可选能力）。 */
+  valuationCapabilityOptional: '可选',
+  /** 一句话说清它是什么、以及"不检查也能继续"。 */
+  valuationCapabilityDescription: '用于辅助获取公开信息；未登录可继续估值。',
+  /** 还没查过时摘要行上的状态（不假装知道，也不假装必须查）。 */
+  valuationCapabilityIdle: '尚未检查',
+  /** 还未检查时摘要行上的来源名（当前只登记了链家这一个来源）。 */
+  valuationCapabilitySourceName: '链家',
+  valuationCapabilityCheck: '检查状态',
+  valuationCapabilityNeverChecked: '尚未检查',
+  valuationCapabilityCheckedAt: '最近检查时间：{time}',
+  /** 摘要行与详情展开（详细原因 / 检查时刻 / 登录任务按需可见）。 */
+  valuationCapabilityDetails: '状态详情',
+  valuationCapabilityDetailsHide: '收起详情',
+  /** 查不出来时的短结论：**不是**"未登录"。 */
+  valuationCapabilityShortUnknown: '暂无法确认',
+  valuationCapabilityShortFailed: '检查失败',
+  /** 已登录但受保护页要人机验证：保留登录事实，另说这一件事。 */
+  valuationCapabilityShortChallenge: '需要页面验证',
+  valuationCapabilityGoVerify: '去验证',
+  /** 未登录时的降级事实（运行阶段实际会用到的平台）。 */
+  valuationAuthFallbackHint: '未登录时将使用房天下、58 同城补充信息。',
+  valuationAuthChecking: '正在检查信息获取能力…',
+  valuationAuthRequired: '必需',
+  valuationAuthOptional: '可选',
+  valuationAuthStateReady: '已登录',
+  valuationAuthStateMissing: '未登录',
+  valuationAuthStateUnknown: '无法检查',
+  /** 断言用的前缀（按钮文案是「登录链家」）。 */
+  valuationAuthLogin: '登录{label}',
+  valuationAuthLoginRunning: '正在登录{label}…（请在打开的浏览器窗口里完成登录）',
+  valuationAuthLoginDone: '{label}：登录任务已结束',
+  valuationAuthLoginStarted: '已打开 {label} 的登录窗口，请在浏览器里完成登录。',
+  valuationAuthLoginReused: '{label} 正在登录，请在那个浏览器窗口里完成登录。',
+  valuationAuthLoginCancel: '取消登录',
+  /** 登录成功但页面要验证：**不要**说成登录失败。 */
+  valuationAuthLoginWaiting: '{label} 的登录凭据已到位，但受保护页要求人机验证：'
+    + '请在打开的浏览器窗口里完成验证，然后点「重新检查」。',
+  /**
+   * 登录任务的五种状态**各有各的话**（设计稿 §7.4）。
+   *
+   * 以前只有"进行中 / 已结束"两句：失败、取消、成功、待验证在界面上长得一模一样，
+   * 员工看不出下一步该做什么。
+   */
+  valuationAuthJobRunning: '已打开 {label} 的登录窗口，请在浏览器中完成登录。',
+  valuationAuthJobWaiting: '{label}：登录状态已确认，还需要完成页面验证。',
+  valuationAuthJobSucceeded: '{label}：来源已登录。',
+  valuationAuthJobFailed: '{label}：登录操作未完成。',
+  valuationAuthJobCancelled: '{label}：本次登录已取消。',
+  /** 单站点登录失败的标题（原因由 Host 安全映射后跟在同一区域）。 */
+  valuationAuthLoginFailed: '登录操作未完成',
+  valuationAuthLoginCancelledNotice: '本次登录已取消，可以重新登录。',
+  /** 「打开验证窗口」：唯一的验证入口（不是登录、不是重新检查）。 */
+  valuationAuthVerify: '打开验证窗口',
+  valuationAuthVerifyFor: '打开验证窗口：{label}',
+  valuationAuthVerifyOpened: '{label}：验证窗口已经打开，请在窗口里完成验证后点「重新检查」。'
+    + '（窗口打开不等于验证已经通过。）',
+  valuationAuthVerifyFailed: '打开验证窗口失败',
+  /** 挑战处置的统一说明（在站点列表下方出现一次）。 */
+  valuationAuthVerifyHint: '需要验证时，点「打开验证窗口」会在同一个浏览器窗口里重新打开那一页；'
+    + '完成验证后回来点「重新检查」。窗口打开不等于验证已经通过。',
+  valuationAuthRecheck: '重新检查',
+  valuationAuthLoginGo: '登录{label}',
+  /** 检查在途时的等待说明与超长提示。 */
+  valuationAuthCheckSlow: '检查用时较长，可以稍后重新检查。',
+  valuationAuthCheckTimedOut: '这次检查等待超时了：可以重新检查，已经登录的来源不受影响。',
+  valuationAuthCheckBusy: '正在检查…',
+  valuationAuthRetryHint: '在打开的浏览器窗口中完成登录，再重新检查。',
+  valuationAuthUnknownHint: '请检查网络后重新检查；不要求重新登录。',
+  valuationAuthUnavailableHint: '当前无法检查：请重新检查，或先确认网络与浏览器可用。',
+  /**
+   * 挑战处置：受保护页要人机验证。**不**引导登录 —— 员工已经登录了。
+   *
+   * 措辞里点明"点重新检查会重新打开那一页"：恢复能力本身就在可见窗口里重新进入原 URL，
+   * 所以不需要再给它一个单独的"打开验证页面"操作（那会多一条 RPC，而它做的事完全一样）。
+   */
+  valuationAuthChallengeChecking: '正在尝试自动恢复 {label} 的访问…',
+  valuationAuthChallengeWaiting: '{label} 要求人机验证（不是未登录）：已自动尝试恢复但未通过。'
+    + '请在刚刚打开的那个浏览器窗口里完成验证，然后点「重新检查」（它会重新打开该页面）；'
+    + '窗口已经关掉也没关系，点它就会再打开一次。',
+  valuationAuthChallengeRecovered: '{label}：自动恢复已通过，正在复核登录状态…',
+  /**
+   * 已放行、但来源当前被人机验证挡住时的**非阻塞**提示。
+   *
+   * 这时候员工是已登录的（凭据有效期可以作证），验证由后续取数流程处理：
+   * 自动尝试恢复，必要时才请员工在可见窗口里完成。
+   */
+  valuationAuthChallengeNotice: '{label} 已登录（{validity}），但该来源当前要求人机验证：'
+    + '取数时会自动尝试恢复；若自动恢复未通过，请在弹出的浏览器窗口里完成验证后继续。',
+  valuationAuthValidityUntil: '到期 {time}',
+  valuationAuthValiditySession: '会话 cookie，关掉浏览器即失效',
+  valuationAuthValidityUnknown: '有效期未报告',
+  valuationProviderCheckUnsupported: '当前宿主没有外部来源预检能力，无法检查登录状态。',
+  valuationProviderCheckFailed: '外部来源检查失败',
+
+  /* 只读确认抽屉（§4.4）：只展示文件元信息与三个用户输入 */
+  valuationDrawerTitle: '核对估值资料',
+  valuationDrawerSubtitle: '确认资料与条件后，将创建并打开估值会话。',
+  /** 首屏摘要区的分区名（资产类型 / 评估方法 / 资料 / 基准日）。 */
+  valuationDrawerSummary: '本轮估值',
+  valuationDrawerConditions: '补充条件',
+  valuationDrawerFiles: '本次纳入的资料',
+  valuationDrawerFileCount: '{count} 份',
+  /** 文件主行是紧凑的：完整路径 / 创建时间 / 重复说明按需展开。 */
+  valuationDrawerDetails: '查看详情',
+  valuationDrawerDetailsHide: '收起详情',
+  /** 补充要求长内容的展开 / 收起（进入同一条正文滚动，不另开小滚动窗）。 */
+  valuationDrawerPromptExpand: '展开全部',
+  valuationDrawerPromptCollapse: '收起',
+  valuationDrawerOpenFolderNote: '选择的是文件夹：下面是本次实际归档的文件。',
+  /** 创建时间为 ISO-8601 UTC 字面量：必须标注 UTC，否则会被读成本地时间。 */
+  valuationDrawerCreatedAt: '创建于 {at}（UTC）',
+  valuationDrawerCreatedAtUnknown: '创建时间未知',
+  valuationDrawerCopyPath: '复制路径',
+  valuationDrawerCopied: '已复制',
+  valuationDrawerCopyFailed: '请选中路径手动复制',
+  valuationDrawerSkippedTitle: '以下 {count} 项未纳入',
+  /** 重名：附短 fileId（+ 所在目录由组件拼在后面）。 */
+  valuationDrawerDuplicateName: '与另一份资料同名（{fileId}）',
+  valuationDrawerDuplicateNames: '有 {count} 个文件名重复：已按文件 ID 与所在目录逐条区分。',
+  valuationDrawerDuplicateContent: '内容与 {fileId} 重复（同一份材料的副本）。',
+  valuationDrawerDuplicateContentNamed: '与《{name}》内容相同（{fileId}）。',
+  valuationDrawerMethodTitle: '评估方法',
+  /** 未指定条件的**必要影响**合并成一条（不逐字段各附一段提示）。 */
+  valuationDrawerUnspecifiedNote: '标注「未指定」的条件不会被预置：结果里会逐字写明本次未指定，且不会据此声称正式估值已完成。',
+  valuationDrawerBaseDateTitle: '评估基准日',
+  /** 只读摘要里的"未指定"（资产类型 / 方法 / 基准日 / 目的 / 价值类型共用同一档措辞）。 */
+  valuationDrawerUnspecified: '未指定',
+  valuationDrawerNoBaseDate: '未指定',
+  valuationDrawerDataCount: '资料',
+  valuationDrawerAssetTitle: '资产类型',
+
+  valuationDrawerPurposeTitle: '评估目的',
+  valuationDrawerValueTypeTitle: '价值类型',
+  /** 只读抽屉里的"未指定"：与报告里那一句声明逐字一致，不写"暂无"这类模糊说法。 */
+  valuationDrawerNoPurpose: '未指定',
+  valuationDrawerNoValueType: '未指定',
+
+  valuationDrawerPromptTitle: '补充要求',
+  valuationDrawerPromptNone: '（未填写）',
+  /** 中性次操作（逐字）。 */
   valuationDrawerBack: '返回修改',
-  valuationDrawerConfirm: '确认并开始估值',
-  valuationDrawerRecheck: '重新检查',
-  valuationDrawerDigest: '输入快照指纹',
-  valuationDrawerMethodAuto: '执行时按规则判断',
-  valuationDrawerSourceFrom: '来源：{file}',
-  valuationDrawerConflicts: '资料冲突',
-  valuationDrawerConflictCurrent: '当前采用',
-  valuationDrawerPromptSource: '补充要求的性质',
-  valuationDrawerPromptSourceNote: '补充要求里的事实记为「用户提供」，**不**当作文件原文；'
-    + '它与资料内容不一致时，两边都保留、由你判断，系统不会替你选一个。',
-  valuationDrawerSourceGranularity: '来源粒度是「哪一份文件」；页码 / 工作表位置这一层提取器不给，'
-    + '需要精确定位时请人工核对原文。',
-  valuationDrawerUpdatedAt: '更新于 {at}',
-  valuationDrawerEvidence: '取证能力',
-  valuationDrawerEvidenceNote: '本部署没有页面截图能力：案例证据是页面字节（HTML）与内容指纹，不是截图。'
-    + '需要截图证据时会在结果的能力缺口里写明。',
-  valuationDrawerPromptFull: '将提交给 Agent 的业务提示词',
-  valuationDrawerPromptShow: '展开查看（与执行时逐字一致）',
-  valuationDrawerPromptUnavailable: '（宿主没有回传提示词预览）',
+  /** 抽屉主操作（逐字，有用例盯着）。 */
+  valuationDrawerConfirm: '开始估值',
 
-  /* 进度与结果 */
-  valuationProgressTitle: '进度',
-  valuationLoginTitle: '需要登录外部来源',
-  valuationLoginAction: '在默认浏览器登录',
-  valuationRecheck: '重新检查并继续',
-  valuationNoFakeProgress: '阶段与进度都来自宿主；没有结论时这里不会显示"已完成"。',
-  valuationResultTitle: '估值结果',
-  valuationResultUnitPrice: '单价',
-  valuationResultPricingArea: '计价面积',
-  valuationResultTotalValue: '总价（元）',
-  valuationResultMethod: '采用方法',
-  valuationResultMethodAdopted: '采用',
-  valuationResultMethodNotAdopted: '不采用',
-  valuationResultMethodConflictTitle: '方法与你的选择不一致',
-  valuationResultMethodConflictLead: '你指定的是「{user}」，本轮结论用的是「{adopted}」。',
-  valuationResultMethodScreening: '方法判断记录',
-  valuationResultBaseDate: '评估基准日',
-  valuationResultNoBaseDate: '本次未指定评估基准日',
-  valuationResultUnknown: '—',
-  valuationResultManual: '待确认事项',
-  valuationResultGaps: '能力缺口',
-  valuationResultCases: '案例',
-  // 结果页第一屏要能一眼看到"结论"：总价 / 单价 / 方法 / 基准日 / **案例数量**。
-  // 数量这一行同时给出两桶的分布（可直接作可比 / 需修正）。
-  valuationResultCaseCount: '案例数量',
-  valuationResultRuleChecks: '规则校验摘要',
-  valuationResultAdoptedCount: '最终采用案例',
-  valuationResultGroupRatio: '组内比值（最高价 / 最低价）',
-  valuationResultLimitIs: '阈值 {limit}',
-  valuationResultGroupOver: '已超过阈值：处置方式见待确认事项',
-  valuationResultRuleCounts: '通过 {passed} · 未通过 {failed}',
-  valuationResultCaseStatus: '案例状态',
-  valuationResultSource: '来源',
-  valuationResultSourceCounts: '共 {total} 条 · 采用 {adopted} 条',
-  valuationCaseStatusAdopted: '最终采用',
-  valuationCaseStatusNotComparable: '条件不匹配',
-  valuationCaseStatusInsufficientEvidence: '资料或证据不足',
-  valuationCaseStatusSingleFailed: '单项规则未通过',
-  valuationCaseStatusCombinedFailed: '综合规则未通过',
-  valuationCaseStatusGroupFailed: '组内一致性未通过',
-  valuationResultCaseCountValue: '{total} 条（可比 {comparable} · 需修正 {listed}）',
-  valuationResultComparable: '可直接作可比实例（成交）',
-  valuationResultListed: '挂牌 / 询价 / 未知（需修正）',
-  valuationResultNoCases: '没有可用案例。',
-  valuationResultTransaction: '交易性质',
-  valuationResultContact: '公开联系方式',
-  valuationResultContacts: '公开中介联系方式',
-  valuationResultContactsNote: '只登记页面合法公开展示的信息；号码按页面原样保留（脱敏就写脱敏）。'
-    + '这里不提供任何联系、拨号或发送消息的入口。',
-  valuationContactPublic: '已公开获取',
-  valuationContactNotPublished: '页面未公开',
-  valuationContactMasked: '页面脱敏展示',
-  valuationContactLoginRequired: '需要登录',
-  valuationContactFailed: '获取失败',
-  valuationContactUnrecorded: '未记录',
-  valuationResultEvidence: '证据',
-  valuationResultScreenshot: '截图',
-  valuationResultScreenshotMissing: '没有截图',
-  valuationResultReason: '保留 / 剔除理由',
-  valuationResultCapturedAt: '抓取于 {at}',
-  valuationResultEvidenceMissing: '没有留存证据',
-  valuationResultIncompleteTitle: '这份结论的证据还不完整',
-  valuationResultIncompleteLead: '下面照样给出数字与案例，但**不要**当成已核实的正式结论：'
-    + '缺件、缺证据或能力缺口写在后面的「能力缺口」里。',
-  valuationResultArtifacts: '交付件',
-  valuationResultOpen: '打开',
-  valuationResultMissingArtifact: '还没生成',
-  valuationResultCancel: '取消本轮',
-
-  /* 12 个估值要素（顺序与 references/09 一致） */
-  valuationFieldAddress: '坐落',
-  valuationFieldNature: '房屋性质',
-  valuationFieldPurpose: '用途',
-  valuationFieldArea: '建筑面积',
-  valuationFieldFloor: '楼层',
-  valuationFieldTotalFloors: '总楼层',
-  valuationFieldStructure: '建筑结构',
-  valuationFieldBuiltYear: '建成年代',
-  valuationFieldOwnership: '权属信息',
-  valuationFieldLease: '租赁信息',
-  valuationFieldPrice: '价格信息',
-  valuationFieldCases: '已知案例线索',
+  /* 交接（§4.5） */
+  valuationCreatingSession: '正在创建会话…',
+  /** 创建期间固定在 footer 的一句说明（不弹二次确认）。 */
+  valuationCreatingNote: '正在创建会话，请稍候。',
+  /** 创建超过 15 秒：**不伪造**细分步骤，只说明"还在确认交接结果"。 */
+  valuationCreatingSlow: '创建用时较长，正在确认交接结果，请勿重复开始。',
+  /** 创建期间禁止关闭抽屉时的解释（写在状态区，不用二次确认弹框）。 */
+  valuationCreatingCannotClose: '正在创建会话：完成前不能关闭或返回修改。',
+  valuationSessionCreated: '估值会话已创建，正在打开…',
+  valuationSessionOpenFailed: '估值会话已创建，未能自动打开',
+  valuationSessionOpenRetry: '打开估值会话',
+  /** 最近一次成功交接的会话入口（中性链接；不读运行进度）。 */
+  valuationRecentSession: '最近创建的估值会话',
+  /**
+   * 交接结果分三类（设计稿 §11.1）：**只有 Host 明确说"没有创建"才允许返回修改**。
+   *
+   * 未知与已创建都必须先完成同一轮恢复 —— 否则"返回修改"会造出第二个项目目录。
+   */
+  valuationHandoffNotCreatedTitle: '未能创建估值会话',
+  valuationHandoffNotCreatedNote: '资料与条件已保留，可以直接重试创建。',
+  valuationHandoffCreatedTitle: '会话已创建，交接尚未完成',
+  valuationHandoffCreatedNote: '重试会发给同一个会话，不会新建。',
+  valuationHandoffUnknownTitle: '尚未确认会话是否创建',
+  valuationHandoffUnknownNote: '恢复交接会复用本次请求，不会另建一轮。',
+  valuationHandoffRecover: '恢复交接',
+  valuationHandoffRetryCreate: '重试创建',
+  valuationHandoffRetryDispatch: '重试交接',
+  /** 结果未知时**不给**返回修改入口的说明。 */
+  valuationHandoffFrozen: '先完成本次恢复；不清楚结果时不会开始新一轮。',
+  valuationHandoffRetry: '重试',
+  valuationHandoffTimeout: '尚未确认会话是否创建：恢复交接会复用本次请求，不会另建一轮。',
+  valuationHandoffFailureGeneric: '本轮操作没有完成',
 } as const

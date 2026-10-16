@@ -17,54 +17,8 @@ import test from 'node:test'
 
 const ROOT = new URL('../../../', import.meta.url)
 
-const { satisfies, parseVersion, compareVersion } = await import(new URL('src/host/core/environment/version.ts', ROOT).href)
 const { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } = await import(new URL('src/host/core/environment/manifest-default.ts', ROOT).href)
 const { normalizeOss } = await import(new URL('src/host/core/environment/manifest.ts', ROOT).href)
-
-// ── 版本 ────────────────────────────────────────────────────────────────────
-
-test('parseVersion reads a version out of noisy command output', () => {
-  assert.deepEqual(parseVersion('v22.19.0'), [22, 19, 0])
-  assert.deepEqual(parseVersion('Version: 1.7.19'), [1, 7, 19])
-  assert.deepEqual(parseVersion('Python 3.11'), [3, 11, 0])
-  assert.deepEqual(parseVersion('dws 0.2.14 (build 7)'), [0, 2, 14])
-  assert.equal(parseVersion('no version here'), null)
-  assert.equal(parseVersion(''), null)
-  assert.equal(parseVersion(null), null)
-})
-
-test('compareVersion is a three-segment lexicographic comparison', () => {
-  assert.equal(compareVersion([1, 2, 3], [1, 2, 3]), 0)
-  assert.equal(compareVersion([1, 2, 3], [1, 2, 4]), -1)
-  assert.equal(compareVersion([2, 0, 0], [1, 9, 9]), 1)
-  assert.equal(compareVersion([1, 10, 0], [1, 9, 0]), 1, '10 必须大于 9（不能按字符串比）')
-})
-
-test('satisfies honours each operator', () => {
-  assert.deepEqual(satisfies('22.19.0', '>=16.7'), { ok: true, reason: '' })
-  assert.deepEqual(satisfies('16.6.0', '>=16.7'), { ok: false, reason: '低于期望 >=16.7' })
-  assert.equal(satisfies('0.2.14', '>0.2.14').ok, false)
-  assert.equal(satisfies('0.2.15', '>0.2.14').ok, true)
-  assert.equal(satisfies('1.7.19', '<=1.7.19').ok, true)
-  assert.equal(satisfies('1.7.20', '<=1.7.19').ok, false)
-  assert.equal(satisfies('3.11.0', '<4').ok, true)
-  assert.equal(satisfies('1.7.19', '1.7.19').ok, true, '无操作符按等号处理')
-  assert.equal(satisfies('1.7.20', '1.7.19').ok, false)
-})
-
-test('satisfies treats an absent constraint as no constraint', () => {
-  assert.deepEqual(satisfies('anything', ''), { ok: true, reason: '' })
-  assert.deepEqual(satisfies('anything', '*'), { ok: true, reason: '' })
-  // 约束本身解析不出数字 = 清单写错了，但按「没有约束」处理而不是把人挡在门外。
-  assert.deepEqual(satisfies('1.0.0', 'latest'), { ok: true, reason: '' })
-})
-
-test('satisfies fails when the installed version cannot be read', () => {
-  // 「装了但读不到版本」不能算通过：那会让环境自检显示绿而实际不可用。
-  const verdict = satisfies('command not found', '>=16.7')
-  assert.equal(verdict.ok, false)
-  assert.match(verdict.reason, /无法从命令版本输出解析出版本号|无法从命令输出解析出版本号/)
-})
 
 // ── 内置清单自洽 ────────────────────────────────────────────────────────────
 

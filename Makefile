@@ -125,6 +125,8 @@ plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && npm run pack:assert:strict
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
+	# 业务层（skills/biz）自包含性同样要过一次（非 vendored 层各一次）。
+	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/biz
 	# 门禁只读源码：`PYTHONDONTWRITEBYTECODE=1` 保证不在包目录留下 `__pycache__/*.pyc`
 	# —— `files` 里有 `skills/crwu/`，残留会被 `pack:assert` 判成「打进了不该发布的东西」。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
@@ -133,11 +135,15 @@ plugin-check: plugin-deps
 	# 业务层（skills/biz）：报告评估的多类型资料提取脚本契约。缺 openpyxl / python-docx / Pillow
 	# 时对应用例**跳过**（那是运行时能力差异，不是脚本缺陷），缺口分支照常断言。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_extract_files.py
-	# 估值交付契约：结果 JSON 的每条硬规则都必须真的让校验失败，随包发布的底稿模板必须过工作簿契约。
-	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_valuation_contracts.py
-	# 市场法规则：20% / 30% / 1.2 三条阈值的等于、略低、略高边界，以及"综合修正是连乘不是相加"
-	# 与 Excel 口径的取整（银行家舍入会让底稿与 JSON 的数字对不上）。
-	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_market_rules.py
+	# 估值交付契约（v2）：报告数据 Schema/口径、通用工作簿生成与校验、报告渲染。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_report_data.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_generic_workbook.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_report_render.py
+	# 市场法**生产入口**：阈值全部来自知识快照、缺少任何一条都不许运行、缺失不许当 0、
+	# 以及"案例少于知识要求时仍给参考结论而不是把金额清空"（design §6.1）。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_calculate_market.py
+	# 挂牌参考一次性交付：固定输入身份、四件产物、修订目录、generatedAt 冻结与只读校验。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_listing_reference.py
 
 # 打成可直接分发的 tgz（`npm publish` 的对象，也是接收方自测的输入）。
 # 包内已含全部技能层（skills/crwu、skills/dws、common/skills）与两个平台的自带二进制。

@@ -7,7 +7,7 @@ import { AuditParentButton } from './modules/report-audit/ui/AuditParentButton.t
 import { RunCardAction } from './shell/RunCardAction.tsx'
 import { WorkbenchPanel } from './shell/WorkbenchPanel.tsx'
 import { createLocalAuditPaneController } from './modules/local-audit/ui/LocalAuditPane.tsx'
-import { createReportEvaluationPaneController } from './modules/report-evaluation/index.ts'
+import { createReportEvaluationPaneController, reportEvaluationPaneServices } from './modules/report-evaluation/index.ts'
 import { hostPickerCapabilities } from './modules/local-audit/pick.ts'
 import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './shell/WorkbenchSidebarEntry.tsx'
 import { createBuildStore } from './shell/build-store.ts'
@@ -76,26 +76,32 @@ export function apply(ctx: ClientContext): void {
    */
   const localAudit = createLocalAuditPaneController(services)
   /**
-   * 「报告评估」的估值控制器（协议 32）。与 `localAudit` 同一条口径：实例级、只有一份，
+   * 「报告评估」的估值控制器（协议 35）。与 `localAudit` 同一条口径：实例级、只有一份，
    * 于是切模块 / 离开面板再回来时，用户选的文件、方法、基准日与补充要求都还在。
+   *
+   * 会话跳转（`uiWorkspace` / `layout`）也从这里接进去：控制器在交接成功后要**立刻**
+   * 打开刚建出来的顶层父会话 —— 那两个服务可能比本插件晚注册，所以一律现读。
    */
-  const evaluation = createReportEvaluationPaneController(hostPickerCapabilities(
-    () => services,
-    {
-      /**
-       * 环境门禁：与面板同一条判据（自检拿到结论且全部通过）。
-       *
-       * 为什么必须**现读**：自检结论会变（用户修完再自检就通过了）。
-       * 为什么必须**给**：`controller.start()` 里 `port.ready?.() ?? { ok: true }` ——
-       * 不传这条，门禁就默认放行，于是"环境没就绪也能起估值"。
-       */
-      ready: () => {
-        const snapshot = envStatus.get()
-        return snapshot.env !== null && snapshot.env.allOk === true
-          ? { ok: true, error: '' }
-          : { ok: false, error: zhCN.valuationNeedEnvironment }
+  const evaluation = createReportEvaluationPaneController(reportEvaluationPaneServices(
+    hostPickerCapabilities(
+      () => services,
+      {
+        /**
+         * 环境门禁：与面板同一条判据（自检拿到结论且全部通过）。
+         *
+         * 为什么必须**现读**：自检结论会变（用户修完再自检就通过了）。
+         * 为什么必须**给**：`controller.preparePreview()` 里 `port.ready?.() ?? { ok: true }` ——
+         * 不传这条，门禁就默认放行，于是"环境没就绪也能起估值"。
+         */
+        ready: () => {
+          const snapshot = envStatus.get()
+          return snapshot.env !== null && snapshot.env.allOk === true
+            ? { ok: true, error: '' }
+            : { ok: false, error: zhCN.valuationNeedEnvironment }
+        },
       },
-    },
+    ),
+    () => services,
   ))
   // 自助更新同理，而且这条是**硬要求**：侧栏那枚版本徽标与面板里的更新面板必须共用
   // 唯一一份更新状态（各自建 store 就会各发一次 status/check，还会出现"徽标说有更新、

@@ -1,5 +1,9 @@
 import { text } from '../../../../shared/utils/value.ts'
-import { looksLikeCaptcha, looksLikeLoginWall } from './login-probe.ts'
+import {
+  BOUNDARY_REFUSAL_TEXT, addressInText, addressKindOf, looksLikeCaptcha, looksLikeLoginWall,
+  normalizeHostAddress, networkPhaseOfErrorCode, noNetworkFacts,
+  type NetworkAddressKind, type NetworkFacts, type NetworkPhase, type NetworkRefusedBy,
+} from './login-probe.ts'
 import type { MarketFailureKind, MarketFetchResult, MarketTransport } from './provider.ts'
 
 /**
@@ -15,6 +19,14 @@ import type { MarketFailureKind, MarketFetchResult, MarketTransport } from './pr
  *    换 UA、打码、代填一律不做。
  *
  * 响应体有上限：一个页面几百 KB 是常态，但被投喂几十 MB 的响应会把进程拖住。
+ *
+ * ## Structured network facts on failure
+ *
+ * A real search.fang.com failure could not be attributed to the site, DNS, a proxy or a local
+ * boundary from a bare "network error". Every failure therefore carries `network`
+ * (error code / phase / address kind / refusing boundary) next to the login and captcha
+ * facts. The facts come from the thrown error itself (`cause` chain, `AggregateError`,
+ * code and address fields); no extra DNS lookup is performed.
  */
 
 /** 单个响应的读取上限（字符数）。 */
@@ -92,21 +104,136 @@ export function hostOf(url: string): string {
   }
 }
 
+/** Result plus network facts (an additive extension; no existing key of `MarketFetchResult` changes). */
+export type MarketFetchResultWithNetwork = MarketFetchResult & { network: NetworkFacts }
+
+/** Facts for a completed request (a body was read), success or failure alike. */
+export function networkFactsOk(host = ''): NetworkFacts {
+  return { ...noNetworkFacts(true), source: 'transport', host }
+}
+
+/** Facts of a local boundary refusal (host allow-list / deployment non-public-address boundary). */
+export function networkFactsOfBoundary(
+  host: string, refusedBy: NetworkRefusedBy, address = host,
+): NetworkFacts {
+  const addr = normalizeHostAddress(address)
+  return {
+    ...noNetworkFacts(false), source: 'transport', phase: 'boundary',
+    addressKind: addressKindOf(addr), address: addr, host, refusedBy,
+  }
+}
+
+/** Facts of a phase failure (redirect / body read). */
+function networkFactsOfPhase(phase: NetworkPhase, host: string, address = ''): NetworkFacts {
+  const addr = normalizeHostAddress(address)
+  return {
+    ...noNetworkFacts(false), source: 'transport', phase,
+    addressKind: addressKindOf(addr), address: addr, host,
+  }
+}
+
+interface ErrorProbe {
+  name: string
+  code: string
+  message: string
+  address: string
+}
+
+/**
+ * Flatten an error object into a chain: `cause` links plus `AggregateError.errors`.
+ *
+ * undici wraps the real reason in `TypeError: fetch failed` (`ENOTFOUND` /
+ * `UND_ERR_CONNECT_TIMEOUT` / `ECONNREFUSED` live on `cause`), so reading only the outer
+ * error records every failure the same way. Bounded: depth 4, at most 8 entries.
+ */
+function probeErrors(root: unknown): ErrorProbe[] {
+  const out: ErrorProbe[] = []
+  const seen = new Set<unknown>()
+  const visit = (value: unknown, depth: number): void => {
+    if (value === null || typeof value !== 'object' || depth > 4 || seen.has(value) || out.length >= 8) return
+    seen.add(value)
+    const record = value as Record<string, unknown>
+    out.push({
+      name: text(record.name),
+      code: text(record.code),
+      message: text(record.message),
+      address: text(record.address),
+    })
+    if (Array.isArray(record.errors)) for (const one of record.errors.slice(0, 8)) visit(one, depth + 1)
+    visit(record.cause, depth + 1)
+  }
+  visit(root, 0)
+  return out
+}
+
+/** Structured facts of one fetch failure (code / phase / address / refusing boundary). */
+export function networkFactsFromError(error: unknown, context: { host?: string } = {}): NetworkFacts {
+  const host = text(context.host)
+  const probes = probeErrors(error)
+  const outerText = error instanceof Error ? `${error.name} ${error.message}` : text(error)
+  const messages = [outerText, ...probes.map((one) => one.message)].join(' ')
+  const codes = [text((error as { code?: unknown } | null)?.code), ...probes.map((one) => one.code)]
+    .filter((one) => one !== '')
+
+  const boundary = BOUNDARY_REFUSAL_TEXT.test(messages)
+  const addressed = probes.find((one) => one.address !== '')?.address ?? ''
+  const address = addressed !== '' ? addressed : addressInText(messages)
+  const carried = codes.find((one) => networkPhaseOfErrorCode(one) !== '') ?? ''
+  const codePhase = networkPhaseOfErrorCode(carried)
+  const named = probes.find((one) => one.name === 'AbortError' || one.name.endsWith('TimeoutError'))
+  const phase: NetworkPhase = boundary ? 'boundary' : codePhase !== '' ? codePhase : named === undefined ? 'unknown' : 'timeout'
+  const chosen = probes.find((one) => one.code !== '' && one.code === carried)
+    ?? probes.find((one) => one.name !== '')
+  return {
+    ok: false,
+    source: 'transport',
+    errorCode: carried,
+    errorName: chosen?.name !== undefined && chosen.name !== '' ? chosen.name : error instanceof Error ? error.name : '',
+    phase,
+    addressKind: addressKindOf(address),
+    address,
+    host,
+    refusedBy: boundary ? 'network-boundary' : '',
+  }
+}
+
+/** Non-public check, so "boundary refused a local/private address" stays distinct from "host not listed". */
+function isNonPublicAddressKind(kind: NetworkAddressKind): boolean {
+  return kind === 'private' || kind === 'loopback' || kind === 'link-local' || kind === 'reserved'
+}
+
 export function fetchTransport(options: FetchTransportOptions = {}): MarketTransport {
   const allowed = options.allowedHosts ?? []
   const bodyMax = options.bodyMax ?? MARKET_BODY_MAX
   const doFetch = options.fetchImpl ?? globalThis.fetch
   const userAgent = options.userAgent ?? MARKET_USER_AGENT
 
-  return async (url: string, { signal }: { signal?: AbortSignal } = {}): Promise<MarketFetchResult> => {
-    const empty = {
+  return async (url: string, { signal }: { signal?: AbortSignal } = {}): Promise<MarketFetchResultWithNetwork> => {
+    const empty = (network: NetworkFacts): Omit<MarketFetchResultWithNetwork, 'error'> => ({
       ok: false, status: 0, body: '', contentType: '', url, loginRequired: false, captcha: false,
-      failureKind: 'blocked' as MarketFailureKind,
-    }
+      failureKind: 'blocked' as MarketFailureKind, network,
+    })
     const host = hostOf(url)
-    if (host === '') return { ...empty, error: `不是一条合法的 URL：${url}` }
-    if (!hostAllowed(host, allowed)) return { ...empty, error: `目标站点不在允许清单里：${host}` }
-    if (typeof doFetch !== 'function') return { ...empty, error: '本部署没有可用的 fetch：无法访问外部来源' }
+    // Invalid URL: refused locally, but the exact boundary cannot be named.
+    if (host === '') {
+      return { ...empty(networkFactsOfBoundary('', '')), error: `不是一条合法的 URL：${url}` }
+    }
+    if (!hostAllowed(host, allowed)) {
+      const kind = addressKindOf(host)
+      return {
+        ...empty(networkFactsOfBoundary(host, 'host-allow-list')),
+        // Name the local boundary refusal instead of blaming the site.
+        error: isNonPublicAddressKind(kind)
+          ? `本地边界拒绝了本机 / 内网地址：${host}（不在允许清单里）`
+          : `目标站点不在允许清单里：${host}`,
+      }
+    }
+    if (typeof doFetch !== 'function') {
+      return {
+        ...empty({ ...noNetworkFacts(false), source: 'transport', phase: 'unknown', host }),
+        error: '本部署没有可用的 fetch：无法访问外部来源',
+      }
+    }
 
     let response: Response
     try {
@@ -121,9 +248,12 @@ export function fetchTransport(options: FetchTransportOptions = {}): MarketTrans
         ...(signal === undefined ? {} : { signal }),
       })
     } catch (error) {
+      const network = networkFactsFromError(error, { host })
       return {
-        ...empty, failureKind: 'network',
-        error: `请求失败（网络错误或超时）：${error instanceof Error ? error.message : String(error)}`,
+        ...empty(network), failureKind: 'network',
+        // A boundary refusal is not a "network error"; saying so keeps the follow-up honest.
+        error: `${network.refusedBy === '' ? '请求失败（网络错误或超时）' : '请求被本地边界拒绝'}：${
+          error instanceof Error ? error.message : String(error)}`,
       }
     }
 
@@ -131,7 +261,10 @@ export function fetchTransport(options: FetchTransportOptions = {}): MarketTrans
     const finalUrl = text((response as { url?: unknown }).url) || url
     const finalHost = hostOf(finalUrl)
     if (finalHost !== '' && !hostAllowed(finalHost, allowed)) {
-      return { ...empty, status: response.status, error: `页面被重定向到允许清单之外的站点：${finalHost}` }
+      return {
+        ...empty(networkFactsOfPhase('redirect', host, finalHost)), status: response.status,
+        error: `页面被重定向到允许清单之外的站点：${finalHost}`,
+      }
     }
 
     let body = ''
@@ -139,7 +272,8 @@ export function fetchTransport(options: FetchTransportOptions = {}): MarketTrans
       body = (await response.text()).slice(0, bodyMax)
     } catch (error) {
       return {
-        ...empty, status: response.status, url: finalUrl, failureKind: 'unreadable',
+        ...empty(networkFactsOfPhase('read', host)), status: response.status, url: finalUrl,
+        failureKind: 'unreadable',
         error: `读取响应失败：${error instanceof Error ? error.message : String(error)}`,
       }
     }
@@ -156,8 +290,10 @@ export function fetchTransport(options: FetchTransportOptions = {}): MarketTrans
       loginRequired,
       captcha,
       failureKind,
-      // 失败信息里带上类别：三次重试的记录因此可区分（§7.3），而不是三行一样的"HTTP 403"。
+      // 失败信息里带上类别：两次重试的记录因此可区分（§7.3），而不是两行一样的"HTTP 403"。
       error: response.ok ? '' : `${failureKindLabel(failureKind)}（HTTP ${String(response.status)}）`,
+      // A response arrived: a site-side status / challenge is not a network fact (and vice versa).
+      network: networkFactsOk(host),
     }
   }
 }

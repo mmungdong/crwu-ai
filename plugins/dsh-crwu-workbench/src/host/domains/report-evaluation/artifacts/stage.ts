@@ -85,3 +85,35 @@ export async function stageSkillScript(input: StageInput): Promise<StageResult> 
   if (!written.ok) return { ok: false, error: `技能脚本落盘失败：${written.error}`, scriptPath: '' }
   return { ok: true, error: '', scriptPath }
 }
+
+export interface StageAssetResult {
+  ok: boolean
+  error: string
+  /** 案例内的资产路径（保留技能内的相对目录形状）。 */
+  path: string
+}
+
+/**
+ * Stage a non-script skill asset (e.g. the report-data schema) under the case directory,
+ * preserving the skill-relative directory layout so packaged scripts can resolve siblings.
+ */
+export async function stageSkillAsset(input: StageInput): Promise<StageAssetResult> {
+  const relative = text(input.relative).replace(/\\/g, '/').replace(/^\/+/, '')
+  if (relative === '' || relative.includes('..') || relative.includes(':')) {
+    return { ok: false, error: `不是一条可用的技能资产路径：${input.relative}`, path: '' }
+  }
+  const source = input.sourcePath ?? packagedSkillFile(relative)
+  if (source === '') {
+    return { ok: false, error: `包内找不到技能资产 ${relative}：插件包可能不完整`, path: '' }
+  }
+  const read = input.readSource ?? (async (path: string) => await readFile(path, 'utf8').catch(() => ''))
+  const body = await read(source)
+  if (body === '') return { ok: false, error: `技能资产 ${relative} 读不出内容：插件包可能不完整`, path: '' }
+  const target = joinLocalPath(input.casePath, ...relative.split('/'))
+  const written = await writeCaseText(input.ctx, target, body, {
+    ...(input.session === undefined ? {} : { session: input.session }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  })
+  if (!written.ok) return { ok: false, error: `技能资产落盘失败：${written.error}`, path: '' }
+  return { ok: true, error: '', path: target }
+}

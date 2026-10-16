@@ -54,12 +54,24 @@ class Checks {
   constructor() {
     this.failures = []
     this.passed = []
+    this.skipped = []
   }
 
   that(name, condition, detail = '') {
     if (condition) this.passed.push(name)
     else this.failures.push(detail === '' ? name : `${name}（${detail}）`)
     return condition === true
+  }
+
+  /**
+   * 这一段**没有执行**，并给出原因。
+   *
+   * 为什么必须有这个状态：真机验收里有些段跑不跑取决于环境（例如未登录时正文被门禁替换）。
+   * 把"没跑"记成"通过"是最坏的一种报告 —— 它让人以为查过了。所以它单列一档，
+   * **不影响退出码**（环境条件不是缺陷），但一定打印出来。
+   */
+  skip(name, reason) {
+    this.skipped.push(`${name}（${reason}）`)
   }
 }
 
@@ -107,6 +119,17 @@ async function main() {
   const techIncludesEngine = (text) => /引擎版本/.test(text)
 
   /**
+   * 估值输入工作面这一段有没有画出来（没画出来时，依赖它的断言**不记**，
+   * 由一条 skip 统一交代）。
+   *
+   * 它必须定义在**所有 phase 之外**：以前它长在"侧栏分组卡"那个 phase 的闭包里，
+   * 而"面板窄宽切换"phase 也在用它 —— 那是一条 ReferenceError，
+   * 只有把真机脚本完整跑一遍才会暴露（2026-10-15 实测踩到）。
+   */
+  let intakeReachable = false
+  const workfaceCheck = (name, condition, detail = '') => (intakeReachable ? checks.that(name, condition, detail) : false)
+
+  /**
    * 一个阶段失败不能变成崩溃：验收工具必须**报告**失败。
    * 返回 true 表示这一阶段通过、后续阶段可以继续。
    */
@@ -122,6 +145,38 @@ async function main() {
 
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+
+    // ── 宿主自己的首次运行说明：它盖住整页，不收掉后面每一条 click 都会超时 ──────
+    //
+    // 2026-10-15 真机实测：全新 profile 第一次打开会弹「预览版说明」（一个宿主级的模态框）。
+    // 它**不是插件的一部分**，但真机脚本必须先把它收掉 —— 否则后续所有 `locator.click()`
+    // 都只会得到 30 秒超时，而报告里读起来像"插件点不动"（一次真实的误诊）。
+    /**
+     * 收掉宿主自己的模态浮层（首次运行说明 / 公告）。
+     *
+     * 它**异步出现**（`domcontentloaded` 之后才挂上），所以必须等一下再判；只 `count()` 一次
+     * 会在弹窗还没渲染时得到 0，于是"没有弹窗"变成一句假话，而后面每一条点击都被它挡掉。
+     */
+    const dismissHostModal = async (timeout = 8_000) => {
+      for (const text of [/^继续$/, /^知道了$/, /^我知道了$/, /^确定$/]) {
+        const button = page.locator('button', { hasText: text }).first()
+        const appeared = await button.waitFor({ state: 'visible', timeout })
+          .then(() => true).catch(() => false)
+        if (!appeared) continue
+        await button.click()
+        await page.waitForTimeout(400)
+        return true
+      }
+      return false
+    }
+    await phase('收掉宿主自己的首次运行说明（如果有）', async () => {
+      const dismissed = await dismissHostModal()
+      if (!dismissed) {
+        checks.skip('宿主首次运行说明', '本次 profile 没有该弹窗')
+        return
+      }
+      checks.passed.push('收掉宿主自己的首次运行说明（如果有）')
+    })
 
     // ── 第 5 条：侧栏底部入口出现 ──────────────────────────────────────────
     const hasEntry = await phase('侧栏底部出现「中瑞世联工作台」入口', async () => {
@@ -284,22 +339,22 @@ async function main() {
           // ── 报告评估：**已经实现的房地产估值面板**（协议 32） ──
           //
           // 这里能查的是"面板真的画出来了、入口齐、而且**不越权**"：
-          // 确认抽屉必须等用户点「开始提取资料」才出现 —— 打开页面就弹抽屉等于把"确认"这一步省掉了。
+          // 确认抽屉必须等用户点「确认」才出现 —— 打开页面就弹抽屉等于把"确认"这一步省掉了。
           await moduleButton('报告评估').click()
           await page.waitForTimeout(500)
           const evalBodyText = await body()
           const evalPane = page.locator('.crwu-valuation').first()
           await evalPane.waitFor({ state: 'visible', timeout: 5_000 })
           const evalPaneText = (await evalPane.innerText()).replace(/\s+/g, ' ')
-          // 页面抬头**按二级目录**给出（估值 / 房地产 → 「房地产估值」）：它由面板渲染，
-          // 所以查的是面板那一块页头，而不是估值页自己画一个写死的名字。
+          // 页面抬头来自**导航元数据**（协议 39：「估值」是一级页，不再是「估值 / 房地产」）。
           const evalHead = page.locator('.crwu-audit-nav-page-head').first()
           await evalHead.waitFor({ state: 'visible', timeout: 5_000 })
           const evalHeadText = (await evalHead.innerText()).replace(/\s+/g, ' ')
-          checks.that('估值页抬头按二级目录给出（房地产估值）', evalHeadText.includes('房地产估值'), evalHeadText)
-          checks.that('抬头下面有一句简短说明', evalHeadText.length > '房地产估值'.length, evalHeadText)
-          // 两级目录**按模块分离**：报告评估树的一级只有「估值」（不出现「审核」）；
-          // 二级是 [房地产][土地][机器设备]。
+          checks.that('估值页抬头按导航元数据给出（估值）', evalHeadText.includes('估值'), evalHeadText)
+          // 抬头只有标题（产品介绍式的说明已按用户口径删除）。
+          checks.that('抬头只有标题，没有多余的介绍文案',
+            evalHeadText.replace('估值', '').replace(/\s+/g, '') === '', evalHeadText)
+          // 协议 39：**取消房地产二级导航** —— 一级目录仍然只有「估值」，但**二级页签行整个不画**。
           const parentTabs = page.locator('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
           const parentLabels = (await parentTabs.allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
           checks.that(
@@ -307,83 +362,157 @@ async function main() {
             JSON.stringify(parentLabels) === JSON.stringify(['估值']),
             JSON.stringify(parentLabels),
           )
-          const childTabs = page.locator('.crwu-audit-nav-children[role="tablist"] .crwu-audit-nav-child')
-          const childLabels = (await childTabs.allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
           checks.that(
-            '报告评估的二级目录是 房地产 / 土地 / 机器设备',
-            JSON.stringify(childLabels) === JSON.stringify(['房地产', '土地开发中', '机器设备开发中']),
-            JSON.stringify(childLabels),
+            '估值没有二级目录（房地产二级导航已取消）',
+            await page.locator('.crwu-audit-nav-children[role="tablist"] .crwu-audit-nav-child').count() === 0,
           )
           checks.that(
             '一级目录用底部强调线（44px 命中高度 + 选中项 3px 强调线）',
             ((await parentTabs.first().boundingBox())?.height ?? 0) >= 44
               && await parentTabs.first().evaluate((element) => getComputedStyle(element, '::after').height) === '3px',
           )
-          const childHeight = (await childTabs.first().boundingBox())?.height ?? 0
-          checks.that('二级目录是更轻的一档（浅色胶囊，比一级矮）', childHeight > 0 && childHeight < 44, `h=${String(childHeight)}`)
-          checks.that('「开发中」的二级目录不可进入', await childTabs.nth(1).isDisabled())
-          // 两级页签的 aria-controls 都指向同一个真实存在的内容区。
+          // 页签的 aria-controls 指向真实存在的内容区。
           const panelId = await parentTabs.first().getAttribute('aria-controls')
           checks.that('页签的 aria-controls 指向真实内容区', await page.locator(`#${String(panelId)}`).count() === 1)
+          // ── 案例来源能力区（协议 39：登录是**可选用能力**，不再是门禁）──────────
+          // 未登录照样画输入工作面：这里如实核对"能力区在页面上、进页面不自动探测"。
+          intakeReachable = await page.locator('.crwu-valuation-intake').count() === 1
+          checks.that('进估值页不做任何来源探测（不出现整页门禁屏）',
+            await page.locator('[data-valuation-auth-gate]').count() === 0)
+          checks.that('能力区在输入工作面里（未登录不阻止填写）',
+            await page.locator('.crwu-valuation-intake [data-valuation-capability]').count() >= 1)
+          if (!intakeReachable) {
+            checks.skip('估值输入工作面（资料入口 / 资产类型 / 方法单选 / 单一主操作 / 抽屉 / 窄宽换行）',
+              '本机面板没有画输入工作面：请确认已选工作空间并通过环境自检后重跑')
+          }
+          // 能力区里逐来源的状态与"检查来源状态"入口（真机只有看了登录状态才有意义）。
+          const capabilitySites = page.locator('.crwu-valuation-intake [data-valuation-site]')
+          if (await capabilitySites.count() >= 1) {
+            checks.that('能力区逐来源给出状态（至少一条 data-valuation-site）', true)
+            // 被人机验证挡住时必须有**真实的验证入口**（受控 Host 操作，不是一句文字）。
+            const challenged = page.locator('.crwu-valuation-intake [data-valuation-site-challenge]')
+            if (await challenged.count() >= 1) {
+              const verifyButtons = page.locator('.crwu-valuation-intake button', { hasText: '打开验证窗口' })
+              checks.that('被人机验证挡住时给出「打开验证窗口」入口',
+                await verifyButtons.count() >= 1)
+            } else {
+              checks.skip('「打开验证窗口」入口', '本次真机没有来源处于人机验证状态')
+            }
+            const checkedAt = await page.locator('[data-valuation-capability-checked-at]').first()
+              .getAttribute('data-valuation-capability-checked-at')
+            checks.that('能力状态带检查时刻（真查过就有时刻）',
+              (checkedAt ?? '') === '' || /^\d{4}-\d{2}-\d{2}T/.test(String(checkedAt)), String(checkedAt))
+          } else {
+            checks.skip('能力区逐来源状态', '本次没有展开来源检查（能力区停在"尚未检查"）')
+          }
+
           // 三种资料入口：选文件 / 选文件夹（清单为空时给一句"还没选"）。
-          checks.that(
+          workfaceCheck(
             '资料入口在（选文件 / 选文件夹）',
-            await page.locator('.crwu-valuation-intake .crwu-valuation-btn').count() >= 2,
+            await page.locator('.crwu-valuation-pick .crwu-ui-btn').count() >= 2,
           )
-          // 四种方法：自动判定 / 市场法 / 收益法 / 成本法 —— 必须是**可选**的单选组。
-          const methodGroup = page.locator('.crwu-valuation-methods[role="radiogroup"]').first()
-          checks.that('评估方法是一组可选单选项', await methodGroup.count() === 1)
-          const methods = await methodGroup.innerText()
-          checks.that(
-            '四种方法都在：自动判定 / 市场法 / 收益法 / 成本法',
-            ['自动判定', '市场法', '收益法', '成本法'].every((label) => methods.includes(label)),
-            methods.replace(/\s+/g, ' '),
+          // 两个必填项是**同一种** select-only combobox（资产类型 / 评估方法），初始都是未选。
+          const requiredOrder = await page.locator('[data-valuation-block]')
+            .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-valuation-block')))
+          workfaceCheck('任务顺序：资料 → 两个必填项 → 补充条件 → 信息获取辅助',
+            JSON.stringify(requiredOrder) === JSON.stringify(['files', 'required', 'conditions', 'capability']),
+            JSON.stringify(requiredOrder))
+          workfaceCheck('没有原生 select / 一排 radio 了（两个必填项用同一种单选下拉）',
+            await page.locator('.crwu-valuation-intake select').count() === 0
+              && await page.locator('.crwu-valuation-intake input[type="radio"]').count() === 0)
+          const assetCombo = page.locator('[data-valuation-select="asset-type"] [role="combobox"]').first()
+          const methodCombo = page.locator('[data-valuation-select="method"] [role="combobox"]').first()
+          workfaceCheck('资产类型与评估方法各有一个 combobox（初始收起、占位是"请选择…"）',
+            await assetCombo.count() === 1 && await methodCombo.count() === 1
+              && (await assetCombo.getAttribute('aria-expanded')) === 'false'
+              && (await methodCombo.getAttribute('aria-expanded')) === 'false'
+              && (await page.locator('[data-valuation-select="asset-type"]').innerText()).includes('请选择资产类型')
+              && (await page.locator('[data-valuation-select="method"]').innerText()).includes('请选择评估方法'))
+          workfaceCheck('两个必填项声明了必填，并带"必填"读屏文字',
+            (await assetCombo.getAttribute('aria-required')) === 'true'
+              && (await methodCombo.getAttribute('aria-required')) === 'true'
+              && (await evalPaneText).includes('必填'))
+          // 可见标签与控件**真的关联**（aria-labelledby 指向页面上存在的元素）。
+          workfaceCheck('必填项的可见标签与控件真的关联（aria-labelledby 有落点）',
+            await assetCombo.evaluate((node) => {
+              const ids = String(node.getAttribute('aria-labelledby') ?? '').split(' ').filter(Boolean)
+              return ids.length > 0 && ids.every((id) => document.getElementById(id) !== null)
+            }))
+          // 初次进入不显示字段红字（只在失焦 / 清空已填值 / 触发下一步时出现）。
+          workfaceCheck('初次进入不显示字段红字',
+            await page.locator('[data-valuation-field-error]').count() === 0)
+          // 协议 37：主按钮必须是**实心**（走 --crwu-primary-bg），不再是只有描边的假 primary。
+          workfaceCheck(
+            '主按钮是实心主操作（背景 = 主按钮 token，不是透明描边）',
+            await page.locator('.crwu-valuation-actionbar .crwu-ui-btn-primary').first()
+              .evaluate((element) => {
+                const style = getComputedStyle(element)
+                const token = getComputedStyle(element.closest('[data-crwu-scope="workbench"]') ?? element)
+                  .getPropertyValue('--crwu-primary-bg').trim()
+                const painted = style.backgroundColor
+                return style.borderStyle !== 'none' || painted !== 'rgba(0, 0, 0, 0)'
+                  ? (painted !== 'rgba(0, 0, 0, 0)' && token !== '')
+                  : false
+              }),
           )
-          checks.that('默认方法是自动判定', /自动判定/.test(methods))
+          // 输入工作面在确认期间是**隐藏但保留**（保留展开状态、滚动位置与焦点锚点）。
+          workfaceCheck('输入工作面挂在 data-valuation-intake-host 容器里（抽屉期间保留 DOM）',
+            await page.locator('[data-valuation-intake-host="true"]').count() === 1)
+          // 基准日走共享日期控件（公共类名），不是原生 date 输入。
+          workfaceCheck('基准日使用共享日期控件（.crwu-ui-datepicker-control，无原生 date 输入）',
+            await page.locator('[data-valuation-base-date-field] .crwu-ui-datepicker-control').count() === 1
+              && await page.locator('.crwu-valuation-intake input[type="date"]').count() === 0)
           // ── 单工作面（§3）：不靠左右等宽双栏，主操作不被推到屏幕下方 ──
-          checks.that('输入页是**单工作面**（没有 .crwu-valuation-cols 那种等宽双栏）',
+          workfaceCheck('输入页是**单工作面**（没有 .crwu-valuation-cols 那种等宽双栏）',
             await page.locator('.crwu-valuation-cols').count() === 0)
           const workface = page.locator('.crwu-valuation-intake').first()
           const workfaceBox = await workface.boundingBox()
           // 工作面有最大宽度并且居中（宽屏下不该横贯整块面板）。
-          checks.that('工作面宽度有上限（≤1120px + 容差）',
+          workfaceCheck('工作面宽度有上限（≤1120px + 容差）',
             (workfaceBox?.width ?? 0) <= 1140, `w=${String(workfaceBox?.width ?? 0)}`)
-          checks.that('工作面没有横向溢出（scrollWidth ≈ clientWidth）',
+          workfaceCheck('工作面没有横向溢出（scrollWidth ≈ clientWidth）',
             await workface.evaluate((element) => element.scrollWidth <= element.clientWidth + 1))
-          // 面板宽度（不是浏览器窗口宽度）决定方法组是横排还是纵排 —— 容器查询。
-          const methodDir = await page.locator('.crwu-valuation-methods').first()
-            .evaluate((element) => getComputedStyle(element).flexDirection)
-          checks.that('方法组按**容器宽度**决定横排 / 纵排（容器查询生效）',
-            methodDir === 'row' || methodDir === 'column', methodDir)
+          // 面板宽度（不是浏览器窗口宽度）决定两个必填项是并排还是堆叠 —— 容器查询。
+          const requiredDir = await page.locator('.crwu-valuation-required').first()
+            .evaluate((element) => getComputedStyle(element).gridTemplateColumns)
+          workfaceCheck('两个必填项按**容器宽度**决定并排 / 堆叠（容器查询生效）',
+            typeof requiredDir === 'string' && requiredDir.trim() !== '', requiredDir)
           // 操作区在可视区域内（不靠滚动才能看到主操作）。
           const actionBar = page.locator('.crwu-valuation-actionbar').first()
-          checks.that('操作区在（工作面内，不是宿主页面的全局固定底栏）', await actionBar.count() === 1)
+          workfaceCheck('操作区在（工作面内，不是宿主页面的全局固定底栏）', await actionBar.count() === 1)
           const barBox = await actionBar.boundingBox()
           const viewport = page.viewportSize()
-          checks.that('操作区在初始可视区域内（主操作不用先往下滚）',
+          workfaceCheck('操作区在初始可视区域内（主操作不用先往下滚）',
             (barBox?.y ?? 1e9) < (viewport?.height ?? 0), `y=${String(barBox?.y ?? -1)}`)
-          checks.that('操作区是面板内粘性，不是覆盖宿主的 fixed 底栏',
-            await actionBar.evaluate((element) => getComputedStyle(element).position) === 'sticky')
+          // 协议 37：操作区是工作面自己的 footer（确定高度的 flex 列 + `flex:none`），
+          // 不是 `position:fixed`，也不是把内容压住的 sticky 覆盖层。
+          workfaceCheck('操作区是工作面自己的底栏（不覆盖正文、不是 fixed 覆盖层）',
+            await actionBar.evaluate((element) => getComputedStyle(element).position) !== 'fixed')
+          workfaceCheck('正文有独立滚动区（操作栏不参与正文滚动）',
+            await page.locator('.crwu-valuation-intake-body').count() === 1
+              && await page.locator('.crwu-valuation-intake-body .crwu-valuation-actionbar').count() === 0)
 
-          // 只读确认抽屉**必须还没出现**（那是点「检查并确认」之后的事）。
-          checks.that(
-            '还没点「检查并确认」，确认抽屉不许自己弹出来',
+          // 只读确认抽屉**必须还没出现**（那是点「确认」之后的事）。
+          workfaceCheck(
+            '还没点「确认」，确认抽屉不许自己弹出来',
             await page.locator('[data-valuation-confirmation-drawer="true"]').count() === 0,
           )
-          checks.that('没选资料时不该有提取进度区',
+          workfaceCheck('没选资料时不该有提取进度区',
             await page.locator('[data-valuation-intake-status="extracting"]').count() === 0)
-          checks.that('没失败时不该有错误块',
+          workfaceCheck('没失败时不该有错误块',
             await page.locator('[data-valuation-intake-error="true"]').count() === 0)
-          // 没选资料时「检查并确认」必须是**禁用**的，旁边有一句说明为什么。
+          // 没选资料时「确认」必须是**禁用**的，旁边有一句说明为什么。
           // （比"点了之后报错"更强：用户根本走不到那一步。）
           const startButton = page.locator('.crwu-valuation-actionbar button').last()
-          checks.that('「检查并确认」按钮在（唯一的主操作）', await startButton.count() === 1)
-          checks.that(
-            '没选资料时「检查并确认」是禁用的',
-            await startButton.isDisabled(),
-            `disabled=${String(await startButton.isDisabled())}`,
+          workfaceCheck('「确认」按钮在（唯一的主操作）', await startButton.count() === 1)
+          // 门禁挡住正文时连这个按钮都不存在：`isDisabled()` 会超时抛错，不是返回 false。
+          const startDisabled = intakeReachable ? await startButton.isDisabled() : false
+          workfaceCheck(
+            '没选资料时「确认」是禁用的',
+            startDisabled,
+            `disabled=${String(startDisabled)}`,
           )
-          checks.that(
+          workfaceCheck(
             '禁用时说清缺什么（先选一份资料）',
             /还没有选择资料|先选择至少一份资料/.test(evalPaneText),
             evalPaneText.slice(0, 160),
@@ -392,8 +521,14 @@ async function main() {
           await startButton.click({ force: true }).catch(() => undefined)
           await page.waitForTimeout(400)
           const afterStart = (await evalPane.innerText()).replace(/\s+/g, ' ')
-          checks.that('禁用状态下点了也不弹确认抽屉', await page.locator('.crwu-valuation-drawer-actions').count() === 0)
-          checks.that('报告评估不造假进度', !/[0-9]+%|敬请期待/.test(afterStart))
+          workfaceCheck('禁用状态下点了也不弹确认抽屉', await page.locator('.crwu-valuation-drawer-actions').count() === 0)
+          workfaceCheck('报告评估不造假进度', !/[0-9]+%|敬请期待/.test(afterStart))
+          // 协议 35：估值进度页与结果页**整体删除**。它们在真实 DOM 里不该留下任何残壳
+          //（删了组件却留下挂载点，是最容易复发的"旧页移除不彻底"）。
+          workfaceCheck(
+            '旧估值进度页 / 结果页不留残壳',
+            await page.locator('.crwu-valuation-progress, .crwu-valuation-result, [data-valuation-progress], [data-valuation-result]').count() === 0,
+          )
           checks.that('报告评估不画报告列表', !evalBodyText.includes('报告列表'))
           // 「报告审核」旁边不再标具体报告数（用户 2026-09-22 口径），那一行只有名字。
           const auditRowText = (await moduleButton('报告审核').innerText()).replace(/\s+/g, '')
@@ -548,15 +683,375 @@ async function main() {
           await page.locator('button[aria-label="收起侧边栏"]').first().click()
           await page.waitForTimeout(400)
           const narrow = await overflowOf('.crwu-valuation-intake')
-          checks.that('窄面板下工作面也没有横向溢出',
+          workfaceCheck('窄面板下工作面也没有横向溢出',
             narrow === null || narrow.scrollWidth <= narrow.clientWidth + 1, JSON.stringify(narrow))
-          const direction = await page.locator('.crwu-valuation-methods').first()
-            .evaluate((element) => getComputedStyle(element).flexDirection)
-          checks.that('窄面板下方法组换行（容器查询按面板宽度生效，不是浏览器宽度）',
-            narrow === null || direction === 'column' || direction === 'row', direction)
+          const requiredColumns = intakeReachable
+            ? await page.locator('.crwu-valuation-required').first()
+              .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length)
+            : 0
+          const panelNow = intakeReachable
+            ? await page.locator('.crwu-valuation-intake').first().evaluate((element) => element.clientWidth)
+            : 0
+          // 收起侧栏会让主列**变宽**，所以这里不断言"必须一列"，只断言列数与面板宽度**一致**
+          //（真正的窄面板覆盖在下面的 fixture 阶段按 375 / 500 / 768 / 1024 / 1440 逐个量）。
+          workfaceCheck('两个必填项的列数始终跟随面板宽度（容器查询按面板宽度生效，不是浏览器宽度）',
+            narrow === null || requiredColumns === (panelNow >= 560 ? 2 : 1),
+            `panel=${String(panelNow)} columns=${String(requiredColumns)}`)
           await page.screenshot({ path: join(out, 'valuation-workface-narrow.png') })
           await page.locator('button[aria-label="打开侧边栏"]').first().click()
           await page.waitForTimeout(400)
+        })
+
+        // ── 估值面板：隔离 fixture 走完整条链路（下拉 / 抽屉 / 交接）──────────────
+        //
+        // 这一段**不碰真实文件、真实会话、真实凭据**：文件选择走 Playwright 的 filechooser
+        // （在内存里造 File），绝对路径由临时注入的假路径桥给出；扫描 / 预览 / 预检 / 交接四条
+        // Host 操作由 `page.route` 用内存 fixture 回包。真机脚本因此能证明"面板走完是什么样"，
+        // 而不会在员工的真实工作区里建会话、归档文件或读真实来源状态。
+        await phase('估值面板：隔离 fixture 的完整链路（下拉 / 抽屉 / 交接）', async () => {
+          const FIXTURE_ROOT = '/tmp/crwu-valuation-fixture'
+          const FIXTURE_FILES = [
+            { name: '权属资料.pdf', kind: 'pdf', sizeBytes: 2048, mime: 'application/pdf' },
+            { name: '现场照片.jpg', kind: 'image', sizeBytes: 1024, mime: 'image/jpeg' },
+          ]
+          const FIXTURE_PREFLIGHT = {
+            ok: true, error: '',
+            sites: [{ siteId: 'lianjia', label: '链家', state: 'unauthenticated', reason: '未检测到登录状态' }],
+            rows: [{
+              siteId: 'lianjia', label: '链家', state: 'unauthenticated', reason: '未检测到登录状态',
+              required: false, stateLabel: '未登录',
+            }],
+            gate: {
+              released: false, required: [], optional: ['lianjia'], reason: '',
+              unavailable: false, checkedAt: '2026-10-15T02:00:00.000Z',
+            },
+            loginJobs: [],
+          }
+          const scanBody = () => ({
+            ok: true, error: '', errorKind: '',
+            fileCount: FIXTURE_FILES.length, limit: 30, overLimit: false,
+            readableCount: FIXTURE_FILES.length, skippedCount: 0,
+            items: FIXTURE_FILES.map((file) => ({
+              path: `${FIXTURE_ROOT}/${file.name}`, name: file.name, kind: file.kind,
+              sizeBytes: file.sizeBytes, status: 'scanned', reason: '', fileCount: 1,
+            })),
+            files: FIXTURE_FILES.map((file) => ({
+              path: `${FIXTURE_ROOT}/${file.name}`, name: file.name, kind: file.kind,
+              sizeBytes: file.sizeBytes, parentPath: `${FIXTURE_ROOT}/${file.name}`,
+            })),
+            skipped: [],
+          })
+          const previewBody = (args) => ({
+            ok: true, error: '', errorKind: '', requestId: String(args.requestId ?? ''),
+            previewId: 'fixture-preview-1', projectId: 'fixture-project-1',
+            casePath: `${FIXTURE_ROOT}/case`, inputDigest: 'sha256:fixture',
+            // Host 的**回声**：资产类型与方法逐字来自本次提交（界面据此核对一致性）。
+            assetType: String(args.assetType ?? ''),
+            methodRequest: String(args.method ?? ''),
+            baseDate: args.baseDate === '' || args.baseDate === undefined ? null : String(args.baseDate),
+            purpose: args.purpose === '' || args.purpose === undefined ? null : String(args.purpose),
+            valueType: args.valueType === '' || args.valueType === undefined ? null : String(args.valueType),
+            supplementalPrompt: String(args.supplementalPrompt ?? ''),
+            files: FIXTURE_FILES.map((file, index) => ({
+              fileId: `material-00${String(index + 1)}`, fileName: file.name,
+              absolutePath: `${FIXTURE_ROOT}/${file.name}`,
+              archiveRelativePath: `材料-源/${file.name}`, kind: file.kind,
+              sizeBytes: file.sizeBytes, sha256: 'f'.repeat(64),
+              createdAt: '2026-02-01T02:03:04.000Z', modifiedAt: null,
+              readable: true, duplicateOf: null,
+            })),
+            fileCount: FIXTURE_FILES.length, overLimit: false, skipped: [], capabilityGaps: [],
+            createdAt: '2026-10-15T02:03:04.000Z', expiresAt: '2026-10-15T03:03:04.000Z',
+          })
+          let startCalls = 0
+          await page.evaluate((root) => {
+            globalThis.__DSH_HOST_PATHS__ = {
+              pathFor: (file) => `${root}/${String(file?.name ?? 'file')}`,
+            }
+          }, FIXTURE_ROOT)
+          await page.route('**/api/crwu-workbench**', async (route) => {
+            let payload = null
+            try { payload = JSON.parse(route.request().postData() ?? '{}') } catch { payload = null }
+            const op = payload?.op
+            const args = payload?.args ?? {}
+            if (op === 'valuation-files-scan') return await route.fulfill({ json: scanBody() })
+            if (op === 'valuation-intake') return await route.fulfill({ json: previewBody(args) })
+            if (op === 'valuation-browser-preflight') return await route.fulfill({ json: FIXTURE_PREFLIGHT })
+            if (op === 'valuation-start') {
+              startCalls += 1
+              // 拖慢一点，好观察"创建期间"的锁定；然后如实回**没有创建**（可恢复）。
+              await new Promise((resolve) => setTimeout(resolve, 1500))
+              return await route.fulfill({
+                json: {
+                  ok: false, errorKind: 'input-invalid', error: 'fixture：本轮没有创建会话',
+                  projectId: '', parentSessionId: '', dispatchAccepted: false, reused: false,
+                  creationDisposition: 'not-created',
+                },
+              })
+            }
+            // 其它操作（审核列表 / 环境 / OSS…）照常走真实 Host。
+            return await route.continue()
+          })
+
+          const overflowOf = async (selector) => page.evaluate((sel) => {
+            const node = document.querySelector(sel)
+            if (node === null) return null
+            return {
+              scrollWidth: node.scrollWidth, clientWidth: node.clientWidth,
+              right: Math.round(node.getBoundingClientRect().right),
+              viewport: window.innerWidth,
+            }
+          }, selector)
+          const requiredColumns = async () => page.locator('.crwu-valuation-required').first()
+            .evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(' ').filter(Boolean).length)
+          const setDark = async (dark) => {
+            await page.evaluate((next) => {
+              if (next) document.body.setAttribute('data-ds-dark-theme', '')
+              else document.body.removeAttribute('data-ds-dark-theme')
+            }, dark)
+            await page.waitForTimeout(150)
+          }
+
+          try {
+            // 宿主可能在中途又弹一次公告 —— 它盖住整页时任何点击都只是超时。
+            if (await page.locator('button', { hasText: /^继续$/ }).count() > 0) {
+              await page.locator('button', { hasText: /^继续$/ }).first().click().catch(() => undefined)
+              await page.waitForTimeout(400)
+            }
+            await moduleButton('报告评估').click()
+            await page.waitForTimeout(400)
+            const intake = page.locator('.crwu-valuation-intake').first()
+            await intake.waitFor({ state: 'visible', timeout: 8_000 })
+
+            // ① 选资料：Playwright 在内存里造 File，走**真实的** filechooser 事件。
+            const chooserWait = page.waitForEvent('filechooser', { timeout: 8_000 })
+            await page.locator('.crwu-valuation-pick button', { hasText: '选择文件' }).first().click()
+            const chooser = await chooserWait
+            await chooser.setFiles(FIXTURE_FILES.map((file) => ({
+              name: file.name, mimeType: file.mime, buffer: Buffer.from(`fixture:${file.name}`),
+            })))
+            await page.locator('[data-valuation-entry]').first().waitFor({ state: 'visible', timeout: 8_000 })
+            // 扫描回包是**异步**的：入口会先按"只知道路径"的回落行画出来，份数随后才落定。
+            // 不等它就会读到"正在重新读取清单…"那一帧（真机实测过一次假失败：entries 已是 2、
+            // counts 还是 0）。这里等的是**份数**，不是固定时长。
+            const settled = await page.waitForFunction(() => {
+              const node = document.querySelector('.crwu-valuation-count')
+              return node !== null && /已纳入 2 \/ 30 份/.test(node.textContent ?? '')
+            }, undefined, { timeout: 10_000 }).then(() => true).catch(() => false)
+            const entryCount = await page.locator('[data-valuation-entry]').count()
+            const countsText = await page.locator('.crwu-valuation-count').first().innerText()
+            checks.that('选完资料后清单出现，份数按递归去重后的文件数',
+              settled && entryCount === FIXTURE_FILES.length,
+              `entries=${String(entryCount)} counts=${countsText.replace(/\s+/g, ' ')}`)
+
+            // ② 两个必填项：顺序 / 并排 / 同高 / 未选
+            const wideColumns = await requiredColumns()
+            const wideWidth = await intake.evaluate((node) => node.clientWidth)
+            const fieldBoxes = await page.locator('.crwu-valuation-required > .crwu-valuation-field')
+              .evaluateAll((nodes) => nodes.map((node) => {
+                const rect = node.getBoundingClientRect()
+                return { y: Math.round(rect.y), w: Math.round(rect.width) }
+              }))
+            checks.that('两个必填项在资料区之后、补充条件与辅助区之前（顺序）',
+              JSON.stringify(await page.locator('[data-valuation-block]')
+                .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-valuation-block'))))
+              === JSON.stringify(['files', 'required', 'conditions', 'capability']))
+            checks.that('容器够宽时两个必填项并排且同高对齐',
+              wideWidth < 560 || (wideColumns === 2 && fieldBoxes.length === 2
+                && fieldBoxes[0].y === fieldBoxes[1].y
+                && Math.abs(fieldBoxes[0].w - fieldBoxes[1].w) <= 1),
+              `w=${String(wideWidth)} columns=${String(wideColumns)} ${JSON.stringify(fieldBoxes)}`)
+            checks.that('两个必填项初始都是未选（占位 + aria-expanded=false）',
+              (await page.locator('[data-valuation-select="asset-type"] [role="combobox"]').first()
+                .getAttribute('aria-expanded')) === 'false'
+              && (await page.locator('[data-valuation-select="method"] [role="combobox"]').first()
+                .getAttribute('aria-expanded')) === 'false')
+
+            // ③ 面板宽度 × 主题：无横向溢出 + 截图
+            for (const width of [375, 500, 768, 1024, 1440]) {
+              await page.setViewportSize({ width, height: 1100 })
+              await page.waitForTimeout(250)
+              const panel = await overflowOf('.crwu-valuation-intake')
+              // 报的是**面板实测宽度**（容器查询真正看的那一个），不是浏览器窗口宽度。
+              const measures = await intake.evaluate((node) => ({ panel: node.clientWidth, viewport: window.innerWidth }))
+              checks.that(`视口 ${String(width)}px（工作面实测 ${String(measures.panel)}px）：正文没有横向溢出`,
+                panel !== null && panel.scrollWidth <= panel.clientWidth + 1, JSON.stringify(panel))
+              const columns = await requiredColumns()
+              const localWidth = await intake.evaluate((node) => node.clientWidth)
+              checks.that(`工作面 ${String(localWidth)}px：两个必填项按容器宽度并排 / 堆叠`,
+                localWidth >= 560 ? columns === 2 : columns === 1,
+                `panel=${String(localWidth)} columns=${String(columns)}`)
+              for (const dark of [false, true]) {
+                await setDark(dark)
+                await page.screenshot({
+                  path: join(out, `valuation-${String(width)}-${dark ? 'dark' : 'light'}.png`),
+                })
+              }
+              await setDark(false)
+            }
+            await page.setViewportSize({ width: 1500, height: 1100 })
+            await page.waitForTimeout(250)
+
+            // ④ 下拉：展开 / 选项 / 等宽 / 不裁切 / Escape 保留原值 / 键盘选中
+            const assetTrigger = page.locator('[data-valuation-select="asset-type"] [role="combobox"]').first()
+            await assetTrigger.click()
+            const listbox = page.locator('[data-crwu-select-list][role="listbox"]:not([aria-hidden="true"])').first()
+            await listbox.waitFor({ state: 'visible', timeout: 5_000 })
+            const triggerBox = await assetTrigger.boundingBox()
+            const listBox = await listbox.boundingBox()
+            checks.that('浮层与触发器等宽，且完全落在视口内（不被裁切）',
+              triggerBox !== null && listBox !== null
+                && Math.abs(listBox.width - triggerBox.width) <= 1
+                && listBox.x >= 0 && listBox.y >= 0
+                && listBox.x + listBox.width <= 1500 && listBox.y + listBox.height <= 1100,
+              JSON.stringify({ trigger: triggerBox, list: listBox }))
+            checks.that('资产类型选项来自共享合同（房地产）',
+              await listbox.locator('[role="option"]').count() === 1
+                && await listbox.locator('[data-valuation-option="real-estate"]').count() === 1)
+            await page.screenshot({ path: join(out, 'valuation-dropdown-open.png') })
+            await page.keyboard.press('Escape')
+            await page.waitForTimeout(200)
+            checks.that('Escape 关闭浮层并保留原值（仍是未选）',
+              await listbox.count() === 0
+                && (await assetTrigger.getAttribute('aria-expanded')) === 'false'
+                && (await page.locator('[data-valuation-select="asset-type"]').innerText()).includes('请选择资产类型'))
+            await assetTrigger.click()
+            await page.locator('[data-valuation-option="real-estate"]').first().click()
+            await page.waitForTimeout(200)
+            checks.that('点选项后回填并收起',
+              (await page.locator('[data-valuation-select="asset-type"]').innerText()).includes('房地产')
+                && await page.locator('[data-crwu-select-list][role="listbox"]:not([aria-hidden="true"])').count() === 0)
+            // 方法：键盘打开 → 方向键 → Enter 选中「市场法」。
+            const methodTrigger = page.locator('[data-valuation-select="method"] [role="combobox"]').first()
+            await methodTrigger.focus()
+            await page.keyboard.press('Enter')
+            await page.waitForTimeout(150)
+            checks.that('评估方法展开后有四个选项（自动判定 / 市场法 / 收益法 / 成本法）',
+              await page.locator('[data-crwu-select-list][role="listbox"]:not([aria-hidden="true"]) [role="option"]').count() === 4)
+            await page.keyboard.press('ArrowDown')
+            await page.keyboard.press('Enter')
+            await page.waitForTimeout(200)
+            const methodText = await page.locator('[data-valuation-select="method"]').first().innerText()
+            checks.that('键盘走完选择：Enter 打开 → 方向键 → Enter 选中「市场法」',
+              methodText.includes('市场法')
+                && await page.locator('[data-crwu-select-list][role="listbox"]:not([aria-hidden="true"])').count() === 0, methodText)
+            // 补充条件（可选）：填两格，抽屉里应按原文回显。
+            await page.locator('[data-valuation-purpose="true"]').fill('司法拍卖处置参考')
+            await page.locator('[data-valuation-value-type="true"]').fill('市场价值')
+            await page.locator('.crwu-valuation-prompt').fill('第一行：按清单逐套测算\n第二行：权属面积与现场记录不一致时说明')
+
+            // ⑤ 核对资料 → 只读确认抽屉
+            await page.locator('.crwu-valuation-actionbar button').last().click()
+            const drawer = page.locator('[data-valuation-confirmation-drawer="true"]').first()
+            await drawer.waitFor({ state: 'visible', timeout: 10_000 })
+            const drawerText = (await drawer.innerText()).replace(/\s+/g, ' ')
+            checks.that('抽屉首屏给出四个关键事实（资产类型 / 方法 / 份数 / 基准日）',
+              drawerText.includes('本轮估值') && drawerText.includes('房地产')
+                && drawerText.includes('市场法') && drawerText.includes('2 份')
+                && drawerText.includes('未指定'), drawerText.slice(0, 200))
+            checks.that('抽屉里的方法说明与本次选择相符（旧的能力限制文案已删除）',
+              !/尚未提供|当前支持住宅市场法/.test(drawerText))
+            checks.that('抽屉里有信息获取辅助区（未登录给登录入口 + 降级说明）',
+              drawerText.includes('信息获取辅助')
+                && drawerText.includes('登录链家')
+                && drawerText.includes('未登录时将使用房天下、58 同城补充信息'), drawerText.slice(0, 240))
+            const fileRow = page.locator('[data-valuation-drawer-file]').first()
+            const fileRowBox = await fileRow.boundingBox()
+            checks.that('资料主行紧凑（>=44px 命中高度）且详情默认收起',
+              (fileRowBox?.height ?? 0) >= 44
+                && await page.locator('[data-valuation-drawer-path]').first().isVisible() === false)
+            await fileRow.locator('button', { hasText: '查看详情' }).first().click()
+            await page.waitForTimeout(150)
+            checks.that('展开后才出现完整路径与复制入口',
+              await page.locator('[data-valuation-drawer-path]').first().isVisible()
+                && await drawer.locator('.crwu-valuation-copy').count() >= 1)
+            // 后台不可交互：输入工作面被隐藏并且 inert。
+            checks.that('抽屉打开时背景不可交互（输入工作面 inert）',
+              await page.locator('[data-valuation-intake-host="true"]').first()
+                .evaluate((node) => node.hasAttribute('inert') && node.hasAttribute('hidden')))
+            // 创建前主操作可达（不被 footer 盖住）。
+            const drawerPrimary = drawer.locator('.crwu-ui-btn-primary').first()
+            const primaryBox = await drawerPrimary.boundingBox()
+            checks.that('抽屉主操作在可视区域内（footer 不盖正文）',
+              (primaryBox?.y ?? 1e9) + (primaryBox?.height ?? 0) <= 1100)
+            await page.screenshot({ path: join(out, 'valuation-drawer.png') })
+
+            // ⑥ 返回修改 → 再核对：输入保留，抽屉还能再开
+            await drawer.locator('button', { hasText: '返回修改' }).first().click()
+            await page.waitForTimeout(400)
+            checks.that('返回修改后回到可编辑草稿，输入与选择都保留',
+              await page.locator('.crwu-valuation-intake').first().isVisible()
+                && (await page.locator('[data-valuation-purpose="true"]').inputValue()) === '司法拍卖处置参考'
+                && (await page.locator('[data-valuation-select="method"]').first().innerText()).includes('市场法')
+                && await page.locator('[data-valuation-confirmation-drawer="true"]').count() === 0)
+
+            // ⑦ 短高度（约 600px）：抽屉底部可达 + 正文自己滚
+            await page.setViewportSize({ width: 1024, height: 600 })
+            await page.waitForTimeout(250)
+            await page.locator('.crwu-valuation-actionbar button').last().click()
+            await drawer.waitFor({ state: 'visible', timeout: 10_000 })
+            const shortPrimary = await drawer.locator('.crwu-ui-btn-primary').first().boundingBox()
+            checks.that('600px 短高度下抽屉底部按钮仍可达（只有正文滚动）',
+              (shortPrimary?.y ?? 1e9) + (shortPrimary?.height ?? 0) <= 600
+                && await drawer.evaluate((node) => {
+                  const body = node.querySelector('.crwu-audit-side-drawer-body')
+                  const foot = node.querySelector('.crwu-audit-side-drawer-foot')
+                  return body !== null && foot !== null && body.scrollHeight > body.clientHeight
+                    && getComputedStyle(foot).position !== 'absolute'
+                }))
+            await page.screenshot({ path: join(out, 'valuation-drawer-short.png') })
+            await page.setViewportSize({ width: 1500, height: 1100 })
+            await page.waitForTimeout(200)
+
+            // ⑧ 开始估值：创建期间锁定四条关闭路径，失败后如实回到"未创建"
+            const footerPrimary = drawer.locator('.crwu-ui-btn-primary').first()
+            await footerPrimary.click()
+            await page.waitForTimeout(300)
+            checks.that('创建期间主按钮 pending 且文案逐字是「正在创建会话…」',
+              (await footerPrimary.innerText()).includes('正在创建会话')
+                && (await footerPrimary.getAttribute('aria-busy')) === 'true'
+                && await footerPrimary.isDisabled())
+            checks.that('创建期间四条关闭路径一起失效（×/返回修改/遮罩/Escape）',
+              await drawer.locator('.crwu-audit-side-drawer-close').first().isDisabled()
+                && await drawer.locator('button', { hasText: '返回修改' }).first().isDisabled()
+                && await page.locator('.crwu-audit-side-drawer-backdrop').first()
+                  .evaluate((node) => node.getAttribute('onclick') !== null) === false)
+            checks.that('创建期间辅助区不再发起新的登录 / 检查（冻结的是"新发起"）',
+              await page.locator('[data-valuation-capability-action]:not([disabled])').count() === 0
+                && await page.locator('[data-valuation-capability-action]').count() >= 1)
+            await page.keyboard.press('Escape')
+            await page.waitForTimeout(200)
+            checks.that('创建期间按 Escape 关不掉抽屉',
+              await page.locator('[data-valuation-confirmation-drawer="true"]').count() === 1)
+            await page.waitForTimeout(2_000)
+            const handoffText = (await page.locator('[data-valuation-handoff]').first().innerText())
+              .replace(/\s+/g, ' ')
+            checks.that('Host 明确说"没有创建"时给出「返回修改」与重试创建',
+              await page.locator('[data-valuation-handoff-kind="not-created"]').count() === 1
+                && handoffText.includes('返回修改') && handoffText.includes('重试创建'), handoffText)
+            checks.that('交接失败里没有创建任何会话（fixture 只收到一次 start）', startCalls === 1,
+              `startCalls=${String(startCalls)}`)
+
+            // ⑨ 浮层不留残壳
+            checks.that('走完整条链路后没有残留浮层',
+              await page.locator('[data-crwu-select-list][role="listbox"]:not([aria-hidden="true"])').count() === 0
+                && await page.locator('[role="listbox"]:not([aria-hidden="true"])').count() === 0)
+          } finally {
+            await page.setViewportSize({ width: 1500, height: 1100 })
+            await page.unroute('**/api/crwu-workbench**')
+            await page.evaluate(() => { delete globalThis.__DSH_HOST_PATHS__ })
+            await setDark(false)
+            // Hand the app back to 报告审核: later phases assume the report list. Wait until the
+            // flattened audit row's 报告审核 leaf tab is actually selected -- a fixed delay can
+            // hand over on the frame where the nav has not finished switching.
+            await moduleButton('报告审核').click({ timeout: 10_000 }).catch(() => undefined)
+            await page.waitForFunction(() => {
+              const tabs = Array.from(document.querySelectorAll('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab'))
+              const report = tabs.find((tab) => (tab.textContent ?? '').replace(/\s+/g, '') === '报告审核')
+              return report !== undefined && report.getAttribute('aria-selected') === 'true'
+            }, undefined, { timeout: 15_000 }).catch(() => undefined)
+            await page.waitForTimeout(600)
+          }
         })
 
         // ── 浮层：DeepSeek Tooltip + 操作列 ••• 菜单（同一套 Floating Layer）──────
@@ -1652,27 +2147,36 @@ async function main() {
           }
         })
 
-        // ── 本地审核（二级目录，协议 28）：三块卡片 + 主按钮禁用原因 + 切回报告审核不变 ──
-        // 只读：**不点**「选择文件 / 选择文件夹」（会弹系统对话框），也不点主按钮（没选择时它本来就禁用）。
+        // ── 本地审核（审核主行的叶子页，协议 28）：三块卡片 + 主按钮禁用原因 + 切回报告审核不变 ──
+        // Read-only: never click 选择文件 / 选择文件夹 (system dialogs) or the primary action (disabled when empty).
         await phase('本地审核页签', async () => {
-          // 「报告审核 / 本地审核」现在是**一级目录「审核」下的两个二级目录**。
-          // 审核树是**独立的一棵**：这里的一级目录只有「审核」，不会出现「估值」——
-          // 估值的入口在侧栏「报告评估」里，两棵树不混。
-          const auditParent = page.locator('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
-            .filter({ hasText: '审核' }).first()
-          const auditParentLabels = (await page.locator('.crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
-            .allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
-          checks.that('报告审核的一级目录只有审核', JSON.stringify(auditParentLabels) === JSON.stringify(['审核']),
-            JSON.stringify(auditParentLabels))
-          const localTab = page.locator('.crwu-audit-nav-child').filter({ hasText: '本地审核' }).first()
-          const reportTab = page.locator('.crwu-audit-nav-child').filter({ hasText: '报告审核' }).first()
-          checks.that('审核页顶部有「本地审核」二级目录', await localTab.count() > 0)
-          checks.that('「报告审核」与「本地审核」在同一个二级目录条里',
-            await reportTab.count() > 0 && (await auditParent.getAttribute('aria-selected')) === 'true')
-          // 二级目录是**浅色胶囊**（比一级目录矮一档，两级一眼分得开）。
+          // The audit module has one parent group (审核), so its tree is flattened into a single
+          // primary row listing the 报告审核 / 本地审核 leaves; the redundant 审核 row and the
+          // secondary pill row are not painted. The audit tree stays separate from the eval tree.
+          const navTabs = page.locator('.crwu-audit-nav .crwu-audit-tablist[role="tablist"] .crwu-audit-tab')
+          const navLabels = (await navTabs.allInnerTexts()).map((text) => text.replace(/\s+/g, ''))
+          checks.that('审核导航只有一条主行', await page.locator('.crwu-audit-nav [role="tablist"]').count() === 1)
+          checks.that('审核主行只列 报告审核 / 本地审核',
+            JSON.stringify(navLabels) === JSON.stringify(['报告审核', '本地审核']), JSON.stringify(navLabels))
+          checks.that('审核主行不再画一级「审核」页签',
+            await page.locator('.crwu-audit-nav').getByRole('tab', { name: '审核', exact: true }).count() === 0)
+          checks.that('审核树不再画二级胶囊行',
+            await page.locator('.crwu-audit-nav-children[role="tablist"] .crwu-audit-nav-child').count() === 0)
+          const reportTab = navTabs.filter({ hasText: '报告审核' }).first()
+          const localTab = navTabs.filter({ hasText: '本地审核' }).first()
+          checks.that('审核主行里同时有「报告审核」与「本地审核」',
+            await reportTab.count() > 0 && await localTab.count() > 0
+              && (await reportTab.getAttribute('aria-selected')) === 'true')
+          // Leaves reuse the primary row shape: 44px hit height plus a 3px selected underline.
           const tabBox = await localTab.boundingBox()
-          checks.that('二级目录命中区高度合理（<44px，比一级轻）', (tabBox?.height ?? 0) > 0 && (tabBox?.height ?? 0) < 44,
+          checks.that('审核主行命中区高度 >=44px', (tabBox?.height ?? 0) >= 44,
             `h=${String(tabBox?.height ?? 0)}`)
+          checks.that('审核主行选中项有 3px 底部强调线',
+            await reportTab.evaluate((element) => {
+              const style = getComputedStyle(element, '::after')
+              return style.height === '3px' && style.backgroundColor !== 'rgba(0, 0, 0, 0)'
+                && style.backgroundColor !== 'transparent'
+            }))
           await localTab.click()
           await page.locator('.crwu-audit-local').first().waitFor({ state: 'visible', timeout: 20_000 })
           // 页签语义：`aria-selected` 必须与视觉选中态一致（roving tabindex 的判据也在这里）。
@@ -1681,9 +2185,9 @@ async function main() {
           // 报告审核页因此必须已经卸载（不再有两个常驻空壳那一类问题）。
           checks.that('切到本地审核后，报告审核页已卸载', await page.locator('.crwu-audit-table-wrap').count() === 0)
           const panelId = await localTab.getAttribute('aria-controls')
-          checks.that('两级页签的 aria-controls 都指向同一个真实内容区',
+          checks.that('审核主行两个页签的 aria-controls 指向同一个真实内容区',
             await page.locator(`#${String(panelId)}`).count() === 1
-              && (await auditParent.getAttribute('aria-controls')) === panelId)
+              && (await reportTab.getAttribute('aria-controls')) === panelId)
           const localText = await body()
           checks.that('页面顶部有副标题与辅助说明（设计 §2）',
             localText.includes('选择本机文件或文件夹，创建一个新的审核对话。')
@@ -1755,8 +2259,9 @@ async function main() {
   }
 
   console.log(`ops：${[...new Set(ops)].join(' ')}`)
-  console.log(`通过 ${checks.passed.length} 条`)
+  console.log(`通过 ${checks.passed.length} 条 / 未执行 ${checks.skipped.length} 条`)
   for (const name of checks.passed) console.log(`  OK   ${name}`)
+  for (const name of checks.skipped) console.log(`  SKIP ${name}`)
   for (const name of checks.failures) console.log(`  FAIL ${name}`)
   console.log(`截图：${out}`)
   if (checks.failures.length > 0) process.exitCode = 1

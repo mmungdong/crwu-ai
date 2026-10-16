@@ -18,14 +18,6 @@ description: Use when valuing real estate for asset-appraisal work — 评估资
 
 估值域按**资产类型**拆分，本技能只负责房地产一类：
 
-```text
-估值域（biz/valuation）
-├── 房地产        → crwu-biz-valuation-realestate（本技能，第一期）
-├── 机器设备      → 后续同类技能（待建）
-├── 无形资产      → 后续同类技能（待建）
-└── 企业价值      → 后续同类技能（待建）
-```
-
 命名规则：`crwu-biz-valuation-<资产类型>`。估值域**不建**一个包揽全部资产类型的总技能——
 不同资产类型的对象口径、参数与计算表契约差异大，合并会让知识正文与勾稽规则互相污染。
 
@@ -53,113 +45,216 @@ description: Use when valuing real estate for asset-appraisal work — 评估资
 → 输出估值结果与待确认事项
 ```
 
-## 知识索引（库内层级路径 ↔ 本地正文）
+## 知识来源：唯一入口 Wiki（协议 39）
 
-本技能对应知识库中的子域：**业务知识库 / 估值与测算 / 房地产**。七份知识文档即本技能 `references/`
-下的文件，**一份文档只写一份**。库内层级路径是稳定的路由键：后续同步进知识库、或换用实时知识通道时，
-按这张表逐字寻址，正文结构不变。
+**业务规则一律来自「中瑞世联业务知识库」的实时正文，技能目录内没有业务正文的副本。**
 
-⚠️ **本地文件名与库内编号不一致，这是刻意的**：本地按"写作顺序"编号，库内按"业务路由"编号。
-成本法在库里是 `04`、本地却是 `07-cost-method.md`。所以**永远按本表逐字映射**，
-不要按编号推导，也不要把本地文件名当成库内节点名 —— 按编号猜会让成本法读到"案例选取"的正文。
+本资产类型的**唯一业务入口**由 [knowledge-routing.md](references/knowledge-routing.md) 声明一次
+（入口路径、库内相对链接契约、读取证据、缺失处置都在那一份里）；**本文件不重复入口路径**。
+按入口 Wiki 的条件逐步读：先读入口看本次分支该读哪几篇，再按它返回的库内链接逐篇读取 ——
+**不要**按编号或本地文件名推导目标（按编号猜会让成本法读到「案例选取」，而且不会有任何报错），
+也**不要**读 `_manifest.json`、旧内置正文或未经验证的本机导出文件。
 
-```text
-业务知识库/估值与测算/房地产/
-├── 01-房地产估值通用   → references/01-realestate-valuation.md
-├── 02-市场法           → references/02-market-method.md
-├── 03-收益法           → references/03-income-method.md
-├── 04-成本法           → references/07-cost-method.md
-├── 05-案例选取         → references/04-case-selection.md
-├── 06-参数与税费       → references/05-parameter-mapping.md
-└── 07-计算表模板       → references/06-workbook-contract.md
-```
+实际读取只经结构化工具 `crwu_valuation_knowledge_materialize`；在线 `dws` 取数在 Host 工具内部
+完成，会话**不需要**自己开浏览器下载、申请额外权限或走 shell。工具的真实入参：
 
-| 库内层级路径（业务知识库/估值与测算/房地产/…） | 本地正文 | 读的时机 |
+| 入参 | 用途 |
+| --- | --- |
+| `caseDir` | 本轮估值案例目录（必填，Host 校验归属） |
+| `wikiPaths` | **主通道**：入口 Wiki 或上一轮 `links[].target` 解析出的库内相对路径（逐字传入） |
+| `planId` | 方案 id（分组阶段可省） |
+| `stage` | 可选，**当前只接受 `parameters`**：在已验真的已落盘正文上解析结构化规则段 |
+| `routeIds` | **遗留通道**：manifest 槽位；省略且没给 `wikiPaths` 时只回报槽位，不下载正文 |
+| `spaceName` | 业务知识库精确名称；缺省即配置值，不接受改道 |
+
+> ⚠️ 入口正文里可能写「先读通用、再读方法、再读案例」之类的**阅读顺序**；那是正文的导航说明，
+> **不是** `stage` 的取值。除 `parameters` 外，没有 `common` / `method-selection` /
+> `method.market` / `method.income` / `method.cost` / `case-selection` / `template` 这些工具参数 ——
+> 下一跳读哪一份，由入口 Wiki 与上一轮返回的 `links[]` 决定。
+
+### 读取顺序（概念，不是工具参数）
+
+按入口 Wiki 的条件逐步读；下面是常见顺序，**只用来组织阅读**：
+
+| 顺序 | 读什么 | 时机 |
 | --- | --- | --- |
-| `01-房地产估值通用` | [01-realestate-valuation.md](references/01-realestate-valuation.md) | 每次估值开始时必读 |
-| `02-市场法` | [02-market-method.md](references/02-market-method.md) | 采用市场法时必读 |
-| `03-收益法` | [03-income-method.md](references/03-income-method.md) | 采用收益法时必读 |
-| `04-成本法` | [07-cost-method.md](references/07-cost-method.md) | 采用成本法时必读 |
-| `05-案例选取` | [04-case-selection.md](references/04-case-selection.md) | 整理候选案例时必读 |
-| `06-参数与税费` | [05-parameter-mapping.md](references/05-parameter-mapping.md) | 填参数与税费口径时必读 |
-| `07-计算表模板` | [06-workbook-contract.md](references/06-workbook-contract.md) | 填表与勾稽时必读 |
+| 通用口径 | 入口 Wiki 指向的通用 / 输入口径正文 | 每次估值开始；**缺它则停止**（没有通用口径的数字无法核对） |
+| 方法选择 | 方法选择方案（自动判定 / 多方法并用时） | 判方法之前 |
+| 方法正文 | 对应方法说明 | 采用该方法时 |
+| 案例选取 | 案例选取与可比性规则 | 整理候选案例之前 |
+| 参数与税费 | 参数与税费口径 | 落参数与税率之前 |
+| 模板说明 | 模板的填写说明（二进制模板走模板工具） | 填表之前 |
 
-**取数与缺口**：插件按 `crwu_valuation_knowledge_materialize` 取正文 —— 知识库优先，
-知识库没有或读不到时回退到上表的本地正文，并在结果里如实标注 `source`（`dws` / `local`）
-与正文指纹。`01-房地产估值通用` 两边都拿不到时**停止估值**：没有通用口径的数字无法核对。
-其余单份缺失只记能力缺口，能算的部分继续算。
+来源标注只有一个口径：
+
+- `source` **只能是** `dws`（实时取数）或 `verified-mirror`（逐字节指纹与库身份都核对过的镜像）；
+- **没有 `local` 这一档**。技能自带的 `references/*.md` 是**技术合同与结构说明**（路由键、
+  字段口径、脚本契约），**不是**本轮结论所依据的规范正文；把本地文件说成"知识库正文"
+  等于把技能发布时刻冒充规范修订时刻；
+- `updatedAt` 只在来源端真的给出时间时才有值，**不许**用本地文件 mtime 顶替；
+  `digest` 是正文指纹，用于事后核对"当时读的是哪一版"。
+
+### 缺了怎么办（硬口径，不允许自行兜底）
+
+| 情况 | 处理 |
+| --- | --- |
+| 精确路径没有 → 同目录同名（空格 / 连字符变体）→ 显式别名 → **身份已验证**的镜像 | 逐级尝试并**留痕**（`attempts[]` 记下查过哪里） |
+| 仍缺 → **中断受影响的方案** | 该方案记 `blocked`，并输出**说明原因的 HTML**（缺哪一份、查过哪里、需要谁补） |
+| 入口 Wiki 指向的通用口径两边都缺 | **停止估值**：没有通用口径的结果无法核对，不许"先算个大概" |
+| 节点存在但正文为空（`empty`） | 与"没有这个节点"区分开，都算未命中，**不退到本地文件** |
+| 镜像身份不符 / 指纹不符 | 拒绝该镜像（`rejected-identity` / `rejected-digest`），**不许**降格使用 |
+| 任何来源不明确 | 结果里**不许**写"已按规范完成"；如实说清建立在哪一版正文上 |
 
 其他资产类型（机器设备、无形资产、企业价值）的知识目录属于各自的估值技能，不在本技能的读取范围。
 
-每份知识文档头部只保留**三项必要的治理信息**：来源、适用范围、更新时间。不建版本、发布、校准、
-回测流程，也不要求额外的维护台账。
+## 技术合同（本技能自带，不是业务正文）
+
+| 文档 | 说明 |
+| --- | --- |
+| [knowledge-routing.md](references/knowledge-routing.md) | **入口 Wiki 声明**与知识读取契约（库内相对链接、读取证据、缺失处置） |
+| [workflow.md](references/workflow.md) | 一次估值从「确认」到交付的**阶段、能力与产物** |
+| [execution-and-land-extension.md](references/execution-and-land-extension.md) | 任务调度、价值范围互斥、土地能力缺失时的处置 |
+| [09-output-contract.md](references/09-output-contract.md) | 案例目录、项目索引、报告数据、HTML 与底稿的**产出形状** |
+
+## 产物落点：一个方案一个目录
+
+一个项目可以有**多个方案**（住宅 / 商业、房地分别评估的土地与建筑物组件…）。项目级事实只有一份，
+**方案级交付件各自一份**：
+
+```text
+<案例目录>/
+  材料-源/ 知识快照/ 提取结果/ 估值输入.json 项目估值方案索引.json   ← 项目级（只一份）
+  方案/<planId>/…                                                   ← 方案级（每方案一份）
+```
+
+本文件下文用 **`<方案目录>`** 指 `<案例目录>/方案/<planId>`（`planId` 由
+`crwu_valuation_project_prepare` 铸定）。把两个方案的交付件写进同一个目录，会让
+`crwu_valuation_finalize` 读到**别的方案**的报告数据；写在案例根下则等于"这个方案没有交付件"。
+取数的证据与截图同样按方案落点（`market_search` / `market_capture` 都要带 `planId`）。
 
 ## 执行步骤
 
-1. **整理项目资料并判对象方法**：读项目资料，确认评估对象（房号 / 用途 / 面积 / 权证）、价值类型、
-   评估基准日、价值内涵与税费口径。对象或基准日含混时，先挂起受影响的部分，其余继续测算，
-   把歧义写进 `manual_confirmation_items[]`；不要因为局部含混整体停摆。
-2. **读知识**：按上表读 `01` + 采用方法对应的正文；参数与税费口径读 `05`；填表前读 `06`。
-3. **整理候选案例与参数**：按 `04` 登记候选案例（来源、链接、成交日期、价格内涵、可比性判断与
-   保留/剔除理由），按 `05` 落参数与税率，逐项写清取值依据。
-4. **填充计算表**：把 [template/valuation-workbook.xlsx](template/valuation-workbook.xlsx) **复制到本轮估值案例目录**
-   （`估值底稿.xlsx`），按 `06` 的字段契约只填输入区。**公式区保持模板公式**，不得用硬编码数值覆盖。
-   ⚠️ 模板本身**只读**：任何情况下都不许回写 `template/`，产物一律落在案例目录里。
+1. **整理项目资料并判对象方法**：读项目资料，确认评估对象（房号 / 用途 / 面积 / 权证）、价值内涵与
+   税费口径。**方案前提**（评估目的 `purpose`、价值类型 `valueType`、评估基准日 `baseDate`）来自
+   冻结输入 `估值输入.json`，子会话**只能消费**：
+   - 三者都**允许未指定**（`null`）：此时逐字写明「本次未指定评估目的 / 价值类型 / 评估基准日」，
+     进 `manual_confirmation_items[]` 与报告数据的 `limitations[]`，且**不得**据此声称正式估值已完成；
+     **绝不许**替用户补一个目的 / 价值类型，或用权证日期、资料日期替代基准日；
+   - **对象分类**：每个对象分开记 `registeredUse`（原始权证登记用途，照抄资料）与 `propertyType`
+     （业务分类），并给出 `classificationBasis`（登记用途 / 规划用途 / 实际使用 + 资料坐标）。
+     名称里的字样（如「公寓」）**不是**分类依据；依据缺失就**挂起该对象**、其余对象继续。
+2. **读知识**：把入口 Wiki 的库内路径传给 `wikiPaths` 读入口，再按返回的 `links[]` 逐篇读通用口径与
+   采用方法对应的正文；需要运行数值规则时用 `stage=parameters` 取得 **Host 绑定的结构化规则记录**
+   （`ruleParameters`），再原样交给计算入口。参数解析目前只认围栏 JSON 段：正文只有普通表格 / 行文、
+   没有该段时记为**适配器契约缺口**，**不等于**知识不存在，也不是让维护者必须补 JSON 的理由 ——
+   普通阅读与引用照常，只是"自动执行数值"这一档未就绪。填表按 `06` 的技术合同。
+3. **整理候选案例与参数**：按入口 Wiki 的案例选取正文登记**完整候选池**（不只看列表首页或排序靠前的
+   几条）；每条给出 canonical URL 身份、来源、成交日期、价格内涵与可比性判断。
+   - **评估后才能采用**：`assessments`（`qualified` / `near-miss` / `excluded` + 依据）是采用的唯一入口，
+     缺评估即 `unreviewed`，不自动采用；**near-miss 不计入合格候选预算**；
+   - **身份只认 canonical URL**：小区 + 面积 + 价格这类弱事实只能标"疑似重复"，**不得自动合并**；
+     同一对象的所有来源记录都保留、编号稳定；
+   - **挂牌信息保持挂牌口径**：挂牌价按挂牌价原样记录；把它转成可比参考价是**单独的人工 / 显式**步骤，
+     只允许知识正文有依据的换算假设，不把它当直接成交自动套用；
+   - 列表页图片只作**页面证据**（不是某个案例的详情证据）；详情取证与 `案例证据` 表见
+     [workflow.md](references/workflow.md)；
+   - 按 `stage=parameters` 返回的规则记录落参数与税率，逐项写清取值依据。
+4. **填充计算表**：用知识库里的**已验真模板**（含它自己的填写说明 descriptor）复制到本方案的方案目录
+   （`<方案目录>/估值底稿.xlsx`；多对象时**逐对象一份**，文件名带 `objectId` 后缀），
+   按 `06` 的字段契约只填输入区。**公式区保持模板公式**，不得用硬编码数值覆盖。
+   ⚠️ 模板本身**只读**：任何情况下都不许回写模板，产物一律落在案例目录里。
 
    填充走脚本，不要手工编辑 XML/单元格：
 
    ```bash
-   python3 scripts/build_workbook.py --values <案例目录>/填入值.json \
-       --out <案例目录>/估值底稿.xlsx
+   python3 scripts/build_workbook.py --values <方案目录>/填入值.json \
+       --out <方案目录>/估值底稿.xlsx \
+       --template <已验真模板.xlsx> --contract <该模板的填写说明.json> \
+       --case-root <方案目录>
    ```
 
-   `填入值.json` 只写 `{"cells": {"基础信息表!B5": "…"}}`。脚本按模板的**填充色**判区域
-   （浅绿 = 输入区），因此：写公式区会被拒、写没声明为输入区的单元格会被拒、输入区里写
-   `=` 开头的值会被拒、空值写成**空单元格而不是 0**。任一处被拒，脚本**不输出底稿**
+   `填入值.json` 写两组东西：`{"cells": {"输入!B5": "…"}, "caseEvidence": [ … ]}`。
+   模板与契约**必须显式提供**（或紧邻
+   `<模板>.contract.json`），没有随包默认模板、也不按填充色猜区域：写结果位 / 公式位 / 未声明的
+   格子会被拒、输入区里写 `=` 开头的值会被拒、空值写成**空单元格而不是 0**。生成前脚本会清空
+   全部声明的输入位，模板样例值不会泄漏；任一处被拒，脚本**不输出底稿**
    （半填的底稿比没有更危险：公式会算出看起来正常的数）。
+
+   **案例证据（`caseEvidence`）**：凡在报告里被采用（`comparables[].used = true`）且带详情截图的案例，
+   都要在 `caseEvidence` 里有一条**可追溯**的详情条目，字段名与 `scripts/evidence_index.py` 一致：
+
+   - `caseId`（稳定案例 id，必须与报告数据、`推理结果/图片/图片清单.json` 里的同一个 `caseId` 对齐）、
+     `displayName`、`provider`、`sourceUrl`（**完整详情 URL**，http/https 绝对地址）、
+     `relativePath`（`推理结果/图片/**` 下的相对路径）、`digest`（该 PNG 的 sha256）、
+     `capturedAt`、`evidenceType`（详情截图恒为 `detail-screenshot`）；
+   - `relativePath` 必须落在 `推理结果/图片/` 且是真实存在、PNG 魔数与 `digest` 都对得上的文件；
+     脚本用 `--case-root` 复算真实路径，缺文件 / 指纹不符 / 路径越界都由 `evidence_index.py` 拒绝；
+   - 生成的底稿会追加可见的 `案例证据` 表：详情 URL 用**完整 URL + native 超链接**、图片写**相对路径**
+     并同样带超链接（**不内嵌图片本体**）；HTML 报告用本地图片链接展示同一批条目。
+   这里不写示例值：字段名以上面的清单为准，不要自造字段或把演示占位值当成受支持取值。
+
+   > ⚠️ **模板现状（2026-10-16 实读）**：模板索引里的住宅工作簿当前只作**结构参考**，待修复与重算
+   > 验收，**不能据此自动计价**；收益法 / 成本法没有单独验收过的模板。该限制进
+   > `manual_confirmation_items[]` 与报告 `limitations[]`，不得声称自动算价就绪。
 5. **计算与勾稽**：重算并核对表内公式链、跨表引用与合计，确认无 `#REF!`、无断链、无隐藏表依赖。
-   交付前用 `scripts/check_workbook_contract.py <案例目录>/估值底稿.xlsx` 核对工作簿契约。
+   交付前用 `scripts/check_workbook_contract.py <方案目录>/估值底稿.xlsx` 核对工作簿契约。
+   重算后由 Host 调 `scripts/read_workbook_values.py` 回读缓存值（`crwu_valuation_recalculate`
+   内部调用，一般不需要手工跑）。
+   **换一份模板不必改脚本**：把该模板的填写说明写成契约描述（`<workbook>.contract.json`，或
+   `--contract <file>`），通用通道按它声明输入区 / 公式区 / 结果位 / 单位 / 允许为空的位置校核，
+   不假定表数量、顺序、业务公式或阈值；形状见 `references/06-workbook-contract.md` §1。
+   通用 checker **没有随包七表 profile**：没有描述文件就直接拒绝。旧七表清单已移出活动文件并作为
+   历史存档保留，不是当前默认契约。
 
-   市场法的三条硬约束（单项修正 20% / 共同修正 30% / 修正后最高价与最低价比值 1.2，
-   出自 `references/02-market-method.md` 第 9 节）用 `scripts/market_rules.py` **算**，不要心算：
-
-   ```python
-   import market_rules as rules
-   ratio = rules.combined_ratio(subject_indices, case_indices)   # 连乘，不是百分比相加
-   rules.check_single(ratio)          # within / at-limit / over（"不宜"= 超限要说明处置）
-   rules.combined_ratio(...)          # 共同修正幅度
-   rules.check_price_ratio(prices)    # (最高, 最低, 比值, 判定)
-   rules.comparable_unit_price(price, ratio)   # 比准价格，保留到十位（Excel 口径）
-   ```
-
-   `over` **不是**让你直接删案例：按规范说明处置方式（剔除离群案例 / 改用加权平均 / 说明原因后保留），
-   并把过程留在底稿里。组内比值超 1.2 时也不许反复删高价低价去凑一个想要的估值 ——
-   没有选组依据就报告规则缺口。
+   市场法的限值**全部来自本轮知识快照**（不在这里写死任何数字）：把 `ruleParameters`
+   原样交给 `scripts/calculate_market.py` **算**，不要心算。单项修正上限、共同修正上限与
+   组内比值上限分别落到计算轨迹与 `估值结果.json` 的 `rule_checks[]`
+   （`market.adjustment.single-limit` / `market.adjustment.combined-limit` /
+   `market.price-ratio.limit`），照它们的 `passed` 与 `detail` 处置：
+   `passed=false` **不是**让你直接删案例：按知识正文说明处置方式（剔除离群案例 / 改用加权平均 /
+   说明原因后保留），并把过程留在底稿里。没有选组依据就报告规则缺口。
    ⚠️ 脚本**不重算**公式：交付前必须真打开一次（Excel 或 LibreOffice）让它重算，再核对勾稽。
-6. **输出估值结果与待确认事项**：按 [09-output-contract.md](references/09-output-contract.md) 写
-   `估值结果.json`（结构见 [schemas/valuation-result.schema.json](schemas/valuation-result.schema.json)，
-   样例见 [examples/valuation-result.sample.json](examples/valuation-result.sample.json)），
-   给出单价、总价、采用结论的方法与理由，列出待确认事项与能力缺口。
-   **待确认事项要同时落进底稿**「估值结果汇总」表的「待确认事项」行（同比填「权重 / 汇总依据」
-   与「已知限制」：最终单价怎么汇总的、这份底稿到什么程度为止）——
-   `validate_result.py --workbook` 会比 JSON 与底稿这一处，对不上就判红。
-   结果明细与勾稽以 [06-workbook-contract.md](references/06-workbook-contract.md) 为唯一权威。
-
-   报告由结果 JSON 渲染（不要另誊一遍数字，那三者迟早不一致，而且不一致时没有任何地方会报错）：
-
-   ```bash
-   python3 scripts/build_report.py --result <案例目录>/估值结果.json \
-       --out <案例目录>/估值报告.html
-   ```
-7. **交付前校验**：`validate_result.py`（JSON 结构与口径）与 `check_workbook_contract.py`（工作簿契约）
-   都必须通过；两者任一不通过就不算交付完成。
+6. **输出结果与待确认事项（全部由脚本产出，不手写数字）**：
+   - **测算**：业务阈值与参数**只来自本轮知识快照**，不来自脚本默认值。
+     `scripts/calculate_market.py` 的限值类参数一律由调用方显式传入（缺一个就报缺口，不用默认值兜底）；
+   - **报告数据**：`scripts/build_report_data.py` 把运行 manifest 组装成受约束的
+     [估值报告数据](schemas/valuation-report-data.schema.json)（`--input` / `--out`）；
+     只读校验入口是 `--validate <估值报告数据.json>`（缺 Schema / 结构或口径不符就 fail closed）。
+     结论、计算轨迹、图片与工作簿路径都在这份 JSON 里，**不要另誊一遍数字**；
+   - **HTML**：`scripts/build_report.py --data <估值报告数据.json> --out <方案目录>/估值报告.html`
+     按固定模板渲染。截图按案例存在 `推理结果/图片/<caseId-名称>/`，HTML 展示它们，
+     底稿记录**相对路径**；
+   - **待确认事项要同时落进底稿**「估值结果汇总」表的「待确认事项」行（同比填「权重 / 汇总依据」
+     与「已知限制」：最终单价怎么汇总的、这份底稿到什么程度为止）——对不上就判红。
+   结果明细与勾稽以 [06-workbook-contract.md](references/06-workbook-contract.md) 为唯一权威，
+   产出形状见 [09-output-contract.md](references/09-output-contract.md)。
+   **挂牌参考模式**不走上面这条正式计算链：它由 `crwu_valuation_listing_reference` 一次性交付
+   （固定输入 `方案/<planId>[/修订/<n>]/挂牌参考输入.json`、一次打包脚本、四件产物，状态只可能是
+   `partial`，不得当成交价或修正后的可比价）。缺配置好的 DSH Python 时 Tool 回 `capability-gap`，
+   不得改走 shell / 手工命令；边界见 [09-output-contract.md](references/09-output-contract.md)。
+7. **交付前校验（显式 finalize，不靠"页面还活着"）**：
+   - `scripts/check_workbook_contract.py <方案目录>/估值底稿.xlsx` 按该工作簿自己的填写说明
+     （`<workbook>.contract.json`）校核可见表 / 公式区 / 结果位 / 单位；没有填写说明就**拒绝**，
+     不回退任何内置 profile；
+   - `scripts/build_report_data.py --validate <方案目录>/估值报告数据.json` 按 report-data.v2
+     Schema 与口径逐条核对，必须通过；
+   - 调用 `crwu_valuation_finalize` 由 **Host** 判定状态：它核对冻结输入、知识快照、模板验真、
+     逐对象结论、计算轨迹、截图证据、计算表与**重算记录**、报告渲染与产物清单。
+     缺任何一项都会降级（`completed` → `partial` / `blocked`）并列出问题；
+   - **没有落盘的重算记录时上限就是 `partial`** —— 绝不用"底稿里有公式"推断"已重算"。
+     本地没有可用的重算程序（Excel / LibreOffice）时如实标记，**不许**声称正式完成；
+   - 交付校验 `crwu_valuation_artifact_validate` 与完成判定 `crwu_valuation_finalize` 都要带
+     该方案的 `planId`：它们只认 `方案/<planId>/` 下的那一套文件。
 
 ## 交付
 
-- **估值结果**：评估对象、方法、单价、总价、价值内涵与税费口径、关键参数与取值依据。
-- **标准计算表**：按 `06` 契约生成的 `.xlsx`（输入区 / 公式区 / 输出区 / 勾稽区齐备）。
+- **主交付件一：完整过程与结果的 HTML**（`估值报告.html`）——由受约束的报告数据 JSON 按固定模板渲染。
+- **主交付件二：计算工作簿**（`估值底稿.xlsx`）——按 `06` 契约（输入区 / 公式区 / 输出区 / 勾稽区齐备）。
+- **截图证据**：按案例存于 `推理结果/图片/<caseId-名称>/`，HTML 展示、底稿记录相对路径；
+  挑战页截图**永远不是**案例证据，缺图如实写 `screenshot_missing`。
 - **待确认事项**：口径未定、参数缺依据、案例来源不可核、规则正文未取到的项，逐条写清。
-- **知识来源快照**：本次实际读到的知识文档清单（含更新时间），说明结论建立在哪一版正文上。
+- **知识来源快照**：本次实际读到的知识文档清单（`routeId` / 来源 / 正文指纹 / 更新时间），
+  说明结论建立在哪一版正文上。
 
 ## 可选复核（成果形成之后）
 
@@ -186,10 +281,15 @@ description: Use when valuing real estate for asset-appraisal work — 评估资
 
 ## 失败与冲突
 
-- 知识正文读不到：记 `capability_gaps[]` 并说明缺哪一份；`01` 缺失时停止测算（口径无从确定），
-  其余单份缺失**不阻断**已能测的部分，但结论中必须写明依据缺项。
+- 知识正文读不到：记 `capability_gaps[]` 并说明缺哪一份；入口 Wiki 指向的通用口径缺失时停止测算
+  （口径无从确定），其余单份缺失**不阻断**已能测的部分，但结论中必须写明依据缺项。
 - 计算表模板缺失或结构不符 `06` 契约：停止填表并如实报告，不得自行改造模板。
-- 案例来源不可核（链接失效、来源不明）：保留在候选清单并标 `剔除`，写明理由；候选不足 3 个时按
-  `04` 的规则处理并写入待确认事项。
+- 案例来源不可核（链接失效、来源不明）：保留在候选清单并标 `剔除`，写明理由；候选不足时按本轮
+  知识快照的案例选取规则处理并写入待确认事项。
 - 计算表出现断链、`#REF!`、隐藏表依赖或跨表引用缺失：按 `06` 的勾稽规则逐项登记，禁止用"补一个数"掩盖。
-- 项目资料缺关键输入（面积、权证、基准日、价值内涵）：只挂起受影响对象，其余对象继续测算。
+- 项目资料缺关键输入：先分清两件事 —— **字段缺失**（可继续，登记缺口）与**方法所需关键参数缺失**
+  （挂起相关计算）。面积、权证、基准日、价值内涵这类影响范围的缺口只挂起受影响对象，其余对象继续；
+  剩余土地使用年限、报酬率这类关键参数取不到时，**挂起使用它的那条计算**，并把
+  `missingImpact = calculation-suspended` 登记进参数记录。
+- **空栏绝不填 0**（0 与"不知道"是两件事）；**绝不许**用楼龄 / 建成年份推算土地年限或剩余土地使用
+  年限 —— 那只能来自权证登记与出让材料，取不到就按关键参数缺失挂起。

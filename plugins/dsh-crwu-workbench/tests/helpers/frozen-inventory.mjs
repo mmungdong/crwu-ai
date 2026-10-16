@@ -29,7 +29,7 @@ export const FROZEN_REQUIRED_AUDIT_TOOLS = [...REQUIRED_AUDIT_TOOLS]
 export const FROZEN_AUDIT_TOOL_COUNT = FROZEN_AUDIT_TOOLS.length
 
 /**
- * 宿主操作表：旧动态形态的 24 个 handler + 包形态新增/调整后的合计 39 个。
+ * 宿主操作表：旧动态形态的 24 个 handler + 包形态新增/调整后的合计 52 个。
  * 顺序按「加入时间」排，便于后来者看出哪一批是哪次改造加的。
  *
  * `install-prompt` 已**删除**（2026-09-26）：那套「复制安装提示词发给 Agent」在二进制随包发布、
@@ -61,11 +61,29 @@ export const FROZEN_OPERATIONS = [
   // 在对话里认领。它**不判环境门禁**（本地审核的意义就是不需要氚云 / OSS / 工作空间），
   // 唯一的前置是本机访问授权（由 Broker 的操作表判）。
   'local-audit-status', 'local-audit-start', 'local-audit-claim',
-  // 第 43~50 个：**报告评估（房地产估值）**（协议 32）。本机选择扫描 / 资料入口（建目录 + 复制 +
-  // 清单 + 提取）/ 外部来源预检（可代开默认浏览器登录）/ 冻结快照并启动 / 状态 / 取消 / 结果 /
-  // 打开交付件。落点一律走统一会话服务（`workspaceId`），没有 `cwd` 兜底。
+  // 第 43~47 个：**报告评估（房地产估值）**（协议 32 → 35）。本机选择扫描 / 归档预览
+  // （建目录 + 按字节复制 + 清单 + 确认摘要）/ 外部来源门禁预检 / 人工登录的启动与取消 /
+  // 冻结快照并交接父会话。落点一律走统一会话服务（`workspaceId`），没有 `cwd` 兜底。
+  //
+  // ⚠️ 协议 35（2026-10-14，计划 Task 4）**删掉**了四条运行期操作：
+  // `valuation-status` / `valuation-result` / `valuation-open-artifact` / `valuation-cancel`
+  // —— 面板完成度轮询整体下线，页面在交接成功后直接跳进**顶层父会话**，不再追踪会话完成度。
+  // 同时**加入**门禁登录两条。输入侧的取消（若将来需要）必须叫 `intake-cancel`，
+  // **不沿用**运行期那个 `valuation-cancel` 名字：它们是两件事（取消一次资料归档准备
+  // vs 取消一轮正在跑的估值）。
   'valuation-files-scan', 'valuation-intake', 'valuation-browser-preflight', 'valuation-start',
-  'valuation-status', 'valuation-cancel', 'valuation-result', 'valuation-open-artifact',
+  'valuation-browser-login', 'valuation-browser-login-cancel',
+  // 协议 37（2026-10-14）新增：**打开验证窗口**。员工已登录、受保护页要人机验证时，Host 按
+  // `siteId` 复用**同一个**浏览器 profile 重开那一页（Client 提交不了 URL / profile / 命令）。
+  // 旧宿主没有它，新界面点「打开验证窗口」只会 404 —— 而"能不能过掉验证"正是员工唯一的出路。
+  'valuation-browser-open-verification',
+  // P18（2026-10-15）新增：**项目归属的显式恢复** `valuation-project-resume`。插件实例重建
+  // （进程重启 / 插件重载）之后，估值的案例归属（进程内注册表）整体丢失，同一条父会话再也拿不到
+  // 自己那一份案例目录。恢复只接受 `projectId`，由 Host 从已选工作空间派生目录，并逐项核对
+  // 授权收据 / 工作区 / 协议代 / 冻结输入 / 材料字节 / 会话归属；核不过一律拒绝。
+  // 客户端由 `src/client/modules/report-evaluation/api.ts` 的 `VALUATION_OPERATION_OF` 登记
+  // （不再走审核门面的 `OPERATION_OF`）；冻结操作对账时两份清单合并核对。
+  'valuation-project-resume',
   // 第 43~45 个：**钉钉设备流登录**（协议 32，2026-10-13）。用户口径是"loopback 回调不通 /
   // 无头环境"时要有退路：`dws auth login --device` 会打印短 URL 与授权码再等人授权，
   // 同步等它跑完（最多 5 分钟）面板拿不到码，所以必须拆成 start / status / cancel 三条。

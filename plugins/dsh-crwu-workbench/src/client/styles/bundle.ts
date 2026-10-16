@@ -5,6 +5,10 @@ import { CRWU_BUTTON_STYLE_TEXT } from '../ui/styles/button.ts'
 import { CRWU_CARD_STYLE_TEXT } from '../ui/styles/card.ts'
 import { CRWU_DIALOG_STYLE_TEXT } from '../ui/styles/dialog.ts'
 import { CRWU_DRAWER_STYLE_TEXT } from '../ui/styles/drawer.ts'
+import { CRWU_FIELD_STYLE_TEXT } from '../ui/styles/field.ts'
+import { CRWU_SELECT_STYLE_TEXT } from '../ui/styles/select.ts'
+import { CRWU_DATE_PICKER_STYLE_TEXT } from '../ui/styles/date-picker.ts'
+import { CRWU_POPOVER_STYLE_TEXT } from '../ui/styles/popover.ts'
 import { CRWU_LAYOUT_STYLE_TEXT } from '../shell/styles/layout.ts'
 import { CRWU_NAVIGATION_STYLE_TEXT } from '../shell/styles/navigation.ts'
 import { CRWU_SIDEBAR_STYLE_TEXT } from '../shell/styles/sidebar.ts'
@@ -42,6 +46,10 @@ const OWNED_STYLE_TEXTS: ReadonlyArray<{ owner: string; text: string }> = [
   { owner: 'modules/environment/styles/pane', text: ENVIRONMENT_STYLE_TEXT },
   { owner: 'ui/styles/drawer', text: CRWU_DRAWER_STYLE_TEXT },
   { owner: 'ui/styles/button', text: CRWU_BUTTON_STYLE_TEXT },
+  { owner: 'ui/styles/field', text: CRWU_FIELD_STYLE_TEXT },
+  { owner: 'ui/styles/select', text: CRWU_SELECT_STYLE_TEXT },
+  { owner: 'ui/styles/date-picker', text: CRWU_DATE_PICKER_STYLE_TEXT },
+  { owner: 'ui/styles/popover', text: CRWU_POPOVER_STYLE_TEXT },
   { owner: 'shell/styles/layout', text: CRWU_LAYOUT_STYLE_TEXT },
   { owner: 'shell/styles/navigation', text: CRWU_NAVIGATION_STYLE_TEXT },
   { owner: 'ui/styles/dialog', text: CRWU_DIALOG_STYLE_TEXT },

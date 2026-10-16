@@ -16,7 +16,7 @@ import { LocalAuditPreparationState } from './LocalAuditPreparationState.tsx'
 import { LocalAuditHandoffCard } from './LocalAuditHandoffCard.tsx'
 import { supportsDirectoryPick, supportsFilePick } from '../model/selection.ts'
 import type { ClientServices } from '../../../shell/services.ts'
-import { pickFilesFromInput, type PickedFileLike } from '../pick.ts'
+import { pickFilesFromInput } from '../pick.ts'
 
 /** 主按钮"为什么不能点"那段文字的 id（`aria-describedby` 指向它）。 */
 const REASON_ID = 'crwu-audit-local-action-reason'

@@ -86,10 +86,22 @@ export const CRWU_BUSINESS_TOOLS = [
   'crwu_valuation_case_bootstrap',
   'crwu_valuation_file_extract',
   'crwu_valuation_knowledge_materialize',
+  'crwu_valuation_template_materialize',
   'crwu_valuation_browser_preflight',
   'crwu_valuation_market_search',
   'crwu_valuation_market_capture',
+  'crwu_valuation_browser_recover',
   'crwu_valuation_artifact_validate',
+  'crwu_valuation_finalize',
+  'crwu_valuation_project_prepare',
+  'crwu_valuation_execution_dispatch',
+  'crwu_valuation_execution_join',
+  // 候选案例的稳定编号册与修订版本（协议 39）：用户按编号选例 → 新版 + 旧版保留。
+  'crwu_valuation_revision',
+  // 真实重算与回读：Host 自己跑引擎、自己写重算结论（协议 39）。
+  'crwu_valuation_recalculate',
+  // 挂牌参考一次性交付（协议 40 起）：固定输入、一次打包脚本、四件产物，只回 partial。
+  'crwu_valuation_listing_reference',
 ] as const
 
 export const TOOL_NAMES = {
@@ -108,6 +120,7 @@ export const TOOL_NAMES = {
   valuationCaseBootstrap: 'crwu_valuation_case_bootstrap',
   valuationFileExtract: 'crwu_valuation_file_extract',
   valuationKnowledgeMaterialize: 'crwu_valuation_knowledge_materialize',
+  valuationTemplateMaterialize: 'crwu_valuation_template_materialize',
   valuationBrowserPreflight: 'crwu_valuation_browser_preflight',
   valuationMarketSearch: 'crwu_valuation_market_search',
   valuationMarketCapture: 'crwu_valuation_market_capture',
@@ -124,6 +137,13 @@ export type ToolErrorKind =
   | 'capability-gap'
   | 'approval'
   | 'infrastructure'
+  /**
+   * **文件 / 目录**错误（建目录、落盘目标不可写…）。
+   *
+   * 与 `infrastructure` 分开：它的处置是"修目录权限 / 换工作空间"，
+   * 既不许被当成"网络取不到"重试，也不许被说成"你需要登录"。
+   */
+  | 'file'
   | 'cancelled'
   | 'cli'
   | 'not-found'

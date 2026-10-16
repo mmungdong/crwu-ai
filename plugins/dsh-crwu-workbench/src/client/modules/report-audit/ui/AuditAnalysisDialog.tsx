@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Button } from '../../../ui/primitives.tsx'
+import { Button as ActionButton } from '../../../ui/components/index.ts'
 import { WORKBENCH_CLASSES as C } from '../../../shell/consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
 import { formatDateTime } from '../model/time.ts'
@@ -81,15 +82,15 @@ export function AuditAnalysisDialog(props: AuditAnalysisDialogProps): React.Reac
 
   /** 选项块：标题 + 说明（与「已有报告会话」那套视觉完全一致）。 */
   const option = (label: string, hint: string, onClick: () => void, primary = false): React.ReactElement =>
-    <button
-      type="button"
+    <ActionButton
+      variant={primary ? 'soft' : 'secondary'}
       className={[C.aiDialogOption, primary ? C.aiDialogOptionOn : ''].filter((one) => one !== '').join(' ')}
       disabled={props.busy}
       onClick={onClick}
     >
       <span className={C.aiDialogOptionTitle}>{label}</span>
       <span className={C.aiDialogOptionHint}>{hint}</span>
-    </button>
+    </ActionButton>
 
   return <>
     <div className={C.aiDialogBackdrop} onClick={props.busy ? undefined : props.onCancel} />

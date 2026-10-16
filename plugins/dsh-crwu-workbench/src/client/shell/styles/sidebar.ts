@@ -121,7 +121,7 @@ export const CRWU_SIDEBAR_STYLE_TEXT = `
   box-sizing: border-box;
   color: var(--dsw-static-neutral-bluish-00);
 }
-.crwu-audit-side-entry-mark-ok { background: var(--dsw-alias-state-success-primary); }
+.crwu-audit-side-entry-mark-ok { background: var(--crwu-primary-bg); }
 .crwu-audit-side-entry-mark-bad { background: var(--dsw-alias-state-error-primary); }
 .crwu-audit-side-entry-mark-busy { background: var(--dsw-alias-state-warn-primary); }
 /* 自检中：圆里一段旋转的白弧。比静态图标更能说明「正在动」，也不需要额外的图形资产。 */

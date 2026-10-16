@@ -30,11 +30,11 @@ export const CRWU_NAVIGATION_STYLE_TEXT = `
   transition: background 160ms var(--crwu-ease), color 160ms var(--crwu-ease);
 }
 .crwu-audit-nav-child:hover { background: var(--crwu-control); color: var(--crwu-text-primary); }
-.crwu-audit-nav-child:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
-/* 选中：浅色底 + 品牌色描边 + 加粗 —— 形状与字重一起变，不只靠颜色表达状态。 */
+.crwu-audit-nav-child:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: -2px; }
+/* 选中：浅蓝底 + 操作蓝描边 + 加粗 —— 形状与字重一起变，不只靠颜色表达状态。 */
 .crwu-audit-nav-child-on,
 .crwu-audit-nav-child-on:hover {
-  background: var(--crwu-selected); border-color: var(--crwu-brand);
+  background: var(--crwu-interactive-soft); border-color: var(--crwu-interactive);
   color: var(--crwu-text-primary); font-weight: 600;
 }
 /* 开发中：灰态、不可进入（disabled 属性另外挡住点击）。 */
@@ -75,10 +75,10 @@ export const CRWU_NAVIGATION_STYLE_TEXT = `
 }
 .crwu-audit-tab:hover { background: var(--crwu-control); color: var(--crwu-text-primary); }
 .crwu-audit-tab:active { background: var(--crwu-control-active); }
-.crwu-audit-tab:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
+.crwu-audit-tab:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: -2px; }
 .crwu-audit-tab-on,
 .crwu-audit-tab-on:hover {
   background: transparent; color: var(--crwu-text-primary); font-weight: 600;
 }
-.crwu-audit-tab-on::after { background: var(--crwu-brand); }
+.crwu-audit-tab-on::after { background: var(--crwu-interactive); }
 `

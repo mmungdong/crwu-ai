@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.screenshot-manifest.v1",
+  "title": "案例图片证据清单（推理结果/图片/<安全caseId-名称>/图片清单.json）",
+  "description": "正式证据截图按案例归档（设计稿 §11.2）。三条硬口径：① 路径必须落在本方案 推理结果/图片/ 下；② 挑战页/验证页截图**不得**进入本目录（恢复期间的画布只是临时排障材料）；③ 采用案例缺图或图无效时先走知识允许的替代证据/替代案例，最终未齐则 partial/blocked，**不输出正式采用结论**。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "planId", "entries"],
+  "properties": {
+    "schemaVersion": { "const": "crwu.valuation.screenshot-manifest.v1" },
+    "planId": { "type": "string", "minLength": 1 },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId", "displayName", "provider", "sourceUrl", "capturedAt",
+          "relativePath", "digest", "validity"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "安全 id（Host 铸号/派生）；中文 displayName 只作标签，不参与路径"
+          },
+          "displayName": { "type": "string" },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "description": "来源 id（本部署首期只登记链家）"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "minLength": 1,
+            "description": "取证时回读的**最终** URL（不是列表页 URL，也不是请求 URL）"
+          },
+          "capturedAt": { "type": "string", "minLength": 1 },
+          "relativePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "相对**本方案**推理结果目录的路径，必须形如 图片/<安全caseId-名称>/<来源>-<用途>.png"
+          },
+          "digest": { "type": "string", "minLength": 1 },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "validity": {
+            "enum": ["valid", "missing", "invalid", "not-required"],
+            "description": "`valid` 才允许被 completed 报告引用；`not-required` 只在知识明确不要求截图时使用"
+          },
+          "listingId": {
+            "type": ["string", "null"],
+            "description": "房源 ID：恢复后必须与原任务一致，否则图与案例对不上"
+          },
+          "evidenceType": {
+            "enum": ["page-screenshot", "detail-screenshot", "alternative-evidence"],
+            "description": "替代证据只在知识允许时使用，并且必须写明替代理由"
+          },
+          "alternativeReason": { "type": "string" },
+          "challengeScreenshot": {
+            "const": false,
+            "description": "恒为 false：挑战页截图不能作为案例证据。这一项显式存在，是为了让「误把挑战图存进证据目录」在结构上无法通过"
+          },
+          "recovery": {
+            "type": ["object", "null"],
+            "description": "技术恢复摘要（策略 / 尝试次数 / 页面校验结果）；**不含** Cookie、挑战凭证或原始 CDP 指令",
+            "additionalProperties": false,
+            "properties": {
+              "strategyId": { "type": "string" },
+              "strategyVersion": { "type": "string" },
+              "attempts": { "type": "integer", "minimum": 0 },
+              "reasonCode": { "type": "string" },
+              "finalUrl": { "type": "string" },
+              "listingIdMatched": { "type": "boolean" },
+              "challengeVisible": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "description": "未采用候选的缺图/无效原因。无关候选缺图不应阻断其它方案。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caseId", "reason"],
+        "properties": {
+          "caseId": { "type": "string" },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

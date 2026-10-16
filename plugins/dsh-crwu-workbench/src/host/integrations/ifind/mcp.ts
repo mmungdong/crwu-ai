@@ -525,7 +525,7 @@ export async function probeIfind(
      * （权益 → 找管理员；网络 → 稍后重试），而不是笼统的「验证失败」。
      * `state` 落到 `unverified`（"还没验成"）而不是 `unreachable`（"服务故障"）。
      */
-    const dataFail = (base: IfindProbeResult, state: string, errorKind: IfindProbeErrorKind,
+    const dataFail = (base: IfindProbeResult, errorKind: IfindProbeErrorKind,
                       error: string, dataTool: string): IfindProbeResult =>
       ({ ...base, state: 'unverified', errorKind, error, dataVerified: false, dataTool })
 
@@ -534,7 +534,7 @@ export async function probeIfind(
     if (picked === null) {
       // 凭据本身是好的（会话与工具清单都过了）→ `ok` 保留为 true，只把 `dataVerified` 留在 false；
       // 界面上这是"认证通过、没取到数据"，而不是"认证失败"。
-      return dataFail(authOk, 'unreachable', 'entitlement',
+      return dataFail(authOk, 'entitlement',
         'API-Key 通过认证，但当前账号的工具里没有可安全试取的取数工具（只有写/批量类工具）—— 数据权益可能未开通',
         '')
     }
@@ -543,17 +543,16 @@ export async function probeIfind(
       params: { name: picked.name, arguments: picked.args },
     }, linked.signal, listed.redact, timeoutMs, source)
     if (!called.ok) {
-      const timedOut = source() === 'timeout'
       if (source() === 'external') {
-        return dataFail(authOk, 'unreachable', 'infrastructure', '调用已取消', picked.name)
+        return dataFail(authOk, 'infrastructure', '调用已取消', picked.name)
       }
       const classified = classifyFailure(called.error, '取数')
-      return dataFail(authOk, classified.state, classified.errorKind, classified.message, picked.name)
+      return dataFail(authOk, classified.errorKind, classified.message, picked.name)
     }
     const verdict = readToolsCallResult(called.data.result, listed.redact)
     if (!verdict.ok) {
       const classified = classifyFailure(verdict.error, '取数')
-      return dataFail(authOk, classified.state, classified.errorKind,
+      return dataFail(authOk, classified.errorKind,
         `取数失败（工具 ${picked.name}）：${verdict.error}`, picked.name)
     }
     return {

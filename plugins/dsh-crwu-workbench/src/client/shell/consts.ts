@@ -411,12 +411,21 @@ export const WORKBENCH_CLASSES = {
   sideDrawerTitle: 'crwu-audit-side-drawer-title',
   /** 标题下面那行流水号（12px 等宽、text-tertiary）；正文不再重复它。 */
   sideDrawerSub: 'crwu-audit-side-drawer-sub',
+  /** 标题下的一行说明（估值确认抽屉用；报告审核那张不传就不渲染）。 */
+  sideDrawerDesc: 'crwu-audit-side-drawer-desc',
   /** × 关闭：32×32 图标按钮（透明底 + 悬停一层中性底），替代原来的「关闭」文字按钮。 */
   sideDrawerClose: 'crwu-audit-side-drawer-close',
   /** 关闭动画期间的类（父层延迟 150ms 卸载，见 WorkbenchPanel.closeDrawer）。 */
   sideDrawerOut: 'crwu-audit-side-drawer-out',
   sideDrawerBackdropOut: 'crwu-audit-side-drawer-backdrop-out',
   sideDrawerBody: 'crwu-audit-side-drawer-body',
+  /**
+   * 抽屉的固定 footer（协议 35）。
+   *
+   * 它不是每张抽屉都必须有的：只给"底部有主操作"的抽屉（例如估值确认抽屉的
+   * 「返回修改 / 开始估值」）。没有 footer 的抽屉（审核信息）渲染结果与以前**逐字相同**。
+   */
+  sideDrawerFoot: 'crwu-audit-side-drawer-foot',
 
   /** 「审核信息」Drawer 的小节（审核摘要 / 问题情况 / 复核情况 / 报告信息 / 技术详情）。 */
   sec: 'crwu-audit-sec',

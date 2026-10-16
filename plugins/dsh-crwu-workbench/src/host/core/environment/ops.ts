@@ -6,9 +6,7 @@ import { applyDeploymentConfig } from '../../config/deployment.ts'
 import { runCrwu } from '../../integrations/crwu/run.ts'
 import { runDws } from '../../integrations/dws/run.ts'
 import type { WhoamiResult } from '../system/identity.ts'
-import { DEFAULT_MANIFEST, DSH_RUNTIME_SOURCE } from './manifest-default.ts'
-import { shellInvoke } from '../platform/shell.ts'
-import { resolveBundledCommand } from '../platform/command.ts'
+import { DEFAULT_MANIFEST } from './manifest-default.ts'
 import type { EnvManifest } from './manifest-default.ts'
 import {
   probePackageIntegrity, probeOss,
@@ -19,7 +17,7 @@ import type { IfindTransport } from '../../integrations/ifind/mcp.ts'
 import { buildEnvironmentState, checkErrorOf, PACKAGE_BLOCKER } from './state.ts'
 // 兼容再导出：`blocked` 的这两条文案以前从这里导出，宿主测试与诊断脚本仍按这个名字引用。
 export { PACKAGE_BLOCKER }
-import { runShell, shellUnavailable } from '../shell/run.ts'
+import { shellUnavailable } from '../shell/run.ts'
 import { ossConfigPath, readOssCred, type OssCredView } from '../../integrations/oss/cred.ts'
 import type { WorkbenchState } from '../state/types.ts'
 import type { EnvironmentStateView } from '../../../shared/environment/model.ts'

@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 // 只为类型增强（`Context.sandboxPolicy` / `Context.approval`）与**两个写入口**：
 // 它们就是 DSH 自己的会话策略写路径，不自己 append 事件（那样会绕过取值校验）。

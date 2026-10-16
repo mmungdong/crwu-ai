@@ -2,7 +2,6 @@ import { rpc } from '../../core/rpc.ts'
 import type {
   AccessDiagnosticsView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
 } from '../../../shared/contracts/index.ts'
-import type { LocalAccessConsentView } from '../../../shared/access/types.ts'
 import type {
   EnvironmentBootView, IfindProbeResult, IfindSaveResult, IfindStatusResult, LocalAccessResult, SimpleResult,
 } from './model/types.ts'

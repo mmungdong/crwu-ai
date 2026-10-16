@@ -92,3 +92,117 @@ test('Host activation resolves an explicitly selected development YAML', async (
     await rm(root, { recursive: true, force: true })
   }
 })
+
+/**
+ * `valuation.knowledge.wikiPath`（协议 39 起的**唯一业务入口**）与遗留的 `manifestPath`。
+ *
+ * 两条都是**库内相对路径**，校验要严：绝对路径与 `..` 会让它指向知识库之外。
+ * 基准与 `mirrorRoot` 的文件系统绝对路径**不是一回事**，各自独立回退。
+ */
+const KNOWLEDGE_YAML = (body) => `${VALID_YAML}\nvaluation:\n  knowledge:\n${body}\n`
+
+test('未配置 valuation.knowledge 时 wikiPath 取默认入口，manifestPath 退回遗留缺省', () => {
+  const resolved = parseWorkbenchYaml(VALID_YAML, 'inline-test.yml')
+
+  // 与技能 `references/knowledge-routing.md` 声明的入口逐字一致。
+  assert.equal(resolved.runtime.valuation.knowledge.wikiPath, '01 估值与测算/01 房地产/wiki.adoc')
+  assert.equal(resolved.runtime.valuation.knowledge.manifestPath, '01 估值与测算/01 房地产/00-知识目录与必需项')
+})
+
+test('wikiPath 采用配置里的库内相对路径，且绝对路径 / .. / 空串一律拒绝', () => {
+  const resolved = parseWorkbenchYaml(
+    KNOWLEDGE_YAML('    wikiPath: 01 估值与测算/01 房地产/wiki.md'),
+    'inline-test.yml',
+  )
+  assert.equal(resolved.runtime.valuation.knowledge.wikiPath, '01 估值与测算/01 房地产/wiki.md')
+  for (const bad of ['/etc/passwd', 'a/../b.md', "''"]) {
+    assert.throws(
+      () => parseWorkbenchYaml(KNOWLEDGE_YAML(`    wikiPath: ${bad}`), 'bad.yml'),
+      /valuation\.knowledge\.wikiPath/,
+      bad,
+    )
+  }
+})
+
+test('只给 wikiPath 时 manifestPath 仍独立回退到遗留缺省值', () => {
+  const resolved = parseWorkbenchYaml(
+    KNOWLEDGE_YAML('    wikiPath: 01 估值与测算/01 房地产/wiki.md'),
+    'inline-test.yml',
+  )
+  assert.equal(resolved.runtime.valuation.knowledge.manifestPath, '01 估值与测算/01 房地产/00-知识目录与必需项')
+})
+
+test('manifestPath 采用配置里的库内相对路径', () => {
+  const resolved = parseWorkbenchYaml(
+    KNOWLEDGE_YAML('    manifestPath: 01 估值与测算/01 房地产/知识目录.md'),
+    'inline-test.yml',
+  )
+
+  assert.equal(resolved.runtime.valuation.knowledge.manifestPath, '01 估值与测算/01 房地产/知识目录.md')
+})
+
+test('valuation.recalculation.enginePath：缺省空串（= 本部署没有表格计算程序），只接受绝对路径', () => {
+  const fallback = parseWorkbenchYaml(VALID_YAML, 'inline-test.yml')
+  assert.equal(fallback.runtime.valuation.recalculation.enginePath, '',
+    '没有配置就是没有引擎：重算 unavailable，报告只能 partial')
+
+  const ok = parseWorkbenchYaml(`${VALID_YAML}\nvaluation:\n  recalculation:\n    enginePath: /usr/local/bin/soffice\n`, 'inline.yml')
+  assert.equal(ok.runtime.valuation.recalculation.enginePath, '/usr/local/bin/soffice')
+
+  // 空串显式写出来 = 没有引擎（合法）。
+  const empty = parseWorkbenchYaml(`${VALID_YAML}\nvaluation:\n  recalculation:\n    enginePath: ''\n`, 'inline.yml')
+  assert.equal(empty.runtime.valuation.recalculation.enginePath, '')
+
+  // 相对路径 / 含 `..` 一律拒绝：那等于让"在哪启动"决定算什么数。
+  for (const bad of ['soffice', '../bin/soffice']) {
+    assert.throws(
+      () => parseWorkbenchYaml(`${VALID_YAML}\nvaluation:\n  recalculation:\n    enginePath: ${bad}\n`, 'bad.yml'),
+      /valuation\.recalculation\.enginePath/,
+      bad,
+    )
+  }
+})
+
+test('只给 manifestPath 时 mirrorRoot 仍独立回退到缺省值', () => {
+  const resolved = parseWorkbenchYaml(
+    KNOWLEDGE_YAML('    manifestPath: 01 估值与测算/01 房地产/知识目录.md'),
+    'inline-test.yml',
+  )
+
+  assert.equal(resolved.runtime.valuation.knowledge.mirrorRoot, '')
+})
+
+test('manifestPath 是绝对路径或含 .. 或为空时拒绝', () => {
+  assert.throws(
+    () => parseWorkbenchYaml(KNOWLEDGE_YAML('    manifestPath: /etc/passwd'), 'bad.yml'),
+    /valuation\.knowledge\.manifestPath/,
+  )
+  assert.throws(
+    () => parseWorkbenchYaml(KNOWLEDGE_YAML('    manifestPath: a/../b.md'), 'bad.yml'),
+    /valuation\.knowledge\.manifestPath/,
+  )
+  assert.throws(
+    () => parseWorkbenchYaml(KNOWLEDGE_YAML("    manifestPath: ''"), 'bad.yml'),
+    /valuation\.knowledge\.manifestPath/,
+  )
+})
+
+/**
+ * `valuation.knowledge.mirrorRoot`：**身份已验证**的镜像根，文件系统绝对路径。
+ *
+ * 空串是合法且默认的取值（= 不启用镜像，不是"还没配"）；非空时必须是绝对路径且不含 `..`，
+ * 否则它会随工作目录漂移或指向镜像根之外 —— 而这一层是"知识库读不到时"的唯一降级来源。
+ */
+test('mirrorRoot 留空即不启用镜像，非空时必须是绝对路径', () => {
+  const mirrorYaml = (value) => `${VALID_YAML}\nvaluation:\n  knowledge:\n    mirrorRoot: ${value}\n`
+
+  assert.equal(parseWorkbenchYaml(VALID_YAML, 'inline-test.yml').runtime.valuation.knowledge.mirrorRoot, '')
+  assert.equal(parseWorkbenchYaml(mirrorYaml("''"), 'inline-test.yml').runtime.valuation.knowledge.mirrorRoot, '')
+  assert.equal(
+    parseWorkbenchYaml(mirrorYaml('/tmp/crwu-mirror'), 'inline-test.yml').runtime.valuation.knowledge.mirrorRoot,
+    '/tmp/crwu-mirror',
+  )
+
+  assert.throws(() => parseWorkbenchYaml(mirrorYaml('./mirror'), 'bad.yml'), /mirrorRoot/)
+  assert.throws(() => parseWorkbenchYaml(mirrorYaml('/tmp/../etc'), 'bad.yml'), /mirrorRoot/)
+})

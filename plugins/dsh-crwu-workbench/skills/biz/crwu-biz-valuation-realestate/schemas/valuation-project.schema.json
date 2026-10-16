@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.project.v2",
+  "title": "房地产估值项目索引（项目估值方案索引.json）",
+  "description": "项目 → 方案 → 对象三层，加执行任务图。方案与对象的分组和归属由 Host 校验后固定；业务判定引用本轮知识快照，不能用硬编码城市/物业规则（设计稿 §7.1 / §15）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "inputDigest",
+    "objects",
+    "plans",
+    "tasks",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "crwu.valuation.project.v2" },
+    "projectId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Host 铸号；中文显示名只作标签，不参与路径"
+    },
+    "inputDigest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "必须等于冻结输入重算出来的摘要；对不上说明资料被改过"
+    },
+    "objects": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/object" }
+    },
+    "plans": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/plan" }
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/task" }
+    },
+    "projectBlockers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/blocker" },
+      "description": "整个项目级别就不能继续时的缺口（例如通用规则缺失）"
+    },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "updatedAt": { "type": "string", "minLength": 1 }
+  },
+  "definitions": {
+    "knowledgeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routeId", "snapshotDigest"],
+      "properties": {
+        "routeId": { "type": "string", "minLength": 1 },
+        "snapshotDigest": { "type": "string", "minLength": 1 },
+        "sectionId": { "type": "string" },
+        "ruleId": { "type": "string" }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "stage", "missing", "checked", "reason", "remediation"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "input-invalid",
+            "property-unsupported",
+            "method-unsupported",
+            "valuation-path-unsupported",
+            "valuation-path-unresolved",
+            "capability-missing",
+            "knowledge-missing",
+            "template-missing",
+            "evidence-missing",
+            "recalculation-unavailable"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "intake", "extract", "grouping", "knowledge", "method-selection",
+            "retrieval", "parameters", "template", "calculation", "delivery"
+          ]
+        },
+        "missing": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "checked": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "reason": { "type": "string", "minLength": 1 },
+        "remediation": { "type": "string", "minLength": 1 },
+        "code": { "type": "string" },
+        "capabilityId": { "type": "string" },
+        "knowledgeRef": { "$ref": "#/definitions/knowledgeRef" }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectId", "displayName", "propertyType", "sourceRefs"],
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Host 铸号；同一对象在方案/任务/报告里始终用这一个 id"
+        },
+        "displayName": { "type": "string", "minLength": 1 },
+        "propertyType": {
+          "oneOf": [
+            { "enum": ["residential", "commercial", "office", "industrial", "apartment", "other"] },
+            { "const": "" }
+          ],
+          "description": "**业务分类**。空串 = 未判定（业务分类依据缺失 → 该对象被挂起，不进方案；见 projectBlockers 的 grouping 阻断项）。名称里的字样（例如「公寓」）不是分类依据"
+        },
+        "registeredUse": {
+          "type": "string",
+          "description": "**原始权证 / 登记用途**（资料原文）—— 与 propertyType 是两个字段，不许互相倒填"
+        },
+        "classificationBasis": {
+          "type": "string",
+          "description": "业务分类的依据（登记用途 / 规划用途 / 实际使用 + 资料坐标）；空 = 依据缺失，该对象挂起"
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "资料坐标（fileId#page / #sheet:cell）；提取器不给坐标时必须显式降低粒度"
+        },
+        "fields": { "type": "object", "additionalProperties": { "type": "string" } },
+        "missingFields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "methodAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "applicable", "implemented", "selected", "reason"],
+      "properties": {
+        "method": { "enum": ["market", "income", "cost"] },
+        "applicable": { "type": "boolean", "description": "业务是否适用（知识判定）；与 implemented 是两种状态" },
+        "implemented": { "type": "boolean", "description": "当前实现能否完整执行（能力判定）" },
+        "selected": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1 },
+        "ruleRefs": { "type": "array", "items": { "$ref": "#/definitions/knowledgeRef" } },
+        "conflicts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "planAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planId", "methodRequest", "selectedMethods", "assessments", "requestedMethodHonored", "decidedAt"],
+      "properties": {
+        "planId": { "type": "string", "minLength": 1 },
+        "methodRequest": { "enum": ["auto", "market", "income", "cost"] },
+        "primaryMethod": { "enum": ["market", "income", "cost", null] },
+        "selectedMethods": { "type": "array", "items": { "enum": ["market", "income", "cost"] } },
+        "assessments": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/methodAssessment" } },
+        "requestedMethodHonored": {
+          "type": "boolean",
+          "description": "用户指定的方法是约束；false 时必须在会话内请求确认，不能悄悄替换"
+        },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "decidedAt": { "type": "string", "minLength": 1 }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planId", "title", "propertyType", "objectIds", "methodRequest",
+        "baseDate", "valuationPath", "groupReason", "groupEvidenceRefs", "conflicts", "status"
+      ],
+      "properties": {
+        "planId": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "propertyType": { "enum": ["residential", "commercial", "office", "industrial", "apartment", "other"] },
+        "objectIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "逐对象保留计算；同方案多对象不等于共用修正系数"
+        },
+        "methodRequest": { "enum": ["auto", "market", "income", "cost"] },
+        "methodAssessment": {
+          "oneOf": [{ "$ref": "#/definitions/planAssessment" }, { "type": "null" }]
+        },
+        "baseDate": { "type": ["string", "null"] },
+        "valuationPath": { "enum": ["combined", "separate", "unresolved"] },
+        "groupReason": { "type": "string" },
+        "groupEvidenceRefs": { "type": "array", "items": { "type": "string" } },
+        "conflicts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "权益/基准日/口径冲突；有冲突就不能自动合并，要在会话内问员工"
+        },
+        "status": {
+          "enum": [
+            "draft", "ready-for-method-selection", "ready-for-retrieval",
+            "blocked", "completed", "partial"
+          ]
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId", "parentPlanId", "objectIds", "assetClass", "requestedCapability",
+        "dependsOn", "valuationPath", "valueScope", "basisRefs", "status"
+      ],
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1 },
+        "parentPlanId": { "type": "string", "minLength": 1 },
+        "objectIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "assetClass": {
+          "enum": ["realestate", "land", "building"],
+          "description": "房地分别评估时土地与建筑物是两个任务，不是两份无关联估值"
+        },
+        "requestedCapability": {
+          "type": "string",
+          "minLength": 1,
+          "description": "capability manifest 的能力 ID；土地为 land.valuation.execute（本期仅 unavailable 映射）"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "依赖图必须无环；有依赖的任务只在前置完成后 ready"
+        },
+        "valuationPath": { "enum": ["combined", "separate", "unresolved"] },
+        "valueScope": {
+          "enum": ["land-only", "building-only", "land-and-building"],
+          "description": "三个范围互斥；land-and-building 与 land-only 不得相加（重复计价）"
+        },
+        "basisRefs": { "type": "array", "items": { "$ref": "#/definitions/knowledgeRef" } },
+        "status": {
+          "enum": ["pending", "ready", "running", "completed", "blocked", "failed"]
+        }
+      }
+    }
+  }
+}

@@ -16,6 +16,8 @@ import test from 'node:test'
 const ROOT = new URL('../../../', import.meta.url)
 
 const { workbenchApi, OPERATION_OF, gatingOf } = await import(new URL('src/client/modules/report-audit/api.ts', ROOT).href)
+const { valuationApi, VALUATION_OPERATION_OF } = await import(
+  new URL('src/client/modules/report-evaluation/api.ts', ROOT).href)
 const { WORKBENCH_ROUTE, UPDATE_OPERATION_NAMES } = await import(new URL('src/shared/consts.ts', ROOT).href)
 const { FROZEN_OPERATIONS } = await import(new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
 
@@ -96,7 +98,10 @@ test('the facade covers exactly the frozen Host operation inventory (both direct
   // 为什么以**冻结清单**为准而不是正则扫 `core.ts` 的对象字面量：Task 4 的四个更新操作是
   // `...updateOperations` 组合进去的，正则看不见它们 —— 那种"扫源码"的对账会静默漏掉一整类
   // 操作（这正是它曾经漏掉四个 update 操作的方式）。冻结清单是交付形状的单一事实源。
-  const facade = Object.values(OPERATION_OF)
+  //
+  // 估值操作不经过审核门面：它们的唯一事实源是 `modules/report-evaluation/api.ts`
+  // （`valuationApi` + `VALUATION_OPERATION_OF`），所以要合并两份清单再对账。
+  const facade = [...Object.values(OPERATION_OF), ...Object.values(VALUATION_OPERATION_OF)]
 
   const missing = FROZEN_OPERATIONS.filter((name) => !facade.includes(name) && !HOST_ONLY.includes(name))
   assert.deepEqual(missing, [], `Host 有但门面没有的操作：${missing.join(' ')}`)
@@ -107,6 +112,27 @@ test('the facade covers exactly the frozen Host operation inventory (both direct
   for (const name of UPDATE_OPERATION_NAMES) {
     assert.ok(facade.includes(name), `${name} 必须由门面提供`)
     assert.equal(HOST_ONLY.includes(name), false, `${name} 不得继续留在 HOST_ONLY`)
+  }
+})
+
+test('the valuation API sends its declared operation for every method', async () => {
+  const calls = stubFetch({ ok: true })
+  const args = {
+    filesScan: { paths: [] },
+    intake: {
+      requestId: 'req-1', paths: [], assetType: 'residential', method: 'auto', baseDate: '',
+    },
+    browserPreflight: {},
+    browserLogin: { siteId: 'lianjia' },
+    browserLoginCancel: { jobId: 'job-1' },
+    browserOpenVerification: { siteId: 'lianjia' },
+    projectResume: { projectId: 'project-1' },
+    start: { previewId: 'preview-1', confirmedInputDigest: 'sha256:x', requestId: 'req-2' },
+  }
+  for (const [method, operation] of Object.entries(VALUATION_OPERATION_OF)) {
+    await valuationApi[method](args[method])
+    const last = calls[calls.length - 1]
+    assert.equal(last.payload.op, operation, `${method} 应发出 ${operation}`)
   }
 })
 

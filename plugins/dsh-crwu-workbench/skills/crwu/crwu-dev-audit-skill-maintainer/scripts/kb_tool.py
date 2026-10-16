@@ -83,6 +83,27 @@ def _is_retirement_note(line: str) -> bool:
     return any(word in line for word in _RETIREMENT_NOTE_WORDS)
 
 
+# crwu-dws 的运行时缓存根与它下面**已登记的缓存层**（目录缓存）。
+#
+# 这棵树由技能在运行时创建，**不随包发布**，所以"本机没有它"不是文档缺陷。
+# 但豁免只覆盖根与已登记的缓存层：正文不缓存（正文一律实时从钉钉取回），
+# 所以 `~/.crwu/knowledge/<别的>/x.md` 这种"把正文当本地文件引用"的写法仍要拦下。
+_RUNTIME_KNOWLEDGE_CACHE_ROOT = "~/.crwu/knowledge"
+_RUNTIME_KNOWLEDGE_CACHE_LAYERS = ("dws-dir-cache",)
+
+
+def _is_runtime_knowledge_cache(literal: str) -> bool:
+    """这个字面量是不是 crwu-dws 的运行时缓存路径（缓存根或已登记的缓存层）。"""
+    t = literal.rstrip("/")
+    if t == _RUNTIME_KNOWLEDGE_CACHE_ROOT:
+        return True
+    prefix = _RUNTIME_KNOWLEDGE_CACHE_ROOT + "/"
+    if not t.startswith(prefix):
+        return False
+    layer = t[len(prefix):].split("/")[0]
+    return layer in _RUNTIME_KNOWLEDGE_CACHE_LAYERS
+
+
 def skill_path_problems(skill_root: str):
     """扫描技能/文档内的引用卫生问题：旧树标记、省略号、废止的本地根引用与字面。"""
     errors, warns = [], []
@@ -108,8 +129,10 @@ def skill_path_problems(skill_root: str):
                         t = lit.lstrip("`")
                         if not t.startswith("~"):
                             continue
-                        if "dws-dir-cache" in t:
-                            # crwu-dws 目录缓存层：运行时 M1/M3 才生成，未生成不算引用缺失
+                        if _is_runtime_knowledge_cache(t):
+                            # crwu-dws 的**运行时缓存树**：M1/M3 才会创建它，
+                            # 一份刚安装、还没跑过审核的技能副本不该因此判"引用了一个不存在的路径"
+                            # ——"还没生成缓存"与"文档引用了不存在的路径"是完全不同的事。
                             continue
                         if not os.path.exists(os.path.abspath(os.path.expanduser(t))):
                             errors.append(f"{rel}:{lineno} 路径不存在 {t}")

@@ -75,7 +75,13 @@ export async function runExtraction(input: ExtractInput): Promise<ExtractionOutc
     }
 
     outcome.files.push(extracted)
-    gaps.push(...extracted.capabilityGaps.map((gap) => gap.startsWith('未解析') ? gap : `未解析：${fileName}（${gap}）`))
+    // 前缀只说**这一次到底解析出了什么**：整份没读出来才是"未解析"，读到了但有页缺文本层
+    // （P1：`第 2–3 页无文本层…`）不能被打成"未解析" —— 那句话会把"部分读到"说成"完全没读"。
+    const parsedSomething = text(extracted.text) !== '' || extracted.tables.length > 0 || extracted.images.length > 0
+    gaps.push(...extracted.capabilityGaps.map((gap) => {
+      if (gap.startsWith('未解析')) return gap
+      return parsedSomething ? `${fileName}（${gap}）` : `未解析：${fileName}（${gap}）`
+    }))
     warnings.push(...extracted.warnings.map((warning) => `${fileName}：${warning}`))
   }
 
@@ -110,6 +116,8 @@ export function emptyExtractedFile(fileName: string, fileType: ValuationFileKind
     tables: [],
     images: [],
     extractedFields: {},
+    // 逐页表与能力声明是**可选**的：缺省表示"未知"。
+    // 这里刻意不预置空数组 / 空对象 —— 空值会被读成"已知，只是没有"。
     warnings: [],
     capabilityGaps: [],
   }

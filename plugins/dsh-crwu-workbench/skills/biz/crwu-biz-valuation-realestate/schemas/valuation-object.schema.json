@@ -42,6 +42,15 @@
       },
       "description": "**抽屉里要核对的 12 个要素标签**（方案 §5.4 的清单，顺序固定）。界面、Host 的要素清单与这份 schema 必须是同一套标签 —— 三处各写一份的后果是\"资料里读到的信息\"在不同地方口径不同"
     },
+    "registeredUse": {
+      "type": "string",
+      "description": "**原始权证 / 登记用途**（资料原文，例如「公寓」「成套住宅」）。它与 `propertyType` 是两个字段：这里是资料事实，不许用业务分类倒填，也不许因为名称里有「公寓」就改写为住宅（P15）"
+    },
+    "classificationBasis": {
+      "type": "string",
+      "minLength": 1,
+      "description": "**业务分类的依据**（登记用途 / 规划用途 / 实际使用 + 资料坐标）。空 = 依据缺失：该对象挂起（不进方案、不算结论），其余对象继续（P15）"
+    },
     "missing_fields": {
       "type": "array",
       "items": {

@@ -50,5 +50,6 @@ const ARTIFACT_HINT_PLACEHOLDER = '<报告流水号>'
 /** 审核产物的落盘位置说明（用户最常问的问题：东西写到哪了）。 */
 export function artifactHint(path: string): string {
   const sep = localSeparator(path)
-  return `${zhCN.wsArtifactPrefix}${joinLocalPath(path, ARTIFACT_HINT_PLACEHOLDER)}${sep}。${zhCN.wsCwdNote}`
+  // Plain output-location hint; the cwd / subagent explanation lives in developer diagnostics only.
+  return `${zhCN.wsArtifactPrefix}${joinLocalPath(path, ARTIFACT_HINT_PLACEHOLDER)}${sep}。`
 }

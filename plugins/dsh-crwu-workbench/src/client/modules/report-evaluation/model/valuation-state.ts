@@ -1,383 +1,351 @@
 import { text } from '../../../../shared/utils/value.ts'
+import { VALUATION_PROMPT_MAX_LENGTH } from '../../../../shared/consts.ts'
+import {
+  ASSET_TYPES,
+  PURPOSE_MAX_LENGTH,
+  VALUE_TYPE_MAX_LENGTH,
+} from '../../../../shared/contracts/valuation-project.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
+import type {
+  AuthGateView,
+  CreationDisposition,
+  LoginJobView,
+  SiteRowView,
+  SiteStatusView,
+  ValuationMethod,
+  ValuationPagePhase,
+  ValuationPreviewView,
+  ValuationHandoffView,
+} from '../../../../shared/contracts/report-evaluation.ts'
 
 /**
- * 报告评估页的**客户端状态机**（协议 32）。
+ * 房地产启动页的**客户端状态机**（协议 35 · 计划 Task 4）。
  *
- * ## 为什么状态与"谁能改输入"是同一件事
+ * ## 这一代换了什么
  *
- * 方案对确认抽屉的要求是"**只读**"：抽屉里不许改字段、不许改提示词、不许改方法、不许改基准日。
- * 把这条写成"按钮不带 onClick"是**界面约定**，改一次渲染就可能悄悄失效；
- * 这里把它变成**状态机判据**：`canEditInputs(state)` 只在 `draft` / `failed` 阶段为真，
- * 一旦进入 `confirmation`，所有改输入的动作都会被拒绝并给出原因。
- * 于是"抽屉只读"是可断言的，而不是靠人看代码。
+ * 协议 32 那一版的页面阶段直接照搬 Host 的轮次（`extracting` / `running` / `completed` …），
+ * 于是页面必须**追着轮次跑**：面板得持有估值专用轮询、结果页得读交付件存在性、抽屉里塞满了
+ * 提取结果（知识库状态、已知/缺失字段、冲突表、完整 Prompt、取证能力、digest）。
  *
- * 另一条同样重要的纪律：**"能不能改"与"显不显示"是两个判据**
- *（`canEditInputs` / `showsIntakeForm`）。提取中要显示表单（进度区与取消都在里面）
- * 但不许改；把两者合成一个判据，提取中整块工作面会消失，用户又回到"点了没反应"。
+ * 这一代把两件事彻底分开：
  *
- * ## 阶段与来源
+ * - **页面只知道"能不能创建、是不是已经交接"**：阶段是 `ValuationPagePhase`（见 shared 合同）；
+ * - **方案识别、方法判定、取知识、抓案例、填表、勾稽全在父会话里**，页面不再有它们的 API。
  *
- * 阶段词与 Host 的 `ValuationPhase` 一致（同一套词，两侧不各说一套）。
- * `stale-host` 由客户端在发现协议代数不匹配时给出 —— 那时页面上的一切事实都不可信。
+ * 于是"交接成功后不再有任何请求"不是靠纪律，而是**写不出来**：这一层没有 status / result /
+ * 运行期 cancel 这些动作。
+ *
+ * ## 只读抽屉仍然由状态机保证
+ *
+ * 抽屉里不许改方法 / 基准日 / 补充要求 —— 这条不靠"按钮没绑 onClick"，而是
+ * `canEditInputs(phase)` 只在 `draft` 为真：确认阶段的一切改输入动作都会被拒绝并给出原因。
  */
 
-export type ValuationPhase =
-  | 'draft'
-  | 'extracting'
-  | 'confirmation'
-  | 'queued'
-  | 'running'
-  | 'browser-login-required'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'stale-host'
-
-export type ValuationMethod = 'auto' | 'market' | 'income' | 'cost'
+// 这几个是**跨进程合同**里的类型，组件从 model 取（页面不直接依赖 shared 的形状名）。
+export type { ValuationMethod, ValuationPagePhase, ValuationPreviewView, ValuationHandoffView }
 
 export const VALUATION_METHODS: readonly ValuationMethod[] = ['auto', 'market', 'income', 'cost']
 
-/** 方法选项（界面顺序即数组顺序；默认第一项 = 自动判定）。 */
-export function valuationMethodOptions(): Array<{ value: ValuationMethod; label: string; hint: string }> {
+/**
+ * 草稿里的评估方法：**空串是"还没选"**。
+ *
+ * 为什么草稿不能用 `'auto'` 当空态：`auto` 是一个明确的用户选项（"由 Agent 判定"），
+ * 拿它当默认值会让"没选"与"选了自动判定"在状态里长得一模一样 —— 于是必填校验恒真、
+ * 空值被静默显示成"自动判定"。草稿因此用空串，提交与冻结输入才收窄成 `ValuationMethod`。
+ */
+export type ValuationMethodChoice = '' | ValuationMethod
+
+/**
+ * 收窄成正式方法：空串与未知枚举都不是有效方法。
+ *
+ * 参数刻意是 `unknown`：Host 回包里的 `methodRequest` 在收窄之前就是 `string`，
+ * 而"它是不是有效方法"必须由这一个函数判，不能靠调用方先强转一次。
+ */
+export function chosenMethod(method: unknown): ValuationMethod | null {
+  return isValuationMethod(method) ? method : null
+}
+
+/** 资产类型是不是已登记的取值（空串 = 还没选，不是"未知"）。 */
+export function isKnownAssetType(value: unknown): boolean {
+  return (ASSET_TYPES as readonly string[]).includes(text(value))
+}
+
+/**
+ * 资产类型的**显示名**（稳定业务标识 → 人话）。
+ *
+ * 未登记的取值原样返回：宁可让员工看到一个陌生的标识，也不要把它显示成别的资产类型。
+ * 空串返回空串（调用方自己决定写"未指定"还是"请选择"）。
+ */
+export function assetTypeLabelOf(assetType: string): string {
+  const value = text(assetType).trim()
+  if (value === '') return ''
+  return value === 'real-estate' ? zhCN.valuationAssetTypeRealEstate : value
+}
+
+/**
+ * 全部方法都**开放**（协议 39）。
+ *
+ * 旧实现把收益法 / 成本法画成禁用项，理由是"正文与模板还没就绪" —— 那是**知识侧**的事实，
+ * 不是入口该拦的东西：知识补一章之后，UI 不该跟着发一次版。开放入口也不等于缺口消失：
+ * 资料、参数、模板或能力不够时，由本轮会话按 Wiki 的缺失处置如实登记缺口。
+ */
+export function methodSupported(_method: ValuationMethod): boolean {
+  return true
+}
+
+/**
+ * 方法选项（界面顺序即数组顺序；默认第一项 = 自动判定）。
+ *
+ * 四项都不禁用。真正的适用性判断归本轮知识（方法选择方案正文），归 Agent 执行，
+ * 不归这一层写死。
+ */
+export function valuationMethodOptions(): Array<{
+  value: ValuationMethod
+  label: string
+  hint: string
+  disabled: boolean
+}> {
   return [
-    { value: 'auto', label: zhCN.valuationMethodAuto, hint: zhCN.valuationMethodAutoHint },
-    { value: 'market', label: zhCN.valuationMethodMarket, hint: zhCN.valuationMethodMarketHint },
-    { value: 'income', label: zhCN.valuationMethodIncome, hint: zhCN.valuationMethodIncomeHint },
-    { value: 'cost', label: zhCN.valuationMethodCost, hint: zhCN.valuationMethodCostHint },
+    { value: 'auto', label: zhCN.valuationMethodAuto, hint: zhCN.valuationMethodAutoHint, disabled: false },
+    { value: 'market', label: zhCN.valuationMethodMarket, hint: zhCN.valuationMethodMarketHint, disabled: false },
+    { value: 'income', label: zhCN.valuationMethodIncome, hint: zhCN.valuationMethodIncomeHint, disabled: false },
+    { value: 'cost', label: zhCN.valuationMethodCost, hint: zhCN.valuationMethodCostHint, disabled: false },
   ]
 }
 
-export function valuationMethodLabel(method: ValuationMethod): string {
-  return valuationMethodOptions().find((item) => item.value === method)?.label ?? zhCN.valuationMethodAuto
+/**
+ * 方法显示名。
+ *
+ * 认不出来时返回**空串**：以前这里回退成「自动判定」，于是空值与未知枚举在界面上
+ * 都被显示成"用户选了自动判定"（这正是本轮要拆掉的掩盖）。
+ */
+export function valuationMethodLabel(method: string): string {
+  return valuationMethodOptions().find((item) => item.value === method)?.label ?? ''
+}
+
+/**
+ * 方法的一句话说明（与**本次选择**相符）。
+ *
+ * 抽屉与表单共用同一份口径：以前抽屉里写的是"当前支持住宅市场法 / 收益法成本法尚未提供"，
+ * 那是知识侧的旧事实，与用户选了什么毫无关系。
+ */
+export function valuationMethodHintOf(method: string): string {
+  return valuationMethodOptions().find((item) => item.value === method)?.hint ?? ''
 }
 
 export function isValuationMethod(value: unknown): value is ValuationMethod {
   return (VALUATION_METHODS as readonly string[]).includes(text(value))
 }
 
-/**
- * 这个阶段能不能改输入 —— **唯一**判据：界面禁用与状态机拒绝都用它。
- *
- * 2026-10-13 用户实测的 bug 就是这里两套判据打架：界面按 `draft || failed` 画（失败后
- * 表单看起来能改），状态机按 `draft || extracting` 拒（一点就报「输入已经冻结」），
- * 于是失败之后**既改不动、也看不到抽屉**（抽屉要 `confirmation`），整页卡死。
- *
- * 正确的是 `draft || failed`：
- * - `draft`：还没开始，当然能改；
- * - `failed`：这一轮没成 —— 用户的第一反应就是"改点什么再试一次"。失败之后不让改，
- *   唯一的结果是让人把面板关掉重开（资料还得重选一遍），那不叫冻结，叫卡死；
- * - `extracting`：**不能改**（§11.1「所有文件、方法、基准日、补充要求暂时不可编辑」）——
- *   改了会让"正在按什么输入提取"变得说不清。要改就先取消或等它结束；
- * - 确认之后（`queued` / `running` / `completed` / `browser-login-required`）：输入已冻结，
- *   要改走「返回修改」重新生成快照。
- */
-export function canEditInputs(phase: ValuationPhase): boolean {
-  return phase === 'draft' || phase === 'failed'
+export type ValuationScanState = 'idle' | 'scanning' | 'ready' | 'failed'
+
+/** 门禁检查的进行状态。 */
+export type AuthCheckState = 'idle' | 'checking' | 'ready'
+
+export interface ValuationLoginState {
+  check: AuthCheckState
+  /** Host 推出的门禁结论；还没查过是 `null`。 */
+  gate: AuthGateView | null
+  rows: SiteRowView[]
+  sites: SiteStatusView[]
+  loginJobs: LoginJobView[]
+  /** 最近一次检查**没做成**的原因（不是"未登录"）。 */
+  error: string
+  /** 本页发起、当前在跑的那一条登录任务。 */
+  job: LoginJobView | null
 }
 
-/**
- * 不能改的时候给一句**对症**的话。
- *
- * 提取中说"输入已经冻结"是错的：那时输入没冻结，只是正在按它跑，用户该做的是取消或等。
- */
-export function inputLockedReason(phase: ValuationPhase): string {
-  return phase === 'extracting' ? zhCN.valuationIntakeBusy : zhCN.valuationInputLocked
-}
-
-/**
- * 表单**工作面**该不该显示（草稿 / 提取中 / 失败回退都停在同一个表单上）。
- *
- * 与 `canEditInputs` 分开：提取中"要显示、但不能改" —— 进度区与「取消提取」就长在
- * 这个表单里（§11.1 要求点击后第一帧就有可见反馈）。
- */
-export function showsIntakeForm(phase: ValuationPhase): boolean {
-  return phase === 'draft' || phase === 'extracting' || phase === 'failed'
-}
-
-/** 抽屉该不该显示（"开始估值"之后、确认之前）。 */
-export function showsConfirmationDrawer(phase: ValuationPhase): boolean {
-  return phase === 'confirmation'
-}
-
-/** 页面顶部阶段提示（一句话说清"现在在等谁"）。 */
-export function phaseHintOf(phase: ValuationPhase): string {
-  switch (phase) {
-    case 'draft': return zhCN.valuationPhaseDraft
-    case 'extracting': return zhCN.valuationPhaseExtracting
-    case 'confirmation': return zhCN.valuationPhaseConfirmation
-    case 'queued': return zhCN.valuationPhaseQueued
-    case 'running': return zhCN.valuationPhaseRunning
-    case 'browser-login-required': return zhCN.valuationPhaseLogin
-    case 'completed': return zhCN.valuationPhaseCompleted
-    case 'failed': return zhCN.valuationPhaseFailed
-    case 'cancelled': return zhCN.valuationPhaseCancelled
-    default: return zhCN.valuationPhaseStale
-  }
-}
-
-/** 一轮估值的**客户端视图**（Host 的事实 + 用户填的输入）。 */
-export interface ValuationFileView {
-  fileName: string
-  relativePath: string
-  kind: string
-  sizeBytes: number
-  status: string
-  note: string
-}
-
-export interface ValuationKnowledgeView {
-  space: string
-  ready: boolean
-  sources: Array<{ route: string; source: string; updatedAt: string; digest: string }>
-  gaps: string[]
-}
-
-export interface ValuationProviderView {
-  id: string
-  label: string
-  state: string
-  stateLabel: string
-  detail: string
-  captcha?: boolean
-  loginUrl?: string
-}
-
-/**
- * 外部来源预检的进行状态。
- *
- * `checking` = 抽屉已经打开、探测还在跑（来源行显示「检查中」）；
- * `done` = 三家都有结论了。它**不阻塞**资料确认信息的展示（§11.2）。
- */
-export type ProviderCheckState = 'idle' | 'checking' | 'done'
-
-/** 确认抽屉要显示的全部事实（由 Host 的 `valuation-intake` 回填）。 */
-export interface ValuationIntakeView {
-  valuationId: string
-  casePath: string
-  method: string
-  baseDate: string
-  supplementalPrompt: string
-  digest: string
-  files: ValuationFileView[]
-  extractedFields: Record<string, string>
-  missingFields: string[]
-  unparsed: string[]
-  capabilityGaps: string[]
-  warnings: string[]
-  knowledge: ValuationKnowledgeView
-  providers: ValuationProviderView[]
-  /** 每个已知要素来自哪一份资料（标签 → 文件名）。 */
-  fieldSources: Record<string, string>
-  /** 资料之间的冲突（同一要素在不同资料里不一致）。 */
-  fieldConflicts: Array<{ label: string; values: Array<{ file: string; value: string }> }>
-  /** 将要提交给估值会话的完整业务提示词（与执行时同一个构造器生成）。 */
-  prompt: string
-}
-
-/**
- * 选择清单里的一份资料（**输入页**显示用）。
- *
- * 它来自 `valuation-files-scan`：用户在"还没开始提取"的时候也应该看得见自己选了什么、
- * 有多大、哪一份读不出来。以前这一页只拿得到一串绝对路径，于是只能把整条路径当标题
- *（用户原话：文件显示完整绝对路径，不容易辨认资料）。
- */
+/** 输入页里的一份资料（对"选中的目录"来说是一行，`fileCount` 是它展开后的份数）。 */
 export interface ValuationSelectedFileView {
-  /** 本机绝对路径（客户端内存里的事实，也是移除时的键）。 */
   path: string
-  /** 主标题：文件名。 */
   name: string
-  /** 同名文件的**目录摘要**（只有重名时才非空，用来区分是哪一个）。 */
+  /** 重名时才给的目录摘要（完整路径留在 `path` 与 `title` 里）。 */
   dirHint: string
   kind: string
   sizeBytes: number
-  /** `scanned` = 读了；`skipped` = 没读（`reason` 说明为什么）。 */
   status: string
   reason: string
-  /** 文件夹来源里实际纳入了几份（单文件是 1）。 */
   fileCount: number
 }
 
-/** 选择清单扫描的三种状态（输入页据此决定显示空态 / 骨架 / 列表 / 失败）。 */
-export type ValuationScanState = 'idle' | 'scanning' | 'ready' | 'failed'
-
-export interface ValuationProgressView {
-  stage: string
-  detail: string
-  completed: number
-  total: number
+/**
+ * 入口展开后的**真实文件行**（协议 37 · 设计稿 §8.2）。
+ *
+ * `state` 是界面状态而不是 Host 状态：Host 只会回"还留在本次范围里的文件"，所以
+ * "已从本次范围移除"这一档由客户端记着 —— 它必须仍然**看得见**（否则员工无从核对，
+ * 也没有「重新纳入」的落点）。
+ */
+export interface ValuationFileRowView {
+  path: string
+  name: string
+  kind: string
+  sizeBytes: number
+  /** 它属于哪个已选入口（入口的绝对路径）。 */
+  parentPath: string
+  state: 'included' | 'excluded'
 }
 
-/** 结果页的最小视图（完整结果在 `估值结果.json` 里，界面只显示结论与案例）。 */
-export interface ValuationResultView {
-  method: string
-  methodReason: string
-  /** 方法判断记录（§7.2）：每条给出采用 / 不采用与依据。 */
-  methodScreening: Array<{ method: string; verdict: string; reason: string }>
-  /**
-   * 用户指定的方法与结论冲突时的记录（§7.2）。
-   *
-   * `null` = 没有冲突（用户选了自动判定，或指定的方法就是采用的那个）。
-   */
-  methodConflict: { userMethod: string; adoptedMethod: string; reason: string } | null
-  baseDate: string
-  unitPrice: number | null
-  totalValue: number | null
-  /** 计价面积（㎡）＝建筑面积，权证面积优先；拿不到是 `null`。 */
-  pricingArea: number | null
-  /** 计价单位（统一「元/㎡」）。 */
-  priceUnit: string
-  manualConfirmationItems: string[]
-  capabilityGaps: string[]
-  cases: Array<{
-    /** 来源平台 id（fang / anjuke / lianjia）。 */
-    source: string
-    /** 来源展示名（「房天下」/「链家 / 贝壳」…）。 */
-    sourceLabel: string
-    url: string
-    title: string
-    community: string
-    transactionType: string
-    usedAsComparable: boolean
-    unitPrice: number | null
-    buildingArea: number | null
-    keepReason: string
-    dropReason: string
-    /** 案例状态（§8）：采用 / 条件不匹配 / 资料或证据不足 / 单项 / 综合 / 组内一致性未通过。 */
-    status: string
-    /**
-     * 这条案例的**规则检查记录**（§8）。
-     *
-     * 每条至少给出规则 ID、实际值与阈值（数值型规则）、判定和理由 ——
-     * "只有一句符合要求"在这里是写不出来的。
-     */
-    ruleChecks: Array<{
-      ruleId: string
-      actual: number | null
-      threshold: number | null
-      verdict: string
-      reason: string
-    }>
-    /** 抓取时刻（可追溯的一部分）。 */
-    capturedAt: string
-    /**
-     * 公开的中介联系方式（§9 第 5 条）。
-     *
-     * `state` 五态如实呈现；`phone` **原样保留**页面展示的形态（含脱敏），
-     * 界面不提供拨号 / 联系入口 —— 只登记公开信息。
-     */
-    contact: { state: string; agency: string; person: string; phone: string; detail: string }
-    /** 页面证据的相对路径（页面字节）；空串表示没留存。 */
-    evidence: string
-    /** 这一条**明确**没有留存证据（§9「证据不完整」的判据之一）。 */
-    evidenceMissing: boolean
-    /**
-     * **页面截图**（§7.4）：相对案例目录；没有截图能力或截图失败时为空串。
-     *
-     * 与 `evidence` 分开两列：HTML 字节 / 指纹 / JSON-LD **不是截图**，
-     * 两者在争议复核时的证明力不一样。
-     */
-    screenshot: string
-    /** 截图指纹（取证要能核对文件没被换过）。 */
-    screenshotDigest: string
-    /** 截图采集时刻。 */
-    screenshotCapturedAt: string
-    /** 这一条**明确**没有截图（本部署没有截图能力时全部为 true）。 */
-    screenshotMissing: boolean
-  }>
-  artifacts: { html: boolean; xlsx: boolean; json: boolean }
+/** 一次扫描里被跳过的条目（符号链接 / 特殊文件 / 权限不足）。 */
+export interface ValuationScanSkippedView {
+  path: string
+  name: string
+  reason: string
+}
+
+/**
+ * 一次"移除"之前的完整范围（撤销用它**原样**还原）。
+ *
+ * 存整份范围而不是只存一个路径：移除文件夹会同时改 `selection` 与 `excluded`，
+ * 只回滚其中一个会留下一个既不在选择里、又被排除的范围。
+ */
+export interface ValuationScopeSnapshot {
+  selection: string[]
+  excluded: string[]
+  files: ValuationFileRowView[]
+}
+
+/** 最近一次移除（只保留一条：连续移除以**最近一次**为单位撤销）。 */
+export interface ValuationRemovalMemory {
+  kind: 'file' | 'root'
+  name: string
+  scope: ValuationScopeSnapshot
 }
 
 export interface ValuationPageState {
-  phase: ValuationPhase
-  /**
-   * 本轮估值 ID（进入 intake 时由 Host 铸号；未铸号时为空串）。
-   *
-   * ⚠️ 它在**点下"检查并确认"的那一刻**就写进 state，不是等 Host 回来才写：
-   * 提取过程中用户点「取消提取」要按这个 id 通知 Host，`state.valuationId` 还空着的话
-   * 那个通知根本发不出去（宿主那一轮会一直在跑）。
-   */
-  valuationId: string
-  /** 用户选择的本机文件 / 文件夹（绝对路径；只在客户端内存里）。 */
+  phase: ValuationPagePhase
+  login: ValuationLoginState
+  /** 用户选中的本机文件 / 文件夹（绝对路径；只在客户端内存里）。 */
   selection: string[]
-  /** 选择清单的**逐份事实**（扫描结果；`selection` 变了就作废）。 */
+  /** 入口层事实（文件夹只在这里带一个份数）。 */
   files: ValuationSelectedFileView[]
+  /** 入口展开后的真实文件行（含"已移除"的那些）。 */
+  fileRows: ValuationFileRowView[]
+  /** 扫描跳过的条目（带原因；不混进已纳入份数）。 */
+  scanSkipped: ValuationScanSkippedView[]
+  /**
+   * 员工逐个移除掉的文件（绝对路径）。
+   *
+   * 它与 `selection` 一起提交给 Host：扫描、预览与归档**共用同一份**范围 ——
+   * 只过滤 UI 列表就是"假排除"。
+   */
+  excluded: string[]
+  /** 最近一次移除（8 秒内可撤销；准备确认时冻结并清掉）。 */
+  lastRemoval: ValuationRemovalMemory | null
   scanState: ValuationScanState
   scanError: string
-  method: ValuationMethod
+  /** 枚举被安全上限截断：清单不完整 → 不能确认。 */
+  truncated: boolean
+  /** 递归去重后的**文件数**（用户选中的目录数不作数）。 */
+  fileCount: number
+  /** 扫描说超限（>30）：**整批阻止**，不悄悄截取。 */
+  overLimit: boolean
+  /** 扫描里读得出来的份数（0 = 一份都读不出来，不能启动）。 */
+  readableCount: number
+  /** Host 报的份数上限（界面照它说"上限 N 份"）。 */
+  limit: number
+  /** 用户选定的评估方法；未选择是空串（详见 `ValuationMethodChoice`）。 */
+  method: ValuationMethodChoice
+  /**
+   * 用户选定的**资产类型**；未选择是空串。
+   *
+   * 通用入口的第一个选择，也是装配哪个 Skill / 哪份入口 Wiki 的唯一依据 —— 所以
+   * **初始必须是空**，不替用户默认成房地产（那会把未确认的资产口径写进冻结输入）。
+   */
+  assetType: string
   /** 用户选择的基准日；未选择是空串。 */
   baseDate: string
+  /**
+   * 用户填的**评估目的**；未填是空串（= 未指定）。
+   *
+   * 它不参与"能不能确认"的判据（业务前提允许后补），但会随摘要冻结，
+   * 且报告里必须按"未指定"呈现 —— **不是**默认成某种正式目的。
+   */
+  purpose: string
+  /** 用户填的**价值类型**；未填是空串（= 未指定）。可选值清单待业务方确认，界面不做枚举。 */
+  valueType: string
   supplementalPrompt: string
-  /** Host 回填的确认数据；还没跑过 intake 时为 `null`。 */
-  intake: ValuationIntakeView | null
-  progress: ValuationProgressView
-  providerStates: Record<string, { state: string; attempts: number; detail: string }>
-  /** 外部来源预检：抽屉打开后才开始跑，跑的过程中不挡资料确认信息。 */
-  providerCheck: ProviderCheckState
-  /** 逐家的公开登录页地址（宿主给的公开地址，不是凭据）。 */
-  providerLoginUrls: Record<string, string>
-  sessionId: string
-  casePath: string
-  result: ValuationResultView | null
+  /** 超过上限的输入原文（让"粘贴超长"有明确说明而不是静默截断）。 */
+  promptOverLimit: boolean
+  /** Host 回填的归档预览（确认抽屉的数据源）；还没准备过是 `null`。 */
+  preview: ValuationPreviewView | null
+  projectId: string
+  parentSessionId: string
+  dispatchAccepted: boolean
   /**
-   * 当前提取阶段的**人话**（来自宿主 `valuation-status` 的 `progress.stage`）。
+   * 交接结果的**权威创建判据**（Host 给的）。
    *
-   * 客户端**不自己编阶段**：没有宿主结论时这里就是空串，界面退回一句
-   * 「正在提取资料…」。按计时器逐条切换阶段文字是**假进度**（§4 明确禁止）。
+   * 只有 `not-created` 才允许「返回修改」；`unknown` 与 `created` 都必须先完成同一轮恢复。
    */
-  intakeStage: string
+  creationDisposition: CreationDisposition
+  /** 同一 requestId / previewId 已经交接成功过（界面据此不重复提示）。 */
+  reused: boolean
+  /** 会话建好了、但自动打开失败：重试**只重新导航**，不再创建。 */
+  openFailed: boolean
+  /** 指令没发出去：重试要发回**同一个会话**。 */
+  retrySameSession: boolean
+  /** 准备确认的发号器（迟到的响应一比就知道自己是不是当前那一次）。 */
+  prepareRequestId: number
   /**
-   * 本轮提取请求的序号：只接受**当前**请求的响应。
+   * 交接的请求标识：**只在第一次点「开始估值」时铸一次**。
    *
-   * 用户「取消提取」或「返回修改」后旧响应才回来的话，用 `requestId` 一比就丢掉它 ——
-   * 否则迟到的响应会把抽屉重新弹出来（用户明明已经退出了）。
+   * 超时重试必须带着它原样再发一次 —— Host 按它复用同一个父会话；每次重试都换一个
+   * requestId 就会在宿主侧变成"新的一次交接"，于是留下不止一个空会话。
    */
-  intakeRequestId: number
+  handoffRequestId: string
   /**
-   * 三件交付件的存在性（宿主 `valuation-status` 报的事实）。
+   * 长等待提示（15 秒后出现）。
    *
-   * 它让"部分结果"可判：轮次失败了，但底稿 / 报告已经产出一部分 —— 那些东西要看得见，
-   * 只是不能当正式结论。
+   * 它不是错误，只是"这一步确实要久一点 + 现在能做什么"。定时器句柄由 controller 管，
+   * 这里只存事实，界面据此多画一行说明。
    */
-  artifacts: { html: boolean; xlsx: boolean; json: boolean }
-  /**
-   * 失败发生在那一个阶段（宿主报的最后一个阶段）。
-   *
-   * §4 要求失败时给出"具体原因、失败阶段和可执行动作"。阶段是**宿主报的**真实阶段，
-   * 不是客户端猜的 —— 没拿到就是空串，那时界面只说原因。
-   */
-  failedStage: string
-  /** 失败原因（人话）。 */
+  slowWait: '' | 'auth' | 'prepare' | 'create'
+  /** 最近一次成功交接的父会话（再次进入这一页时给一个中性入口）。 */
+  recentSessionId: string
   error: string
-  /** 需要用户在默认浏览器登录的来源（`browser-login-required` 阶段）。 */
-  needsLogin: string[]
+  notice: string
 }
 
 export function initialValuationState(patch: Partial<ValuationPageState> = {}): ValuationPageState {
   return {
+    // 协议 39：**进页面就是草稿**，不先探测案例来源 —— 登录是可选用能力，
+    // 让它决定首帧画什么，等于又把它变回门禁（用户口径：先允许整理资料）。
     phase: 'draft',
-    valuationId: '',
+    login: { check: 'idle', gate: null, rows: [], sites: [], loginJobs: [], error: '', job: null },
     selection: [],
     files: [],
+    fileRows: [],
+    scanSkipped: [],
+    excluded: [],
+    lastRemoval: null,
     scanState: 'idle',
     scanError: '',
-    method: 'auto',
+    truncated: false,
+    fileCount: 0,
+    overLimit: false,
+    readableCount: 0,
+    limit: 30,
+    // 新草稿里两个必填项都**未选择**：不替用户默认「自动判定」，也不默认房地产。
+    method: '',
+    assetType: '',
     baseDate: '',
+    purpose: '',
+    valueType: '',
     supplementalPrompt: '',
-    intake: null,
-    progress: { stage: '', detail: '', completed: 0, total: 0 },
-    providerStates: {},
-    providerCheck: 'idle',
-    providerLoginUrls: {},
-    sessionId: '',
-    casePath: '',
-    result: null,
-    artifacts: { html: false, xlsx: false, json: false },
-    failedStage: '',
-    intakeStage: '',
-    intakeRequestId: 0,
+    promptOverLimit: false,
+    preview: null,
+    projectId: '',
+    parentSessionId: '',
+    dispatchAccepted: false,
+    creationDisposition: 'unknown',
+    reused: false,
+    openFailed: false,
+    retrySameSession: false,
+    prepareRequestId: 0,
+    handoffRequestId: '',
+    slowWait: '',
+    recentSessionId: '',
     error: '',
-    needsLogin: [],
+    notice: '',
     ...patch,
   }
 }
@@ -396,429 +364,1126 @@ function accept(state: ValuationPageState, patch: Partial<ValuationPageState>): 
   return { ok: true, error: '', state: { ...state, ...patch } }
 }
 
+// ── 阶段判据（界面禁用与状态机拒绝共用同一处）────────────────────────────────
+
+/**
+ * 这个阶段能不能改输入 —— **唯一**判据。
+ *
+ * 只有 `draft` 能改：`preparing-confirmation` / `confirmation` / `creating-session` 都在
+ * "已经按当前输入往下走"的路上，改了会让"正在按什么输入准备"变得说不清；
+ * `handoff-failed` 也不能改 —— 那一屏的主操作是**重试**（或打开已建好的会话），
+ * 不是把输入改掉重来（那会变成第二个项目目录）。
+ */
+export function canEditInputs(phase: ValuationPagePhase): boolean {
+  return phase === 'draft'
+}
+
+/** 不能改的时候给一句对症的话。 */
+export function inputLockedReason(phase: ValuationPagePhase): string {
+  if (phase === 'preparing-confirmation') return zhCN.valuationPrepareLocked
+  if (phase === 'confirmation') return zhCN.valuationInputLocked
+  if (phase === 'creating-session') return zhCN.valuationCreatingLocked
+  if (phase === 'handoff-failed') return zhCN.valuationHandoffLocked
+  if (phase === 'handed-off') return zhCN.valuationHandedOffLocked
+  return zhCN.valuationInputLocked
+}
+
+/** 输入工作面该不该**显示**（草稿与"正在准备确认"停在同一个表单上）。 */
+export function showsIntakeForm(phase: ValuationPagePhase): boolean {
+  return phase === 'draft' || phase === 'preparing-confirmation'
+}
+
+/**
+ * 输入工作面该不该**留在 DOM 里**（`confirmation` / `creating-session` 期间隐藏但保留）。
+ *
+ * 为什么要保留而不是卸载：抽屉打开时把整个表单卸载会丢掉**展开状态、查看全部状态、
+ * 滚动位置与焦点锚点**，关掉抽屉后员工面对的是一个被重置的表单（设计稿 §16 的"表单展示记忆"）。
+ * 隐藏 + `inert`（由抽屉负责）仍然满足"背景不可访问"，而且"焦点回到原「确认」按钮"变成
+ * 把焦点还给**同一个**元素。
+ */
+export function keepsIntakeMounted(phase: ValuationPagePhase): boolean {
+  return showsIntakeForm(phase) || showsConfirmationDrawer(phase)
+}
+
+/**
+ * 案例来源能力区该不该显示。
+ *
+ * 协议 39 起它**不是门禁屏**：能力区就长在输入工作面里（资料区下方），所以这一档
+ * 永远为 `false` —— 保留函数是为了让"门禁屏"这个概念在代码里只剩这一处可查的否定。
+ */
+export function showsAuthGate(_phase: ValuationPagePhase): boolean {
+  return false
+}
+
+/**
+ * 确认抽屉该不该显示。
+ *
+ * `creating-session` **也算**：点下「开始估值」之后抽屉必须继续开着、同一颗按钮变成
+ * 「正在创建会话…」—— 让原操作界面在点击瞬间消失正是 UX-01 的缺陷。
+ */
+export function showsConfirmationDrawer(phase: ValuationPagePhase): boolean {
+  return phase === 'confirmation' || phase === 'creating-session'
+}
+
+/** 页面顶部那一行"现在在等谁"。 */
+export function phaseHintOf(phase: ValuationPagePhase): string {
+  switch (phase) {
+    case 'draft': return zhCN.valuationPhaseDraft
+    case 'preparing-confirmation': return zhCN.valuationPhasePreparing
+    case 'confirmation': return zhCN.valuationPhaseConfirmation
+    case 'creating-session': return zhCN.valuationPhaseCreating
+    case 'handoff-failed': return zhCN.valuationPhaseHandoffFailed
+    case 'handed-off': return zhCN.valuationPhaseHandedOff
+    case 'stale-host': return zhCN.valuationPhaseStale
+  }
+}
+
+/**
+ * 交接失败/结果未知时的结构化标题（UX-17）。
+ *
+ * 标题来自**结构化事实**，不是一句泛化的阶段话：会话已经建出来时还说"未创建"就是自相矛盾。
+ */
+export function handoffTitleOf(state: ValuationPageState): string {
+  if (state.creationDisposition === 'created' || state.parentSessionId !== '') {
+    return zhCN.valuationHandoffCreatedTitle
+  }
+  if (state.creationDisposition === 'not-created') return zhCN.valuationHandoffNotCreatedTitle
+  return zhCN.valuationHandoffUnknownTitle
+}
+
+/** 交接失败时的解释句（与标题配对，不再叠一句泛化阶段说明）。 */
+export function handoffNoteOf(state: ValuationPageState): string {
+  if (state.creationDisposition === 'created' || state.parentSessionId !== '') {
+    return zhCN.valuationHandoffCreatedNote
+  }
+  if (state.creationDisposition === 'not-created') return zhCN.valuationHandoffNotCreatedNote
+  return zhCN.valuationHandoffUnknownNote
+}
+
+/**
+ * 「返回修改」是否可用：**只有 Host 明确说"没有创建"**才允许。
+ *
+ * 结果未知或已有会话时先完成同一轮恢复 —— 直接回草稿会生成第二个项目目录。
+ */
+export function canReturnToEdit(state: ValuationPageState): boolean {
+  if (state.phase === 'confirmation' || state.phase === 'preparing-confirmation') return true
+  if (state.phase !== 'handoff-failed') return false
+  return state.creationDisposition === 'not-created'
+}
+
+/** 「重试创建」与「恢复交接」共用同一颗按钮：复用 requestId 就是恢复。 */
+export function handoffRetryLabelOf(state: ValuationPageState): string {
+  if (state.creationDisposition === 'not-created') return zhCN.valuationHandoffRetryCreate
+  if (state.creationDisposition === 'created' || state.parentSessionId !== '') {
+    return zhCN.valuationHandoffRetryDispatch
+  }
+  return zhCN.valuationHandoffRecover
+}
+
+/**
+ * 「确认」为什么不能点（空串 = 能点）。
+ *
+ * 每一条都必须**可见地**说出来，而不是只把按钮画灰：用户点不动又不知道为什么，
+ * 唯一的结果是把面板关掉重开。
+ *
+ * 优先级：清单完整性 → 资料有效性 → **资产类型** → **评估方法** → 文本校验（设计稿 §9.1）。
+ * 两个必填项紧挨着：先决定"做哪一种资产"，再决定"用什么方法" —— 它们的错误提示也挨着出现，
+ * 用户不会在同一屏的上下两头来回找。
+ */
+export function startDisabledReason(state: ValuationPageState): string {
+  if (!canEditInputs(state.phase)) return inputLockedReason(state.phase)
+  if (state.truncated) return zhCN.valuationActionDisabledTruncated
+  if (state.scanState === 'failed') return zhCN.valuationActionSummaryScanFailed
+  if (state.selection.length === 0) return zhCN.valuationActionDisabledNoFiles
+  if (state.scanState === 'scanning') return zhCN.valuationScanRunning
+  if (state.overLimit) {
+    return zhCN.valuationTooManyFiles
+      .replace('{count}', String(state.fileCount))
+      .replace('{limit}', String(state.limit))
+  }
+  if (state.fileCount === 0) return zhCN.valuationActionDisabledNoFiles
+  if (state.readableCount === 0) return zhCN.valuationActionDisabledUnreadable
+  // 两个必填项都由用户主动选：未选不能确认，也**不替**用户默认成房地产 / 自动判定。
+  if (state.assetType === '') return zhCN.valuationActionDisabledNoAssetType
+  if (!isKnownAssetType(state.assetType)) {
+    return zhCN.valuationAssetTypeUnknown.replace('{value}', state.assetType)
+  }
+  if (chosenMethod(state.method) === null) return zhCN.valuationActionDisabledNoMethod
+  if (state.promptOverLimit || state.supplementalPrompt.length > VALUATION_PROMPT_MAX_LENGTH) {
+    return zhCN.valuationPromptTooLong.replace('{limit}', String(VALUATION_PROMPT_MAX_LENGTH))
+  }
+  return ''
+}
+
+/** 底栏左侧的"当前可行动摘要"（数量明细留在资料区，不在这里重复）。 */
+export function actionSummaryOf(state: ValuationPageState): string {
+  if (state.phase === 'preparing-confirmation') return zhCN.valuationActionSummaryPreparing
+  if (state.scanState === 'scanning') return zhCN.valuationActionSummaryScanning
+  if (state.scanState === 'failed') return zhCN.valuationActionSummaryScanFailed
+  if (state.selection.length === 0 || state.fileCount === 0) return zhCN.valuationActionSummaryEmpty
+  if (state.overLimit) {
+    return zhCN.valuationActionSummaryOverLimit
+      .replace('{count}', String(state.fileCount))
+      .replace('{limit}', String(state.limit))
+  }
+  return zhCN.valuationActionSummaryReady.replace('{count}', String(state.fileCount))
+}
+
+/** 资料区的"已纳入 N / limit 份；跳过 M 项"（数量明细只出现在这里）。 */
+export function scopeCountsText(state: ValuationPageState): string {
+  const base = zhCN.valuationFilesIncluded
+    .replace('{count}', String(state.fileCount))
+    .replace('{limit}', String(state.limit))
+  const skip = state.scanSkipped.length
+  return skip === 0 ? base : `${base}；${zhCN.valuationFilesSkippedCount.replace('{count}', String(skip))}`
+}
+
+export function canStart(state: ValuationPageState): boolean {
+  return state.phase === 'draft' && startDisabledReason(state) === ''
+}
+
+// ── 输入 ────────────────────────────────────────────────────────────────────
+
 /**
  * 改本机选择（只有能改输入的阶段允许）。
  *
- * 清掉 `files`：那是对**上一次**选择的扫描结论，选择一变它就不再是事实（留着会让界面
- * 显示已经移除的文件）。
+ * 清掉 `files` / 真实文件行与份数：那是对**上一次**选择的扫描结论，选择一变它就不再是事实。
+ * 排除范围（`excluded`）**保留**：本期是"排除优先" —— 被移除的文件不会因为再添加一个
+ * 含它的文件夹就自动回来（设计稿 §8.4）。
  */
 export function setSelection(state: ValuationPageState, selection: readonly string[]): MutationResult {
   if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  // 同一个绝对路径重复选择：**保留第一次**（提示由调用方给），不把它记成一份失败文件。
+  // 更彻底的去重（符号链接、同内容不同路径）按 canonical 路径由 Host 负责。
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const item of selection) {
+    const path = text(item)
+    if (path === '' || seen.has(path)) continue
+    seen.add(path)
+    next.push(path)
+  }
   return accept(state, {
-    selection: selection.map((item) => text(item)).filter((item) => item !== ''),
+    selection: next,
     files: [],
+    fileRows: [],
+    scanSkipped: [],
+    fileCount: 0,
+    overLimit: false,
+    readableCount: 0,
+    truncated: false,
     scanState: 'idle',
     scanError: '',
+    error: '',
   })
 }
 
-/** 扫描开始（界面显示骨架）。 */
+/**
+ * 进入"正在重新读取清单"。
+ *
+ * **不清空旧行**：上一次的事实继续显示（标记为旧事实），主按钮临时禁用；新结果在同一次
+ * 状态更新里整组落地（设计稿 §8.6：不要先清空再出现，页面会闪）。
+ */
 export function beginScan(state: ValuationPageState): MutationResult {
   return accept(state, { scanState: 'scanning', scanError: '' })
 }
 
-/** 扫描成功：逐份事实落地。 */
-export function scanReady(state: ValuationPageState, files: readonly ValuationSelectedFileView[]): MutationResult {
-  return accept(state, { scanState: 'ready', scanError: '', files: files.map((item) => ({ ...item })) })
+export interface ScanFacts {
+  fileCount: number
+  overLimit: boolean
+  readableCount: number
+  limit: number
+  truncated?: boolean
 }
 
-/** 扫描失败：界面要说清楚是"读不出来"而不是"你还没选"。 */
+/**
+ * 扫描结果落地。
+ *
+ * `rows` 是 Host 回的**真实文件明细**；上一次已被员工移除的那些行不会被 Host 回传，
+ * 所以这里把"还不在结果里的已排除行"合并回去 —— 员工必须还能看见它们、也还能「重新纳入」。
+ */
+export function scanReady(
+  state: ValuationPageState,
+  files: readonly ValuationSelectedFileView[],
+  rows: readonly ValuationFileRowView[],
+  facts: ScanFacts,
+  skipped: readonly ValuationScanSkippedView[] = [],
+): MutationResult {
+  const incoming = rows.map((row) => ({ ...row, state: 'included' as const }))
+  const incomingPaths = new Set(incoming.map((row) => row.path))
+  const kept = state.fileRows
+    .filter((row) => row.state === 'excluded' && !incomingPaths.has(row.path))
+    .map((row) => ({ ...row }))
+  return accept(state, {
+    scanState: 'ready',
+    scanError: '',
+    files: files.map((item) => ({ ...item })),
+    fileRows: [...incoming, ...kept],
+    scanSkipped: skipped.map((item) => ({ ...item })),
+    fileCount: facts.fileCount,
+    overLimit: facts.overLimit,
+    readableCount: facts.readableCount,
+    limit: facts.limit,
+    truncated: facts.truncated === true,
+  })
+}
+
+/** 扫描失败：界面要说清楚是"读不出来"而不是"你还没选"；**保留**入口与条件。 */
 export function scanFailed(state: ValuationPageState, error: string): MutationResult {
-  return accept(state, { scanState: 'failed', scanError: error })
+  return accept(state, {
+    scanState: 'failed', scanError: error, fileCount: 0, readableCount: 0, truncated: false,
+  })
 }
 
-/** 改方法。 */
-export function setMethod(state: ValuationPageState, method: ValuationMethod): MutationResult {
+// ── 资料范围：逐个移除 / 移除文件夹 / 撤销 / 重新纳入（§8.4）──────────────────
+
+/** 撤销用的范围快照。 */
+function snapshotOf(state: ValuationPageState): ValuationScopeSnapshot {
+  return {
+    selection: [...state.selection],
+    excluded: [...state.excluded],
+    files: state.fileRows.map((row) => ({ ...row })),
+  }
+}
+
+/**
+ * 逐个移除一份文件。
+ *
+ * 它写的是 `excluded`：Host 在扫描 / 预览 / 归档三处共用同一份范围，所以"移除"是真的
+ * 不在本次范围里，而不是只从列表上藏起来。
+ */
+export function excludeFile(state: ValuationPageState, path: string): MutationResult {
   if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
-  return accept(state, { method })
+  const target = text(path)
+  const row = state.fileRows.find((item) => item.path === target)
+  if (row === undefined) return refuse(state, zhCN.valuationFilesExcludedReadd)
+  if (state.excluded.includes(target)) return refuse(state, zhCN.valuationFilesExcludedReadd)
+  return accept(state, {
+    excluded: [...state.excluded, target],
+    fileRows: state.fileRows.map((item) => (item.path === target ? { ...item, state: 'excluded' } : item)),
+    lastRemoval: { kind: 'file', name: row.name, scope: snapshotOf(state) },
+    error: '',
+  })
+}
+
+/**
+ * 重新纳入一份之前被移除的文件（本期"排除优先"，所以需要一个显式动作）。
+ */
+export function reincludeFile(state: ValuationPageState, path: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const target = text(path)
+  if (!state.excluded.includes(target)) return refuse(state, zhCN.valuationFilesExcludedReadd)
+  return accept(state, {
+    excluded: state.excluded.filter((item) => item !== target),
+    // 行状态先按"已纳入"显示；真正的份数以紧接着那次重扫为准。
+    fileRows: state.fileRows.map((item) => (item.path === target ? { ...item, state: 'included' } : item)),
+    lastRemoval: null,
+    error: '',
+  })
+}
+
+/**
+ * 移除一个**选择入口**（真个文件夹/文件）。
+ *
+ * 同时清理只属于该入口的排除项：入口都不在范围里了，它的排除记录再留着只会在
+ * 重新添加同一路径时把文件莫名其妙地藏起来。
+ */
+export function removeSelection(state: ValuationPageState, path: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const target = text(path)
+  const row = state.files.find((item) => item.path === target)
+  if (row === undefined) return refuse(state, zhCN.valuationActionSummaryEmpty)
+  const owned = new Set(state.fileRows.filter((item) => item.parentPath === target).map((item) => item.path))
+  return accept(state, {
+    selection: state.selection.filter((item) => item !== target),
+    excluded: state.excluded.filter((item) => !owned.has(item)),
+    fileRows: state.fileRows.filter((item) => item.parentPath !== target),
+    lastRemoval: { kind: 'root', name: row.name, scope: snapshotOf(state) },
+    error: '',
+  })
+}
+
+/** 撤销最近一次移除（文件或文件夹）：原样还原那一刻的范围。 */
+export function undoRemoval(state: ValuationPageState): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const memory = state.lastRemoval
+  if (memory === null) return refuse(state, zhCN.valuationFilesExcludedReadd)
+  return accept(state, {
+    selection: [...memory.scope.selection],
+    excluded: [...memory.scope.excluded],
+    fileRows: memory.scope.files.map((row) => ({ ...row })),
+    lastRemoval: null,
+    error: '',
+  })
+}
+
+/** 准备确认时冻结范围：撤销入口必须消失（可编辑操作不进只读抽屉）。 */
+export function freezeScope(state: ValuationPageState): MutationResult {
+  return accept(state, { lastRemoval: null })
+}
+
+/**
+ * 选**资产类型**。
+ *
+ * 它是通用入口的第一个选择，也是装配哪个 Skill / 哪份入口 Wiki 的唯一依据。允许清回空串
+ * （"我选错了"），但**不允许**在用户没选时替它填一个默认值 —— 所以空串是合法状态，
+ * 只是不能确认。
+ *
+ * 切换资产类型**保留共用输入**（资料、目的、价值类型、基准日、补充要求）；专属条件不兼容
+ * 时由各自的方法选项与提示说明，不在这里悄悄清空用户的输入。
+ */
+export function setAssetType(state: ValuationPageState, assetType: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const value = text(assetType).trim()
+  if (value === '') return accept(state, { assetType: '' })
+  if (!(ASSET_TYPES as readonly string[]).includes(value)) {
+    return refuse(state, zhCN.valuationAssetTypeUnknown.replace('{value}', value))
+  }
+  return accept(state, { assetType: value })
+}
+
+/**
+ * 选**评估方法**。
+ *
+ * 四项都可选，但**空串与未知枚举都不是有效方法**：旧实现的判据是 `methodSupported()`，
+ * 而它恒真 —— 于是"没选"和"选了一个不存在的枚举"都能通过校验，一路走到 Host 才被拒。
+ * 现在这里就是那道校验（`''` 允许，表示清回未选）。
+ */
+export function setMethod(state: ValuationPageState, method: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const value = text(method).trim()
+  if (value === '') return accept(state, { method: '' })
+  if (!isValuationMethod(value)) {
+    return refuse(state, zhCN.valuationMethodUnknown.replace('{value}', value))
+  }
+  if (!methodSupported(value)) return refuse(state, zhCN.valuationMethodUnsupported)
+  return accept(state, { method: value })
 }
 
 /**
  * 改基准日。
  *
- * 只接受空串或 `YYYY-MM-DD`：其余一律拒绝而不是"尽量解析" —— 基准日错一天，
- * 交易日期修正与收益年限都跟着错，而那是看不出来的。
+ * 只接受空串或**真实存在**的 `YYYY-MM-DD`：其余一律拒绝而不是"尽量解析" —— 基准日错一天，
+ * 交易日期修正与收益年限都跟着错，而那是看不出来的。形状对但日期不存在的（`2026-02-30`）
+ * 同样必须拒绝：`new Date('2026-02-30')` 会悄悄滚到 3 月 2 日，这正是要断掉的那类静默归一。
  */
 export function setBaseDate(state: ValuationPageState, baseDate: string): MutationResult {
   if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
   const value = text(baseDate).trim()
-  if (value !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(value)) return refuse(state, zhCN.valuationBaseDateShape)
+  if (value === '') return accept(state, { baseDate: '' })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !isRealCalendarDate(value)) {
+    return refuse(state, zhCN.valuationBaseDateShape)
+  }
   return accept(state, { baseDate: value })
 }
 
-/** 改补充提示词。 */
+/**
+ * `YYYY-MM-DD` 是不是一个**真实存在**的日历日期。
+ *
+ * 逐字段回读而不是 `Date.parse`：后者对越界日期做溢出归一（`2026-02-30` → 3 月 2 日），
+ * 于是"员工填错了一天"会变成"系统替他换了另一天"。这里刻意**不用** UTC 转换，
+ * 所以日期值不会因为时区前后移动一天。
+ */
+export function isRealCalendarDate(value: string): boolean {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (matched === null) return false
+  const year = Number(matched[1])
+  const month = Number(matched[2])
+  const day = Number(matched[3])
+  if (month < 1 || month > 12 || day < 1) return false
+  const daysInMonth = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return day <= (daysInMonth[month - 1] ?? 0)
+}
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+}
+
+/**
+ * 改**评估目的** / **价值类型**。
+ *
+ * 与基准日同一套口径：空串是"未指定"（合法），超长拒绝而不是截断。
+ * 不在状态机里校验业务枚举 —— 可选值清单属于业务规范，代码不发明。
+ */
+export function setPurpose(state: ValuationPageState, purpose: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const value = text(purpose).trim()
+  if (value.length > PURPOSE_MAX_LENGTH) {
+    return refuse(state, zhCN.valuationPurposeTooLong.replace('{limit}', String(PURPOSE_MAX_LENGTH)))
+  }
+  return accept(state, { purpose: value })
+}
+
+export function setValueType(state: ValuationPageState, valueType: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const value = text(valueType).trim()
+  if (value.length > VALUE_TYPE_MAX_LENGTH) {
+    return refuse(state, zhCN.valuationValueTypeTooLong.replace('{limit}', String(VALUE_TYPE_MAX_LENGTH)))
+  }
+  return accept(state, { valueType: value })
+}
+
+/**
+ * 改补充要求（原样用户输入，只受长度上限约束）。
+ *
+ * 超限时**不静默截断**：写进 `promptOverLimit` 并给一句说明，`supplementalPrompt` 保持
+ * 上一次的有效内容（粘贴一大段不该把已写好的要求吃掉）。
+ */
 export function setSupplementalPrompt(state: ValuationPageState, prompt: string): MutationResult {
   if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
-  return accept(state, { supplementalPrompt: text(prompt) })
+  const value = text(prompt)
+  if (value.length > VALUATION_PROMPT_MAX_LENGTH) {
+    const error = zhCN.valuationPromptOverLimit.replace('{limit}', String(VALUATION_PROMPT_MAX_LENGTH))
+    return { ok: false, error, state: { ...state, promptOverLimit: true, error } }
+  }
+  return accept(state, { supplementalPrompt: value, promptOverLimit: false })
 }
 
+// ── 案例来源能力（**不是门禁**） ──────────────────────────────────────────────
+
 /**
- * 开始提取（"检查并确认" → 抽屉之前的第一步）。
+ * 开始（或重新开始）一次来源能力检查。
  *
- * `requestId` 由调用方传进来（控制器按单调递增发号）：它写在 state 上，迟到的响应
- * 一比就知道自己是不是当前那一次。
+ * **不改阶段**：协议 39 起登录是可选用能力，"正在检查"不许把页面挡在草稿之外。
+ * 它只更新能力区自己的 `check`。
  */
-export function beginIntake(state: ValuationPageState, requestId: number): MutationResult {
-  if (state.selection.length === 0) return refuse(state, zhCN.valuationNeedFiles)
-  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+export function authChecking(state: ValuationPageState): MutationResult {
   return accept(state, {
-    phase: 'extracting',
-    intakeRequestId: requestId,
-    intakeStage: '',
+    login: { ...state.login, check: 'checking', error: '' },
     error: '',
-    intake: null,
+    slowWait: '',
   })
 }
 
-/**
- * 提取阶段推进（宿主报的真实阶段）。
- *
- * 只认**当前请求**的阶段：换了一次请求（重新提取）之后旧请求的阶段不能改这一轮的显示。
- */
-export function intakeStage(state: ValuationPageState, requestId: number, stage: string): MutationResult {
-  if (state.phase !== 'extracting') return refuse(state, zhCN.valuationNotInConfirmation)
-  if (requestId !== state.intakeRequestId) return refuse(state, zhCN.valuationStaleIntake)
-  return accept(state, { intakeStage: text(stage) })
+/** 已经在"正文之内"的阶段：一次复查放行时不该把页面重置回草稿。 */
+function insideBody(phase: ValuationPagePhase): boolean {
+  return phase === 'draft' || phase === 'preparing-confirmation' || phase === 'confirmation'
+    || phase === 'creating-session' || phase === 'handoff-failed' || phase === 'handed-off'
+    || phase === 'stale-host'
 }
 
-/** 提取失败：**保留**资料、方法、基准日与补充要求（用户改一句再试，不必重选一遍）。 */
-export function intakeFailed(state: ValuationPageState, error: string): MutationResult {
+/**
+ * 把本页那条登录任务与 Host 的最新任务列表对齐（UX-07）。
+ *
+ * 判据只有 `jobId`：Host 的任务列表里还有它就用**新状态**（含 `waiting-user`），
+ * 没有就把它丢掉 —— 否则一次 `running` 会被无限保留，重新检查之后界面上还挂着上一条登录。
+ */
+export function syncLoginJob(
+  job: LoginJobView | null,
+  jobs: readonly LoginJobView[],
+): LoginJobView | null {
+  if (job === null) return null
+  return jobs.find((item) => item.jobId === job.jobId) ?? null
+}
+
+/**
+ * 能力状态落地。
+ *
+ * **不再有"释放正文"这一档**：未登录 / 未知 / 该站失败都只更新能力事实，页面的阶段
+ * （草稿、确认、交接）原样保留。这样"没登录也能填完并启动"不是靠调用方自觉，而是
+ * 写不出来 —— 这个函数根本不碰 `phase`。
+ */
+export function authReady(state: ValuationPageState, view: {
+  rows: SiteRowView[]
+  sites: SiteStatusView[]
+  gate: AuthGateView
+  loginJobs: LoginJobView[]
+}): MutationResult {
   return accept(state, {
-    phase: 'failed',
-    error,
-    // 失败阶段 = 宿主最后报过的那个阶段（客户端不猜）。清掉 intakeStage，但把它留给
-    // `failedStage`，界面因此能说"在「正在提取文件内容」这一步失败"。
-    failedStage: state.intakeStage,
-    intakeStage: '',
-    progress: { stage: '', detail: '', completed: 0, total: 0 },
+    phase: insideBody(state.phase) ? state.phase : 'draft',
+    login: {
+      check: 'ready',
+      gate: view.gate,
+      rows: view.rows.map((row) => ({ ...row })),
+      sites: view.sites.map((site) => ({ ...site })),
+      loginJobs: view.loginJobs.map((job) => ({ ...job })),
+      error: '',
+      // 按 jobId 对齐：Host 已经不认这条任务了就不再显示它。
+      job: syncLoginJob(state.login.job, view.loginJobs),
+    },
+    error: '',
+    slowWait: '',
+  })
+}
+
+/** 能力检查**没查成**（清单读不出来 / 浏览器不可用）：如实说不可用，并给"重新检查"。 */
+export function authFailed(state: ValuationPageState, error: string): MutationResult {
+  return accept(state, {
+    phase: insideBody(state.phase) ? state.phase : 'draft',
+    login: {
+      ...state.login,
+      check: 'ready',
+      error,
+      gate: {
+        released: false, required: [], optional: [], reason: error, unavailable: true, checkedAt: '',
+      },
+    },
+    error: '',
+    slowWait: '',
   })
 }
 
 /**
- * 部分结果（§4「部分结果」）。
+ * 检查**等超时**（页面等待结束，不是 Host 失败）。
  *
- * 轮次没跑完（失败 / 取消），但已经有交付件产出：把宿主给的那份结果落下来，
- * **阶段保持不变** —— 它不是 `completed`，结果页会以此打上"阶段结果"的标记、
- * 不制造"已给出正式结论"的观感。
+ * 措辞只说"这次检查没等到结论"：不能宣称 Host 那边的操作已经被取消，也不能说来源未登录。
  */
-export function applyPartialResult(state: ValuationPageState, result: ValuationResultView): MutationResult {
-  return accept(state, { result, error: state.error })
+export function authTimedOut(state: ValuationPageState): MutationResult {
+  return accept(state, {
+    phase: insideBody(state.phase) ? state.phase : 'draft',
+    login: {
+      ...state.login,
+      check: 'ready',
+      error: zhCN.valuationAuthCheckTimedOut,
+      gate: {
+        released: false, required: [], optional: [],
+        reason: zhCN.valuationAuthCheckTimedOut, unavailable: true, checkedAt: '',
+      },
+    },
+    error: '',
+    slowWait: '',
+  })
 }
 
-/** 交付件存在性落地（宿主事实）。 */
-export function applyArtifacts(
+/** 长等待提示（15 秒）：只是"这一步确实要久一点 + 现在能做什么"。 */
+export function markSlowWait(state: ValuationPageState, which: '' | 'auth' | 'prepare' | 'create'): MutationResult {
+  return accept(state, { slowWait: which })
+}
+
+/** 打开验证窗口的结果：`opened` **只**说明窗口开了，不说明验证已经通过。 */
+export function verificationOpened(state: ValuationPageState, view: {
+  ok: boolean
+  error: string
+  opened: boolean
+  siteId: string
+}): MutationResult {
+  const label = state.login.rows.find((row) => row.siteId === view.siteId)?.label ?? view.siteId
+  if (view.ok && view.opened) {
+    return accept(state, {
+      login: { ...state.login, error: '' },
+      notice: zhCN.valuationAuthVerifyOpened.replace('{label}', label),
+      error: '',
+    })
+  }
+  const reason = view.error === '' ? zhCN.valuationAuthVerifyFailed : view.error
+  return accept(state, {
+    login: { ...state.login, error: reason },
+    error: '',
+    notice: '',
+  })
+}
+
+/** 登录任务受理（`reused` = 复用正在跑的那一条）。 */
+export function loginStarted(state: ValuationPageState, view: {
+  ok: boolean
+  error: string
+  jobId: string
+  reused: boolean
+  job: LoginJobView | null
+}): MutationResult {
+  const siteId = view.job?.siteId ?? state.login.job?.siteId ?? ''
+  const label = state.login.rows.find((row) => row.siteId === siteId)?.label ?? siteId
+  if (!view.ok) {
+    return accept(state, { login: { ...state.login, error: view.error }, error: view.error, notice: '' })
+  }
+  return accept(state, {
+    login: { ...state.login, job: view.job, error: '' },
+    notice: (view.reused ? zhCN.valuationAuthLoginReused : zhCN.valuationAuthLoginStarted)
+      .replace('{label}', label),
+    error: '',
+  })
+}
+
+/** 取消本页发起的那一条登录任务（权威结论仍由下一次 preflight 给）。 */
+export function loginCancelled(state: ValuationPageState): MutationResult {
+  return accept(state, { login: { ...state.login, job: null }, notice: '' })
+}
+
+// ── 准备确认（「确认」） ─────────────────────────────────────────────────────
+
+export function beginPrepare(state: ValuationPageState, requestId: number): MutationResult {
+  const reason = startDisabledReason(state)
+  if (reason !== '') return refuse(state, reason)
+  return accept(state, {
+    phase: 'preparing-confirmation',
+    prepareRequestId: requestId,
+    preview: null,
+    // 冻结范围：可编辑操作（撤销）不许带进只读抽屉（设计稿 §8.4）。
+    lastRemoval: null,
+    error: '',
+    notice: '',
+    slowWait: '',
+  })
+}
+
+/**
+ * 归档预览落地 → 打开只读确认抽屉。
+ *
+ * ## 为什么 `ok:true` 还不够
+ *
+ * 抽屉里的资产类型与方法是**本次 Host 核对的事实**，不是草稿的回声。所以一份"成功"回包
+ * 只要缺资产类型 / 方法，或者回显与本次提交不一致，就不是一次可信的核对结果：
+ * 旧实现会把草稿里的旧方法原样填进去（`?? state.method`），于是抽屉显示的条件与被冻结的
+ * 输入可能根本不是同一份。现在这两种情形都返回**可恢复错误**并留在草稿（输入一个字不动）。
+ */
+export function prepareReady(
   state: ValuationPageState,
-  artifacts: { html: boolean; xlsx: boolean; json: boolean },
+  requestId: number,
+  preview: ValuationPreviewView,
 ): MutationResult {
-  return accept(state, { artifacts: { ...artifacts } })
-}
-
-/** 已经产出**至少一件**交付件（"部分结果"的判据之一）。 */
-export function hasAnyArtifact(state: ValuationPageState): boolean {
-  return state.artifacts.html || state.artifacts.xlsx || state.artifacts.json
-}
-
-/**
- * 提取超时：同样是可恢复的失败，但说明**等待**结束了、宿主可能还在跑。
- *
- * 不谎称"宿主已停止"：客户端就是不再等它了，那一轮要不要继续由用户在宿主侧决定。
- */
-export function intakeTimedOut(state: ValuationPageState): MutationResult {
-  return accept(state, {
-    phase: 'failed',
-    error: zhCN.valuationIntakeTimeout,
-    intakeStage: '',
-    progress: { stage: '', detail: '', completed: 0, total: 0 },
+  if (!isCurrentPrepare(state, requestId)) return refuse(state, zhCN.valuationStaleIntake)
+  if (preview.ok !== true) {
+    return accept(state, {
+      phase: 'draft',
+      prepareRequestId: 0,
+      preview: null,
+      error: preview.error || zhCN.valuationIntakeFailed,
+    })
+  }
+  const recover = (error: string): MutationResult => accept(state, {
+    phase: 'draft', prepareRequestId: 0, preview: null, error, slowWait: '',
   })
-}
-
-/** 「取消提取」：回到可编辑的草稿态，**保留**资料与补充要求。 */
-export function cancelIntake(state: ValuationPageState): MutationResult {
-  if (state.phase !== 'extracting') return refuse(state, zhCN.valuationNotExtracting)
-  return accept(state, {
-    phase: 'draft',
-    intakeRequestId: 0,
-    intakeStage: '',
-    error: '',
-    intake: null,
-  })
-}
-
-/**
- * 提取完成 → 打开只读确认抽屉。
- *
- * **不创建估值会话**：抽屉只是让人核对，确认那一步才动会话（方案 §5.4）。
- */
-export function intakeReady(state: ValuationPageState, intake: ValuationIntakeView): MutationResult {
+  const verifiedMethod = chosenMethod(preview.methodRequest)
+  if (!isKnownAssetType(preview.assetType) || verifiedMethod === null) {
+    return recover(zhCN.valuationPreviewIncomplete)
+  }
+  if (preview.assetType !== state.assetType || verifiedMethod !== state.method) {
+    return recover(zhCN.valuationPreviewMismatch)
+  }
   return accept(state, {
     phase: 'confirmation',
-    intake,
-    valuationId: intake.valuationId || state.valuationId,
-    casePath: intake.casePath,
-    method: isValuationMethod(intake.method) ? intake.method : state.method,
-    // 提取结束：阶段文字收掉，抽屉里的东西才是现在的事实。
-    intakeStage: '',
-    scanState: 'ready',
-    // 来源探测**还没开始**（§11.2）：先把宿主给的三行落下来（状态一律"尚未检查"），
-    // 探测由控制器随后异步发起。先落下来是为了让"探测失败"也能逐家写出「无法检查」。
-    providerCheck: intake.providers.length === 0 ? 'idle' : 'checking',
-    providerStates: Object.fromEntries(intake.providers.map((item) => [item.id, {
-      state: item.state === '' ? 'unknown' : item.state, attempts: 0, detail: item.detail,
-    }])),
-    providerLoginUrls: Object.fromEntries(intake.providers.flatMap((item) => (
-      item.loginUrl === undefined || item.loginUrl === '' ? [] : [[item.id, item.loginUrl]]
-    ))),
+    prepareRequestId: 0,
+    preview,
+    projectId: preview.projectId || state.projectId,
+    // 资产类型与方法**逐字**取自 Host 回包（已在上面的校验里确认过是本次提交的那一份）。
+    assetType: preview.assetType,
+    method: verifiedMethod,
+    baseDate: preview.baseDate ?? state.baseDate,
+    // 评估目的 / 价值类型：Host 回 `null` 就是"未指定"（**不回填**草稿里的旧值，
+    // 否则"清空"会被一次预览悄悄还原成上一轮的结论）。
+    purpose: preview.purpose ?? '',
+    valueType: preview.valueType ?? '',
+    supplementalPrompt: preview.supplementalPrompt,
     error: '',
+    slowWait: '',
   })
 }
 
-/** 外部来源预检的结论落地（逐家更新，不影响资料确认信息）。 */
-export function providerCheckReady(
-  state: ValuationPageState,
-  providers: readonly ValuationProviderView[],
-): MutationResult {
-  if (providers.length === 0) return accept(state, { providerCheck: 'done' })
+/** 准备确认失败（Host 拒绝 / 网络）：回到可编辑草稿并**保留**全部输入。 */
+export function prepareFailed(state: ValuationPageState, requestId: number, error: string): MutationResult {
+  if (!isCurrentPrepare(state, requestId)) return refuse(state, zhCN.valuationStaleIntake)
   return accept(state, {
-    providerCheck: 'done',
-    providerStates: Object.fromEntries(providers.map((item) => [item.id, {
-      state: item.state, attempts: 0, detail: item.detail,
-    }])),
-    providerLoginUrls: {
-      ...state.providerLoginUrls,
-      ...Object.fromEntries(providers.flatMap((item) => (
-        item.loginUrl === undefined || item.loginUrl === '' ? [] : [[item.id, item.loginUrl]]
-      ))),
-    },
+    phase: 'draft', prepareRequestId: 0, preview: null, error, slowWait: '',
   })
-}
-
-/** 外部来源预检失败：如实记下来（不谎称"已登录"），抽屉里那几行显示"无法检查"。 */
-export function providerCheckFailed(state: ValuationPageState, error: string): MutationResult {
-  return accept(state, {
-    providerCheck: 'done',
-    providerStates: Object.fromEntries(Object.keys(state.providerStates).map((id) => [id, {
-      state: 'unknown', attempts: 0, detail: error,
-    }])),
-  })
-}
-
-/** 「返回修改」：回到表单，并**丢掉**上一次的确认数据（要重新生成快照）。 */
-export function backToEdit(state: ValuationPageState): MutationResult {
-  if (state.phase !== 'confirmation') return refuse(state, zhCN.valuationNotInConfirmation)
-  return resetToDraft(state)
 }
 
 /**
- * 「取消」：从任何阶段回到取消态。
+ * 「返回修改」：丢掉这一次预览（下一次「确认」会铸一个新的 requestId）。
  *
- * `extracting` 也是可取消的（§11.4）：那一步会同时作废在途的提取请求，
- * 所以这里一并把 `intakeRequestId` 清掉 —— 旧响应回来时对不上号，自然被丢掉。
+ * `handoff-failed` 只有在 Host **明确说没有创建会话**时才允许走这里（UX-06）：
+ * 结果未知时回草稿会生成第二个项目目录。
  */
-export function cancelValuation(state: ValuationPageState): MutationResult {
-  if (state.phase === 'completed') return refuse(state, zhCN.valuationAlreadyCompleted)
-  return accept(state, { phase: 'cancelled', error: '', intakeRequestId: 0, intakeStage: '' })
-}
-
-/** 返回可编辑的草稿态并作废在途请求（「返回修改」「重新提取」共用）。 */
-export function resetToDraft(state: ValuationPageState): MutationResult {
+export function backToEdit(state: ValuationPageState): MutationResult {
+  if (!canReturnToEdit(state)) {
+    return refuse(state, state.phase === 'handoff-failed'
+      ? zhCN.valuationHandoffFrozen
+      : zhCN.valuationNotInConfirmation)
+  }
   return accept(state, {
     phase: 'draft',
-    intake: null,
-    intakeRequestId: 0,
-    intakeStage: '',
+    preview: null,
+    prepareRequestId: 0,
+    handoffRequestId: '',
+    // 新建一轮草稿不再持有上一轮的会话身份（最近会话入口另行保留）。
+    parentSessionId: state.phase === 'handoff-failed' ? '' : state.parentSessionId,
+    creationDisposition: 'unknown',
+    dispatchAccepted: false,
+    retrySameSession: false,
     error: '',
+    notice: '',
+    slowWait: '',
   })
 }
 
-/** 这次响应是不是当前请求的（迟到的响应必须被丢掉）。 */
-export function isCurrentIntake(state: ValuationPageState, requestId: number): boolean {
-  return requestId !== 0 && state.intakeRequestId === requestId
+/** 这次响应是不是**当前**那一次准备（迟到的响应必须被丢掉）。 */
+export function isCurrentPrepare(state: ValuationPageState, requestId: number): boolean {
+  return requestId !== 0 && state.prepareRequestId === requestId
 }
 
-/** 「确认并开始估值」：确认后输入冻结，页面转入自动运行。 */
-export function confirmAndStart(state: ValuationPageState, patch: { sessionId?: string; casePath?: string; digest?: string } = {}): MutationResult {
-  if (state.phase !== 'confirmation' || state.intake === null) return refuse(state, zhCN.valuationNotInConfirmation)
+// ── 交接（「开始估值」） ─────────────────────────────────────────────────────
+
+/**
+ * 开始（或重试）一次交接。
+ *
+ * `requestId` 由调用方给：第一次铸号后写进 state，**重试时原样再用一次** ——
+ * Host 按它复用同一个父会话。
+ */
+export function beginCreate(state: ValuationPageState, requestId: string): MutationResult {
+  if (state.preview === null) return refuse(state, zhCN.valuationNotInConfirmation)
+  if (state.phase !== 'confirmation' && state.phase !== 'handoff-failed') {
+    return refuse(state, inputLockedReason(state.phase))
+  }
+  // 已经建出会话、或结果未知时，"重试"是**恢复同一轮**（同一个 requestId），不是新一轮。
   return accept(state, {
-    phase: 'queued',
-    sessionId: text(patch.sessionId) || state.sessionId,
-    casePath: text(patch.casePath) || state.casePath,
+    phase: 'creating-session',
+    handoffRequestId: requestId,
     error: '',
-    progress: { stage: zhCN.valuationStageQueued, detail: '', completed: 0, total: 4 },
+    notice: '',
+    slowWait: '',
   })
-}
-
-export interface StatusPatch {
-  phase: ValuationPhase
-  artifacts?: { html: boolean; xlsx: boolean; json: boolean }
-  progress?: ValuationProgressView
-  providerStates?: Record<string, { state: string; attempts: number; detail: string }>
-  sessionId?: string
-  casePath?: string
-  error?: string
-  needsLogin?: readonly string[]
 }
 
 /**
- * 落地一次 Host 状态。
+ * 交接成功：会话已建、指令已受理 → 立刻导航。
  *
- * `stale-host` **不覆盖**：协议不匹配时页面停在过期态，直到用户重启（那时任何进度都不可信）。
+ * `notice` 只覆盖"正在打开"这一小段：打开成功的那一刻 `openCreatedSession` 就把页面
+ * 交回 `resetAfterHandoff`（成功页不留）；打开失败则走 `sessionOpenFailed` 的恢复页。
  */
-export function applyStatus(state: ValuationPageState, patch: StatusPatch): MutationResult {
-  if (state.phase === 'stale-host') return refuse(state, zhCN.valuationPhaseStale)
-  // 提取阶段：宿主报的阶段就是进度区的文案（客户端不自己编，见 `intakeStage` 的说明）。
-  const stage = patch.phase === 'extracting' ? text(patch.progress?.stage) : ''
+export function handoffDone(state: ValuationPageState, receipt: ValuationHandoffView): MutationResult {
+  const sessionId = receipt.parentSessionId || state.parentSessionId
   return accept(state, {
-    phase: patch.phase,
-    intakeStage: stage,
-    artifacts: patch.artifacts ?? state.artifacts,
-    progress: patch.progress ?? state.progress,
-    providerStates: patch.providerStates ?? state.providerStates,
-    sessionId: text(patch.sessionId) || state.sessionId,
-    casePath: text(patch.casePath) || state.casePath,
-    // 失败原因**不因为一次轮询就丢掉**：宿主在 `failed` 时会回 `recordError`，但其它阶段
-    // 不回这个字段 —— 无条件覆盖会把用户刚看到的失败原因擦掉（界面只剩"原因见下"而没有原因）。
-    // 所以：宿主给了就用宿主的；没给就保留上一份；只有走到 `completed` 才清。
-    error: text(patch.error) !== '' ? text(patch.error) : (patch.phase === 'completed' ? '' : state.error),
-    needsLogin: patch.needsLogin === undefined ? [] : patch.needsLogin.map((item) => text(item)),
+    phase: 'handed-off',
+    preview: null,
+    projectId: receipt.projectId || state.projectId,
+    parentSessionId: sessionId,
+    dispatchAccepted: true,
+    creationDisposition: 'created',
+    reused: receipt.reused === true,
+    openFailed: false,
+    retrySameSession: false,
+    // 成功之后**不再保留**上一轮的失败态提示；最近会话入口供再次进入时使用。
+    recentSessionId: sessionId,
+    error: '',
+    notice: zhCN.valuationSessionCreated,
+    slowWait: '',
   })
 }
 
-/** 协议代数不匹配 → 整页进入 `stale-host`。 */
+/**
+ * 交接没成。
+ *
+ * 界面据此给动作的**唯一**判据是 Host 的 `creationDisposition`：
+ * - `not-created`：会话确定没建出来 —— 可以重试创建，也可以返回修改；
+ * - `created`：会话已经建好、只是固定指令没发出去 —— 重试要发回**同一个会话**；
+ * - `unknown`：回执没拿到 —— 只能恢复同一轮，**不许**回草稿生成第二个项目。
+ *
+ * 缺字段时按 `unknown` 处理：默认值必须偏向安全的一侧。
+ */
+export function handoffFailed(
+  state: ValuationPageState,
+  receipt: Partial<ValuationHandoffView>,
+  error: string,
+): MutationResult {
+  const sessionId = text(receipt.parentSessionId) || state.parentSessionId
+  const raw = text(receipt.creationDisposition)
+  const disposition: CreationDisposition = raw === 'not-created' || raw === 'created' || raw === 'unknown'
+    ? raw
+    : (sessionId === '' ? 'unknown' : 'created')
+  return accept(state, {
+    phase: 'handoff-failed',
+    projectId: text(receipt.projectId) || state.projectId,
+    parentSessionId: sessionId,
+    dispatchAccepted: false,
+    creationDisposition: disposition,
+    reused: receipt.reused === true,
+    // "重试要发回同一条会话"是**会话存在**的事实（与判据分开）：`unknown` 时也可能已经建出
+    // 会话来了，重试同样必须复用它。能不能「返回修改」只看 `creationDisposition`。
+    retrySameSession: sessionId !== '',
+    error,
+    notice: '',
+    slowWait: '',
+  })
+}
+
+/** 自动打开失败：会话**已经建好了**，只是没跳到它上面。 */
+export function sessionOpenFailed(state: ValuationPageState, error: string): MutationResult {
+  return accept(state, {
+    phase: 'handed-off',
+    openFailed: true,
+    creationDisposition: 'created',
+    error: `${zhCN.valuationSessionOpenFailed}：${error}`,
+    notice: '',
+  })
+}
+
+/**
+ * 交接这一轮结束、**跳转已经发生**：清掉上一轮交接的痕迹，回到**新的草稿**。
+ *
+ * 两个入口共用它：成功跳转之后立刻调用（页面因此不会停在"估值会话已创建，正在打开…"
+ * 那张死页上），以及再次进入估值页时。
+ *
+ * 成功跳转之后所有页面请求与计时器都停了，这一页不该留着上一轮的状态看板。
+ * `recentSessionId` 是唯一被留下来的东西：它只是一个中性入口，不读执行进度、不读交付件。
+ *
+ * **资产类型一起清回未选择**：下一轮是全新的一次估值，替用户保留上一轮的资产类型
+ * 等于让他"以为已经选过了"。
+ */
+export function resetAfterHandoff(state: ValuationPageState): MutationResult {
+  return accept(state, {
+    phase: 'draft',
+    selection: [],
+    files: [],
+    fileRows: [],
+    scanSkipped: [],
+    excluded: [],
+    lastRemoval: null,
+    scanState: 'idle',
+    scanError: '',
+    truncated: false,
+    fileCount: 0,
+    overLimit: false,
+    readableCount: 0,
+    // 开始新一轮：两个必填项**一起**清回未选择。
+    method: '',
+    assetType: '',
+    baseDate: '',
+    purpose: '',
+    valueType: '',
+    supplementalPrompt: '',
+    promptOverLimit: false,
+    preview: null,
+    projectId: '',
+    parentSessionId: '',
+    dispatchAccepted: false,
+    creationDisposition: 'unknown',
+    reused: false,
+    openFailed: false,
+    retrySameSession: false,
+    prepareRequestId: 0,
+    handoffRequestId: '',
+    slowWait: '',
+    recentSessionId: state.recentSessionId,
+    error: '',
+    notice: '',
+  })
+}
+
+/**
+ * 切走再回来时的**临时状态清理**（UX-05）。
+ *
+ * 只清"这一次页面请求的瞬时状态"，不动用户的输入，也不动 Host 那边的登录任务：
+ * - `checking` → `idle`：回来时 `checkAuth` 会重新发一次真实检查（否则守卫会认为
+ *   "已经有一次检查在途"，页面就永远停在 checking）；
+ * - `preparing-confirmation` → `draft`：在途的准备结果已经作废，回来必须是可编辑草稿，
+ *   而不是一个永远 pending 的按钮（迟到的响应由 generation 丢掉）。
+ *
+ * 交接（`creating-session`）**不在这里清理**：会话是 Host 的事务，切走不能中断它。
+ */
+export function pruneTransientState(state: ValuationPageState): ValuationPageState {
+  const checking = state.login.check === 'checking'
+  const preparing = state.phase === 'preparing-confirmation'
+  if (!checking && !preparing) return state
+  return {
+    ...state,
+    phase: preparing ? 'draft' : state.phase,
+    ...(preparing ? { prepareRequestId: 0, preview: null } : {}),
+    slowWait: '',
+    login: checking ? { ...state.login, check: 'idle' } : state.login,
+  }
+}
+
+/** 协议代数不匹配 → 整页进入 `stale-host`（那时页面上的一切事实都不可信）。 */
 export function markHostStale(state: ValuationPageState): ValuationPageState {
   return { ...state, phase: 'stale-host', error: zhCN.valuationPhaseStale }
 }
 
-/** 结果落地。 */
-export function applyResult(state: ValuationPageState, result: ValuationResultView): MutationResult {
-  return accept(state, { phase: 'completed', result, error: '', failedStage: '' })
+// ── 输入页 / 抽屉的展示辅助 ─────────────────────────────────────────────────
+
+interface ScanItemLike {
+  path?: unknown
+  name?: unknown
+  kind?: unknown
+  sizeBytes?: unknown
+  status?: unknown
+  reason?: unknown
+  fileCount?: unknown
 }
 
-/** 抽屉里的只读行（键 / 值 / 是否缺失）。 */
-export interface FieldRow {
-  key: string
-  label: string
-  value: string
-  missing: boolean
+/** 路径末段（两种分隔符都认；客户端产物不许引 `node:path`）。 */
+export function basenameOf(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== '')
+  return parts.length === 0 ? path : parts[parts.length - 1]
 }
 
-/** 页面与抽屉共用的 12 个估值要素（顺序固定，与 `references/09` 一致）。 */
-export const VALUATION_FIELD_LABELS: ReadonlyArray<{ key: string; label: string }> = [
-  { key: '坐落', label: zhCN.valuationFieldAddress },
-  { key: '房屋性质', label: zhCN.valuationFieldNature },
-  { key: '用途', label: zhCN.valuationFieldPurpose },
-  { key: '建筑面积', label: zhCN.valuationFieldArea },
-  { key: '楼层', label: zhCN.valuationFieldFloor },
-  { key: '总楼层', label: zhCN.valuationFieldTotalFloors },
-  { key: '建筑结构', label: zhCN.valuationFieldStructure },
-  { key: '建成年代', label: zhCN.valuationFieldBuiltYear },
-  { key: '权属信息', label: zhCN.valuationFieldOwnership },
-  { key: '租赁信息', label: zhCN.valuationFieldLease },
-  { key: '价格信息', label: zhCN.valuationFieldPrice },
-  { key: '已知案例线索', label: zhCN.valuationFieldCases },
-]
+/** 路径的目录部分（同上）。 */
+export function dirnameOf(path: string): string {
+  const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return index <= 0 ? '' : path.slice(0, index)
+}
 
 /**
- * 抽屉里的要素行。
+ * 把 `valuation-files-scan` 的 `items` 收成输入页的逐份视图。
  *
- * `missing` 由**值是否为空**判定，而不是由 Host 的 `missingFields` 决定 ——
- * 后者是 Host 的判据（可能因为提取器不同而不同），界面显示的是"这一行有没有内容"。
+ * 主标题是**文件名**，只有**重名**的那些才附一行目录摘要 —— 每一行都顶着一长串路径的话，
+ * 扫一眼还是认不出是哪一份。
  */
-export function fieldRowsOf(extractedFields: Record<string, string>): FieldRow[] {
-  return VALUATION_FIELD_LABELS.map(({ key, label }) => {
-    const value = text(extractedFields[key])
-    return { key, label, value, missing: value === '' }
+export function selectedFilesOf(
+  items: readonly unknown[],
+  fallbackPaths: readonly string[],
+): ValuationSelectedFileView[] {
+  const rows = items.flatMap((item) => {
+    if (item === null || typeof item !== 'object') return []
+    const raw = item as ScanItemLike
+    const path = text(raw.path)
+    if (path === '') return []
+    return [{
+      path,
+      name: text(raw.name) || basenameOf(path),
+      kind: text(raw.kind),
+      sizeBytes: typeof raw.sizeBytes === 'number' && Number.isFinite(raw.sizeBytes) ? raw.sizeBytes : 0,
+      status: text(raw.status) || 'skipped',
+      reason: text(raw.reason),
+      fileCount: typeof raw.fileCount === 'number' && Number.isFinite(raw.fileCount) ? raw.fileCount : 1,
+    }]
+  })
+  const list = rows.length > 0 ? rows : fallbackPaths.map((path) => ({
+    path, name: basenameOf(path), kind: '', sizeBytes: 0, status: 'skipped', reason: '', fileCount: 1,
+  }))
+  const duplicated = new Map<string, number>()
+  for (const row of list) duplicated.set(row.name, (duplicated.get(row.name) ?? 0) + 1)
+  return list.map((row) => ({
+    ...row,
+    dirHint: (duplicated.get(row.name) ?? 0) > 1 ? dirnameOf(row.path) : '',
+  }))
+}
+
+/** 人话字节数（`0` / 拿不到时给空串，不编"0 B"当事实）。 */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  if (bytes < 1024) return `${String(bytes)} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 大小文本：未知时说"大小待确认"，**不编 0 B**（设计稿 §8.3）。 */
+export function sizeTextOf(bytes: number): string {
+  return formatBytes(bytes) === '' ? zhCN.valuationFileSizeUnknown : formatBytes(bytes)
+}
+
+interface ScanFileLike {
+  path?: unknown
+  name?: unknown
+  kind?: unknown
+  sizeBytes?: unknown
+  parentPath?: unknown
+}
+
+/**
+ * 把 `valuation-files-scan` 的 `files[]` 收成真实文件行（协议 37）。
+ *
+ * `parentPath` 缺字段时退化成它自己：直接选中的文件就是自己的入口，
+ * 这样"移除整个入口"的判据不会因为缺一个字段而永远匹配不上。
+ */
+export function fileRowsOf(files: readonly unknown[]): ValuationFileRowView[] {
+  return files.flatMap((item) => {
+    if (item === null || typeof item !== 'object') return []
+    const raw = item as ScanFileLike
+    const path = text(raw.path)
+    if (path === '') return []
+    return [{
+      path,
+      name: text(raw.name) || basenameOf(path),
+      kind: text(raw.kind),
+      sizeBytes: typeof raw.sizeBytes === 'number' && Number.isFinite(raw.sizeBytes) ? raw.sizeBytes : 0,
+      parentPath: text(raw.parentPath) || path,
+      state: 'included' as const,
+    }]
   })
 }
 
-/**
- * 规则校验摘要（§9 第 3 条）：按规则 ID 汇总"几条通过、几条没通过"，并给出组内比值。
- *
- * 结果页要有这一段，而不是只写"案例 3 条" —— 读者要一眼看到
- * 「这三条案例按哪几条规则查过、有没有没过的」。没过的规则**列出来**（不藏）。
- */
-export function ruleCheckSummary(cases: ValuationResultView['cases']): {
-  total: number
-  adopted: number
-  rows: Array<{ ruleId: string; passed: number; failed: number; thresholds: number[] }>
-  groupRatio: number | null
-  groupOverLimit: boolean
-} {
-  const rows = new Map<string, { ruleId: string; passed: number; failed: number; thresholds: number[] }>()
-  let groupRatio: number | null = null
-  let groupOverLimit = false
-  for (const item of cases) {
-    for (const check of item.ruleChecks) {
-      if (check.ruleId === '') continue
-      const row = rows.get(check.ruleId) ?? { ruleId: check.ruleId, passed: 0, failed: 0, thresholds: [] }
-      if (check.verdict === 'pass') row.passed += 1
-      if (check.verdict === 'fail') row.failed += 1
-      if (check.threshold !== null && !row.thresholds.includes(check.threshold)) row.thresholds.push(check.threshold)
-      rows.set(check.ruleId, row)
-      if (check.ruleId === 'R-GROUP-1.2' && check.actual !== null) {
-        groupRatio = check.actual
-        groupOverLimit = check.verdict === 'fail'
-      }
-    }
-  }
-  return {
-    total: cases.length,
-    adopted: cases.filter((item) => item.usedAsComparable).length,
-    rows: [...rows.values()],
-    groupRatio,
-    groupOverLimit,
+/** 把 `valuation-files-scan` 的 `skipped[]` 收成可展示的跳过项（带原因）。 */
+export function scanSkippedOf(skipped: readonly unknown[]): ValuationScanSkippedView[] {
+  return skipped.flatMap((item) => {
+    if (item === null || typeof item !== 'object') return []
+    const raw = item as { path?: unknown; name?: unknown; reason?: unknown }
+    const path = text(raw.path)
+    const name = text(raw.name)
+    if (path === '' && name === '') return []
+    return [{ path, name: name || basenameOf(path), reason: text(raw.reason) }]
+  })
+}
+
+/** 资料类型的人话名（按扩展名判，认不出来是"未知类型"）。 */
+export function fileKindLabel(kind: string): string {
+  switch (text(kind)) {
+    case 'pdf': return zhCN.valuationKindPdf
+    case 'word': return zhCN.valuationKindWord
+    case 'excel': return zhCN.valuationKindExcel
+    case 'image': return zhCN.valuationKindImage
+    case 'text': return zhCN.valuationKindText
+    case 'archive': return zhCN.valuationKindArchive
+    default: return zhCN.valuationKindUnknown
   }
 }
 
-/**
- * 按**来源**汇总案例（§9 第 3 条：最终采用案例的**数量与来源**）。
- *
- * 只给一个总数看不出"结论压在几个站点上"：全押在一个站点、或某个站点一条都没取到，
- * 都是复核时要先知道的事。
- */
-export function caseSourceSummary(cases: ValuationResultView['cases']): Array<{
-  source: string
-  label: string
-  total: number
-  adopted: number
-}> {
-  const rows = new Map<string, { source: string; label: string; total: number; adopted: number }>()
-  for (const item of cases) {
-    const key = item.source === '' ? item.sourceLabel : item.source
-    if (key === '') continue
-    const row = rows.get(key) ?? { source: item.source, label: item.sourceLabel || item.source, total: 0, adopted: 0 }
-    row.total += 1
-    if (item.usedAsComparable) row.adopted += 1
-    // 展示名以**非空**的那个为准（有的来源只有 id）。
-    if (row.label === '' || row.label === row.source) row.label = item.sourceLabel || row.label
-    rows.set(key, row)
-  }
-  return [...rows.values()]
+/** 扩展名 → 类型（客户端不引 `node:path`，只做一次小写匹配）。 */
+export function fileKindOf(name: string): string {
+  const raw = text(name)
+  const at = raw.lastIndexOf('.')
+  if (at <= 0 || at === raw.length - 1) return 'unknown'
+  const ext = raw.slice(at).toLowerCase()
+  if (ext === '.pdf') return 'pdf'
+  if (ext === '.doc' || ext === '.docx') return 'word'
+  if (ext === '.xls' || ext === '.xlsx' || ext === '.xlsm') return 'excel'
+  if (['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.heic', '.tif', '.tiff'].includes(ext)) return 'image'
+  if (['.txt', '.md', '.csv', '.json'].includes(ext)) return 'text'
+  if (['.zip', '.rar', '.7z'].includes(ext)) return 'archive'
+  return 'unknown'
 }
 
-/** 案例表：拣出可直接作可比实例的（成交）与需要修正的（挂牌 / 询价 / 未知）。 */
-export function caseBuckets(cases: ValuationResultView['cases']): {
-  comparable: ValuationResultView['cases']
-  listed: ValuationResultView['cases']
-} {
-  return {
-    comparable: cases.filter((item) => item.usedAsComparable),
-    listed: cases.filter((item) => !item.usedAsComparable),
+/**
+ * 一份文件的**界面状态**：入口是否目录、是否被移除、扫描是否说它读不出来。
+ *
+ * 未知状态一律落到"状态待确认"（设计稿 §8.3 的最后一档）：不能把它读成
+ * "已纳入"或"待读取"，那会让员工以为这份资料没问题。
+ */
+export function fileStatusOf(
+  row: ValuationFileRowView,
+  scanState: ValuationScanState,
+): { key: string; text: string } {
+  if (row.state === 'excluded') {
+    return { key: 'removed', text: zhCN.valuationFileStatusRemoved }
+  }
+  if (scanState === 'scanning') {
+    return { key: 'reading', text: zhCN.valuationFileStatusReading }
+  }
+  return { key: 'scanned', text: zhCN.valuationFileStatusScanned }
+}
+
+/** 入口行的扫描状态文案（完整映射，不再落进"待读取"）。 */
+export function entryStatusText(status: string): string {
+  switch (text(status)) {
+    case 'scanned': return zhCN.valuationFileStatusScanned
+    case 'skipped': return zhCN.valuationFileStatusSkipped
+    case 'unreadable': return zhCN.valuationFileStatusUnreadable
+    case 'over-limit': return zhCN.valuationFileStatusOverLimit
+    case 'removed': return zhCN.valuationFileStatusRemoved
+    case 'reading': return zhCN.valuationFileStatusReading
+    default: return zhCN.valuationFileStatusUnknown
   }
 }
 
 /**
- * 证据完整不完整（§9：证据不完整时不得制造"已给出正式结论"的观感）。
+ * 归档资料的创建时间显示。
  *
- * 三种不完整：① 交付件缺件；② 有采用案例明确没留存证据；③ 宿主报了阻塞性能力缺口。
- * 这是**界面判据**，不是完成判定（完成判定在宿主侧，见 `valuation-status`）。
+ * 与 `report-audit/model/time.ts` 同一条口径：**只取字面量**，不做时区换算
+ * （Host 给的是 ISO-8601 UTC 记录，换算会让"记录里写的那一刻"在别的时区变成另一天）。
+ * `null` = `birthtime` 不可用 → 明说"创建时间未知"，**绝不**拿 mtime 冒充。
  */
-export function evidenceIncomplete(result: ValuationResultView): boolean {
-  if (!result.artifacts.html || !result.artifacts.xlsx || !result.artifacts.json) return true
-  if (result.cases.some((item) => item.usedAsComparable && (item.evidence === '' || item.evidenceMissing))) return true
-  return result.capabilityGaps.length > 0
+export function createdAtTextOf(createdAt: string | null): string {
+  const raw = text(createdAt)
+  if (raw === '') return zhCN.valuationDrawerCreatedAtUnknown
+  const matched = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(raw)
+  if (matched === null) return raw
+  const [, year, month, day, hour, minute] = matched
+  return hour === undefined || minute === undefined
+    ? `${year}-${month}-${day}`
+    : `${year}-${month}-${day} ${hour}:${minute}`
 }
 
-/** 交付件齐不齐（结果页据此决定"能不能收工"）。 */
-export function artifactsComplete(artifacts: { html: boolean; xlsx: boolean; json: boolean }): boolean {
-  return artifacts.html && artifacts.xlsx && artifacts.json
+/** 同一批资料里出现多次的文件名（抽屉据此附上短 fileId 与目录）。 */
+export function duplicateNamesOf(files: readonly { fileName: string }[]): Set<string> {
+  const seen = new Map<string, number>()
+  for (const file of files) seen.set(file.fileName, (seen.get(file.fileName) ?? 0) + 1)
+  return new Set([...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name))
 }

@@ -992,14 +992,121 @@ degraded 放行」「环境页顶部不再提供『进入报告审核』按钮�
 - **布局稳定**：目录条长在滚动容器（`.crwu-audit-tab-panel`）外面，所以它始终留在页面顶部；
   内容区是同一个元素、同一个高度，切换目录**不重建**（滚动位置与宽度都不跳）。
   审核那两页在内容区里共用一张纸（`.crwu-audit-page-paper`），纸里那层 surface 不画第二层框。
-- **草稿与运行态**：估值控制器仍在 `apply()` 层（切目录不丢已选资料 / 方法 / 基准日 / 补充要求）；
-  估值阶段轮询由**面板**持有（只在 queued / running / 等登录时开定时器），切到别的目录不会停 ——
-  顺带修掉 `controller.poll()` 从未被调用、页面永远停在「估值进行中」的缺陷。
+- **草稿与交接（协议 35 修订）**：估值控制器仍在 `apply()` 层（切目录不丢已选资料 / 方法 /
+  基准日 / 补充要求）。**面板不再持有任何估值定时器**：确认成功后只创建一个父估值会话并自动跳转，
+  进度页、结果页与完成度轮询整体删除（`ValuationProgressPane` / `ValuationResultPane` 及
+  `WorkbenchPanel` 里的估值 interval 一并移除）。面板能看到的估值状态只剩"门禁是否放行"与
+  "会话是否已交接"；分析、拆分方案、取数与测算都在父会话里，完成与否由
+  `crwu_valuation_finalize` 用真实文件判定（详见 [`development-notes.md`](development-notes.md)）。
+  **登录门禁**是唯一的例外：它只对当前门禁 job 做有界查询（手动登录的生命周期查询，
+  与已删除的"完成度轮询"不是一回事）。
+- **流程恢复与资料范围（协议 37 修订）**：确认抽屉在**创建期间继续显示**（主按钮原地变成
+  「正在创建会话…」），创建期间四条关闭路径一起失效；离开页面会清理"这一次页面请求的瞬时状态"
+  （检查中 → 可重查、准备中 → 可编辑草稿），**交接不清**。交接失败按 Host 的权威判据
+  `creationDisposition` 分三类，只有 `not-created` 允许「返回修改」，结果未知只能「恢复交接」
+  并复用同一轮请求。资料区是**两层**（入口 + 真实文件）：文件夹可展开、单个文件可移除，
+  移除写进 `excluded[]` 并被扫描 / 预览 / 归档共用（不是只过滤列表），可撤销、可重新纳入，
+  清单被安全上限截断时禁止确认。被人机验证挡住时给受控的「打开验证窗口」
+  （`valuation-browser-open-verification`，Client 只提交 `siteId`）。
+
+## 估值面板视觉与交互重构（2026-10-15 · 插件 0.0.46）
+
+用户口径（2026-10-15 面板评审，本轮已确认）：
+
+- **两个必填项紧跟资料区**：资产类型与评估方法排在**所有**可选条件与辅助能力之前；容器 ≥560px
+  并排等宽、更窄纵向堆叠。字段有统一必填标记（星号 + 读屏"必填"）与真实的标签关联。
+- **必填贯穿状态、预览与交接**：客户端草稿的方法改成**明确空态**（`auto` 不再当默认值），
+  `setMethod` 校验真实枚举；Host 回包缺/非法资产类型或方法、或**回显与本次提交不一致**时，
+  返回**可恢复错误并留在草稿**（旧实现会拿草稿里的旧方法冒充本次 Host 结论）。
+  错误只在失焦 / 清空已填值 / 触发下一步时**就地**出现短句，初次进入不是满屏红字。
+- **同一种单选下拉**：资产类型与评估方法都是 select-only combobox（浮层按触发元素 rect 定位、
+  贴底翻转、靠右夹取、限高滚动、外部点击 / Escape / Tab / 滚动 / resize 全处理；关闭先播淡出再卸载）。
+  换掉原生 `<select>` 与一排 radio，是为了让两者"看起来是同一个控件"。
+- **「案例来源」改名「信息获取辅助」**：旁边轻标「可选」，说明"用于辅助获取公开信息；未登录可继续估值。"。
+  常态是一条紧凑摘要行（名称 / 短结论 / 该做的动作），详细原因、检查时刻与登录任务按需展开；
+  未登录时补一句"未登录时将使用房天下、58 同城补充信息"。辅助区不再借用整页 `error`。
+- **确认抽屉重组**：首屏「本轮估值」两列摘要 → 补充条件 → 本次纳入的资料（主行紧凑、详情按需展开）
+  → 未纳入项（默认只给数量）→ 「信息获取辅助 · 可选」。抽屉里的资产类型与方法**只认 Host 回包**，
+  旧的能力限制文案删除；登录 / 检查 / 验证是**允许的环境操作**（旧约束"抽屉里一个能力都不许出现"作废）。
+- **一层工作纸**：估值页与审核页共用同一张 `.crwu-audit-page-paper`，业务模块自己不再画框。
+- **用词一致**：主操作「确认」→「**核对资料**」（准备中「正在准备…」），抽屉主操作仍是「开始估值」
+  （创建中「正在创建会话…」）。
+
+判据：`acceptance-0.0.46.md`（本轮的验收点与强制点）、
+`tests/unit/client/client-valuation-required.test.mjs`（必填空态、枚举校验、残缺/不一致回包、
+文件夹真收起、复制反馈恢复）、`tests/unit/client/client-valuation-select.test.mjs`（combobox 语义与
+键盘模型、浮层几何与翻转、同时只开一个、关闭动画与减少动画、监听清理）、
+`tests/unit/client/client-valuation-pane.test.mjs`（分区顺序、字段错误时机、必填标记）、
+`install/browser-check.mjs`（隔离 fixture 的完整链路：五个面板宽度 × 明暗两套 + 抽屉 + 创建期锁定）。
+
+实现落点：
+
+- **状态机**：`ValuationMethodChoice = '' | ValuationMethod`；`initialValuationState` / `resetAfterHandoff`
+  的方法空态；`setMethod` 校验枚举；`startDisabledReason` 在资产类型之后紧接着校验方法；
+  `prepareReady` 新增"完整性 + 一致性"两道校验并返回可恢复错误。
+- **新组件**：`src/client/ui/components/Select.tsx`（共享 `select-model.ts` 的 `selectIntentFor` /
+  `typeaheadIndexOf` / 模块级 `selectRegistry` 保证"同时只开一个"，`popover-model.ts` 的 `placementOf` /
+  自校准偏移）；`ui/icons.tsx` 新增 `ChevronDownIcon`。
+- **样式**：`modules/report-evaluation/styles/pane.ts` 重写（工作纸内分区、字段网格、下拉浮层、
+  轻量辅助区、抽屉摘要 / 紧凑文件行），并新增 `--crwu-valuation-field-border-hover` 语义槽（浅深各一份）。
+- **真机脚本**：`install/browser-check.mjs` 新增"隔离 fixture 的完整链路"阶段（filechooser + `page.route`
+  假回包），覆盖两个必填项顺序与几何、五个面板宽度 × 明暗两套、下拉鼠标 / 键盘流程、抽屉、
+  创建期间四条关闭路径锁定与"未创建"恢复，并把宿主自己的首次运行说明先收掉。
+
+## 通用估值入口 + 登录改为可选能力（2026-10-15 · 插件 0.0.45 · 协议 39）
+
+用户口径（本轮已确认的产品行为）：
+
+- **估值直接打开通用页面**，取消房地产二级导航。资产类型改在**页面里的下拉**里选，初始为空、由用户
+  主动选；未选不能确认，**不替**用户默认房地产。当前提供房地产入口，土地 / 机器设备不再占目录位
+  （它们由资产类型下拉承载，而不是画一个点不进去的灰标签）。
+- **页面顺序**：资料 → **资产类型 / 评估方法（两个必填项）** → 补充条件与补充要求 →
+  「信息获取辅助」区 → 核对操作。切换资产类型保留已选资料与共用条件。
+- **四种方法全部开放**：自动判断 / 市场法 / 收益法 / 成本法。旧版把收益法、成本法画成「暂未开放」，
+  那是**知识侧**的事实，不该让 UI 跟着发版；缺正文 / 参数 / 模板 / 能力一律记能力缺口。
+- **链家登录从门禁改为可选能力**：进估值页**不做任何站点探测**，先允许整理资料；页面下方的
+  **能力区**展示逐来源的真实状态（带**检查时刻**）与登录 / 验证入口；确认抽屉打开时独立再查一次。
+  未登录、未知或该站失败**都不阻止填写与整轮启动** —— 父会话收到逐来源的策略与原因，按知识库的
+  渠道与降级策略继续（链家未登录就用房天下与 58 等替代来源）。
+- **业务判据回归知识库**：交接固定指令不再复制选法顺序、可比性条件、挂牌/成交口径、来源优先级与
+  页数上限；改为"先读资产 Skill 声明的**入口 Wiki**，再按它的条件逐篇读正文"。
+
+实现落点：
+
+- **导航**：`valuation` 一级节点**自己带 `page`**、`children` 为空（`navigation.ts`）；
+  `parentNodes` 允许"自己就是页面"的一级节点，`firstEnabledChild` 在没有子项时返回它自己，
+  `module-store.landOn` 在 `parentOf === null` 时把一级目录取成节点自己。二级页签行因为子项为空
+  而整个不画（组件原本就有这一档）。
+- **页面阶段**：`ValuationPagePhase` 去掉 `checking-auth` / `auth-blocked`；初始态是 `draft`，
+  挂载时**不调用**任何来源检查；抽屉打开的那一次 effect 才查（`ReportEvaluationPane`）。
+- **状态机**：`assetType` 进 `ValuationPageState` 与 `startDisabledReason` 的判据链；
+  `methodSupported` 恒真、`valuationMethodOptions` 四项全不禁用；`authReady` / `authFailed` /
+  `authTimedOut` **不再改 `phase`**（登录不再是门禁，写不出来而不是靠纪律）。
+- **Host**：`valuation-intake` 收 `assetType` 并由 `normalizeAssetType` 拒绝未选 / 未登记值；
+  `估值输入.json` 升到 `crwu.valuation.input.v3`（含 `assetType`），项目记录同步；
+  `sites.ts` 删除"空必需集 = 全部必需"的回退；`decidePhase` 三类结论都 `canProceed: true`；
+  `gateFromStatuses` 带 `checkedAt`；`HandoffDeps.sources` 由站点清单 + 必需/可选分档推出。
+- **能力区组件**：`ValuationAuthGate` → `ValuationCapabilityArea`（类名 `crwu-valuation-auth` 不变，
+  样式与真机脚本继续选择它）。三种处置仍分开：未登录给登录、unknown 只给重新检查、
+  被挑战只给「打开验证窗口」。
+
+判据：`acceptance-0.0.45.md`（协议 39 的验收点与强制点）、
+`tests/unit/client/client-valuation-handoff.test.mjs`（无二级导航、进页面不探测、抽屉打开才查、
+能力区三种处置）、`tests/unit/client/client-valuation-pane.test.mjs`（资产类型空态 + 方法四项全开）、
+`tests/unit/host/host-valuation-browser-client.test.mjs`（空必需集、能力状态文案）、
+`tests/unit/host/host-valuation-lifecycle.test.mjs`（来源策略随交接、业务判据不再抄进指令）。
+
+### 仍未完成的真实能力（不得冒充已实现）
+
+58 同城 provider、各来源独立地区解析、Host 持久检索预算（同组同轮 10 页 / 20 条、触顶即停）、
+跨站去重与优选 3 条、多方法编排（覆盖矩阵 / auto 多选 / 任务图按方法 / 结果 Schema）、
+模板真实重算回读、会话内按候选编号复算与新版 revision —— 逐项见 `acceptance-0.0.45.md` 末节。
 
 判据：`tests/unit/client/client-module-gate.test.mjs`（元数据 + 落点 + 门禁，
 含"一次通知改完整组""默认选第一个可用页面""开发中不可进入""空目录"）、
 `tests/unit/client/client-package.test.mjs`（面板级渲染：两级页签结构与切换、空目录、开发中、
-估值页不展示环境信息、切目录不丢草稿、轮询不被切目录停掉）、
+估值页不展示环境信息、切目录不丢草稿、交接后没有 status/result 请求）、
 `tests/unit/client/client-local-audit.test.mjs`（纸里只有一层框 / 内容区是唯一滚动容器）、
 `install/browser-check.mjs`（真机：一级 44px + 3px 强调线、二级更轻的胶囊、`aria-controls`
-指向同一内容区、纸里的 surface 不画第二层框）。
+指向同一内容区、纸里的 surface 不画第二层框；估值页的计算样式、容器查询、单一 primary、
+`data-valuation-intake-host` 与「打开验证窗口」入口）。

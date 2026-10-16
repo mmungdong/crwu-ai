@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Button, Loading, LoadingBar, Notice } from '../../../ui/primitives.tsx'
 import { DeepSeekIcon, InfoIcon, RefreshIcon, SearchIcon } from '../../../ui/icons.tsx'
+import { Button as ActionButton, IconButton, TextInput } from '../../../ui/components/index.ts'
 import { WORKBENCH_CLASSES as C } from '../../../shell/consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
 import { stopPresentationOf } from '../model/stop-view.ts'
@@ -21,7 +22,7 @@ import { changesSince, freshnessOf, type AuditContextSnapshot, type SnapshotChan
 import { asRecord, textOf } from '../model/audit-summary.ts'
 import { AuditAnalysisDialog, type AuditAskState } from './AuditAnalysisDialog.tsx'
 import { WorkbenchLoading } from '../../../shell/LoadingPane.tsx'
-import { buildRows, menuActionsOf, pageCount, primaryActionOf, hasFormalResult, remoteQueryText, rowKeyOf, statusBadge, riskBadge } from '../model/row.ts'
+import { buildRows, menuActionsOf, pageCount, primaryActionOf, hasFormalResult, remoteQueryText, rowKeyOf, riskBadge } from '../model/row.ts'
 import type { AuditView, ButtonSpec, RowView, TaskRow } from '../types.ts'
 import { caseDirOf } from '../../../../shared/utils/case-dir.ts'
 
@@ -131,25 +132,19 @@ function SearchField(props: {
   onClear: () => void
 }): React.ReactElement {
   return <span className={C.searchWrap}>
-    <span className={C.searchGlyph} aria-hidden={true}><SearchIcon size={15} /></span>
-    <input
-      className={C.input}
+    <TextInput
       value={props.value}
-      placeholder={props.placeholder}
+      controlClassName={C.input}
+      startAdornment={<span className={C.searchGlyph}><SearchIcon size={15} /></span>}
+      clearable
       aria-label={props.ariaLabel}
-      onChange={(event) => { props.onChange(String((event.target as { value?: unknown }).value ?? '')) }}
+      placeholder={props.placeholder}
+      onChange={(value) => { props.onChange(value) }}
       onKeyDown={(event) => {
         if ((event as unknown as { key?: string }).key !== 'Enter') return
         props.onSubmit()
       }}
     />
-    {props.value === '' ? null : <button
-      type="button"
-      className={C.searchClear}
-      aria-label={zhCN.clear}
-      title={zhCN.clear}
-      onClick={props.onClear}
-    >×</button>}
   </span>
 }
 
@@ -232,10 +227,11 @@ function RowButtons(props: {
     {/* 与 DeepSeek 讨论这份报告：唯一的会话入口（「查看会话」文字按钮已删除）。
         提示是**浮层 Tooltip**（渲染在表格之外，悬停立刻出现、带箭头），不用原生 title。
         审核中不展示它 —— 见上面 `inProgress` 的理由。 */}
-    {inProgress ? null : <button
-      type="button"
+    {inProgress ? null : <IconButton
+      variant="soft"
       className={C.aiRowBtn}
-      aria-label={props.discussionLabel}
+      label={props.discussionLabel}
+      title=""
       disabled={props.discussing}
       onMouseEnter={(event) => { props.onShowTip(rectOf(event?.currentTarget ?? null)) }}
       onMouseLeave={props.onHideTip}
@@ -244,19 +240,20 @@ function RowButtons(props: {
       onClick={props.onDiscuss}
     >
       <DeepSeekIcon size={18} />
-    </button>}
+    </IconButton>}
 
     {/* •••：Ghost Icon Button；菜单本身由**列表层**渲染成浮层（见 ReportPane）。
         打开时按钮保持一层略深的底，用户一眼知道菜单属于哪一行。 */}
-    {menu.length === 0 ? null : <button
-      type="button"
+    {menu.length === 0 ? null : <IconButton
+      variant="text"
       className={[C.menu, props.menuOpen ? C.menuOpen : ''].filter((one) => one !== '').join(' ')}
+      label={zhCN.moreActions}
+      title=""
       aria-haspopup="menu"
       aria-expanded={props.menuOpen}
-      aria-label={zhCN.moreActions}
       aria-controls={MENU_ID}
       onClick={(event) => { props.onToggleMenu(rectOf(event?.currentTarget ?? null), event?.currentTarget ?? null) }}
-    >•••</button>}
+    >•••</IconButton>}
   </div>
 }
 
@@ -466,7 +463,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
   // 讨论相关：会话列表（订阅 sessions.list）+ 拉取中/气泡/错误三个页内状态。
   const sessions = useSessionRows(props.port)
   const [pulling, setPulling] = React.useState('')
-  const [aiError, setAiError] = React.useState('')
+  const [, setAiError] = React.useState('')
   const [ask, setAsk] = React.useState<{ key: string; sessions: SessionSummaryLike[] } | null>(null)
   // **列表层**维护"哪个菜单开着"：行自己不持有 open，天然保证同一时间只有一个菜单
   // （用户 2026-09-22 口径）。切到另一行时浮层是同一个 DOM 节点、left/top 有过渡，
@@ -1121,14 +1118,14 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
             {/* 刷新属于**列表工具条**（刷的是这张列表），不属于页面头 —— 放这里用户才能建立
                 "刷新 → 刷新当前列表"的直接关系。刷新期间只有图标转，已有列表保持展示。 */}
             <span className={C.searchAction}>
-              <button
-                type="button"
+              <ActionButton
+                variant="soft"
                 className={[C.ghost, props.gating.busy === true || state.ossLoading ? C.ghostBusy : ''].filter((one) => one !== '').join(' ')}
                 disabled={props.gating.busy === true || state.ossLoading}
                 onClick={props.onRefreshPending}
               >
                 <RefreshIcon size={15} />{zhCN.refresh}
-              </button>
+              </ActionButton>
             </span>
           </div>
           {/* 列表数据区：首次加载与拉报告资料的等待页**只盖这一块** ——
@@ -1338,41 +1335,42 @@ function Pager(props: {
 }): React.ReactElement {
   return <div className={C.pager}>
     <span className={C.muted}>{`共 ${props.total} 条 · 第 ${props.page} / ${props.pages} 页`}</span>
-    <button
-      type="button" className={C.pagerNav} aria-label={zhCN.paginationFirst} title={zhCN.paginationFirst}
+    <ActionButton
+      variant="text" size="sm" className={C.pagerNav} aria-label={zhCN.paginationFirst} title={zhCN.paginationFirst}
       disabled={props.busy || props.page <= 1} onClick={() => { props.onGoPage(1) }}
-    >«</button>
-    <button
-      type="button" className={C.pagerNav} aria-label={zhCN.paginationPrev} title={zhCN.paginationPrev}
+    >«</ActionButton>
+    <ActionButton
+      variant="text" size="sm" className={C.pagerNav} aria-label={zhCN.paginationPrev} title={zhCN.paginationPrev}
       disabled={props.busy || props.page <= 1} onClick={() => { props.onGoPage(props.page - 1) }}
-    >‹</button>
+    >‹</ActionButton>
     {pageWindow(props.page, props.pages).map((item, index) => item === 0
       ? <span key={`gap-${String(index)}`} className={C.pagerGap}>…</span>
-      : <button
+      : <ActionButton
           key={item}
-          type="button"
+          variant={item === props.page ? 'soft' : 'text'}
+          size="sm"
           className={[C.pagerPage, item === props.page ? C.pagerPageOn : ''].filter((one) => one !== '').join(' ')}
           aria-current={item === props.page ? 'page' : undefined}
           disabled={props.busy}
           onClick={() => { props.onGoPage(item) }}
-        >{String(item)}</button>)}
-    <button
-      type="button" className={C.pagerNav} aria-label={zhCN.paginationNext} title={zhCN.paginationNext}
+        >{String(item)}</ActionButton>)}
+    <ActionButton
+      variant="text" size="sm" className={C.pagerNav} aria-label={zhCN.paginationNext} title={zhCN.paginationNext}
       disabled={props.busy || props.page >= props.pages} onClick={() => { props.onGoPage(props.page + 1) }}
-    >›</button>
-    <button
-      type="button" className={C.pagerNav} aria-label={zhCN.paginationLast} title={zhCN.paginationLast}
+    >›</ActionButton>
+    <ActionButton
+      variant="text" size="sm" className={C.pagerNav} aria-label={zhCN.paginationLast} title={zhCN.paginationLast}
       disabled={props.busy || props.page >= props.pages} onClick={() => { props.onGoPage(props.pages) }}
-    >»</button>
+    >»</ActionButton>
     {/* 跳页：非法/越界一律 clamp 到合法范围并给一句提示，**不发请求**。 */}
     <span className={C.pagerJumpWrap}>
       <span className={C.muted}>{zhCN.paginationJump}</span>
-      <input
+      <TextInput
         className={C.pagerJump}
         value={props.jump}
         inputMode="numeric"
         aria-label={zhCN.paginationJump}
-        onChange={(event) => { props.onJumpChange(String((event.target as { value?: unknown }).value ?? '')) }}
+        onChange={(value) => { props.onJumpChange(value) }}
         onKeyDown={(event) => {
           if ((event as unknown as { key?: string }).key !== 'Enter') return
           props.onJumpSubmit()

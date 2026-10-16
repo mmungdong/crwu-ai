@@ -15,7 +15,7 @@ import { requireMaterialScope } from '../../domains/report-audit/discussion-scop
 import { requireCaseAccess } from '../../domains/report-audit/case-access.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from '../common/outcome.ts'
-import { credentialsTrusted, toolContext, type ToolDeps } from '../common/types.ts'
+import { toolContext, type ToolDeps } from '../common/types.ts'
 import { caseScopes } from './case-scopes.ts'
 
 /**

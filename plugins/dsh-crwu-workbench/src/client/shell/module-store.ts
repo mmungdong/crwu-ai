@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { isModuleId, moduleLabel, requirementOf, requiresEnvironment, type ModuleId } from './modules.ts'
+import { isModuleId, moduleLabel, type ModuleId } from './modules.ts'
 import {
   defaultNodeOfModule,
   firstEnabledChild,
@@ -165,14 +165,18 @@ export function createModuleStore(initial: ModuleId = 'env'): ModuleStore {
   }
 
   /**
-   * 落到某个二级页面：一级目录、二级目录、正文在**同一次 emit** 里一起变。
+   * 落到某个页面：一级目录、二级目录、正文在**同一次 emit** 里一起变。
    *
    * 被拦住时不进目标页，落到环境信息并记下 `pendingNode` —— 恢复逻辑在 `envChanged` 里。
+   *
+   * `parentId` 的取法有一个例外：「估值」这类**一级页**（自己带 `page`、没有二级目录）
+   * 的 `parentOf` 是 `null`，那时一级目录就是它自己 —— 退回"上一个一级目录"会显示成
+   * 「审核」页签高亮、正文却是估值。
    */
   const landOn = (node: NavigationNode, input: ModuleGateInput, epochBump: boolean): NavVerdict => {
     const current = snapshot
     const parent = parentOf(node.id)
-    const parentId = parent?.id ?? current.parent
+    const parentId = parent?.id ?? (node.parentId === null ? node.id : current.parent)
     const verdict = gateOf(node, input)
     if (verdict.blocked) {
       emit({
@@ -283,7 +287,7 @@ export function createModuleStore(initial: ModuleId = 'env'): ModuleStore {
       emit({
         ...current,
         kind: 'env',
-        parent: parentOf(pending.id)?.id ?? current.parent,
+        parent: parentOf(pending.id)?.id ?? (pending.parentId === null ? pending.id : current.parent),
         node: null,
         active: 'env',
         gateReason: verdict.reason,
@@ -303,7 +307,7 @@ export function createModuleStore(initial: ModuleId = 'env'): ModuleStore {
     },
     navigateNode(nodeId, input) {
       const node = nodeById(nodeId)
-      // `enabled: false` 的二级目录**不可进入**：它只是把业务目录的全貌显示出来。
+      // `enabled: false` 的节点**不可进入**：它只是把业务目录的全貌显示出来。
       if (node === null || node.page === null || !node.enabled) {
         return { module: 'env', blocked: false, pending: null, reason: '', node: null, empty: false }
       }

@@ -7,12 +7,14 @@ import { localAccessGranted } from '../../core/access/consent.ts'
 import type { LocalAccessBroker } from '../../core/access/broker.ts'
 import type { H3yunFormResolver } from '../../integrations/h3yun/form.ts'
 import type { ValuationScreenshotCapability } from '../../domains/report-evaluation/browser/capture.ts'
+import type { ValuationBrowserRuntime } from '../../domains/report-evaluation/browser/runtime.ts'
 import type { IfindTransport } from '../../integrations/ifind/mcp.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { DiscussionScopeRegistry } from '../../domains/report-audit/discussion-scope.ts'
 import type { LocalAuditRegistry } from '../../domains/local-audit/handoff.ts'
-import type { ValuationScopeRegistry } from '../../domains/report-evaluation/scope.ts'
+import type { ValuationScopeService } from '../../domains/report-evaluation/scope.ts'
 import type { ValuationLifecycles } from '../../domains/report-evaluation/lifecycle/index.ts'
+import type { TaskLeaseStore } from '../../domains/report-evaluation/execution/leases.ts'
 import type { SnapshotIo } from '../../domains/local-audit/snapshot.ts'
 import type { PythonRuntimeResolver } from '../../core/runtime/python.ts'
 
@@ -78,7 +80,7 @@ export interface ToolDeps {
    * 但普通会话判据只认"`<工作空间>/<某段>` 这个形状"，认不出**归属** ——
    * 于是同一条估值会话能把 caseDir 指向另一个案例目录。这里按会话 id 钉死归属。
    */
-  valuationScopes?: ValuationScopeRegistry
+  valuationScopes?: ValuationScopeService
   /**
    * 估值轮次的注册表（协议 32）。
    *
@@ -87,6 +89,24 @@ export interface ToolDeps {
    * 之后把阶段 / 来源状态 / 能力缺口写进去，界面才看得到"需要登录、点了重新检查"。
    */
   valuationLifecycles?: ValuationLifecycles
+  /**
+   * **估值浏览器能力**（协议 35）。
+   *
+   * 缺省不注入 = 本部署没有浏览器通道：`crwu_valuation_browser_recover` 如实回
+   * `capability-gap`，而**不是**去装库、拼命令或改用别的通道抓网页。
+   *
+   * 为什么整份 runtime 一起传：`toolClient`（取数）与 `panelClient`（门禁）必须共用
+   * **同一条 profile 串行队列**，拆开注入就会出现"两条队列锁不住同一个标签页"。
+   */
+  browserRuntime?: ValuationBrowserRuntime
+  /**
+   * **估值执行租约**（协议 35，计划 Task 7）。
+   *
+   * 与 `valuationScopes` 同类：进程内、随插件生命周期释放。它回答的是"这个执行任务现在
+   * 有没有执行者"，而"启动请求发出但结果未知"**也是**一种执行者状态 —— 那种状态下父会话
+   * 接手重算，同一个方案会写出两份看起来都正常的结论。
+   */
+  valuationLeases?: TaskLeaseStore
   /**
    * DSH 自带 Python 的**实例级**解析器（`crwu_run_python_script` 用它）。
    *

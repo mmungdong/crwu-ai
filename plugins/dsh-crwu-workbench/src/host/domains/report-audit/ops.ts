@@ -138,7 +138,7 @@ export interface AuditStartResult {
 }
 
 export async function auditStart(deps: AuditDeps, args: Record<string, unknown>): Promise<AuditStartResult> {
-  const { ctx, config, state } = deps
+  const { ctx, state } = deps
 
   /**
    * 当前阶段：**每个失败都要留档**，而"卡在哪一步"要由代码说，不能事后从文案里猜。
@@ -922,23 +922,4 @@ export async function auditStatus(deps: AuditDeps, args: Record<string, unknown>
     active: { key: state.activeKey, childId: state.activeChildId, since: state.activeSince },
     canStartNext,
   }
-}
-
-/** 会话层级：只有子代理才有 `origin === 'subagent'` / `delegationDepth`。 */
-function delegationOf(ctx: Context, id: string): { found: boolean; subagent: boolean; depth: number } {
-  const out = { found: false, subagent: false, depth: 0 }
-  if (id === '') return out
-  try {
-    const sessions = ctx.get('sessions') as { get?: (sid: string) => { header?: Record<string, unknown> } | undefined } | undefined
-    if (sessions === undefined || typeof sessions.get !== 'function') return out
-    const header = sessions.get(id)?.header
-    if (header === undefined) return out
-    out.found = true
-    out.subagent = text(header.origin) === 'subagent'
-    out.depth = typeof header.delegationDepth === 'number' ? header.delegationDepth : 0
-  } catch (error) {
-    // 会话服务不可用时保留「未知」，不阻断用户继续处理环境问题。
-    void error
-  }
-  return out
 }

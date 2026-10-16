@@ -34,7 +34,7 @@ provider 装配成功、技能表里 0 个技能）。
 - **登录一律回工作台**：员工在侧栏面板的「账号连接」步骤里点「钉钉登录」/「氚云扫码登录」。
   Host 用 `dws.auth.login` / `h3yun.session.login` 两个操作执行它，而这两个操作的
   `allowedSources` **只有 `panel`** —— 审核链路（`audit-tool`）与宿主后台都拿不到它们。
-- **没有给 Agent 的登录 Tool**：`host/tools/consts.ts` 的工具集里没有任何 login 工具，
+- **没有给 Agent 的登录 Tool**：`src/host/tools/report-audit/consts.ts` 的工具集里没有任何 login 工具，
   `host-access-migration.test.mjs` 与 `host-access-broker.test.mjs` 各有一条断言盯着。
 - **审核提示词明令禁止**：未登录 / 未允许本机访问时子代理必须**停下并回报**，
   不许自己登录、不许翻凭据、不许改 `PATH`（`host-audit-prompt.test.mjs` 逐句钉住）。

@@ -759,7 +759,17 @@ test('20. 协议号覆盖当前页批量 OSS 查询与请求取消', () => {
   //   `failed to ensure project directory "": ENOENT: mkdir ''`（用户实测），必须靠协议号拦住。
   // 33（2026-10-13）= 估值提取链路：`valuation-intake` 入参新增 `baseDate` 并回显、
   //   intake 不再串行预检三家站点、`valuation-status` 的 progress 承载提取阶段。
-  assert.equal(WORKBENCH_PROTOCOL, 34)
+  // 35（2026-10-14）= 房地产改成"启动页 + 父会话跳转"：删掉四条运行期完成度操作、
+  //   新增门禁登录两条、intake/start 的入参应答整组换掉。
+  // 36（2026-10-14）= 门禁逐站结论新增 `verdict` / `protectedUrl` / `challenge`（人机验证）。
+  // 37（2026-10-14）= 启动页的流程恢复与资料范围闭环：`valuation-start` 应答新增权威创建判据
+  //   `creationDisposition`；`valuation-files-scan` 回真实文件明细 + `skipped` + `truncated`，
+  //   两条资料操作新增 `excluded`；新增受控的「打开验证窗口」操作。
+  // 39（2026-10-15）= 通用估值入口：资产类型进契约、登录从门禁改为可选能力、能力状态带检查时刻。
+  // 40 adds structured rule parameters and project-level finalization.
+  // 41 adds assessments / canonical-URL identity / durable list snapshots;
+  // 42 adds detail capture (actual URL + immutable PNG + manifest) and the background browser flow.
+  assert.equal(WORKBENCH_PROTOCOL, 42)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

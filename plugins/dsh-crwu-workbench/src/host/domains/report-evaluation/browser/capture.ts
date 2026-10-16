@@ -89,6 +89,10 @@ export interface ValuationScreenshotRequest {
    * 单独给出来是因为"截图属于哪条案例"不能靠文件名推：同一页面上可能有多套房源。
    */
   caseId: string
+  /** Optional human label used only for the evidence directory name. */
+  displayName?: string
+  /** Optional evidence type; omitted by legacy callers and never inferred as detail. */
+  evidenceType?: 'page-screenshot' | 'detail-screenshot' | 'alternative-evidence'
   session?: Session
   signal?: AbortSignal
 }
@@ -103,6 +107,10 @@ export interface ValuationScreenshotResult {
   bytes: number
   /** 采集时刻（ISO 字符串）。 */
   capturedAt: string
+  /** Verified final page URL for this shot; empty for legacy callers that never verified one. */
+  sourceUrl?: string
+  /** Verified evidence type; omitted when the caller did not declare one. */
+  evidenceType?: 'page-screenshot' | 'detail-screenshot' | 'alternative-evidence'
 }
 
 /** 注入的截图能力（`deps.screenshot`）。 */

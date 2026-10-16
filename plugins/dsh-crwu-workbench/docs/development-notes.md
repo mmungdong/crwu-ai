@@ -204,6 +204,13 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
   要断言"注册发生了"就解析真正的调用实参，要断言"方法存在"就 `import` 真模块查 `typeof`；
 - 界面行为只有浏览器能证明：`install/browser-check.mjs` 用系统里已装的 Edge + `playwright-core`
   （不下载 Chromium），逐阶段断言几何、计算样式、真实请求次数；它**不点「AI 审核」**；
+- **隔离的共享控件 / 估值页浏览器验收**（不需要 profile）：`install/ui-browser-check.mjs` 用
+  `tests/browser/unified-ui-fixture.tsx` 与 `tests/browser/valuation-ui-fixture.tsx`（真实源码
+  组件 + 假端口）构建到一个**尚不存在的** `--out` 新目录（已存在即报错，脚本绝不删除任意路径），
+  用**外部测试用** React/ReactDOM 与 Playwright 运行并截图。外部运行时只用于测试，**不进产物、
+  不进依赖图**；fixture 不访问账号、凭据、真实文件或 provider。
+  完整控件契约见 [`shared-ui-components.md`](shared-ui-components.md)。真实 profile 的 live
+  验收仍由用户 / supervisor 在独立 profile 上执行；agent 不代跑，也不在文档里写未验证的通过数；
 - 等真实后端的断言一律用 `waitForFunction`（氚云十几秒、`ossutil` 几十秒都是常态）；
   瞬时加载态用 `page.route` 人为拖慢，把"有没有加载态"变成确定性断言；
 - 运行产物（`*.tgz`、截图、临时 profile）不进提交。
@@ -1661,8 +1668,8 @@ draft → extracting → confirmation → queued → running → completed
 1. `valuation-start` 想一步把 `draft` 改成 `queued`，被转移表拦下 → 状态停在 `draft` 而界面以为在跑；
    现在沿 `extracting → confirmation → queued` 逐段推进。
 2. 有界淘汰最初写成"把最旧的标成 `failed`"，而标记**不减少条目数** → 循环一路把每一轮都标花。
-   现在先删终态、全是活动轮次时删最旧的；被淘汰的轮次在 `valuation-status` 里表现为 `known:false`，
-   界面据此说"宿主没有这一轮的记录（重启或已被更新的轮次挤掉）"。
+   现在先删终态、全是活动轮次时删最旧的；被淘汰的轮次在轮次注册表里表现为 `known:false`
+   （协议 35 起不再有 `valuation-status`，这条判据只留在工具与注册表之间）。
 
 **资料必须按字节复制**：估值资料的主力是 `.pdf` / `.xlsx` / 图片，走 fs 的文本通道
 （`readText` + `writeText`）会按 UTF-8 解码再编码，得到一个**看起来正常、内容已损坏**的副本，
@@ -1671,6 +1678,57 @@ draft → extracting → confirmation → queued → running → completed
 
 **报告与底稿的一致性**以底稿为权威：报告是一次性渲染的人读件，不参与计算；
 两者数字不一致时改报告，而不是改底稿去凑报告（`validate_result.py --html` 会抽查这一条）。
+
+### 估值启动页的流程恢复与资料范围（2026-10-14，协议 37）
+
+0.0.43 的"启动页 → 父会话"结构不变，这一轮补的是**页面自己的闭环**与**跨进程事实**：
+
+| 事实 | 上一代的问题 | 现在的口径 |
+| --- | --- | --- |
+| 交接结果 | 只有"成功 / 失败"两分，客户端拿"没有 sessionId"当"没建会话" | `valuation-start` 应答新增 `creationDisposition`（`not-created` / `created` / `unknown`）。**只有 `not-created` 允许「返回修改」**；缺字段按 `unknown` 兜（偏安全的一侧）；Client 唯一**绝对**不许自己推的方向就是 `not-created` |
+| 切页恢复 | `invalidate()` 只作废在途请求，phase 留在 checking / preparing，回来被守卫吃掉 | 离开时**清理这一次页面请求的瞬时状态**（`checking → idle`、`preparing-confirmation → draft`，输入保留）；`creating-session` **不清**（交接是 Host 的事务） |
+| 资料范围 | `valuation-files-scan` 只回入口 `items[]`，移除只过滤 UI 列表 | 应答扩成 `files[]` + `skipped[]` + `truncated`；两条资料操作新增 `excluded[]`，扫描 / 预览 / 归档共用同一份排除范围；`truncated` 时拒绝归档 |
+| 验证窗口 | 只有一句文字，没有入口 | 新增受控操作 `valuation-browser-open-verification`（只接受 `siteId`，URL 与 profile 由 Host 从可信站点清单取）；配套 CLI `crwu browser open` |
+
+**为什么验证窗口必须是一条受控 Host 操作**：验证只在 CLI 自己的持久 profile 里有效，
+随便 `window.open(verifyUrl)` 既没有那份 Cookie、也没有任何边界。所以 Client 提交不了 URL、
+提交不了 profile、也提交不了命令；`opened: true` 只表示窗口打开了，**不表示验证已经通过**——
+完成与否只由下一次 `valuation-browser-preflight` 的逐站结论回答。
+
+**登录任务的状态词**：`waiting-user`（凭据到位、受保护页要人机验证）在这一版进入共享词表
+（`VALUATION_LOGIN_JOB_STATES`）。旧的收窄把"非终态"一律当 `running`，于是"请去完成验证"这条
+路径永远到不了；未知状态现在落 `failed` —— 那是唯一不会骗人的兜底。
+
+**操作清单与协议号**：52 → 53（新增 `valuation-browser-open-verification`），
+`WORKBENCH_PROTOCOL` 36 → **37**。判据在 `tests/helpers/frozen-inventory.mjs`
+（`tests/unit/host/host-package.test.mjs` 与 `tests/unit/client/client-rpc-facade.test.mjs`
+两侧对账）与 `tests/unit/client/client-valuation-scope.test.mjs`。
+
+### 通用估值入口与可选登录（2026-10-15，协议 39）
+
+这一代改的是**入口与来源能力**，不是父会话里的业务执行：
+
+| 事实 | 上一代的问题 | 现在的口径 |
+| --- | --- | --- |
+| 资产类型 | 页面没有这个字段，房地产是靠**二级目录**选出来的 | `valuation-intake` 入参 / 应答、`估值输入.json`（升 `crwu.valuation.input.v3`）、项目记录都带 `assetType`；未选由 `normalizeAssetType` 直接拒绝预览（**没有默认房地产**那一档） |
+| 页面阶段 | `checking-auth` / `auth-blocked` 是必经阶段，进页面先等一次来源探测 | `ValuationPagePhase` 只留草稿 / 准备 / 确认 / 建会话 / 交接失败 / 已交接 / stale；初始态 `draft`，**挂载不探测**，抽屉打开才查一次 |
+| 能力状态 | `AuthGateView.released` 是"能不能进正文"的判据 | 新增 `checkedAt`（检查时刻）；`released` 退化为兼容字段，**不再进任何禁用判据** —— 未登录 / 未知 / 该站失败都不阻止填写与启动 |
+| 来源策略 | 交接时 `providers: []`（**空数组**） | `HandoffDeps.sources` 由站点清单 + 必需/可选分档推出；清单读不出来时给一条说明原因的事实，而不是"一个来源都没有" |
+| 空必需集 | `sites.ts` 里"没有必需来源就退回全部站点" | 删除那条回退：配置成空就是空（否则把配置改成可选的当天，所有站点静默恢复成硬门禁） |
+| 阻断口径 | `decidePhase` 把未登录 / 未确认判成 `canProceed: false`（整轮停在原地） | 三类结论都 `canProceed: true`；分类（`needsLogin` / `unconfirmed` / `failed`）保留，因为**处置不同**，"下一步做什么"必须说对 |
+
+**为什么"插件侧不能再自己写业务判据"**：这一代把指令里的选法顺序、可比性三条件、挂牌/成交口径、
+来源优先级与页数上限全部删掉，改成"先读资产 Skill 声明的**入口 Wiki**，再按它的条件逐篇读正文"。
+理由与审核链路同一条：抄进指令的业务规则会**盖住知识库**（Agent 照着更旧的副本执行，两边都不报错），
+而知识库改动才是业务侧唯一的维护入口。指令保留的只有真实工具、安全与正确性边界。
+
+**导航上的"一级页"**：`valuation` 自己带 `page`、`children` 为空。`parentNodes` 因此需要接受
+"自己就是页面"的一级节点，`firstEnabledChild` 在无子项时返回它自己，`landOn` 在 `parentOf === null`
+时把一级目录取成节点自己（否则会显示成「审核」页签高亮、正文却是估值）。二级页签行因为子项为空
+而整个不画 —— 组件本来就有这一档，不需要再加一个"是否画二级目录"的开关。
+
+**操作清单与协议号**：清单不变（**54**），`WORKBENCH_PROTOCOL` 38 → **39**。本次改的是入参 /
+应答字段与页面阶段语义，没有增删操作。
 
 ### 估值页：只读确认抽屉为什么长在状态机里（2026-10-12）
 
@@ -2108,29 +2166,102 @@ IF(ISNUMBER(SEARCH("成本法",J5)),I5,"")))`。这条公式有一个**安静**�
 于是**随包发布的模板自己**被判不合格 —— 现在有一条断言专门钉这件事：
 "模板必须过契约"。凡是新增契约规则，先问问"模板自己过不过"。
 
-### 谁来说"这一轮完成了"（2026-10-12）
+### 谁来说"这一轮完成了"（2026-10-12；协议 35 起改为显式 finalize）
 
-状态机里有 `completed`、工具允许写它，但**没有任何地方真的推过去** —— 于是面板永远看到
-`running`，而客户端只在 `completed` 时去取结果，**结果页永远不出现**。这类断链的共同形状是：
-*每一段都在，缺的是"谁负责跨过那一步"*。
+这里的教训没变，变的是判据落地的地方：**完成必须由 Host 用真实文件判定，不由子会话声称**。
 
-判据放在 `valuation-status`（面板轮询的那一份事实），而且**由宿主判定、不由子会话声称**：
+协议 35 之前，判据挂在 `valuation-status` 上、由面板轮询触发（进度页/结果页据此渲染）。
+那条链路已经**整体删除**：估值改成"确认即交接"，面板不再跟踪完成度，也没有进度页与结果页。
+现在判据住在 `crwu_valuation_finalize`（`domains/report-evaluation/delivery/`）：
 
 ```text
-三件交付件齐备 且 估值结果.json 解析得出来（带 method）  → completed（进度走满）
-否则                                    → 留在 running（不是错误：还没做完）
+冻结输入重算摘要一致 且 知识快照可核对 且 模板验真 且 逐对象结论 且 计算轨迹
+且 截图证据 且 计算表登记 且 重算记录 verified 且 报告渲染 且 产物清单齐备
+    → completed
+缺项 → partial / blocked（并逐条列出问题）
+输入被改过 → failed（最严重的一类）
 ```
 
-两个理由：① 子会话写完文件就结束了、**没有回调**，模型说一句"我完成了"不是事实；
-② 只看文件在不在会把"报告刚写了一半"判成完成，而结果页要拿这份 JSON 渲染结论。
-`completed` 是终态：删掉一件之后再轮询仍然是它（已交付过的东西不撤回）。
+两个理由与当年一致：① 子会话写完文件就结束了、**没有回调**，模型说一句"我完成了"不是事实；
+② 只看文件在不在会把"报告刚写了一半"判成完成。差别是**没有任何页面再轮询它** ——
+finalize 由会话显式调用，结论落盘，面板删掉不影响校验（这正是"删页面不能删校验"的落点）。
+
+⚠️ 方案级交付件按 `方案/<planId>/` 隔离：多方案共用一个目录会让
+`finalizePlan(plan-002)` 读到 plan-001 的报告数据并通过校验（文件确实存在、格式确实合法，
+只是不属于这个方案）。逐对象结论同样按 `plans[].objectIds` 核对，不拿全项目的对象去要求某个方案。
+
+### 登录判定：凭据有效性归属"登录"，人机验证归属"页面访问"（2026-10-14，用户口径）
+
+第二条现场反馈是"我点登录后其实是登录成功的"。根因是判定把两件事混成一件：受保护页必须**可读**
+才算通过，而链家的受保护页常年会回人机验证（`hip.*/captcha`）。于是刚登录成功的员工被挡在
+工作面之外，还被告知"没通过检查"。
+
+现在两个事实分开，各自只回答一个问题：
+
+| 字段 | 回答 | 依据 |
+| --- | --- | --- |
+| `state` | 有没有登录 | 凭据存在且**未过期**；页面不是**登录墙** |
+| `verdict` | 这一页能不能读 | `ok` / `login-wall` / `captcha` / `blocked` |
+| `expiresAt` / `sessionCookie` | 凭据什么时候失效 | CDP 的 `expires`（`-1` = 会话 cookie） |
+
+判定顺序：凭据缺失/过期 → `unauthenticated`（原因写明"已过期"）；凭据在但登录墙 → `unauthenticated`
+（会话被服务端作废的形态）；凭据在 + 挑战/风控 → **`authenticated`**；凭据在 + 页面可读 → `authenticated`。
+
+到期时间**不读** profile 里的 SQLite（那要拷贝文件、还得解密值）：CDP 的 `Storage.getCookies`
+直接给 `expires`，实测该来源的 `lianjia_token` 是登录后 24 小时。`expiresAt` 用 UTC RFC3339
+给面板，原因里的时间是带时区的本地时间 —— 两个口径不能靠猜。
+
+挑战不再是门禁的阻塞条件，但**没有被丢掉**：正文里有一条非阻塞提示，取数流程该有的自动恢复与
+waiting-user 断点照旧。
+
+### 浏览器还开着，检查却说"无法获得浏览器会话"（2026-10-14）
+
+登录窗口按设计**要一直开着**（员工在里面完成登录/验证），而每条命令结束时只释放**自己那条连接**。
+问题是释放时顺手把端口文件删了：下一条命令（尤其是登录之后那次权威 `status`）便再也发现不了
+那个浏览器，于是另起一个实例 —— Chromium 检测到 profile 已被占用，把请求交给已在运行的实例，
+新实例的调试端口**永远不会打开**，20 秒后报一句"调试端口 N 没有可用的页面目标"。
+现场表现就是：员工在窗口里明明登录成功了，面板永远说没通过。
+
+修法与三条口径：
+
+1. **端口发现有三条来源**：自有 `debug-port` 文件 → Chromium 的 `DevToolsActivePort` → profile 锁
+   `SingletonLock` 里的 pid，再去读该进程命令行的 `--remote-debugging-port=`。实测这台机器上
+   Edge 不写 `DevToolsActivePort`，第三条是唯一能在"文件被删"之后救回来的来源。
+2. **每条候选都要真的应答**才算数（`/json/version` 返回 200）：文件在、进程已死不算。
+3. **释放时只在端口确实没人应答时才删文件**；冷启动超时的报错要点名占用 profile 的 pid，
+   否则员工拿到的只是一句无从下手的端口号。
+
+### "我已经登录了，检查还是没过"（2026-10-14，协议 36）
+
+现场有两条各自独立的缺陷，症状一样：
+
+1. **凭据读错了作用域**。`Network.getCookies` 不带 `urls` 时，CDP 把它限定在**当前 URL**：
+   CLI 附着的标签页是 `about:blank` → 0 条；附在链家页面 → 只看得到链家那一条。
+   真实 profile 实测三个数：`about:blank` 0 条、带显式 urls 28 条、浏览器级 66 条。
+   于是"两个站点都已登录"被报成"没有登录凭据"。修法是读**浏览器级**的 `Storage.getCookies`，
+   并按 URL 读取只留给"这一页能看到什么"的场景；cookie 域比较同时改成规范化
+   （前导点可选、大小写不敏感、按标签边界匹配），因为同一个会话 cookie 可能存成
+   带点 / 不带点 / 子域三种作用域写法（2026-10-14 实测三种都出现过）。
+2. **受保护页回的是人机验证，不是登录墙**（2026-10-14 实测记录）。凭据修好之后，权威检查打开
+   受保护页得到的是风控挑战页（`…/captcha`，title=`CAPTCHA`）。
+   原来的 `VerifySite` 把它归到 `unknown` 并给一句"可能被风控" —— 状态没错，
+   但门禁除了「重新检查」之外没有别的路，员工只能反复点。
+
+协议 36 之后，逐站结论里多了 `verdict`（`ok`/`login-wall`/`captcha`/`blocked`）与公开的
+`protectedUrl`。门禁对判定为 `captcha` 的必需来源**先做一次有界恢复**（与取数共用同一个协调器，
+预算挂在 `gate:<siteId>` 上，所以重复点「重新检查」不会无限重试），然后**重新读一次权威状态** ——
+只有真的过了才释放，绝不因为"尝试过了"就放行。未恢复时给的是"这是验证不是未登录、
+请在刚打开的那个窗口里完成验证后点「重新检查」"，**不给登录入口**：员工本来就已经登录了。
+
+两条口径写进了 CLI manual：**判定用 `verdict`，不要匹配 `reason` 的中文文案**（那是给人看的）。
 
 ### 冻结输入：三层保障，最后一层是"篡改可见"（2026-10-12）
 
 ```text
 ① 接口形状   子会话没有参数能改方法 / 基准日 / 补充要求（Host 从内存里的快照读）
 ② 启动核对   valuation-start 在建会话**之前**核对一次确认指纹（资料在确认后被改过就拒绝启动）
-③ 篡改可见   valuation-result 每次读结果都把磁盘上的 估值输入.json 与宿主记录逐字段比一次
+③ 篡改可见   crwu_valuation_finalize 每次判定都把磁盘上的 估值输入.json 的摘要与宿主记录重算比对
+            （对不上直接 failed：协议 35 起这一步不再依赖任何页面请求）
 ```
 
 前两层都对，但都管不到一件事：**`估值输入.json` 是案例目录里的普通文件，而估值会话对案例目录
@@ -2143,8 +2274,8 @@ IF(ISNUMBER(SEARCH("成本法",J5)),I5,"")))`。这条公式有一个**安静**�
 不在宿主内存里留一份，"文件被改过"就永远发现不了。
 
 ⚠️ 还有一条**只有工具知道**的事实必须写回宿主：`browser-login-required` 与每个来源的登录/失败状态。
-面板轮询的是 `valuation-status`（读注册表），而"请求失败、需要用户去登录"这件事**只有发请求的一方**
-（工具）知道。工具只把 `phase` 回给模型的话，界面**永远进不到**那个阶段 —— 状态机里有一个阶段、
+它落在轮次注册表（`ValuationRecord.providerStates`）里，而"请求失败、需要用户去登录"这件事
+**只有发请求的一方**（工具）知道。工具只把 `phase` 回给模型的话，界面**永远进不到**那个阶段 —— 状态机里有一个阶段、
 工具返回值里有它、唯独没有任何路径把它落到注册表上。现在 `tools/report-evaluation/record.ts`
 负责这一步：身份只从 Agent 取（与案例归属门禁同一个来源），写不回去就**如实写进 `warnings`**
 （静默的后果是界面与子会话看到的事实不一致，而没有任何地方会提这件事）。
@@ -2162,3 +2293,24 @@ IF(ISNUMBER(SEARCH("成本法",J5)),I5,"")))`。这条公式有一个**安静**�
 ③ 两处"被删组件不许复活"的断言只盯旧路径 —— **把文件挪个目录就能让守卫失效**，现在改成断言
 新分层下也不存在。所以 `tests/unit/host-module-layout.test.mjs` 里那几条"没有指向旧路径的引用"
 是按**文本里出现过旧路径**扫的，不按某一种语法扫。
+
+## 挂牌参考一次性 Tool 与 finalize（2026-10-16 · 协议 40 起）
+
+- **一条命名 Tool**：`crwu_valuation_listing_reference`
+  （`src/host/tools/report-evaluation/listing-reference.ts`）是挂牌参考交付的唯一入口。
+  参数面只有 `caseDir / planId / revision`；固定输入 `方案/<planId>[/修订/<n>]/挂牌参考输入.json`
+  与输出目录都由 Host 从已登记方案派生，输入里的 `valuationMode / projectId / planId` 在执行前
+  与 Host scope 核对，外来案例 / 未登记方案 / 不安全 id 一律在 Python I/O 之前拒绝。
+- **一次执行**：脚本经 Broker 的 `python.script.run`（来源 `audit-tool`）跑一次配置好的 DSH Python；
+  打包脚本 + `calculate_market / build_report_data / build_report / evidence_index` + schema +
+  报告模板先落到案例目录。四件产物（计算轨迹 / 估值底稿 / 估值报告数据 / 估值报告）逐个按真实
+  存在与非空核验，不看 stdout 自报、不把 xlsx 当文本读。缺运行时 → `capability-gap`；缺产物 →
+  结构化失败。**没有**系统解释器或自定义命令的兜底通道。
+- **只可能 `partial`**：挂牌参考是参考口径，Tool 回执 `status` 永远是 `partial`。`finalize` 里
+  `valuationMode=listing-reference` + 已验证 `reference` 也最多 `partial`，且不适用正式模板 /
+  底稿 / Excel 重算三道门禁 —— 但输入摘要、知识、阻断、价值范围、证据、计算、报告数据与产物
+  清单照旧。`reference` 由 `collectPlanFinalizeFacts` 从报告数据（`valuationMode` /
+  `referenceSummary` / `provisionalResults`）复核得出，**不读模型自报的 verified**。
+- **CLI 静态守卫**：`exec-cli-literal` 改为逐字面量判定（同一行的数据取值不豁免真实绑定），
+  并新增 `exec-cli-record` 兜住「CLI 值存进数据记录再取出执行」；直接 argv / shell / 相对 /
+  包内路径与良性 `sys.executable` + 来源数据口径不变。

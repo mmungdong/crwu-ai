@@ -11,6 +11,7 @@ import { caseScopes } from '../report-audit/case-scopes.ts'
 import { kindOf } from '../../domains/report-evaluation/intake/classify.ts'
 import { runExtraction } from '../../domains/report-evaluation/intake/extract.ts'
 import { EXTRACT_OUTPUT_DIR, pythonFileExtractor } from '../../domains/report-evaluation/intake/python-extractor.ts'
+import type { ExtractionCapabilities } from '../../domains/report-evaluation/intake/types.ts'
 import { VALUATION_MATERIAL_DIR, VALUATION_TOOL_NAMES } from './consts.ts'
 
 /**
@@ -22,8 +23,13 @@ import { VALUATION_MATERIAL_DIR, VALUATION_TOOL_NAMES } from './consts.ts'
  * - 这里只做三件事：**校验调用范围**、**调编排**、**把完整结果落盘 + 只回紧凑摘要**。
  *
  * 为什么只回摘要：一张估值明细表几百行，几份文件就能把模型上下文塞满 —— 而模型真正要的是
- * 结构化字段与"哪一份没解析"。完整结果（正文 / 表格 / 图片）写在
+ * 结构化字段与"哪一份没解析"。完整结果（正文 / 表格 / 图片 / **逐页表**）写在
  * `<案例目录>/提取结果/提取汇总.json`，需要时由子会话自己读。
+ *
+ * 摘要里**保留**逐页的**计数**与**能力声明**（`pageCount` / `pagesWithText` /
+ * `pagesWithoutText` / `capabilities`）：会话据此不开文件就能决定"改读页面图像"还是
+ * "请人工补关键页"。逐页表本身（最多 200 行）与"哪几页读不到"的页码区间文案分工不同：
+ * 台账进落盘的那一份，**动作指令**由 `capabilityGaps` 原文带到会话。
  */
 
 interface ExtractArgs {
@@ -37,6 +43,11 @@ interface FileSummary {
   textLength: number
   tableCount: number
   imageCount: number
+  /** 逐页计数与能力声明：**未知就缺键**，不许补 0 / false（补出来的等于假的"全都读到了"）。 */
+  pageCount?: number
+  pagesWithText?: number
+  pagesWithoutText?: number
+  capabilities?: ExtractionCapabilities
   extractedFields: Record<string, string>
   warnings: string[]
   capabilityGaps: string[]
@@ -83,8 +94,10 @@ export function valuationFileExtractTools(deps: ToolDeps) {
     name: VALUATION_TOOL_NAMES.fileExtract,
     description: [
       '提取本轮估值资料的结构化内容（PDF 文本 / Word / Excel 表格 / 图片信息），并返回紧凑摘要。',
-      '完整结果（正文与表格）写在案例目录的 提取结果/提取汇总.json 里，需要时自己读文件。',
-      '读不出来的文件不会阻塞其他文件：它会出现在 unparsed 与 capabilityGaps 里——',
+      '完整结果（正文 / 表格 / 逐页表）写在案例目录的 提取结果/提取汇总.json 里，需要时自己读文件。',
+      '每份文件的摘要带 pageCount / pagesWithText / pagesWithoutText 与 capabilities（pdfText / pdfRender / imageOcr），',
+      '据此决定"改读页面图像"还是"请人工补关键页"；缺这些键表示**未知**（脚本没声明），不是 0 / false。',
+      '读不出来的文件不会阻塞其他文件：它会出现在 unparsed 与 capabilityGaps 里（无文本层的 PDF 会给出页码区间），',
       '**绝不按文件名猜内容**。',
     ].join(' '),
     parameters: {
@@ -114,6 +127,19 @@ export function valuationFileExtractTools(deps: ToolDeps) {
                 textLength: { type: 'integer', required: true },
                 tableCount: { type: 'integer', required: true },
                 imageCount: { type: 'integer', required: true },
+                pageCount: { type: 'integer', description: '文档总页数；脚本没声明时不出现（未知，不是 0）' },
+                pagesWithText: { type: 'integer', description: '有文本层的页数；未知时不出现' },
+                pagesWithoutText: { type: 'integer', description: '无文本层的页数；未知时不出现（不是 0）' },
+                capabilities: {
+                  type: 'object', additionalProperties: false,
+                  description: '当场探到的部署能力；缺键 = 未知，false = 明确不能',
+                  properties: {
+                    pdfText: { type: 'boolean' },
+                    pdfRender: { type: 'boolean' },
+                    imageOcr: { type: 'boolean' },
+                    visionFallback: { type: 'string' },
+                  },
+                },
                 extractedFields: { type: 'object', required: true, additionalProperties: true },
                 warnings: { type: 'array', required: true, items: { type: 'string' } },
                 capabilityGaps: { type: 'array', required: true, items: { type: 'string' } },
@@ -190,12 +216,18 @@ export function valuationFileExtractTools(deps: ToolDeps) {
         return { ...base, ...failure('infrastructure', `提取结果落盘失败：${written.error}`) }
       }
 
+      // 逐页**表**刻意不进摘要（最多 200 行）：会话要的"哪几页读不到"由 capabilityGaps 里的
+      // 页码区间原文表达，计数与能力声明足够决定下一步动作。完整表在 resultPath 里。
       const files: FileSummary[] = outcome.files.map((file) => ({
         fileName: file.fileName,
         fileType: file.fileType,
         textLength: file.text.length,
         tableCount: file.tables.length,
         imageCount: file.images.length,
+        ...(file.pageCount === undefined ? {} : { pageCount: file.pageCount }),
+        ...(file.pagesWithText === undefined ? {} : { pagesWithText: file.pagesWithText }),
+        ...(file.pagesWithoutText === undefined ? {} : { pagesWithoutText: file.pagesWithoutText }),
+        ...(file.capabilities === undefined ? {} : { capabilities: { ...file.capabilities } }),
         extractedFields: { ...file.extractedFields },
         warnings: [...file.warnings],
         capabilityGaps: [...file.capabilityGaps],

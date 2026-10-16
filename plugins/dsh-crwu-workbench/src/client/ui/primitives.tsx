@@ -1,5 +1,6 @@
 import type * as React from 'react'
 import { WORKBENCH_CLASSES as C } from '../shell/consts.ts'
+import { Button as SharedButton, type ButtonVariant } from './components/Button.tsx'
 
 /**
  * 展示用小组件。
@@ -158,21 +159,26 @@ export interface ButtonProps {
   onClick?: () => void
 }
 
-/** 按 `deriveRowView` 给的 `ButtonSpec` 渲染；`tone` 决定视觉，不影响行为。 */
+/** Compatibility adapter over the shared Button; legacy tone/busy/label anchors are preserved. */
 export function Button(props: ButtonProps): React.ReactElement {
-  const tone = props.tone === 'primary' ? C.btnPrimary : (props.tone === 'warn' ? C.btnWarn : '')
-  const classes = [C.btn, tone, props.small === true ? C.btnSmall : ''].filter((item) => item !== '').join(' ')
-  const described = props.ariaDescribedBy === undefined ? {} : { 'aria-describedby': props.ariaDescribedBy }
-  const busy = props.busy === true ? { 'aria-busy': true } : {}
-  return <button
-    className={classes}
-    type="button"
-    disabled={props.disabled === true || props.busy === true}
+  // `warn` is an attention tone, not destruction: it maps to the soft blue variant.
+  const variant: ButtonVariant = props.tone === 'primary' ? 'primary' : (props.tone === 'warn' ? 'soft' : 'secondary')
+  const legacy = [
+    C.btn,
+    props.tone === 'primary' ? C.btnPrimary : '',
+    props.small === true ? C.btnSmall : '',
+  ].filter((item) => item !== '').join(' ')
+  return <SharedButton
+    variant={variant}
+    size={props.small === true ? 'sm' : 'md'}
+    loading={props.busy === true}
+    disabled={props.disabled === true}
+    describedBy={props.ariaDescribedBy}
     title={props.title ?? ''}
-    {...described}
-    {...busy}
-    onClick={props.busy === true ? undefined : props.onClick}
-  >{props.label}</button>
+    className={legacy}
+    onClick={props.onClick}
+    label={props.label}
+  />
 }
 
 /** 空态提示（列表没有数据时用）。 */

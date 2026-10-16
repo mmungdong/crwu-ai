@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.rule-parameters.v1",
+  "title": "业务知识库的结构化规则段（rule parameters）",
+  "description": "Host-bound rule-parameters record for the current knowledge snapshot. The document fragment is a fenced JSON data block that MAY omit routeId/snapshotDigest; the Host binds both from the persisted verified bytes before returning or persisting this record. An explicitly supplied value that disagrees with the Host facts is rejected, and a record without Host-bound routeId/snapshotDigest is not usable. Only data is allowed: no executable JS/Python, shell, arbitrary URL or selector.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ruleSetVersion", "routeId", "snapshotDigest", "parameters"],
+  "properties": {
+    "ruleSetVersion": { "const": "crwu.valuation.rule-parameters.v1" },
+    "routeId": { "type": "string", "minLength": 1, "description": "Host-bound route id of the snapshot this record came from." },
+    "snapshotDigest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Host-computed digest of the persisted snapshot bytes; a mismatch means the parameters are not from this snapshot."
+    },
+    "sectionId": { "type": "string" },
+    "effectiveFrom": { "type": ["string", "null"] },
+    "effectiveTo": { "type": ["string", "null"] },
+    "parameters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleId", "label", "valueKind", "unit", "sourceRef", "basisGrade",
+          "appliesTo", "strength"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "稳定规则标识；脚本与报告都引用它，而不是引用正文句子"
+          },
+          "label": { "type": "string", "minLength": 1 },
+          "valueKind": {
+            "enum": ["threshold", "rate", "ratio", "range", "count", "date-window", "rounding", "enum"],
+            "description": "只允许数据种类，不允许表达式或代码"
+          },
+          "value": {
+            "type": ["string", "number", "boolean", "null"],
+            "description": "十进制一律用字符串表达（'0.05' 而不是 0.05000000000000001）；null 表示该条在本次不适用"
+          },
+          "valueMin": { "type": ["string", "number", "null"] },
+          "valueMax": { "type": ["string", "number", "null"] },
+          "unit": { "type": "string" },
+          "comparison": {
+            "enum": ["gte", "gt", "lte", "lt", "eq", "between", "in", "not-in", "none"],
+            "description": "比较方向必须显式声明，脚本不许猜"
+          },
+          "rounding": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "description": "取整必须来自知识库；代码里的默认取整不算依据",
+            "properties": {
+              "mode": { "enum": ["half-up", "half-even", "floor", "ceil", "truncate"] },
+              "digits": { "type": "integer", "minimum": 0, "maximum": 8 },
+              "stage": { "enum": ["input", "intermediate", "result"] }
+            },
+            "required": ["mode", "digits"]
+          },
+          "appliesTo": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["propertyTypes", "methods"],
+            "description": "适用对象：不适用时该条不得参与计算，也不能被当成 0",
+            "properties": {
+              "propertyTypes": {
+                "type": "array",
+                "items": { "enum": ["residential", "commercial", "office", "industrial", "other"] }
+              },
+              "methods": { "type": "array", "items": { "enum": ["market", "income", "cost"] } },
+              "valueScopes": {
+                "type": "array",
+                "items": { "enum": ["land-only", "building-only", "land-and-building"] }
+              },
+              "regions": { "type": "array", "items": { "type": "string" } },
+              "valuationPaths": { "type": "array", "items": { "enum": ["combined", "separate", "unresolved"] } }
+            }
+          },
+          "sourceRef": {
+            "type": "string",
+            "minLength": 1,
+            "description": "权威出处（法规/标准/机构数据的可核对标识）；不允许写成「用户提示优先」"
+          },
+          "basisGrade": {
+            "enum": ["mandatory-standard", "industry-standard", "published-data", "market-practice", "project-fact"],
+            "description": "依据等级；项目事实与规范约束分开，冲突时记录双方证据"
+          },
+          "valueDate": { "type": ["string", "null"] },
+          "strength": {
+            "enum": ["must", "should", "should-not", "may"],
+            "description": "适用条款的业务强度（必须/应/不宜/可）。超限处置按快照，不能由程序一律删案例或自由放宽"
+          },
+          "requiresCapabilities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "运行该条所需的技术能力 ID（capability manifest 的键）"
+          },
+          "templateId": { "type": ["string", "null"] },
+          "templateContractVersion": { "type": ["string", "null"] },
+          "missingHandling": {
+            "enum": ["block", "degrade", "not-applicable"],
+            "description": "该参数缺失时的处置：必需参数缺失即中断，不许填 0"
+          }
+        }
+      }
+    },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  }
+}

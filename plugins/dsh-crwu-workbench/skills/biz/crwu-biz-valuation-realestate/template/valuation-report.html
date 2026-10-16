@@ -2,81 +2,432 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<!-- 报告模板：占位符由 scripts/build_report.py 替换。本文件**只读**，产物写进估值案例目录。 -->
-<title>房地产估值报告 · {{valuationId}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>房地产估值报告 · {{projectId}} / {{planId}}</title>
+<!--
+  房地产估值报告模板（只读技术骨架）。
+
+  这份文件由 scripts/build_report.py 用「估值报告数据.json」渲染，模型不能直接写这个文件，
+  也不能写 HTML 片段 / 样式 / 脚本。规则：
+  1. 数据槽写成双花括号的名字，由脚本替换；脚本没替换完会直接失败，不会静默漏印。
+  2. 状态相关文案用 IF 注释块选择：IF 标记单独占一行，块内文案属于模板，不属于脚本。
+  3. CSS 与 JS 全部内联，不引用任何 CDN；离线双击打开即可阅读，图片以 data URI 内嵌。
+  4. 全部文案是"可复核的业务推导与工具轨迹"，不含模型隐藏思维链。
+-->
 <style>
-  :root { color-scheme: light dark; }
-  body { margin: 0 auto; max-width: 900px; padding: 32px 20px 64px;
-         font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-         line-height: 1.7; color: #1a1a1a; background: #fff; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #e5e5e5; }
-  .sub { color: #666; font-size: 13px; margin: 0 0 20px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
-  th, td { border: 1px solid #e0e0e0; padding: 6px 8px; text-align: left; vertical-align: top; }
-  th { background: #f6f6f6; font-weight: 600; }
-  dl { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 4px 12px; margin: 8px 0; font-size: 14px; }
-  dt { color: #666; } dd { margin: 0; font-variant-numeric: tabular-nums; }
-  ul { margin: 6px 0; padding-left: 20px; font-size: 13px; }
-  .note { background: #fbf7e8; border-left: 3px solid #e0c060; padding: 8px 12px; font-size: 13px; margin: 12px 0; }
-  .gap { background: #fdf3f2; border-left: 3px solid #d08a80; padding: 8px 12px; font-size: 13px; margin: 12px 0; }
-  .muted { color: #777; font-size: 12px; }
-  footer { margin-top: 40px; color: #888; font-size: 12px; }
+  :root{
+    --crwu-fg:#1a1a1a; --crwu-muted:#666; --crwu-bg:#fff; --crwu-card:#fff;
+    --crwu-line:#e2e2e2; --crwu-head:#f6f6f6; --crwu-code:#f2f2f2;
+    --crwu-note-bg:#fbf7e8; --crwu-note-line:#e0c060;
+    --crwu-gap-bg:#fdf3f2; --crwu-gap-line:#d08a80;
+    --crwu-ok:#1f7a3d; --crwu-bad:#b3261e; --crwu-link:#0b62c4;
+  }
+  html[data-ds-dark-theme] body, body[data-ds-dark-theme]{
+    --crwu-fg:#e8e8e8; --crwu-muted:#a3a3a3; --crwu-bg:#16181c; --crwu-card:#1d2025;
+    --crwu-line:#33373d; --crwu-head:#24272d; --crwu-code:#24272d;
+    --crwu-note-bg:#2b2718; --crwu-note-line:#8a7634;
+    --crwu-gap-bg:#2c1e1d; --crwu-gap-line:#7d4a44;
+    --crwu-ok:#5fd08a; --crwu-bad:#ff8a80; --crwu-link:#6fb3ff;
+  }
+  /* 显式浅色主题优先于系统偏好：prefers-color-scheme 的回退不许覆盖显式选择。 */
+  html[data-ds-theme="light"] body{
+    --crwu-fg:#1a1a1a; --crwu-muted:#666; --crwu-bg:#fff; --crwu-card:#fff;
+    --crwu-line:#e2e2e2; --crwu-head:#f6f6f6; --crwu-code:#f2f2f2;
+    --crwu-note-bg:#fbf7e8; --crwu-note-line:#e0c060;
+    --crwu-gap-bg:#fdf3f2; --crwu-gap-line:#d08a80;
+    --crwu-ok:#1f7a3d; --crwu-bad:#b3261e; --crwu-link:#0b62c4;
+  }
+  @media (prefers-color-scheme: dark){
+    html:not([data-ds-dark-theme]):not([data-ds-theme="light"]) body{
+      --crwu-fg:#e8e8e8; --crwu-muted:#a3a3a3; --crwu-bg:#16181c; --crwu-card:#1d2025;
+      --crwu-line:#33373d; --crwu-head:#24272d; --crwu-code:#24272d;
+      --crwu-note-bg:#2b2718; --crwu-note-line:#8a7634;
+      --crwu-gap-bg:#2c1e1d; --crwu-gap-line:#7d4a44;
+      --crwu-ok:#5fd08a; --crwu-bad:#ff8a80; --crwu-link:#6fb3ff;
+    }
+  }
+  *{box-sizing:border-box;}
+  body{margin:0 auto;max-width:1120px;padding:28px 20px 72px;background:var(--crwu-bg);
+       color:var(--crwu-fg);line-height:1.7;
+       font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}
+  h1{font-size:22px;margin:0 0 6px;}
+  h2{font-size:16px;margin:30px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--crwu-line);}
+  h3{font-size:14px;margin:18px 0 6px;}
+  .sub{color:var(--crwu-muted);font-size:13px;margin:0 0 14px;overflow-wrap:anywhere;}
+  .badge{display:inline-block;border:1px solid var(--crwu-line);border-radius:999px;
+         padding:1px 10px;font-size:12px;background:var(--crwu-head);}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0;table-layout:auto;}
+  th,td{border:1px solid var(--crwu-line);padding:6px 8px;text-align:left;vertical-align:top;
+        overflow-wrap:anywhere;}
+  th{background:var(--crwu-head);font-weight:600;white-space:nowrap;}
+  dl{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:4px 12px;margin:8px 0;font-size:14px;}
+  dt{color:var(--crwu-muted);} dd{margin:0;overflow-wrap:anywhere;}
+  ul.plain{margin:6px 0;padding-left:20px;font-size:13px;}
+  .muted{color:var(--crwu-muted);font-size:12px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+        background:var(--crwu-code);padding:1px 4px;border-radius:4px;overflow-wrap:anywhere;}
+  .note{background:var(--crwu-note-bg);border-left:3px solid var(--crwu-note-line);
+        padding:8px 12px;font-size:13px;margin:12px 0;}
+  .gap{background:var(--crwu-gap-bg);border-left:3px solid var(--crwu-gap-line);
+       padding:8px 12px;font-size:13px;margin:12px 0;}
+  .verdict{font-size:14px;padding:10px 12px;border-radius:8px;border:1px solid var(--crwu-line);
+           background:var(--crwu-card);}
+  .verdict.ok{border-color:var(--crwu-ok);}
+  .verdict.warn{border-color:var(--crwu-note-line);}
+  .verdict.bad{border-color:var(--crwu-bad);}
+  .ok-text{color:var(--crwu-ok);} .bad-text{color:var(--crwu-bad);}
+  a{color:var(--crwu-link);}
+  details{margin:8px 0;border:1px solid var(--crwu-line);border-radius:8px;background:var(--crwu-card);}
+  summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:600;}
+  details > div{padding:0 12px 10px;}
+  .thumb{border:1px solid var(--crwu-line);border-radius:6px;background:transparent;padding:0;
+         margin:2px 6px 2px 0;cursor:zoom-in;line-height:0;}
+  .thumb:focus-visible{outline:2px solid var(--crwu-link);outline-offset:2px;}
+  .thumb img{display:block;width:132px;height:99px;object-fit:cover;border-radius:5px;}
+  .thumb-missing{display:inline-block;font-size:12px;color:var(--crwu-muted);
+                 border:1px dashed var(--crwu-line);border-radius:6px;padding:4px 8px;}
+  #crwu-image-preview{border:1px solid var(--crwu-line);border-radius:10px;background:var(--crwu-card);
+                      color:var(--crwu-fg);max-width:min(96vw,1100px);padding:12px;}
+  #crwu-image-preview img{max-width:100%;height:auto;display:block;}
+  #crwu-image-preview-caption{font-size:12px;color:var(--crwu-muted);margin-top:8px;overflow-wrap:anywhere;}
+  footer{margin-top:44px;color:var(--crwu-muted);font-size:12px;}
+  @media print{
+    body{max-width:none;padding:0;background:#fff;color:#000;}
+    h2{page-break-after:avoid;}
+    table{page-break-inside:auto;}
+    thead{display:table-header-group;}
+    tr,th,td{page-break-inside:avoid;}
+    details{border-color:#bbb;break-inside:auto;}
+    details > summary{display:none;}
+    a{color:#000;text-decoration:none;}
+  }
 </style>
 </head>
-<body>
+<body data-report-status="{{reportStatus}}">
+
 <h1>房地产估值报告</h1>
-<p class="sub">估值 ID：{{valuationId}} · 报告生成时间：{{generatedAt}}</p>
+<p class="sub">
+  <span class="badge">
+<!--IF status=completed-->已完成<!--ENDIF-->
+<!--IF status=blocked-->已中断（未完成）<!--ENDIF-->
+<!--IF status=partial-->未定稿<!--ENDIF-->
+<!--IF status=failed-->执行失败<!--ENDIF-->
+<!--IF status=cancelled-->已取消<!--ENDIF-->
+  </span>
+  项目 <span class="mono">{{projectId}}</span> · 方案 <span class="mono">{{planId}}</span> ·
+  生成时间 {{generatedAtText}} · 输入摘要 <span class="mono">{{inputDigest}}</span>
+</p>
 
-<h2>一、结论</h2>
-<dl>
-  <dt>采用方法</dt><dd>{{methodLabel}}（{{method}}）</dd>
-  <dt>评估基准日</dt><dd>{{baseDate}}</dd>
-  <dt>评估单价</dt><dd>{{unitPrice}}</dd>
-  <dt>评估总价</dt><dd>{{totalValue}}</dd>
-</dl>
-<p class="muted">方法理由：{{methodReason}}</p>
+<h2 id="conclusion">一、结果与状态</h2>
 
-<h2>二、评估对象</h2>
-<dl>
-{{objectRows}}
-</dl>
-
-<h2>三、参数与取值依据</h2>
+<!--IF status=completed-->
+<div data-conclusion="final">
+<p class="verdict ok">本轮估值已完成：方法判定、知识引用、案例证据、脚本计算与工作簿校验均已通过（明细见本页各节与「十、交付件与校验回执」）。</p>
+<!--IF hasConclusions-->
 <table>
-  <thead><tr><th>参数</th><th>取值</th><th>依据</th></tr></thead>
-  <tbody>
-{{parameterRows}}
-  </tbody>
+  <thead><tr><th>评估对象</th><th>价值范围</th><th>方法</th><th>评估单价</th><th>评估总价</th><th>币种</th><th>结论依据（知识）</th><th>计算引用</th></tr></thead>
+  <tbody>{{conclusionRows}}</tbody>
 </table>
+<!--ENDIF-->
+<!--IF !flag:hasConclusions--><p class="muted">没有登记对象结论。</p><!--ENDIF-->
+</div>
+<!--ENDIF-->
 
-<h2>四、案例</h2>
-{{caseTables}}
-
-<h2>五、知识来源</h2>
+<!--IF status=partial-->
+<div data-conclusion="provisional">
+<p class="verdict warn">本次估值尚未定稿：下列金额是<strong>暂算</strong>口径，未定稿，不作为估值结论，也不得计入项目汇总。</p>
+<h3>已完成的工作</h3>
+<!--IF hasCompletedWork--><ul class="plain">{{completedWorkItems}}</ul><!--ENDIF-->
+<!--IF !flag:hasCompletedWork--><p class="muted">没有登记已完成的工作。</p><!--ENDIF-->
+<h3>未完成 / 待补齐</h3>
+<!--IF hasOutstanding--><ul class="plain">{{outstandingItems}}</ul><!--ENDIF-->
+<!--IF !flag:hasOutstanding--><p class="muted">没有登记未完成项。</p><!--ENDIF-->
+<!--IF hasReferenceSummary-->
+<div class="note" data-reference="listing-reference">
+<p class="verdict"><strong>{{referenceLabel}}</strong>（价格性质：挂牌）：{{referenceBasis}}</p>
+<ul class="plain">{{referenceSourceItems}}</ul>
+</div>
+<!--ENDIF-->
+<h3>暂算金额</h3>
+<!--IF hasProvisional-->
 <table>
-  <thead><tr><th>路由</th><th>来源</th><th>更新时间</th><th>正文指纹</th></tr></thead>
-  <tbody>
-{{knowledgeRows}}
-  </tbody>
+  <thead><tr><th>评估对象</th><th>价值范围</th><th>方法</th><th>暂算单价</th><th>暂算总价</th><th>币种</th><th>计算引用</th></tr></thead>
+  <tbody>{{provisionalRows}}</tbody>
 </table>
+<!--ENDIF-->
+<!--IF !flag:hasProvisional--><p class="muted">还没有可展示的暂算金额。</p><!--ENDIF-->
+</div>
+<!--ENDIF-->
 
-<h2>六、待确认事项</h2>
-{{manualItems}}
+<!--IF status=blocked-->
+<div data-conclusion="none">
+<p class="verdict bad">本次估值未完成：方案在「{{stageLabel}}」阶段被阻断。下面列出缺什么、查过哪、为什么、怎么补；本报告<strong>不含金额结论</strong>。</p>
+<!--IF hasPartialObjectResults-->
+<h3>阻断前已经形成的材料（过程值，不是结论，不得计入项目汇总）</h3>
+<table>
+  <thead><tr><th>评估对象</th><th>价值范围</th><th>方法</th><th>过程单价</th><th>过程总价</th><th>币种</th><th>计算引用</th></tr></thead>
+  <tbody>{{partialObjectRows}}</tbody>
+</table>
+<!--ENDIF-->
+</div>
+<!--ENDIF-->
 
-<h2>七、能力缺口</h2>
-{{capabilityGaps}}
+<!--IF status=failed-->
+<div data-conclusion="none">
+<p class="verdict bad">本次估值未能完成：在「{{stageLabel}}」阶段执行失败。原因：{{errorText}}</p>
+<h3>已有文件（工作中材料）</h3>
+<!--IF hasAvailableArtifacts--><ul class="plain">{{availableArtifactItems}}</ul><!--ENDIF-->
+<!--IF !flag:hasAvailableArtifacts--><p class="muted">没有登记已有文件。</p><!--ENDIF-->
+</div>
+<!--ENDIF-->
 
-<h2>八、交付件</h2>
-<ul>
-  <li>计算底稿：{{artifactXlsx}}</li>
-  <li>结果 JSON：{{artifactJson}}</li>
-  <li>本报告：{{artifactHtml}}</li>
-</ul>
+<!--IF status=cancelled-->
+<div data-conclusion="none">
+<p class="verdict bad">本次估值已取消：停在「{{stageLabel}}」阶段。原因：{{errorText}}</p>
+<h3>已有文件（工作中材料）</h3>
+<!--IF hasAvailableArtifacts--><ul class="plain">{{availableArtifactItems}}</ul><!--ENDIF-->
+<!--IF !flag:hasAvailableArtifacts--><p class="muted">没有登记已有文件。</p><!--ENDIF-->
+</div>
+<!--ENDIF-->
+
+<h3>阻断项与补齐动作</h3>
+<!--IF hasBlockers-->
+<table>
+  <thead><tr><th>类型</th><th>阶段</th><th>缺少</th><th>已检查</th><th>原因</th><th>补齐动作</th></tr></thead>
+  <tbody>{{blockerRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasBlockers--><p class="muted">没有待确认事项，也没有阻断项。</p><!--ENDIF-->
+
+<h2 id="sources">二、事实来源与输入</h2>
+<dl>
+  <dt>用户选择的方法</dt><dd>{{methodRequestLabel}}</dd>
+  <dt>评估目的</dt><dd>
+<!--IF purposeSpecified-->{{purposeText}}<!--ENDIF-->
+<!--IF !flag:purposeSpecified--><strong>本次未指定评估目的</strong>（用户没有填：不构成正式估值前提，也不得据此声称估值已完成）<!--ENDIF-->
+  </dd>
+  <dt>价值类型</dt><dd>
+<!--IF valueTypeSpecified-->{{valueTypeText}}<!--ENDIF-->
+<!--IF !flag:valueTypeSpecified--><strong>本次未指定价值类型</strong>（用户没有填：不构成正式估值前提，也不得据此声称估值已完成）<!--ENDIF-->
+  </dd>
+  <dt>评估基准日</dt><dd>
+<!--IF baseDateSpecified-->{{baseDateText}}<!--ENDIF-->
+<!--IF !flag:baseDateSpecified-->本次未指定评估基准日（以下按采集时点组织数据，不构成历史时点价值主张）<!--ENDIF-->
+  </dd>
+  <dt>补充要求（用户原文）</dt><dd>
+<!--IF hasSupplementalPrompt-->{{supplementalPrompt}}<!--ENDIF-->
+<!--IF !flag:hasSupplementalPrompt--><span class="muted">未填写补充要求</span><!--ENDIF-->
+  </dd>
+  <dt>输入冻结摘要</dt><dd><span class="mono">{{inputDigest}}</span></dd>
+  <dt>案例目录</dt><dd><span class="mono">{{caseRootText}}</span></dd>
+</dl>
+<h3>资料清单</h3>
+<!--IF hasMaterials-->
+<table>
+  <thead><tr><th>fileId</th><th>原名称</th><th>归档相对路径</th><th>类型</th><th>大小(字节)</th><th>sha256</th><th>创建时间</th><th>修改时间</th><th>可读</th><th>重复来源</th></tr></thead>
+  <tbody>{{materialRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasMaterials--><p class="muted">没有登记资料。</p><!--ENDIF-->
+
+<h2 id="rules">三、适用规则与方法理由</h2>
+<!--IF hasAssessment-->
+<dl>
+  <dt>方案</dt><dd><span class="mono">{{assessmentPlanId}}</span></dd>
+  <dt>主方法</dt><dd>{{primaryMethodText}}</dd>
+  <dt>已选方法</dt><dd>{{selectedMethodsText}}</dd>
+  <dt>实际采用的方法</dt><dd>{{adoptedMethodsText}}</dd>
+  <dt>是否尊重用户选择</dt><dd>{{requestedMethodHonoredText}}</dd>
+  <dt>判定时间</dt><dd>{{decidedAtText}}</dd>
+</dl>
+<!--IF hasAssessments-->
+<table>
+  <thead><tr><th>方法</th><th>业务适用</th><th>当前可实现</th><th>已选</th><th>理由</th><th>规则引用</th><th>冲突</th></tr></thead>
+  <tbody>{{assessmentRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF hasAssessmentNotes--><ul class="plain">{{assessmentNoteItems}}</ul><!--ENDIF-->
+<!--IF hasMethodResults-->
+<h3>逐方法结果<!--IF hasMultipleMethods-->（组合方法：各方法分别记录，<strong>不相加、不默认平均</strong>）<!--ENDIF--></h3>
+<table>
+  <thead><tr><th>方法</th><th>单价</th><th>总价</th><th>依据</th><th>计算表模板</th></tr></thead>
+  <tbody>{{methodResultRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !hasMethodResults--><p class="muted">没有逐方法结果记录。</p><!--ENDIF-->
+<!--ENDIF-->
+<!--IF !flag:hasAssessment--><p class="muted">没有登记方法判定。</p><!--ENDIF-->
+
+<h3>知识引用（routeId + 正文指纹 + 节 / 规则 ID）</h3>
+<!--IF hasKnowledge-->
+<table>
+  <thead><tr><th>routeId</th><th>节点名</th><th>解析路径</th><th>来源</th><th>知识库</th><th>更新时间</th><th>正文指纹</th><th>快照文件</th><th>节 ID</th><th>规则 ID</th></tr></thead>
+  <tbody>{{knowledgeRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasKnowledge--><p class="muted">没有登记知识来源。</p><!--ENDIF-->
+
+<h2 id="retrieval">四、取数轨迹</h2>
+<!--IF hasRetrieval-->
+<table>
+  <thead><tr><th>任务</th><th>案例</th><th>来源</th><th>阶段</th><th>结果</th><th>最终 URL</th><th>原因码</th><th>恢复策略</th><th>恢复次数</th></tr></thead>
+  <tbody>{{retrievalRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasRetrieval--><p class="muted">没有登记取数轨迹。</p><!--ENDIF-->
+<!--IF hasRecovery-->
+<div class="note"><strong>挑战恢复摘要：</strong>本页取数过程中出现过可见人机验证，已按固定脚本策略尝试恢复；恢复结果、策略与次数见上表，未恢复的任务保留断点等待人工处理，不把验证码页面当作案例证据。</div>
+<!--ENDIF-->
+
+<h3>知识查找轨迹（精确路径 → 同目录同名 → 别名 → 身份已验证镜像）</h3>
+<!--IF hasLookups-->
+<table>
+  <thead><tr><th>routeId</th><th>通道</th><th>目标</th><th>结果</th><th>说明</th></tr></thead>
+  <tbody>{{lookupRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasLookups--><p class="muted">没有登记知识查找轨迹。</p><!--ENDIF-->
+
+<h2 id="comparables">五、案例筛选</h2>
+<!--IF hasComparables-->
+<table>
+  <thead><tr><th>caseId</th><th>案例</th><th>来源</th><th>交易性质</th><th>挂牌日</th><th>单价</th><th>建筑面积</th><th>是否采用</th><th>保留理由</th><th>剔除理由</th><th>截图证据</th></tr></thead>
+  <tbody>{{comparableRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasComparables--><p class="muted">没有登记候选案例。</p><!--ENDIF-->
+
+<h3>截图证据清单（顶层 evidence）</h3>
+<!--IF hasEvidence-->
+<table>
+  <thead><tr><th>caseId</th><th>名称</th><th>来源</th><th>页面 URL</th><th>采集时间</th><th>有效性</th><th>相对路径</th><th>指纹</th><th>缩略图</th></tr></thead>
+  <tbody>{{evidenceRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasEvidence--><p class="muted">没有登记截图证据。</p><!--ENDIF-->
+
+<h2 id="parameters">六、参数依据</h2>
+<!--IF hasParameters-->
+<table>
+  <thead><tr><th>参数</th><th>名称</th><th>取值</th><th>单位</th><th>取值日期</th><th>适用地区</th><th>来源引用</th><th>规则引用</th><th>状态</th></tr></thead>
+  <tbody>{{parameterRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasParameters--><p class="muted">没有登记参数。</p><!--ENDIF-->
+
+<h2 id="calculation">七、公式与中间值</h2>
+<!--IF hasCalculations-->
+<details open>
+  <summary>展开 / 收起全部计算步骤（打印时自动展开，不裁表）</summary>
+  <div>
+  <table>
+    <thead><tr><th>步骤</th><th>公式 ID</th><th>说明</th><th>表达式</th><th>代入值（名称 = 值 单位｜来源）</th><th>结果</th><th>单位</th><th>规则引用</th></tr></thead>
+    <tbody>{{calculationRows}}</tbody>
+  </table>
+  </div>
+</details>
+<!--ENDIF-->
+<!--IF !flag:hasCalculations--><p class="muted">没有登记计算步骤与中间值。</p><!--ENDIF-->
+<p class="muted">金额与单位由计算脚本按知识规则一次生成，本页只逐字排版，不再次取整。</p>
+
+<h2 id="checks">八、规则校验</h2>
+<!--IF hasRuleChecks-->
+<table>
+  <thead><tr><th>规则</th><th>说明</th><th>结论</th><th>明细</th><th>规则引用</th></tr></thead>
+  <tbody>{{ruleCheckRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasRuleChecks--><p class="muted">没有登记规则校验。</p><!--ENDIF-->
+
+<h2 id="limitations">九、限制与缺口</h2>
+<!--IF hasLimitations--><div class="gap"><ul class="plain">{{limitationItems}}</ul></div><!--ENDIF-->
+<!--IF !flag:hasLimitations--><p class="muted">没有登记能力缺口，也没有其它限制。</p><!--ENDIF-->
+
+<h2 id="artifacts">十、交付件与校验回执</h2>
+<h3>交付件</h3>
+<!--IF hasArtifacts-->
+<table>
+  <thead><tr><th>artifactId</th><th>类型</th><th>相对路径</th><th>指纹</th><th>是否存在</th></tr></thead>
+  <tbody>{{artifactRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasArtifacts--><p class="muted">没有登记交付件。</p><!--ENDIF-->
+
+<h3>计算表（工作簿）</h3>
+<!--IF hasWorkbooks-->
+<table>
+  <thead><tr><th>workbookId</th><th>相对路径</th><th>模板 ID</th><th>模板指纹</th><th>对象</th><th>已重算</th><th>重算说明</th></tr></thead>
+  <tbody>{{workbookRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasWorkbooks--><p class="muted">没有登记工作簿。</p><!--ENDIF-->
+
+<h3>finalize 校验回执</h3>
+<!--IF hasValidation-->
+<table>
+  <thead><tr><th>校验项</th><th>结果</th><th>说明</th></tr></thead>
+  <tbody>{{validationRows}}</tbody>
+</table>
+<!--ENDIF-->
+<!--IF !flag:hasValidation--><p class="muted">没有登记校验回执。</p><!--ENDIF-->
 
 <footer>
-  <p>数字口径以计算底稿（<code>{{artifactXlsx}}</code>）重算结果为准；本报告为一次性渲染的人读件，不参与计算。</p>
-  <p>本报告由 CRWU 工作台生成。能力缺口与待确认事项已如实列出，未列出的部分不代表已完成核验。</p>
+  <p>数字口径以「估值报告数据.json」与计算表重算结果为准；本页是一次性渲染的人读件，不参与计算，也不四舍五入。</p>
+  <p>本页图片已在渲染阶段按指纹校验并内嵌为 data URI，单独转发本 HTML 不会断图；磁盘上的原始图片目录始终保留。报告体积过大时，请改用附带「图片目录」的报告包，不要让图片静默缺失。</p>
+  <p>能力缺口与待确认事项已如实列出；未列出的部分不代表已完成核验。</p>
 </footer>
+
+<dialog id="crwu-image-preview" aria-label="图片预览">
+  <img id="crwu-image-preview-img" alt="">
+  <p id="crwu-image-preview-caption"></p>
+  <p class="muted">按 Esc 或点击空白处关闭。</p>
+</dialog>
+
+<script type="application/json" id="crwu-report-data">{{dataJson}}</script>
+<script>
+(function () {
+  var dialog = document.getElementById('crwu-image-preview');
+  var dialogImage = document.getElementById('crwu-image-preview-img');
+  var dialogCaption = document.getElementById('crwu-image-preview-caption');
+  function expandAll() {
+    var nodes = document.querySelectorAll('details');
+    for (var index = 0; index < nodes.length; index += 1) { nodes[index].open = true; }
+  }
+  if (dialog && dialogImage) {
+    document.addEventListener('click', function (event) {
+      var node = event.target;
+      while (node && node !== document.body) {
+        if (node.getAttribute && node.getAttribute('data-preview-source') !== null) {
+          var image = node.querySelector('img');
+          if (image) {
+            dialogImage.src = image.getAttribute('src');
+            dialogImage.alt = image.getAttribute('alt') || '';
+            if (dialogCaption) {
+              dialogCaption.textContent = node.getAttribute('data-preview-caption') || '';
+            }
+            if (typeof dialog.showModal === 'function') { dialog.showModal(); }
+            else { dialog.setAttribute('open', 'open'); }
+          }
+          return;
+        }
+        node = node.parentNode;
+      }
+    });
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) { dialog.close(); }
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && dialog.open) { dialog.close(); }
+    });
+  }
+  window.addEventListener('beforeprint', expandAll);
+  if (window.matchMedia) {
+    var media = window.matchMedia('print');
+    var onChange = function (event) { if (event.matches) { expandAll(); } };
+    if (media.addEventListener) { media.addEventListener('change', onChange); }
+    else if (media.addListener) { media.addListener(onChange); }
+  }
+})();
+</script>
 </body>
 </html>

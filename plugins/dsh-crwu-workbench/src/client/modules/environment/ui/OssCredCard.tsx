@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Button, Chip, Notice } from '../../../ui/primitives.tsx'
+import { TextInput } from '../../../ui/components/index.ts'
 import { WORKBENCH_CLASSES as C } from '../../../shell/consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
 import { environmentApi, type EnvResult } from '../api.ts'
@@ -153,28 +154,26 @@ export function OssCredCard(props: OssCredCardProps): React.ReactElement {
       ? <div className={C.stepFields}>
           <label className={C.field}>
             <span className={C.fieldLabel}>{zhCN.envOssAkLabel}</span>
-            <input
-              className={C.input}
+            <TextInput
               type="text"
               name="crwu-oss-ak"
               autoComplete="off"
               spellCheck={false}
               value={accessKeyId}
               disabled={busy}
-              onChange={(event) => { setAccessKeyId(event.target.value) }}
+              onChange={(value) => { setAccessKeyId(value) }}
             />
           </label>
           <label className={C.field}>
             <span className={C.fieldLabel}>{zhCN.envOssSkLabel}</span>
-            <input
-              className={C.input}
+            <TextInput
               type="password"
               name="crwu-oss-sk"
               autoComplete="off"
               spellCheck={false}
               value={accessKeySecret}
               disabled={busy}
-              onChange={(event) => { setAccessKeySecret(event.target.value) }}
+              onChange={(value) => { setAccessKeySecret(value) }}
             />
           </label>
         </div>

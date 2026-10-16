@@ -71,7 +71,10 @@ function fakeBuildStore(patch = {}) {
  * 断言却落在"请重启 profile"那一屏上。
  */
 function bootOk(patch = {}) {
-  return { ok: true, protocol: WORKBENCH_PROTOCOL, parentSessionId: '', ...patch }
+  return {
+    ok: true, protocol: WORKBENCH_PROTOCOL, permissionSchemaVersion: PERMISSION_SCHEMA_VERSION,
+    parentSessionId: '', ...patch,
+  }
 }
 
 /**
@@ -554,9 +557,11 @@ test('环境标记是实心圆徽标（圆底 + 白字形），四态各有形�
   assert.match(badge, /width:\s*16px/, '尺寸固定，四态之间不许因为形状不同而跳动')
   // 白字形：色块上的字形必须恒为白，所以用 static 白而不是会在深色主题翻黑的那几个 alias。
   assert.match(badge, /color:\s*var\(--dsw-static-neutral-bluish-00\)/)
-  // 通过 / 不通过 / 自检中都是**实心**圆底（各自的状态色），尚未自检才是空心圈。
+  // Pass / fail / checking are all solid discs (each with its own tone); "pass" uses the brand
+  // blue since 2026-10-16 (bright green clashed with the info blue on the environment page).
+  // Not-yet-checked is the only hollow ring.
   for (const [tone, token] of [
-    ['ok', '--dsw-alias-state-success-primary'],
+    ['ok', '--crwu-primary-bg'],
     ['bad', '--dsw-alias-state-error-primary'],
     ['busy', '--dsw-alias-state-warn-primary'],
   ]) {
@@ -3336,35 +3341,52 @@ test('报告评估 是房地产估值模块：资料入口 + 方法 + 可选基�
   const { modules } = await mountChecked(services)
 
   modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
-  const after = rerender(WorkbenchPanel, { services, modules })
+  // 协议 35：进页面先过门禁。这一条测的是**正文**（资料入口 / 方法 / 基准日），
+  // 所以注入一个"门禁已放行 + 草稿"的控制器；门禁自身的行为在
+  // `client-valuation-handoff.test.mjs` 里逐条覆盖。
+  const evaluation = fakeEvaluationController({ phase: 'draft' })
+  const after = rerender(WorkbenchPanel, { services, modules, evaluation })
   // 面板这一页现在是估值模块（`crwu-valuation`），不再是占位页。
   const pane = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes('crwu-valuation'))
   assert.ok(pane, '估值模块的容器要在')
   const paneText = textOf(pane)
-  // 页面抬头**不在这一页里**：它由面板按导航元数据渲染（估值 / 房地产 → 「房地产估值」），
-  // 所以这里查的是页面内容区里那一块页头，而不是估值页自己画一个写死的名字。
+  // Page identity comes from the top "valuation" tab: the valuation node declares no navPageHead
+  // (the duplicate large heading from the screenshot feedback, 2026-10-16). Other nodes keep it.
   const head = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.navPageHead))
-  assert.ok(head, '估值页要有页面标题区（标题随二级目录变化）')
-  const headText = textOf(head)
-  assert.ok(headText.includes(zhCN.valuationPageTitle), '标题要按二级目录给出（房地产估值）')
-  assert.ok(headText.includes(zhCN.valuationIntroLead), '要有一句简短说明')
+  assert.equal(head, null, '估值页不再重复画一个大页头')
+  const valuationTab = findAll(after, (node) => node.props?.role === 'tab'
+    && textOf(node) === zhCN.navParentValuation)
+  assert.ok(valuationTab.length >= 1, '顶部「估值」页签仍然给出页面身份')
   // 占位页那套话术（"将来提供" / "开发中" / 去报告审核）都不该再出现。
   // 被删掉的 Coming Soon 文案（`features/report-eval/` 已整体移除）：逐字钉住"不许复活"。
   for (const banned of ['该模块正在开发中', '开发中', '目前可以继续使用', '敬请期待', '重磅', '赋能']) {
     assert.equal(paneText.includes(banned), false, `不该再出现「${banned}」`)
   }
-  // 四种方法都在（自动判定 / 市场法 / 收益法 / 成本法），默认自动判定。
-  for (const method of ['自动判定', '市场法', '收益法', '成本法']) {
-    assert.ok(paneText.includes(method), `方法选项要有「${method}」`)
-  }
+  // 评估方法是**统一的单选下拉**，初始停在"请选择评估方法"（自动判定是选项，不是默认值）。
+  // 四个选项（自动判定 / 市场法 / 收益法 / 成本法）在展开时才渲染到 DOM —— 那份清单与
+  // "四项全可选 + 推荐标记"由 `client-valuation-pane.test.mjs` 直接渲染控件逐条钉住。
+  const methodSelect = find(pane, (node) => node.props?.['data-valuation-select'] === 'method')
+  assert.ok(methodSelect, '评估方法要用统一单选下拉（与资产类型同一种控件）')
+  const methodTrigger = find(methodSelect, (node) => node.props?.role === 'combobox')
+  assert.ok(methodTrigger, '方法下拉要有 combobox 语义')
+  assert.equal(methodTrigger.props['aria-expanded'], false, '收起时不画浮层')
+  assert.equal(methodTrigger.props.disabled, false, '草稿阶段表单可编辑')
+  // 触发器左端就是**当前值**（这份草稿已经选了市场法）；未选时显示占位。
+  assert.equal(textOf(methodSelect).includes(zhCN.valuationMethodMarket), true, '触发器显示当前选择')
+  assert.equal(textOf(methodSelect).includes(zhCN.valuationMethodPlaceholder), false,
+    '已经选好时不再显示占位')
+  // 两个必填项都要有统一标记（星号 + 读屏"必填"）。
+  assert.equal(paneText.includes(zhCN.valuationFieldRequired), true, '必填项要有统一标记')
+  assert.equal(paneText.includes(zhCN.valuationActionDisabledNoMethod), false, '两个必填项都选好了就不该报缺')
   // 基准日是**可选**的：界面上必须写明，否则用户会以为必须填。
   assert.ok(paneText.includes(zhCN.valuationBaseDateOptional), '基准日要标明可选')
-  // 没有资料时不能开始（按钮禁用），也不能现在就画抽屉。
+  // 已有资料、没扫完之前不能点「确认」（按钮禁用 + 可见原因），也不能现在就画抽屉。
   assert.equal(textOf(pane).includes(zhCN.valuationDrawerTitle), false, '还没确认时不该出现抽屉')
-  const startButton = findAll(pane, (node) => node.type === 'button'
+  const confirmButton = findAll(pane, (node) => node.type === 'button'
     && String(node.props?.className ?? '').includes('crwu-valuation-btn-primary'))
-  assert.ok(startButton.length > 0, '要有「开始估值」按钮')
-  assert.equal(startButton.some((node) => node.props?.disabled === true), true, '没有资料时开始按钮必须禁用')
+  assert.equal(confirmButton.length, 1, '工作面只有一个 primary')
+  assert.equal(textOf(confirmButton[0]), zhCN.valuationConfirm, '主操作逐字是「核对资料」')
+  assert.equal(textOf(confirmButton[0]).includes('检查并确认'), false, '旧的「检查并确认」不许回来')
   // 占位页不画报告列表、也不画环境四层。
   const text = textOf(after)
   assert.equal(onReportPage(after), false)
@@ -3384,54 +3406,69 @@ function tabsIn(tree, label) {
   return findAll(list, (node) => node.props?.role === 'tab')
 }
 
-test('两级目录按模块分离：报告审核树只有审核，报告评估树只有估值且不出现审核', async () => {
+test('两级目录按模块分离：审核树扁平为一条主行，评估树只有估值且不出现审核', async () => {
   stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
   const { tree, modules } = await mountChecked(services)
 
-  // 自检通过默认落在审核 / 报告审核（既有习惯不变）。审核模块的一级目录**只有审核**。
-  let parents = tabsIn(tree, zhCN.navParentsLabel)
-  assert.deepEqual(parents.map((tab) => textOf(tab)), ['审核'])
-  assert.deepEqual(parents.map((tab) => tab.props['aria-selected']), [true])
-  let children = tabsIn(tree, zhCN.navChildrenLabel)
-  assert.deepEqual(children.map((tab) => textOf(tab)), ['报告审核', '本地审核'])
-  assert.deepEqual(children.map((tab) => tab.props['aria-selected']), [true, false])
+  // 审核模块只有一个一级目录（审核），所以它**扁平**成一条主行：直接列出两个叶子页面，
+  // 冗余的一级「审核」行不画。内部 group / node id、门禁与默认落点都不变。
+  let primary = tabsIn(tree, zhCN.navParentsLabel)
+  assert.deepEqual(primary.map((tab) => textOf(tab)), ['报告审核', '本地审核'])
+  assert.deepEqual(primary.map((tab) => tab.props['aria-selected']), [true, false])
+  assert.equal(tabsIn(tree, zhCN.navChildrenLabel), null, '审核树不再画二级胶囊行')
+  assert.equal(findAll(tree, (node) => node.props?.role === 'tab'
+    && textOf(node) === zhCN.navParentAudit).length, 0, '不再渲染一级「审核」页签')
+  // 叶子页签沿用稳定 child id，并且都用主行类（选中项额外带 on）。
+  assert.deepEqual(primary.map((tab) => tab.props.id),
+    ['crwu-workbench-tab-audit.report', 'crwu-workbench-tab-audit.local'])
+  for (const tab of primary) {
+    assert.equal(String(tab.props.className ?? '').split(/\s+/).includes('crwu-audit-tab'), true,
+      '审核叶子页签用主行类')
+  }
+  assert.equal(String(primary[0].props.className).split(/\s+/).includes('crwu-audit-tab-on'), true)
 
-  // 两级页签的 `aria-controls` 都指向**同一个真实存在**的内容区。
+  // 所有页签的 `aria-controls` 都指向**同一个真实存在**的内容区。
   const panel = find(tree, (node) => node.props?.id === 'crwu-workbench-tabpanel')
   assert.ok(panel, '内容区要存在（aria-controls 因此永远指向真实节点）')
   assert.equal(panel.props.role, 'tabpanel')
-  for (const tab of [...parents, ...children]) {
+  assert.equal(panel.props['aria-labelledby'], 'crwu-workbench-tab-audit.report')
+  for (const tab of primary) {
     assert.equal(tab.props['aria-controls'], 'crwu-workbench-tabpanel')
   }
 
+  // 点击叶子页签走真实节点导航（本地审核 → 报告审核）；扁平后点击与选中仍同步。
+  primary.find((tab) => textOf(tab) === '本地审核').props.onClick()
+  let clicked = rerender(WorkbenchPanel, { services, modules })
+  assert.deepEqual(tabsIn(clicked, zhCN.navParentsLabel).map((tab) => tab.props['aria-selected']), [false, true])
+  assert.ok(findByClass(clicked, 'crwu-audit-local'), '本地审核页要在内容区里渲染')
+  tabsIn(clicked, zhCN.navParentsLabel).find((tab) => textOf(tab) === '报告审核').props.onClick()
+  clicked = rerender(WorkbenchPanel, { services, modules })
+  assert.deepEqual(tabsIn(clicked, zhCN.navParentsLabel).map((tab) => tab.props['aria-selected']), [true, false])
+  assert.equal(onReportPage(clicked), true)
+
   // 侧栏切到「报告评估」：目录条整棵换成评估树 —— 一级只有「估值」，**不出现「审核」**，
-  // 二级立即换成估值那一组，正文也跟着换。
+  // 二级那一条整个不画（估值是一级页）。
   modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
   const valuation = rerender(WorkbenchPanel, { services, modules })
-  parents = tabsIn(valuation, zhCN.navParentsLabel)
-  children = tabsIn(valuation, zhCN.navChildrenLabel)
-  assert.deepEqual(parents.map((tab) => textOf(tab)), ['估值'], '评估树里不许出现审核入口')
-  assert.deepEqual(parents.map((tab) => tab.props['aria-selected']), [true])
-  assert.deepEqual(children.map((tab) => textOf(tab)), ['房地产', '土地开发中', '机器设备开发中'])
-  assert.deepEqual(children.map((tab) => tab.props['aria-selected']), [true, false, false], '默认选第一个可用页面')
+  const evalParents = tabsIn(valuation, zhCN.navParentsLabel)
+  assert.deepEqual(evalParents.map((tab) => textOf(tab)), ['估值'], '评估树里不许出现审核入口')
+  assert.deepEqual(evalParents.map((tab) => tab.props['aria-selected']), [true])
+  assert.equal(tabsIn(valuation, zhCN.navChildrenLabel), null, '估值不再有二级目录页签')
   assert.equal(onReportPage(valuation), false, '正文跟着目录换')
-  // 「开发中」的二级目录：可显示、不可进入。
-  for (const tab of children.slice(1)) {
-    assert.equal(tab.props.disabled, true, '「开发中」不可进入')
-    assert.equal(tab.props['aria-disabled'], true, '也要说给读屏')
-  }
-  // 页面标题按二级目录给出（不是写死的「报告评估 / 房地产估值」面包屑）。
-  const head = find(valuation, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.navPageHead))
-  assert.equal(textOf(head).includes(zhCN.valuationPageTitle), true)
+  // Valuation no longer repeats a page heading: the "valuation" tab above is the identity (2026-10-16).
+  assert.equal(find(valuation, (node) => String(
+    node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.navPageHead)), null,
+  '估值页不再重复画一个大页头')
   // 没有任何已配置业务项的一级目录（其他业务）**不画**：不留空占位入口。
   assert.equal(textOf(valuation).includes(zhCN.navParentOther), false, '空的一级目录不出现')
 
-  // 切回报告审核：一级 / 二级各回自己那一棵，二级重新选中**第一个可用页面**。
+  // 切回报告审核：扁平主行重新落到第一个可用叶子页。
   modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
   const auditAgain = rerender(WorkbenchPanel, { services, modules })
-  assert.deepEqual(tabsIn(auditAgain, zhCN.navParentsLabel).map((tab) => textOf(tab)), ['审核'])
-  assert.deepEqual(tabsIn(auditAgain, zhCN.navChildrenLabel).map((tab) => tab.props['aria-selected']), [true, false])
+  assert.deepEqual(tabsIn(auditAgain, zhCN.navParentsLabel).map((tab) => textOf(tab)), ['报告审核', '本地审核'])
+  assert.deepEqual(tabsIn(auditAgain, zhCN.navParentsLabel).map((tab) => tab.props['aria-selected']), [true, false])
+  assert.equal(tabsIn(auditAgain, zhCN.navChildrenLabel), null)
   assert.equal(onReportPage(auditAgain), true)
   // 内容区外壳**跨模块是同一个**（id / 类名不变、始终只有一个），切换只换里面的页面：
   // 这也是"滚动位置要按页面身份归零"的前提（容器本身不重建，scrollTop 会留到下一页）。
@@ -3452,8 +3489,8 @@ test('估值页不展示环境信息：没有环境胶囊、没有环境检查�
   for (const banned of [zhCN.envStepAccounts, zhCN.envStepWorkspace, zhCN.envStatusReady, zhCN.moduleEnvMarkOk]) {
     assert.equal(text.includes(banned), false, `估值页不该出现「${banned}」`)
   }
-  // 环境信息不是一级 / 二级目录里的标签（它只由外层门禁决定要不要整页显示）。
-  for (const tab of [...tabsIn(tree, zhCN.navParentsLabel), ...tabsIn(tree, zhCN.navChildrenLabel)]) {
+  // 环境信息不是目录里的标签（它只由外层门禁决定要不要整页显示）。
+  for (const tab of [...(tabsIn(tree, zhCN.navParentsLabel) ?? []), ...(tabsIn(tree, zhCN.navChildrenLabel) ?? [])]) {
     assert.notEqual(textOf(tab).includes(zhCN.moduleEnv), true, '目录里不该有「环境信息」')
   }
 })
@@ -3462,27 +3499,38 @@ test('估值页不展示环境信息：没有环境胶囊、没有环境检查�
 
 /** 一个只服务"切目录"这条链路的估值控制器替身（其余动作在 client-valuation-pane 里测）。 */
 function fakeEvaluationController(patch = {}) {
-  let state = {
-    phase: 'draft', valuationId: '', selection: ['/tmp/估值报告.pdf'], method: 'market',
-    baseDate: '2026-06-30', supplementalPrompt: '多考虑地铁因素', intake: null, error: '',
+  const state = {
+    phase: 'draft', selection: ['/tmp/估值报告.pdf'], assetType: 'real-estate', method: 'market',
+    baseDate: '2026-06-30', supplementalPrompt: '多考虑地铁因素',
     // 输入页还要逐份资料事实与扫描状态（§4）；替身也要照实给，否则测的是"假页面"。
     files: [{ path: '/tmp/估值报告.pdf', name: '估值报告.pdf', dirHint: '', kind: 'pdf',
       sizeBytes: 1024, status: 'scanned', reason: '', fileCount: 1 }],
-    scanState: 'ready', scanError: '', intakeStage: '', intakeRequestId: 0,
-    progress: { stage: '', detail: '', completed: 0, total: 0 }, providerStates: {}, result: null,
+    // 协议 37：入口展开后的**真实文件行**（含被逐个移除的那些）与排除范围。
+    fileRows: [{ path: '/tmp/估值报告.pdf', name: '估值报告.pdf', kind: 'pdf',
+      sizeBytes: 1024, parentPath: '/tmp/估值报告.pdf', state: 'included' }],
+    scanSkipped: [], excluded: [], lastRemoval: null, truncated: false,
+    scanState: 'ready', scanError: '', fileCount: 1, overLimit: false, readableCount: 1, limit: 30,
+    login: { check: 'ready', gate: null, rows: [], sites: [], loginJobs: [], error: '', job: null },
+    promptOverLimit: false, slowWait: '', recentSessionId: '',
+    preview: null, projectId: '', parentSessionId: '', dispatchAccepted: false,
+    creationDisposition: 'unknown', reused: false,
+    openFailed: false, retrySameSession: false, prepareRequestId: 0, handoffRequestId: '',
+    error: '', notice: '',
     ...patch,
   }
   const listeners = new Set()
-  const polls = { count: 0 }
+  const calls = { prepare: 0, confirm: 0, checkAuth: 0, invalidate: 0 }
   return {
-    polls,
+    calls,
     getState: () => state,
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
-    pickFiles: () => {}, pickFolder: () => {}, removeSelection: () => {}, setMethod: () => {},
-    setBaseDate: () => {}, setPrompt: () => {}, start: () => {}, cancelIntake: () => {}, rescan: () => {},
-    backToEdit: () => {}, confirm: () => {},
-    cancel: () => {}, recheck: () => {}, openLogin: () => {}, openArtifact: () => {},
-    poll: () => { polls.count += 1 },
+    checkAuth: () => { calls.checkAuth += 1 }, recheckAuth: () => {}, login: () => {}, cancelLogin: () => {},
+    openVerification: () => {},
+    pickFiles: () => {}, pickFolder: () => {}, removeSelection: () => {}, rescan: () => {},
+    excludeFile: () => {}, reincludeFile: () => {}, undoRemoval: () => {},
+    setMethod: () => {}, setBaseDate: () => {}, setPrompt: () => {},
+    preparePreview: () => { calls.prepare += 1 }, backToEdit: () => {}, confirm: () => { calls.confirm += 1 },
+    openCreatedSession: () => {}, invalidate: () => { calls.invalidate += 1 }, markStale: () => {},
   }
 }
 
@@ -3527,7 +3575,9 @@ test('切一级目录不丢估值草稿：控制器由 apply 层持有，切走�
   assert.equal(evaluation.getState().baseDate, '2026-06-30')
 })
 
-test('面板持有估值轮询：切到别的目录也不会把它停掉（运行中的估值不被取消）', async () => {
+test('面板不再持有估值轮询：只有报告审核那一条 10 秒定时器（协议 35）', async () => {
+  // 协议 35 起页面在交接成功后直接跳进顶层父会话、完成度由父会话负责，
+  // 面板这里**没有**估值定时器可开 —— 这条用例反向盯着"别把旧轮询加回来"。
   const { createModuleStore: makeStore } = await import(new URL('src/client/shell/module-store.ts', ROOT).href)
   const realSet = globalThis.setInterval
   const realClear = globalThis.clearInterval
@@ -3537,23 +3587,17 @@ test('面板持有估值轮询：切到别的目录也不会把它停掉（运�
   try {
     stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
     const services = fakeServices()
-    const evaluation = fakeEvaluationController({ phase: 'running' })
+    const evaluation = fakeEvaluationController({ phase: 'handed-off' })
     const modules = makeStore()
     const rendered = render(WorkbenchPanel, { services, modules, evaluation })
     await flushEffects(rendered.instance)
+    // 报告审核的轮询只在"确实停在报告审核页"时开：先切过去，再跑一轮 effect。
+    modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
     rerender(WorkbenchPanel, { services, modules, evaluation })
     await flushEffects(rendered.instance)
 
-    const poll = intervals.find((item) => item.ms === 4000)
-    assert.ok(poll, '运行中要开估值轮询定时器')
-    poll.callback()
-    assert.equal(evaluation.polls.count, 1, '定时器到了就去问一次宿主')
-    // 页面停在审核页（估值页根本没挂）时轮询照样在 —— 它不是估值页的定时器。
-    modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
-    rerender(WorkbenchPanel, { services, modules, evaluation })
-    assert.equal(poll.cleared, false, '切目录不许把它停掉')
-    poll.callback()
-    assert.equal(evaluation.polls.count, 2)
+    assert.equal(intervals.some((item) => item.ms === 4000), false, '不许再有 4 秒的估值轮询')
+    assert.equal(intervals.some((item) => item.ms === 10_000), true, '报告审核的 10 秒轮询仍在')
   } finally {
     globalThis.setInterval = realSet
     globalThis.clearInterval = realClear
@@ -4471,7 +4515,7 @@ test('D2 · 「检查本机目录」按 Host 给的事实禁用（不让员工�
   }
   const checkButton = (tree) => {
     const button = find(tree, (node) => node.type === 'button'
-      && String(node.props?.children ?? '').includes(zhCN.dwsLocalCheck))
+      && textOf(node).includes(zhCN.dwsLocalCheck))
     assert.ok(button, '卡片上要有「检查本机目录」')
     return button
   }
@@ -4789,7 +4833,8 @@ test('审核信息 Drawer：数据没回来时只显示加载态，不画空小�
 test('Drawer 头部：标题 + 一行等宽流水号 + × 关闭（不再有「关闭」文字按钮）', async () => {
   stubOps({})
   const { SideDrawer } = await import(new URL('src/client/ui/SideDrawer.tsx', ROOT).href)
-  const { tree } = render(SideDrawer, { title: zhCN.auditInfo, subtitle: '2026-302474-LX9995-BG8740', onClose: () => {} })
+  let closed = 0
+  const { tree } = render(SideDrawer, { title: zhCN.auditInfo, subtitle: '2026-302474-LX9995-BG8740', onClose: () => { closed += 1 } })
   const head = findByClass(tree, WORKBENCH_CLASSES.sideDrawerHead)
   assert.equal(textOf(findByClass(head, WORKBENCH_CLASSES.sideDrawerTitle)).includes(zhCN.auditInfo), true)
   // 流水号只在头部出现一次。
@@ -4797,8 +4842,10 @@ test('Drawer 头部：标题 + 一行等宽流水号 + × 关闭（不再有「�
   assert.ok(findByClass(head, WORKBENCH_CLASSES.sideDrawerSub), '副标题用等宽小字')
   assert.equal(findButtonLike(head, zhCN.closeDrawer), null, '「关闭」文字按钮已删除')
   const close = find(head, (node) => node.type === 'button' && node.props?.['aria-label'] === zhCN.closeDrawer)
-  assert.ok(close, '要有 × 关闭按钮（aria-label=关闭）')
-  assert.equal(textOf(close), '×')
+  assert.ok(close, '要有关闭按钮（aria-label=关闭）')
+  assert.ok(findAll(close, (node) => node.type === 'svg').length >= 1, '关闭按钮用图标，不是 × 文字')
+  close.props.onClick()
+  assert.equal(closed, 1, '关闭按钮要真的接到 onClose')
 })
 
 test('Drawer 关闭动画：onClose 立刻回调，`-out` 类只在 closing 时加', async () => {
@@ -6440,6 +6487,6 @@ test('打开报告：审核中的行主位显示「正在打开…」且不可�
   assert.equal(chips.some((node) => node.props.children === zhCN.openingReport), true,
     '正在打开时主位要说「正在打开…」')
   // 这一行此刻不该再有可点的主操作按钮（避免重复点、重复签名）。
-  const labels = findAll(tree, (node) => node.type === 'button').map((node) => node.props.children)
+  const labels = findAll(tree, (node) => node.type === 'button').map((node) => textOf(node))
   assert.equal(labels.includes(zhCN.openReport), false, '打开过程中不再渲染「查看报告」按钮')
 })

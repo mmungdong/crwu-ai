@@ -30,6 +30,36 @@ export interface ExtractedTable {
   rows: string[][]
 }
 
+/**
+ * 一页的文本层事实（`index` 从 1 起）。
+ *
+ * 只有**两件事都成立**的页才会成为一条事实：页码可定位 + `hasTextLayer` 是布尔。
+ * 读不出形状的页直接丢弃 —— 猜一个 `true` 比"这一页未知"危险得多（无文本层的页永远
+ * 不产生字段，而假的 `true` 会让下游以为这一页的正文只是没提取到）。
+ */
+export interface ExtractedPageFact {
+  index: number
+  hasTextLayer: boolean
+  /** 去空白后的字符数；脚本没给或给得不成形时不出现（未知，不补 0）。 */
+  chars?: number
+  /** 这一页自己的读取观察（例如 `第 2 页文本读取失败：…`）。 */
+  warning?: string
+}
+
+/**
+ * 当场探到的部署能力。
+ *
+ * **缺键 = 未知**（没探到 / 脚本没声明），`false` 是**明确声明的"不能"**：
+ * 两者不能混同 —— 前者不许被读成"没有能力"，后者不许被当成"没声明"。
+ */
+export interface ExtractionCapabilities {
+  pdfText?: boolean
+  pdfRender?: boolean
+  imageOcr?: boolean
+  /** 视觉退路（`none` / `session-images`…），由提取器声明。 */
+  visionFallback?: string
+}
+
 /** 单份文件的提取结果。 */
 export interface ExtractedFile {
   fileName: string
@@ -48,6 +78,28 @@ export interface ExtractedFile {
    * （确认抽屉 / 表格 / JSON）要的是可显示、可比对的原文。
    */
   extractedFields: Record<string, string>
+  /**
+   * 逐页文本层事实（PDF 才有；别的类型与"没探过"都不出现）。
+   *
+   * 可选且**空表不出现**：`[]` 会被 `pages.every(...)` 读成一句空洞的"整份都有文本层"，
+   * 而空表真正的含义是"没有任何逐页事实"。缺省一律按**未知**处理。
+   */
+  pages?: ExtractedPageFact[]
+  /** 文档总页数；未知（脚本没声明）不出现，不补 0。 */
+  pageCount?: number
+  /** 有文本层的页数；未知不出现。 */
+  pagesWithText?: number
+  /** 无文本层的页数；未知不出现，**尤其不许把未知凑成 0**（那等于一句假的"全都读到了"）。 */
+  pagesWithoutText?: number
+  /** 本次探测到的部署能力；整体没声明时缺省。 */
+  capabilities?: ExtractionCapabilities
+  /**
+   * 能力探测的**逐字证据**（`pdfTextLibrary` / `rasterizer` / `ocrEngine` / `probe`…）。
+   *
+   * 与 `extractedFields` 的口径不同：证据里的**空串有意义**（"探过，没找到"），
+   * 所以保留空串；只有键或值不是字符串时才丢弃。
+   */
+  capabilityProbe?: Record<string, string>
   /** 非致命观察（编码回退、表格被截断…）。 */
   warnings: string[]
   /** 能力缺口（扫描件没有文本层、旧版 .doc 读不了…）。 */

@@ -37,6 +37,11 @@ export const CRWU_DRAWER_STYLE_TEXT = `
   animation: crwu-audit-drawer-in 200ms var(--crwu-ease) both;
 }
 [data-crwu-scope="workbench"].crwu-audit-side-drawer-out { animation: crwu-audit-drawer-out 150ms var(--crwu-ease) both; pointer-events: none; }
+/* 窄视口（<600px）抽屉成为**整宽面板**（协议 37 · 设计稿 §10.1）：
+   580px 的抽屉放在 560px 的视口里会两侧贴死、正文被挤成一列窄杠。 */
+@media (max-width: 599px) {
+  [data-crwu-scope="workbench"].crwu-audit-side-drawer { width: 100%; max-width: 100%; }
+}
 @keyframes crwu-audit-drawer-in {
   from { transform: translateX(20px); opacity: 0.85; }
   to { transform: translateX(0); opacity: 1; }
@@ -75,22 +80,36 @@ export const CRWU_DRAWER_STYLE_TEXT = `
   color: var(--crwu-text-tertiary);
   overflow-wrap: anywhere;
 }
-/* × ：透明底 + 悬停一层中性底，32×32（用户口径：删除「关闭」文字按钮，改成标准 Icon Button）。 */
+/* 标题是 tabindex=-1 的**焦点目标**（打开抽屉时焦点落在这里，让员工先核对内容）。
+   它不可交互，所以不要画焦点环 —— 程序化聚焦会命中 UA 的默认描边，看起来像一个框错了位置。 */
+.crwu-audit-side-drawer-title > span[tabindex="-1"]:focus { outline: none; }
+/* 标题下的一行说明（协议 37）：长清单**不**整段当描述，所以这里只是一句指引。
+   用 secondary 而不是 tertiary —— 它是"必要说明"，不是装饰性弱信息。 */
+.crwu-audit-side-drawer-desc {
+  flex: none; margin: 0; padding: 10px 20px 0;
+  font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary);
+}
+/* Layout-only anchor: the shared text IconButton owns colour, hover and disabled appearance. */
 .crwu-audit-side-drawer-close {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; padding: 0; border: none; border-radius: 8px;
-  background: transparent; color: var(--crwu-control-text);
-  font-family: inherit; font-size: 18px; line-height: 1; cursor: pointer;
-  transition: background 120ms var(--crwu-ease), color 120ms var(--crwu-ease);
+  font-family: inherit; line-height: 1; cursor: pointer;
 }
-.crwu-audit-side-drawer-close:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
-.crwu-audit-side-drawer-close:active { background: var(--crwu-control-active); }
-.crwu-audit-side-drawer-close:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-side-drawer-close:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
+.crwu-audit-side-drawer-close:disabled { opacity: .45; cursor: default; }
 .crwu-audit-side-drawer-body {
   flex: 1 1 auto; min-height: 0; overflow: auto;
   padding: 20px 20px 28px;
   scrollbar-width: thin;
   scrollbar-color: var(--dsh-scrollbar-thumb, var(--dsw-alias-scrollbar-bg-l2)) transparent;
+}
+/* 固定 footer（协议 35）：只给"底部有主操作"的抽屉用（例如估值确认抽屉）。
+   它不在滚动区里 —— 资料很多时主操作不能被滚出视口；上边一条发丝线与内容分区。 */
+.crwu-audit-side-drawer-foot {
+  flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px;
+  background: var(--crwu-surface);
+  border-top: 1px solid var(--crwu-border);
 }
 
 /* ── Drawer 内容：核心指标 → 已提未改 → AI 问题列表 → 报告信息 → 技术详情 ──────
@@ -254,13 +273,11 @@ export const CRWU_DRAWER_STYLE_TEXT = `
   font-family: var(--crwu-font-mono); font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* Layout only: the shared text Button owns colour, hover and disabled. */
 .crwu-audit-tech-copy {
   display: inline-flex; align-items: center; height: 24px; padding: 0 9px; margin-top: 8px;
-  border: none; border-radius: 6px; background: var(--crwu-control); color: var(--crwu-control-text);
-  font-family: inherit; font-size: 12px; cursor: pointer;
-  transition: background 120ms var(--crwu-ease), color 120ms var(--crwu-ease);
+  border-radius: 6px; font-family: inherit; font-size: 12px; cursor: pointer;
 }
-.crwu-audit-tech-copy:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
 .crwu-audit-tech-hint { margin-top: 8px; font-size: 12px; line-height: 18px; color: var(--crwu-text-tertiary); }
 @media (prefers-reduced-motion: reduce) {
   .crwu-audit-acc-body, .crwu-audit-acc-chevron { transition: none; }

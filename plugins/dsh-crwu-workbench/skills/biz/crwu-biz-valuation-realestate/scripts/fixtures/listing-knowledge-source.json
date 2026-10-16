@@ -1,0 +1,10 @@
+{
+  "routeId": "wiki:listing",
+  "nodeName": "挂牌参考知识",
+  "resolvedPath": "01 估值与测算/02 挂牌/wiki",
+  "source": "dws",
+  "spaceName": "中瑞世联业务知识库",
+  "updatedAt": "2026-10-01T00:00:00Z",
+  "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "snapshotFile": "知识快照/wiki-listing.md"
+}

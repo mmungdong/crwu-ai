@@ -13,9 +13,17 @@ import { pythonScriptTools } from './common/python-script.ts'
 import { valuationBootstrapTools } from './report-evaluation/bootstrap.ts'
 import { valuationFileExtractTools } from './report-evaluation/file-extract.ts'
 import { valuationKnowledgeTools } from './report-evaluation/knowledge.ts'
+import { valuationTemplateTools } from './report-evaluation/template.ts'
+import { valuationExecutionTools } from './report-evaluation/execution.ts'
 import { valuationBrowserPreflightTools } from './report-evaluation/browser-preflight.ts'
 import { valuationMarketSearchTools } from './report-evaluation/market-search.ts'
+import { valuationBrowserRecoverTools } from './report-evaluation/browser-recover.ts'
+import { valuationFinalizeTools } from './report-evaluation/finalize.ts'
+import { valuationProjectPrepareTools } from './report-evaluation/project.ts'
 import { valuationArtifactValidateTools } from './report-evaluation/artifact-validate.ts'
+import { valuationRevisionTools } from './report-evaluation/revision.ts'
+import { valuationRecalculateTools } from './report-evaluation/recalculate.ts'
+import { valuationListingReferenceTools } from './report-evaluation/listing-reference.ts'
 import { CRWU_BUSINESS_TOOLS, REQUIRED_AUDIT_TOOLS } from './report-audit/consts.ts'
 import type { ToolDeps } from './common/types.ts'
 
@@ -53,8 +61,16 @@ export function registerCrwuTools(ctx: Context, deps: ToolDeps): () => void {
     ...valuationBootstrapTools(deps),
     ...valuationFileExtractTools(deps),
     ...valuationKnowledgeTools(deps),
+    ...valuationTemplateTools(deps),
+    ...valuationExecutionTools(deps),
     ...valuationBrowserPreflightTools(deps),
     ...valuationMarketSearchTools(deps),
+    ...valuationBrowserRecoverTools(deps),
+    ...valuationFinalizeTools(deps),
+    ...valuationRevisionTools(deps),
+    ...valuationRecalculateTools(deps),
+    ...valuationListingReferenceTools(deps),
+    ...valuationProjectPrepareTools(deps),
     ...valuationArtifactValidateTools(deps),
   ]
 

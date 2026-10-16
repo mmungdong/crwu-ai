@@ -15,7 +15,9 @@ import type { PythonRuntimeResolver } from '../../../core/runtime/python.ts'
 import type { LocalAccessBroker } from '../../../core/access/broker.ts'
 import { kindOf, type ValuationFileKind } from './classify.ts'
 import { emptyExtractedFile } from './extract.ts'
-import type { ExtractedFile, FileExtractor } from './types.ts'
+import type {
+  ExtractedFile, ExtractedPageFact, ExtractionCapabilities, FileExtractor,
+} from './types.ts'
 
 /**
  * **Python 后端**的提取器：把真正的字节读取交给技能脚本
@@ -36,8 +38,12 @@ import type { ExtractedFile, FileExtractor } from './types.ts'
  * ## 契约与降级
  *
  * - 脚本写出固定形状的 JSON；这里只做映射与校验，**不补字段**；
+ * - 逐页事实（`pages` / `pageCount` / 计数）与能力声明（`capabilities` / `capabilityProbe`）
+ *   按原样搬运，但**形状不对就整键缺省**：假的 `hasTextLayer: true` 会让下游去引用一段
+ *   不存在的正文，假的 `pagesWithoutText: 0` 等于一句"整份都读到了"；
  * - 脚本报 `ok: false`（缺 PDF 库、无文本层、旧版 .doc）→ **抛错**，
  *   由 `runExtraction` 记成"未解析 + 能力缺口"，绝不产出半截 `extractedFields`；
+ *   注意"整份读不出来"这条路**不经过**上面的逐页映射：`ok: false` 的结果里没有 `ExtractedFile`。
  * - 输出文件读不到 / 不是合法 JSON → 同样抛错（那是脚本或沙箱的问题，不是"读到了空内容"）。
  */
 
@@ -96,10 +102,91 @@ interface ScriptPayload {
   extractedFields?: unknown
   warnings?: unknown
   capabilityGaps?: unknown
+  pages?: unknown
+  pageCount?: unknown
+  pagesWithText?: unknown
+  pagesWithoutText?: unknown
+  capabilities?: unknown
+  capabilityProbe?: unknown
 }
 
 function stringsOf(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => text(item)).filter((item) => item !== '') : []
+}
+
+/**
+ * 只接受**真布尔**。
+ *
+ * `'true'` / `1` / `0` / `null` 一律返回 `undefined`（未知）：把 `1` 当 `true` 会凭空造出一条
+ * "这一页有文本层"的事实，下游就会去引用一段根本不存在的正文。
+ */
+function booleanOf(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/** 只接受非负安全整数；`'3'` / `2.5` / `-1` 一律未知（不四舍五入、不截断）。 */
+function countOf(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return undefined
+  return value
+}
+
+/**
+ * 逐页事实：**可定位 + 断言成形**才算一条，其余行丢弃。
+ *
+ * 一条都不成形时返回 `undefined`（不落空数组）：空数组会被 `every` 变成一句空洞的
+ * "全部页都有文本层"，而真相是"没有逐页事实"。
+ */
+function pagesOf(value: unknown): ExtractedPageFact[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: ExtractedPageFact[] = []
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const record = item as Record<string, unknown>
+    const index = countOf(record.index)
+    const hasTextLayer = booleanOf(record.hasTextLayer)
+    if (index === undefined || index < 1 || hasTextLayer === undefined) continue
+    const chars = countOf(record.chars)
+    const warning = typeof record.warning === 'string' ? record.warning.trim() : ''
+    out.push({
+      index,
+      hasTextLayer,
+      ...(chars === undefined ? {} : { chars }),
+      ...(warning === '' ? {} : { warning }),
+    })
+  }
+  return out.length === 0 ? undefined : out
+}
+
+/** 能力声明：只认声明的键；非布尔值丢弃（**不许**把 `'true'`/`1` 收成 `true`）。 */
+function capabilitiesOf(value: unknown): ExtractionCapabilities | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const out: ExtractionCapabilities = {}
+  for (const key of ['pdfText', 'pdfRender', 'imageOcr'] as const) {
+    const flag = booleanOf(record[key])
+    if (flag !== undefined) out[key] = flag
+  }
+  // 视觉退路必须是**真字符串**：把 `7` 收成 `'7'` 就是凭空造一个能力声明。
+  const vision = typeof record.visionFallback === 'string' ? record.visionFallback.trim() : ''
+  if (vision !== '') out.visionFallback = vision
+  return Object.keys(out).length === 0 ? undefined : out
+}
+
+/**
+ * 探针证据：**逐字搬运**，只丢形状不对的条目。
+ *
+ * 空串要留住 —— 它是"探过、没找到"的证据（`rasterizer: ''` 正是"本部署没有渲染器"这句话的
+ * 出处）；丢成缺键就分不清"没探"和"没找到"了。
+ */
+function evidenceOf(value: unknown): Record<string, string> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const out: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const name = key.trim()
+    if (name === '' || typeof item !== 'string') continue
+    out[name] = item
+  }
+  return Object.keys(out).length === 0 ? undefined : out
 }
 
 /** 字段表：只收字符串值（脚本只产字符串；别的形状一律丢弃，不猜测）。 */
@@ -206,6 +293,15 @@ export function pythonFileExtractor(deps: PythonExtractorDeps): FileExtractor {
 
       const kind: ValuationFileKind = (text(payload.fileType) || input.kind) as ValuationFileKind
       const fields = payload.extractedFields
+      // P1 事实（逐页文本层 + 部署能力）：形状不对就**整键缺省**（未知），而不是补 0 / 补 false。
+      // 用条件展开而不是 `pages: undefined`：`'pages' in result` 必须是假的，
+      // 否则"未知"会被读成"已知，只是空"。
+      const pages = pagesOf(payload.pages)
+      const pageCount = countOf(payload.pageCount)
+      const pagesWithText = countOf(payload.pagesWithText)
+      const pagesWithoutText = countOf(payload.pagesWithoutText)
+      const capabilities = capabilitiesOf(payload.capabilities)
+      const capabilityProbe = evidenceOf(payload.capabilityProbe)
       return {
         ...empty,
         fileType: kindOf(input.fileName) === 'unknown' ? kind : kindOf(input.fileName),
@@ -220,6 +316,12 @@ export function pythonFileExtractor(deps: PythonExtractorDeps): FileExtractor {
           })
           : [],
         extractedFields: stringRecordOf(fields),
+        ...(pages === undefined ? {} : { pages }),
+        ...(pageCount === undefined ? {} : { pageCount }),
+        ...(pagesWithText === undefined ? {} : { pagesWithText }),
+        ...(pagesWithoutText === undefined ? {} : { pagesWithoutText }),
+        ...(capabilities === undefined ? {} : { capabilities }),
+        ...(capabilityProbe === undefined ? {} : { capabilityProbe }),
         warnings: stringsOf(payload.warnings),
         capabilityGaps: gaps,
       }

@@ -1,0 +1,1705 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.report-data.v2",
+  "title": "房地产估值报告数据（估值报告数据.json，约束 HTML 的唯一数据源）",
+  "description": "判别联合。HTML 只能由这份数据渲染，模型不能直接写 HTML / 样式 / 片段。blocked 的报告没有金额也没有工作簿；completed 必须有对象结论、计算表、知识引用与 finalize 校验回执（设计稿 §11.3 / §11.4）。",
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "planId",
+        "generatedAt",
+        "methodRequest",
+        "method",
+        "baseDate",
+        "baseDateSpecified",
+        "purpose",
+        "purposeSpecified",
+        "valueType",
+        "valueTypeSpecified",
+        "supplementalPrompt",
+        "inputDigest",
+        "materials",
+        "knowledgeSources",
+        "retrievalAttempts",
+        "artifacts",
+        "limitations",
+        "status",
+        "objects",
+        "methodAssessment",
+        "parameters",
+        "comparables",
+        "calculationSteps",
+        "ruleChecks",
+        "conclusions",
+        "evidence",
+        "workbooks",
+        "validation"
+      ],
+      "properties": {
+        "status": {
+          "const": "completed"
+        },
+        "objects": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/valuationObject"
+          }
+        },
+        "methodAssessment": {
+          "$ref": "#/definitions/planAssessment"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/parameter"
+          }
+        },
+        "comparables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/comparable"
+          }
+        },
+        "calculationSteps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/calculationStep"
+          }
+        },
+        "ruleChecks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ruleCheck"
+          }
+        },
+        "conclusions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/conclusion"
+          },
+          "description": "每个对象一条；不得用一条汇总金额代表多个对象"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/screenshot"
+          }
+        },
+        "workbooks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/workbook"
+          },
+          "description": "多对象时允许是对象级工作簿集合"
+        },
+        "validation": {
+          "$ref": "#/definitions/validation"
+        }
+      }
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "planId",
+        "generatedAt",
+        "methodRequest",
+        "method",
+        "baseDate",
+        "baseDateSpecified",
+        "purpose",
+        "purposeSpecified",
+        "valueType",
+        "valueTypeSpecified",
+        "supplementalPrompt",
+        "inputDigest",
+        "materials",
+        "knowledgeSources",
+        "retrievalAttempts",
+        "artifacts",
+        "limitations",
+        "status",
+        "stage",
+        "blockers",
+        "lookupAttempts",
+        "conclusion",
+        "partialObjectResults"
+      ],
+      "properties": {
+        "status": {
+          "const": "blocked"
+        },
+        "stage": {
+          "enum": [
+            "intake",
+            "extract",
+            "grouping",
+            "knowledge",
+            "method-selection",
+            "retrieval",
+            "parameters",
+            "template",
+            "calculation",
+            "delivery"
+          ]
+        },
+        "blockers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/blocker"
+          },
+          "description": "必须列全：缺什么、查过哪、为什么、怎么补"
+        },
+        "lookupAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lookupAttempt"
+          },
+          "description": "精确路径 → 同目录同名 → 别名 → 身份已验证镜像 的完整查找轨迹"
+        },
+        "conclusion": {
+          "const": null
+        },
+        "partialObjectResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/objectResult"
+          },
+          "description": "阻断前的过程材料，不是结论"
+        }
+      }
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "planId",
+        "generatedAt",
+        "methodRequest",
+        "method",
+        "baseDate",
+        "baseDateSpecified",
+        "purpose",
+        "purposeSpecified",
+        "valueType",
+        "valueTypeSpecified",
+        "supplementalPrompt",
+        "inputDigest",
+        "materials",
+        "knowledgeSources",
+        "retrievalAttempts",
+        "artifacts",
+        "limitations",
+        "status",
+        "stage",
+        "completedWork",
+        "outstanding",
+        "blockers",
+        "lookupAttempts",
+        "provisionalResults",
+        "conclusion"
+      ],
+      "properties": {
+        "status": {
+          "const": "partial"
+        },
+        "stage": {
+          "enum": [
+            "intake",
+            "extract",
+            "grouping",
+            "knowledge",
+            "method-selection",
+            "retrieval",
+            "parameters",
+            "template",
+            "calculation",
+            "delivery"
+          ]
+        },
+        "completedWork": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "outstanding": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/blocker"
+          }
+        },
+        "lookupAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lookupAttempt"
+          }
+        },
+        "provisionalResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/objectResult"
+          },
+          "description": "暂算金额，不得作为最终结论展示"
+        },
+        "conclusion": {
+          "const": null
+        }
+      }
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "planId",
+        "generatedAt",
+        "methodRequest",
+        "method",
+        "baseDate",
+        "baseDateSpecified",
+        "purpose",
+        "purposeSpecified",
+        "valueType",
+        "valueTypeSpecified",
+        "supplementalPrompt",
+        "inputDigest",
+        "materials",
+        "knowledgeSources",
+        "retrievalAttempts",
+        "artifacts",
+        "limitations",
+        "status",
+        "stage",
+        "error",
+        "blockers",
+        "conclusion",
+        "availableArtifacts"
+      ],
+      "properties": {
+        "status": {
+          "const": "failed"
+        },
+        "stage": {
+          "enum": [
+            "intake",
+            "extract",
+            "grouping",
+            "knowledge",
+            "method-selection",
+            "retrieval",
+            "parameters",
+            "template",
+            "calculation",
+            "delivery"
+          ]
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/blocker"
+          }
+        },
+        "conclusion": {
+          "const": null
+        },
+        "availableArtifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "planId",
+        "generatedAt",
+        "methodRequest",
+        "method",
+        "baseDate",
+        "baseDateSpecified",
+        "purpose",
+        "purposeSpecified",
+        "valueType",
+        "valueTypeSpecified",
+        "supplementalPrompt",
+        "inputDigest",
+        "materials",
+        "knowledgeSources",
+        "retrievalAttempts",
+        "artifacts",
+        "limitations",
+        "status",
+        "stage",
+        "error",
+        "blockers",
+        "conclusion",
+        "availableArtifacts"
+      ],
+      "properties": {
+        "status": {
+          "const": "cancelled"
+        },
+        "stage": {
+          "enum": [
+            "intake",
+            "extract",
+            "grouping",
+            "knowledge",
+            "method-selection",
+            "retrieval",
+            "parameters",
+            "template",
+            "calculation",
+            "delivery"
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/blocker"
+          }
+        },
+        "conclusion": {
+          "const": null
+        },
+        "availableArtifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "referenceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "aggregation",
+        "basis",
+        "priceNature",
+        "unitPriceUnit",
+        "caseIds"
+      ],
+      "properties": {
+        "label": {
+          "const": "挂牌参考估值"
+        },
+        "aggregation": {
+          "const": "arithmetic-mean"
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "priceNature": {
+          "const": "挂牌"
+        },
+        "unitPriceUnit": {
+          "const": "CNY/m2"
+        },
+        "caseIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caseId",
+              "sourceUrl"
+            ],
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceUrl": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "knowledgeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routeId",
+        "snapshotDigest"
+      ],
+      "properties": {
+        "routeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshotDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sectionId": {
+          "type": "string"
+        },
+        "ruleId": {
+          "type": "string"
+        }
+      }
+    },
+    "lookupAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routeId",
+        "channel",
+        "target",
+        "outcome",
+        "detail"
+      ],
+      "properties": {
+        "routeId": {
+          "type": "string"
+        },
+        "channel": {
+          "enum": [
+            "exact-route",
+            "same-name",
+            "alias",
+            "mirror",
+            "dws-tree"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "found",
+            "missing",
+            "empty",
+            "ambiguous",
+            "unreadable",
+            "rejected-identity",
+            "rejected-digest"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stage",
+        "missing",
+        "checked",
+        "reason",
+        "remediation"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "input-invalid",
+            "property-unsupported",
+            "method-unsupported",
+            "valuation-path-unsupported",
+            "valuation-path-unresolved",
+            "capability-missing",
+            "knowledge-missing",
+            "template-missing",
+            "evidence-missing",
+            "recalculation-unavailable"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "intake",
+            "extract",
+            "grouping",
+            "knowledge",
+            "method-selection",
+            "retrieval",
+            "parameters",
+            "template",
+            "calculation",
+            "delivery"
+          ]
+        },
+        "missing": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "checked": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "type": "string"
+        },
+        "capabilityId": {
+          "type": "string"
+        },
+        "knowledgeRef": {
+          "$ref": "#/definitions/knowledgeRef"
+        }
+      }
+    },
+    "knowledgeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routeId",
+        "nodeName",
+        "resolvedPath",
+        "source",
+        "spaceName",
+        "updatedAt",
+        "digest",
+        "snapshotFile"
+      ],
+      "properties": {
+        "routeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodeName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolvedPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "enum": [
+            "dws",
+            "verified-mirror"
+          ]
+        },
+        "spaceName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshotFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sectionIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ruleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "retrievalAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "caseId",
+        "providerId",
+        "stage",
+        "outcome",
+        "finalUrl",
+        "reasonCode"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "caseId": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "search",
+            "detail",
+            "screenshot"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "ok",
+            "blocked",
+            "challenge-recovered",
+            "waiting-user",
+            "unsupported",
+            "failed"
+          ]
+        },
+        "finalUrl": {
+          "type": "string"
+        },
+        "reasonCode": {
+          "type": "string"
+        },
+        "recoveryStrategy": {
+          "type": "string"
+        },
+        "recoveryAttempts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fileId",
+        "fileName",
+        "archiveRelativePath",
+        "kind",
+        "sizeBytes",
+        "sha256",
+        "readable"
+      ],
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "archiveRelativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "readable": {
+          "type": "boolean"
+        },
+        "duplicateOf": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "kind",
+        "relativePath",
+        "digest",
+        "present"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "html",
+            "workbook",
+            "data",
+            "screenshot"
+          ]
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      }
+    },
+    "screenshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "displayName",
+        "provider",
+        "sourceUrl",
+        "capturedAt",
+        "relativePath",
+        "digest",
+        "validity"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "必须落在本方案 推理结果/图片/<安全caseId-名称>/ 下；挑战页截图不得进入此目录。"
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "validity": {
+          "enum": [
+            "valid",
+            "missing",
+            "invalid",
+            "not-required"
+          ]
+        },
+        "evidenceType": {
+          "enum": [
+            "page-screenshot",
+            "detail-screenshot",
+            "alternative-evidence"
+          ],
+          "description": "Optional: distinguishes a list-page screenshot from a real detail screenshot."
+        }
+      }
+    },
+    "objectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objectId",
+        "displayName",
+        "valueScope",
+        "currency"
+      ],
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "valueScope": {
+          "enum": [
+            "land-only",
+            "building-only",
+            "land-and-building"
+          ]
+        },
+        "method": {
+          "enum": [
+            "market",
+            "income",
+            "cost",
+            null
+          ]
+        },
+        "unitPrice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalValue": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calculationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "valuationObject": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "objectId",
+        "displayName",
+        "propertyType",
+        "sourceRefs"
+      ],
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "propertyType": {
+          "oneOf": [
+            {
+              "enum": [
+                "residential",
+                "commercial",
+                "office",
+                "industrial",
+                "apartment",
+                "other"
+              ]
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "业务分类；空串 = 未判定（依据缺失时该对象被挂起，不进结论）"
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fields": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "missingFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "planAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planId",
+        "methodRequest",
+        "selectedMethods",
+        "assessments",
+        "requestedMethodHonored",
+        "decidedAt"
+      ],
+      "properties": {
+        "planId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "methodRequest": {
+          "enum": [
+            "auto",
+            "market",
+            "income",
+            "cost"
+          ]
+        },
+        "primaryMethod": {
+          "enum": [
+            "market",
+            "income",
+            "cost",
+            null
+          ]
+        },
+        "selectedMethods": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "market",
+              "income",
+              "cost"
+            ]
+          }
+        },
+        "assessments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "method",
+              "applicable",
+              "implemented",
+              "selected",
+              "reason"
+            ],
+            "properties": {
+              "method": {
+                "enum": [
+                  "market",
+                  "income",
+                  "cost"
+                ]
+              },
+              "applicable": {
+                "type": "boolean",
+                "description": "业务是否适用（知识判定）"
+              },
+              "implemented": {
+                "type": "boolean",
+                "description": "当前实现能否完整执行（能力判定）"
+              },
+              "selected": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ruleRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/knowledgeRef"
+                }
+              },
+              "conflicts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestedMethodHonored": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decidedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parameterId",
+        "label",
+        "unit",
+        "region",
+        "sourceRef",
+        "state"
+      ],
+      "properties": {
+        "parameterId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "valueDate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": "string"
+        },
+        "sourceRef": {
+          "type": "string"
+        },
+        "ruleRef": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/knowledgeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "provided",
+            "missing",
+            "not-applicable"
+          ],
+          "description": "null 与不适用必须与 0 分开（设计稿 §6.4 的 04-参数记录与缺失处理）"
+        },
+        "missingImpact": {
+          "enum": [
+            "registration-gap",
+            "calculation-suspended"
+          ],
+          "description": "state=missing 时的**处置**（P17）：registration-gap = 资料字段缺失，登记缺口后继续；calculation-suspended = 方法所需关键参数缺失，挂起相关计算。两者混成一个 state 就分不清「少一栏」与「算不下去」"
+        }
+      }
+    },
+    "comparable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "displayName",
+        "provider",
+        "sourceUrl",
+        "transactionType",
+        "used",
+        "keepReason",
+        "dropReason"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "transactionType": {
+          "enum": [
+            "挂牌",
+            "成交",
+            "询价",
+            "未知"
+          ]
+        },
+        "publishedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "挂牌日，不是成交日"
+        },
+        "unitPrice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "buildingArea": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "used": {
+          "type": "boolean"
+        },
+        "keepReason": {
+          "type": "string"
+        },
+        "dropReason": {
+          "type": "string"
+        },
+        "screenshots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/screenshot"
+          }
+        }
+      }
+    },
+    "calculationStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stepId",
+        "formulaId",
+        "label",
+        "expression",
+        "operands",
+        "value",
+        "unit"
+      ],
+      "properties": {
+        "stepId": {
+          "type": "string"
+        },
+        "formulaId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "expression": {
+          "type": "string"
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "value",
+              "unit",
+              "provenance"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "provenance": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "value": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "ruleRef": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/knowledgeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ruleCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "label",
+        "passed",
+        "detail"
+      ],
+      "properties": {
+        "ruleId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "ruleRef": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/knowledgeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objectId",
+        "valueScope",
+        "method",
+        "currency",
+        "basisRefs"
+      ],
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valueScope": {
+          "enum": [
+            "land-only",
+            "building-only",
+            "land-and-building"
+          ]
+        },
+        "method": {
+          "enum": [
+            "market",
+            "income",
+            "cost"
+          ]
+        },
+        "unitPrice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalValue": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "basisRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/knowledgeRef"
+          },
+          "description": "结论必须能回溯到本轮知识快照"
+        },
+        "calculationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "workbook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workbookId",
+        "relativePath",
+        "templateId",
+        "templateDigest",
+        "recalculated"
+      ],
+      "properties": {
+        "workbookId": {
+          "type": "string"
+        },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "templateId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "templateDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objectIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recalculated": {
+          "type": "boolean"
+        },
+        "recalculationNote": {
+          "type": "string"
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectId",
+        "planId",
+        "inputDigest",
+        "knowledgeVerified",
+        "templateVerified",
+        "evidenceVerified",
+        "calculationVerified",
+        "workbookRecalculated",
+        "reportRendered",
+        "verifiedAt"
+      ],
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "planId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "knowledgeVerified": {
+          "type": "boolean"
+        },
+        "templateVerified": {
+          "type": "boolean"
+        },
+        "evidenceVerified": {
+          "type": "boolean"
+        },
+        "calculationVerified": {
+          "type": "boolean"
+        },
+        "workbookRecalculated": {
+          "type": "boolean"
+        },
+        "reportRendered": {
+          "type": "boolean"
+        },
+        "verifiedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "planId",
+        "generatedAt",
+        "methodRequest",
+        "method",
+        "methods",
+        "methodResults",
+        "baseDate",
+        "baseDateSpecified",
+        "purpose",
+        "purposeSpecified",
+        "valueType",
+        "valueTypeSpecified",
+        "supplementalPrompt",
+        "inputDigest",
+        "materials",
+        "knowledgeSources",
+        "retrievalAttempts",
+        "artifacts",
+        "limitations"
+      ],
+      "properties": {
+        "valuationMode": {
+          "enum": [
+            "formal",
+            "listing-reference"
+          ]
+        },
+        "referenceSummary": {
+          "$ref": "#/definitions/referenceSummary"
+        },
+        "schemaVersion": {
+          "const": "crwu.valuation.report-data.v2"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "planId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "methodRequest": {
+          "enum": [
+            "auto",
+            "market",
+            "income",
+            "cost"
+          ]
+        },
+        "method": {
+          "enum": [
+            "market",
+            "income",
+            "cost",
+            null
+          ]
+        },
+        "methods": {
+          "type": "array",
+          "description": "实际采用的全部方法（协议 39：单一或组合）；methods[0] 必须等于 method。**blocked 分支允许为空数组** —— 中断报告没有采用任何方法。",
+          "items": {
+            "enum": [
+              "market",
+              "income",
+              "cost"
+            ]
+          }
+        },
+        "methodResults": {
+          "type": "array",
+          "description": "逐方法结果：每个采用方法各自的依据、参数、案例、模板与结果（多方法不相加）。**blocked 分支允许为空数组**。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "method",
+              "basis",
+              "unitPrice",
+              "totalValue",
+              "template"
+            ],
+            "properties": {
+              "method": {
+                "enum": [
+                  "market",
+                  "income",
+                  "cost"
+                ]
+              },
+              "basis": {
+                "type": "string",
+                "description": "该方法的采用依据与取值口径来源。**可以为空串** —— 旧结果（协议 38 及更早）没有这一项时，报告如实留空，不许编造。"
+              },
+              "unitPrice": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "十进制的**逐字**文本（不取整、不加千分位）；拿不到就是 null。"
+              },
+              "totalValue": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "十进制的**逐字**文本（不取整、不加千分位）；拿不到就是 null。"
+              },
+              "template": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "baseDate": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "未指定基准日时为 null；此时报告必须说明这是按采集时点组织的测算，不得宣称历史时点价值"
+        },
+        "baseDateSpecified": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "评估目的；未指定时为 null。未指定时报告必须逐字写明「本次未指定评估目的」，且**不得**据此声称正式估值已完成（P16）"
+        },
+        "purposeSpecified": {
+          "type": "boolean"
+        },
+        "valueType": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "价值类型；未指定时为 null。未指定时报告必须逐字写明「本次未指定价值类型」，且不得据此声称正式估值已完成"
+        },
+        "valueTypeSpecified": {
+          "type": "boolean"
+        },
+        "supplementalPrompt": {
+          "type": "string"
+        },
+        "inputDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "materials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/material"
+          }
+        },
+        "knowledgeSources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/knowledgeSource"
+          }
+        },
+        "retrievalAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/retrievalAttempt"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/artifact"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

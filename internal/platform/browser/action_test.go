@@ -65,7 +65,7 @@ func captchaResponder(conn *websocket.Conn, request map[string]any) {
 	case method == "Runtime.evaluate" && strings.Contains(expression, "outerHTML"):
 		reply(map[string]any{"result": map[string]any{"type": "string", "value": "<html><body>人机验证</body></html>"}})
 	case method == "Runtime.evaluate" && strings.Contains(expression, "location.href"):
-		reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://hip.ke.com/captcha?location=x","title":"CAPTCHA","text":"人机验证 点击按钮开始验证"}`}})
+		reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://hip.lianjia.com/captcha?location=x","title":"CAPTCHA","text":"人机验证 点击按钮开始验证"}`}})
 	case method == "Runtime.evaluate":
 		reply(map[string]any{"result": map[string]any{"type": "number", "value": 200}})
 	default:
@@ -152,7 +152,7 @@ func TestDoFetchWritesPageAndDigestWhenVerdictIsOK(t *testing.T) {
 		case method == "Runtime.evaluate" && strings.Contains(expression, "outerHTML"):
 			reply(map[string]any{"result": map[string]any{"type": "string", "value": "<html>listing page</html>"}})
 		case method == "Runtime.evaluate" && strings.Contains(expression, "location.href"):
-			reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://bj.ke.com/ershoufang/1.html","title":"房源","text":"在售"}`}})
+			reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://bj.lianjia.com/ershoufang/1.html","title":"房源","text":"在售"}`}})
 		default:
 			reply(map[string]any{"result": map[string]any{"type": "number", "value": 200}})
 		}

@@ -96,12 +96,7 @@ const DENIED_MARKERS = [
   'eacces', 'eperm', '拒绝访问', '不允许', '被拒绝',
 ] as const
 
-/** ① 策略挡下：原因是文件策略，动作是切「完全权限」。 */
-const POLICY_REASONS: Record<LoginKind, string> = {
-  h3yun: '氚云扫码登录要起一个临时浏览器配置目录（crwu-scan-*），当前文件策略超过工作区就不再放行',
-  dws: '钉钉登录要先创建/打开登录态锁文件（在工作区之外的插件状态目录里），当前文件策略超过工作区就不再放行',
-}
-
+/** ① 策略挡下：动作是切「完全权限」。 */
 const POLICY_ACTIONS: Record<LoginKind, string> = {
   h3yun: '在输入框下方的访问模式里选「完全权限」（或输入 /permission danger-full-access），回到「账号连接」再点一次「扫码登录氚云」。',
   dws: '在输入框下方的访问模式里选「完全权限」（或输入 /permission danger-full-access），回到「账号连接」再点一次「钉钉登录」。设备流登录同样要创建/打开这个锁文件，在这个模式下也走不通。',
@@ -224,7 +219,7 @@ export function loginFailureAdvice(kind: LoginKind, facts: LoginFailureFacts): L
  * `original` 必须是**命令自己的原话**（stderr / 脱离沙箱前的错误），不是别的归因函数
  * 已经加工过的句子 —— 否则同一句"沙箱挡住了"会出现两次，员工会以为是两个故障。
  */
-export function describeLoginAdvice(kind: LoginKind, advice: LoginAdvice, original: unknown): string {
+export function describeLoginAdvice(_kind: LoginKind, advice: LoginAdvice, original: unknown): string {
   if (!advice.blocked) return text(original)
   // 两支的开头必须不同：说成"被文件策略挡下"会让人去切权限，而那一支切了没用。
   const head = advice.policyBlocked

@@ -37,15 +37,15 @@ import {
   type PageId,
 } from './navigation.ts'
 import { ReportEvaluationPane, type ReportEvaluationController } from '../modules/report-evaluation/ui/ReportEvaluationPane.tsx'
-import { createReportEvaluationPaneController } from '../modules/report-evaluation/index.ts'
+import { createReportEvaluationPaneController, reportEvaluationPaneServices } from '../modules/report-evaluation/index.ts'
 import { hostPickerCapabilities } from '../modules/local-audit/pick.ts'
 import { WorkbenchLoading } from './LoadingPane.tsx'
 import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
 import { CRWU_SCOPE_PROPS } from '../styles/scope.ts'
-import { moduleLabel, type ModuleId } from './modules.ts'
+import type { ModuleId } from './modules.ts'
 import type { NavigateResult } from '../../shared/environment/model.ts'
 import { buildTagOf, createBuildStore, currentVersionOf, hostIsStale, hostPermissionSchemaStale, useBuild, type BuildStore } from './build-store.ts'
-import { consentGranted, consentOf, consentRequestCapabilities } from '../modules/environment/model/local-access.ts'
+import { consentGranted, consentRequestCapabilities } from '../modules/environment/model/local-access.ts'
 import { PERMISSION_SCHEMA_VERSION } from '../../shared/access/types.ts'
 import { UpdateDialog } from '../modules/update/ui/UpdateDialog.tsx'
 import { useUpdateDialog, useUpdateStore } from '../modules/update/model/react.ts'
@@ -76,9 +76,6 @@ import { greetingLine } from './greeting.ts'
  */
 
 const POLL_INTERVAL_MS = 10_000
-
-/** 估值阶段轮询间隔：比审核列表快一档 —— 它推进的是用户正盯着的那个阶段。 */
-const VALUATION_POLL_INTERVAL_MS = 4_000
 
 /** 哪条登录在飞：两条钉钉路都占 `~/.dws` 锁，氚云不占 —— 界面要区别对待。 */
 type LoginKind = 'h3yun' | 'dingtalk'
@@ -156,17 +153,21 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 估值兜底控制器：同样放 ref（每次重渲染新建一个会把用户填的方法/基准日/补充要求丢掉）。
   const evaluationFallback = React.useRef<ReportEvaluationController | null>(null)
   if (evaluationFallback.current === null) {
-    evaluationFallback.current = createReportEvaluationPaneController(hostPickerCapabilities(
-      () => props.services,
-      {
-        // 门禁与 `apply()` 同一条判据：现读环境快照 —— 快照一次会把"还没自检"永久钉住。
-        ready: () => {
-          const current = envStatus.get()
-          return current.env !== null && current.env.allOk === true
-            ? { ok: true, error: '' }
-            : { ok: false, error: zhCN.valuationNeedEnvironment }
+    evaluationFallback.current = createReportEvaluationPaneController(reportEvaluationPaneServices(
+      hostPickerCapabilities(
+        () => props.services,
+        {
+          // 门禁与 `apply()` 同一条判据：现读环境快照 —— 快照一次会把"还没自检"永久钉住。
+          ready: () => {
+            const current = envStatus.get()
+            return current.env !== null && current.env.allOk === true
+              ? { ok: true, error: '' }
+              : { ok: false, error: zhCN.valuationNeedEnvironment }
+          },
         },
-      },
+      ),
+      // 会话跳转的两条服务同样现读（它们可能比本插件晚注册）。
+      () => props.services,
     ))
   }
   const evaluationController: ReportEvaluationController = props.evaluation ?? evaluationFallback.current
@@ -195,6 +196,13 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    *（报告审核 / 本地审核由侧栏「报告审核」进入，它们那棵树里也没有「估值」）。
    */
   const navModule = moduleOfParent(mod.parent)
+  /**
+   * The audit module has exactly one parent group (审核); painting it above its two leaf pages is a
+   * redundant row. Audit therefore flattens to a single primary row of 报告审核 / 本地审核, reusing
+   * the same stable child ids and existing click / keyboard handlers. Other modules keep the
+   * generic two-level tree.
+   */
+  const flatAuditNav = navModule === 'audit'
   /**
    * 内容区容器（滚动容器）。它切换目录时**不重建**，所以滚动位置要按页面身份处理。
    */
@@ -601,25 +609,13 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   }, [onReportPage, envOk, refreshAudits, loadReport, pageLoader])
 
   /**
-   * 估值轮次状态轮询：**由面板持有，不挂在估值页上**。
+   * ⚠️ 协议 35 起这里**没有**估值轮询（设计稿 §4.5）。
    *
-   * 三件事都靠这一点：
-   * 1. 切到别的目录时正在跑的估值**不会被取消** —— 页面卸载了，轮询还在（面板没卸载），
-   *    切回来看到的是最新阶段；
-   * 2. 「已完成」要真的被发现 —— 控制器只提供 `poll()`，而在此之前没有任何地方调它，
-   *    页面会永远停在「估值进行中」；
-   * 3. 只有真的在跑（queued / running / 等登录）时才开定时器 —— 空闲时一个定时器都不留。
+   * 上一版面板替估值页轮询 `valuation-status`（4 秒一次，页面卸载也不停）。这一代
+   * 页面在交接成功后**直接跳进顶层父会话**，完成度由父会话自己负责 —— 页面不再有
+   * 状态/结果/交付件这些接口，所以"面板不再轮询"不是纪律，而是没有东西可轮询。
+   * 报告审核那 10 秒的轮询仍在（在下面那个 effect 里），它的语义与估值无关。
    */
-  const valuationPhase = useValuationPhase(evaluationController)
-  // `extracting` 也算"在跑"：那一段时间里进度区显示的是**宿主报的真实阶段**，
-  // 不轮询的话它永远停在"正在提取资料…"这一句上（客户端不自己编阶段）。
-  const valuationRunning = valuationPhase === 'queued' || valuationPhase === 'running'
-    || valuationPhase === 'browser-login-required' || valuationPhase === 'extracting'
-  React.useEffect(() => {
-    if (!valuationRunning) return undefined
-    const timer = setInterval(() => { evaluationController.poll() }, VALUATION_POLL_INTERVAL_MS)
-    return () => { clearInterval(timer) }
-  }, [valuationRunning, evaluationController])
 
   /**
    * 「进入报告审核」。
@@ -727,7 +723,6 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   // 客户端不许从「有没有凭据 / 是不是登录过」倒推 —— 那正是"未授权时报未登录"的来源。
   // 未授权**不遮住整页**（用户口径：「不要让一个模态层遮住整个环境页」）：它变成
   // 「账号连接」这一步里的第一张卡；真实门禁仍在 Host 侧（未授权一律拒绝）。
-  const consent = consentOf(env)
   const authorized = env !== null && consentGranted(env)
   /**
    * 允许本机访问。
@@ -1070,7 +1065,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
             onOpenAuditInfo={(key, cloud) => { void openAuditInfo(key, cloud) }}
             // 「AI 审核结果分析会话」要的是**数据**（不是抽屉界面）：同一个 `oss-result`
             // 操作，把裁剪过的审核摘要直接交回去；失败如实返回原因，由页内降级处理。
-            onLoadAuditInfo={async (key, cloud) => {
+            onLoadAuditInfo={async (_key, cloud) => {
               if (cloud.jsonKey === '') return { info: null, error: '' }
               try {
                 const result = await workbenchApi.ossResult({ key: cloud.jsonKey })
@@ -1099,13 +1094,18 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
         workspaceId={env?.workspace.id ?? ''}
       />
     }
-    if (page === 'real-estate-valuation') {
-      // 估值页的控制器由 `apply()` 注入（它握着 RPC 与会话服务），切走再回来仍是同一份草稿。
+    if (page === 'valuation') {
+      // 通用估值页：资产类型在页面里选，所以「估值」本身就是页面（没有二级目录）。
+      // 控制器由 `apply()` 注入（它握着 RPC 与会话服务），切走再回来仍是同一份草稿。
       return <ReportEvaluationPane controller={evaluationController} />
     }
     // 元数据里有、页面还没实现的（`enabled: false`，正常路径进不来）：不假装有内容。
     return <div className={C.navEmpty}>{zhCN.navParentEmpty}</div>
   }
+
+  // Primary navigation row: generic modules list their parent groups, while audit lists its leaf
+  // pages directly (the sole parent group is not painted as a redundant second level).
+  const navPrimaryNodes = navModule === null ? [] : (flatAuditNav ? childNodes(mod.parent) : parentNodes(navModule))
 
   // `data-crwu-scope` 是**插件作用域**：主题变量定义在它上面（styles/tokens.ts），
   // 样式也只在它之内生效。它和 `.crwu-audit-root`（面板布局）是两件事 ——
@@ -1156,18 +1156,20 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
           所以不存在"一级已经切了、二级还显示旧目录"的中间帧。 */}
       {mod.kind === 'node' || mod.kind === 'empty'
         ? navModule === null ? null : <div className={C.navBar}>
-            {/* 一级目录沿用既有报告审核页那套页签形态（44px 命中高度 + 底部 3px 强调线）。 */}
+            {/* Primary row: parent groups for generic modules; for audit the leaf pages themselves
+                (the sole parent group would otherwise repeat above them). Both use the existing
+                underlined tab family with stable ids. */}
             <div
               className={LOCAL_AUDIT_CLASSES.tablist}
               role="tablist"
               aria-orientation="horizontal"
               aria-label={zhCN.navParentsLabel}
             >
-              {parentNodes(navModule).map((parent) => {
-                const on = mod.parent === parent.id
-                const id = parentTabIdOf(parent.id)
+              {navPrimaryNodes.map((node) => {
+                const on = flatAuditNav ? mod.node === node.id : mod.parent === node.id
+                const id = flatAuditNav ? tabIdOf(node.id) : parentTabIdOf(node.id)
                 return <button
-                  key={parent.id}
+                  key={node.id}
                   type="button"
                   role="tab"
                   id={id}
@@ -1176,13 +1178,13 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
                   tabIndex={on ? 0 : -1}
                   ref={(element) => { tabRefs.current[id] = element }}
                   className={[LOCAL_AUDIT_CLASSES.tab, on ? LOCAL_AUDIT_CLASSES.tabOn : ''].filter((one) => one !== '').join(' ')}
-                  onClick={() => { gotoParent(parent.id) }}
-                  onKeyDown={onParentKeyDown}
-                >{parent.label}</button>
+                  onClick={flatAuditNav ? () => { gotoNode(node.id) } : () => { gotoParent(node.id) }}
+                  onKeyDown={flatAuditNav ? onChildKeyDown : onParentKeyDown}
+                >{node.label}</button>
               })}
             </div>
-            {/* 二级目录：浅色胶囊、字号小一号；子项多时横向滚动，不把所有未来业务一次铺开。 */}
-            {childNodes(mod.parent).length === 0 ? null : <div
+            {/* Secondary row (generic modules only): lighter pills; audit is already flat. */}
+            {flatAuditNav || childNodes(mod.parent).length === 0 ? null : <div
               className={C.navChildren}
               role="tablist"
               aria-orientation="horizontal"
@@ -1223,6 +1225,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
         className={C.tabPanel}
         id={TAB_PANEL_ID}
         ref={tabPanelRef}
+        // 页面身份交给 CSS：估值是**固定高度工作面**（只有正文内部滚），其它页面照旧由这里滚。
+        {...(mod.kind === 'node' && activeNode !== null && activeNode.page !== null
+          ? { 'data-workbench-page': activeNode.page }
+          : {})}
         // 环境信息不是目录里的一页（那时目录条整个不画），所以内容区只在有目录时才是 tabpanel ——
         // 否则 `aria-labelledby` 会指向一个此刻并不存在的页签 id。
         {...(mod.kind === 'env'
@@ -1261,8 +1267,9 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
         {/* 一级目录下一个可用页面都没有：如实说一句，不给空白页。 */}
         {mod.kind === 'empty' ? <div className={C.navEmpty}>{zhCN.navParentEmpty}</div> : null}
 
-        {/* 当前二级目录的正文。页面标题来自**导航元数据**（估值 / 房地产 → 「房地产估值」），
-            随二级目录变化 —— 不再有一个写死的「报告评估 / 房地产估值」抬头。 */}
+        {/* 当前二级目录的正文。页面标题来自**导航元数据**（有 `title` 的节点才画）。
+            估值刻意**不声明** `title`：上面那行「估值」页签已经是页面身份，再画一次大字
+            就是用户截图里那处重复页头（2026-10-16）。其它节点照旧。 */}
         {!awaitingEnv && mod.kind === 'node' && activeNode !== null && activeNode.title !== undefined
           ? <div className={C.navPageHead}>
               <h2 className={C.navPageTitle}>{activeNode.title}</h2>
@@ -1271,10 +1278,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
             </div>
           : null}
 
-        {/* 审核那两页在内容区里共用"一张纸"；估值页自己就是一叠卡片，不再套第二层框。 */}
+        {/* 三个业务页在内容区里共用**同一张工作纸**（14px 圆角 + 轻边界 + 轻阴影）。
+            估值页以前直接落在内容区底色上，于是"内部辅助卡片很重、外面反而没有纸" ——
+            现在它和审核页是同一种纸，估值工作面自己不再画第二层框（`> .crwu-valuation`）。 */}
         {!awaitingEnv && mod.kind === 'node' && activeNode !== null
           ? (activeNode.page === 'report-audit' || activeNode.page === 'local-audit'
-              ? <div className={C.pagePaper}>{pageContentOf(activeNode.page)}</div>
+              || activeNode.page === 'valuation'
+              ? <div
+                className={C.pagePaper}
+                data-workbench-page={activeNode.page}
+              >{pageContentOf(activeNode.page)}</div>
               : pageContentOf(activeNode.page))
           : null}
       </div>
@@ -1296,20 +1309,4 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       />
     </SideDrawer>}
   </div>
-}
-
-/**
- * 订阅估值控制器的**阶段**（面板据此决定要不要开轮询定时器）。
- *
- * 只读阶段、不读整个状态：整页跟着每次进度刷新重渲染是没必要的，
- * 而"要不要开定时器"只取决于阶段。写法与 `useEnvStatus` / `useModule` 同一条：
- * `useState` + `useEffect` 订阅，产物冒烟用的那个极小 react 替身也撑得住。
- */
-function useValuationPhase(controller: ReportEvaluationController): string {
-  const [phase, setPhase] = React.useState<string>(() => controller.getState().phase)
-  React.useEffect(() => {
-    setPhase(controller.getState().phase)
-    return controller.subscribe((state) => { setPhase(state.phase) })
-  }, [controller])
-  return phase
 }

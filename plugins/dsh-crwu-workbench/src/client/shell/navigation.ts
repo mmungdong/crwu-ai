@@ -3,13 +3,20 @@ import { MODULE_META, type ModuleId } from './modules.ts'
 import type { EnvironmentRequirement } from '../../shared/environment/model.ts'
 
 /**
- * 工作台的**两级目录**（一级 = 业务大类，二级 = 该业务下的功能页面）。
+ * 工作台的**目录树**（一级 = 业务大类，二级 = 该业务下的功能页面）。
  *
  * ```text
- * 报告评估：一级 [估值]        二级 [房地产] [土地·开发中] [机器设备·开发中]
- * 报告审核：一级 [审核]        二级 [报告审核] [本地审核]
+ * 报告评估：一级 [估值·本身就是页面]   （无二级：资产类型在页面里选）
+ * 报告审核：一级 [审核]               二级 [报告审核] [本地审核]
  * 环境信息：不在目录树里（外层门禁与修复入口）
  * ```
+ *
+ * ## 「估值」是一级页，不再是目录
+ *
+ * 2026-10-15 口径：估值直接打开**通用页面**，取消房地产二级导航 —— 资产类型由用户在下拉里主动选。
+ * 所以 `valuation` 自己带 `page`、`children` 为空：`parentNodes` 把「有页面的无子项目录」照常返回，
+ * 二级页签那条因为子项为空而整个不画。未实现的资产类型不再占目录位（土地 / 机器设备从目录里删除），
+ * 它们由资产类型下拉承载 —— 画一个点不进去的灰标签只会让人以为"这里以后有个入口"。
  *
  * ## 一级目录**分属模块**
  *
@@ -32,11 +39,9 @@ import type { EnvironmentRequirement } from '../../shared/environment/model.ts'
  * 否则「导航说能进、门禁说不能进」会再次分叉。
  */
 
-/** 二级目录指向的实际页面。协议内部仍用这些 id，改标签不改协议。 */
+/** 页面指向的实际页面。协议内部仍用这些 id，改标签不改协议。 */
 export type PageId =
-  | 'real-estate-valuation'
-  | 'land-valuation'
-  | 'equipment-valuation'
+  | 'valuation'
   | 'report-audit'
   | 'local-audit'
 
@@ -48,7 +53,11 @@ export interface NavigationNode {
   parentId: string | null
   /** 这个一级目录属于哪个侧栏模块（只有一级目录声明；二级目录从 `page` 反推）。 */
   module?: ModuleId
-  /** 这个二级目录画哪一页；一级目录是 `null`。 */
+  /**
+   * 这个节点画哪一页；纯目录（底下挂二级页面）是 `null`。
+   *
+   * ⚠️ 一级目录**可以**带 `page`（「估值」就是），那时它自己既是目录项也是页面。
+   */
   page: PageId | null
   /** `false` = 「开发中」：可显示、不可进入。 */
   enabled: boolean
@@ -81,24 +90,13 @@ export const PARENT_IDS: readonly string[] = (Object.keys(PARENT_IDS_BY_MODULE) 
   .flatMap((module) => [...PARENT_IDS_BY_MODULE[module]])
 
 export const NAVIGATION: Record<string, NavigationNode> = {
+  // 「估值」= 通用估值页，自己就是页面（不再有二级目录）。
   valuation: {
-    id: 'valuation', label: zhCN.navParentValuation, parentId: null, module: 'eval', page: null, enabled: true,
-    children: ['valuation.real-estate', 'valuation.land', 'valuation.equipment'],
-  },
-  'valuation.real-estate': {
-    id: 'valuation.real-estate', label: zhCN.navChildRealEstate, parentId: 'valuation',
-    page: 'real-estate-valuation', enabled: true,
-    title: zhCN.valuationPageTitle, lead: zhCN.valuationIntroLead, note: zhCN.valuationIntroNote,
-  },
-  // 土地 / 机器设备：元数据先摆在这里（用户要看到业务目录的全貌），但页面还没有 ——
-  // 灰态「开发中」、不可进入（`enabled: false`），也不声明标题（不编不存在的页面的标题）。
-  'valuation.land': {
-    id: 'valuation.land', label: zhCN.navChildLand, parentId: 'valuation',
-    page: 'land-valuation', enabled: false,
-  },
-  'valuation.equipment': {
-    id: 'valuation.equipment', label: zhCN.navChildEquipment, parentId: 'valuation',
-    page: 'equipment-valuation', enabled: false,
+    id: 'valuation', label: zhCN.navParentValuation, parentId: null, module: 'eval',
+    page: 'valuation', enabled: true,
+    children: [],
+    // No `title`: the tab row already names the page, and the extra large heading below it was the
+    // duplicate the user reported (2026-10-16). Other nodes may still declare one.
   },
 
   audit: {
@@ -132,12 +130,14 @@ export function childNodes(parentId: string): NavigationNode[] {
 /**
  * 某个模块的一级目录（按 `PARENT_IDS_BY_MODULE` 的顺序）。
  *
- * **没有已配置子项的一级目录不出现**：不画"点进去什么都没有"的占位入口。
+ * 出现的条件有两条，满足一条即可：**底下有已配置的二级目录**，或者**它自己就是页面**
+ * （「估值」是后者）。只有空目录的「其他业务」两条都不满足，所以不画。
  */
 export function parentNodes(module: ModuleId): NavigationNode[] {
   return (PARENT_IDS_BY_MODULE[module] ?? [])
     .map((id) => NAVIGATION[id])
-    .filter((node): node is NavigationNode => node !== undefined && childNodes(node.id).length > 0)
+    .filter((node): node is NavigationNode => node !== undefined
+      && (childNodes(node.id).length > 0 || node.page !== null))
 }
 
 /** 一级目录所属模块；二级目录 / 不认识的 id 返回 `null`。 */
@@ -148,13 +148,24 @@ export function moduleOfParent(parentId: string): ModuleId | null {
 }
 
 /**
+ * 这个一级目录自己就是一个页面（没有二级目录）。
+ *
+ * 「估值」是唯一一个：点它直接进通用估值页，不再先落一个二级目录。
+ */
+export function selfPageOf(parentId: string): NavigationNode | null {
+  const parent = nodeById(parentId)
+  if (parent === null || parent.parentId !== null || parent.page === null || !parent.enabled) return null
+  return parent
+}
+
+/**
  * 该一级目录下**第一个可用页面** —— 用户点一级目录时默认落到它。
  *
  * 「不记忆上一次的二级页面」是明确口径（用户 2026-10-13）：每次切一级目录都从第一个可用页开始，
- * 所以这里不认识"上次选过谁"。
+ * 所以这里不认识"上次选过谁"。一级目录自己就是页面时（「估值」）返回它自己。
  */
 export function firstEnabledChild(parentId: string): NavigationNode | null {
-  return childNodes(parentId).find((node) => node.enabled) ?? null
+  return childNodes(parentId).find((node) => node.enabled) ?? selfPageOf(parentId)
 }
 
 /** 按 id 取节点；不认识的 id 返回 `null`（不许抛、也不许编一个）。 */
@@ -174,14 +185,14 @@ export function parentOf(nodeId: string | null): NavigationNode | null {
 export function moduleOfPage(page: PageId | null): ModuleId | null {
   if (page === null) return null
   if (page === 'report-audit' || page === 'local-audit') return 'audit'
-  if (page === 'real-estate-valuation' || page === 'land-valuation' || page === 'equipment-valuation') return 'eval'
+  if (page === 'valuation') return 'eval'
   return null
 }
 
 /**
  * 某个模块的**默认页面**（侧栏那张分组卡上的子项、以及"回到工作台"这类动作走它）。
  *
- * 「报告评估」→ 估值 / 房地产；「报告审核」→ 审核 / 报告审核（既有习惯不变：
+ * 「报告评估」→ 估值（通用页）；「报告审核」→ 审核 / 报告审核（既有习惯不变：
  * 环境自检通过就直接进报告审核）。找不到时返回 `null`，由调用方如实处理。
  */
 export function defaultNodeOfModule(module: ModuleId): NavigationNode | null {

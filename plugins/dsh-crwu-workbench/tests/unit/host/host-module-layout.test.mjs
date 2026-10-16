@@ -68,11 +68,29 @@ test('每个分层的目录都有真实内容（空目录 = 搬了个壳）', ()
 test('operations/ 取代了 ops/（方案 §4.2 的目录名）', () => {
   assert.equal(existsSync(join(PLUGIN, 'src/host/ops')), false, 'ops/ 应当已经改名 operations/')
   // 组装 / 共享依赖 / 四个域 / 两个类型文件 —— 域文件里只放 handler。
+  // `report-evaluation/`（计划 Task 2）：估值那条链路的 handler 按职责拆开，
+  // 入口 `report-evaluation.ts` 只剩**装配**（共享实例 + 并表），不再堆业务。
   const operations = readdirSync(join(PLUGIN, 'src/host/operations')).sort()
   assert.deepEqual(operations, [
     'common.ts', 'core.ts', 'environment.ts', 'local-audit.ts',
-    'register.ts', 'report-audit.ts', 'report-evaluation.ts', 'types-export.ts', 'types.ts',
+    'register.ts', 'report-audit.ts', 'report-evaluation', 'report-evaluation.ts',
+    'types-export.ts', 'types.ts',
   ])
+  // `report-evaluation.ts` 是薄装配：面板预检 handler 是它允许留的**唯一**一个
+  // （Task 3 把登录作业搬进 `report-evaluation/auth.ts` 之后连这一个也会走），
+  // 估值业务 handler 一律不许出现在入口里。
+  const valuation = readFileSync(join(PLUGIN, 'src/host/operations/report-evaluation.ts'), 'utf8')
+  const inlineHandlers = [...valuation.matchAll(/^    '([^']+)':/gm)].map((match) => match[1])
+  assert.deepEqual(
+    inlineHandlers.filter((name) => name !== 'valuation-browser-preflight'), [],
+    'report-evaluation.ts 只做装配：业务 handler 必须放在 report-evaluation/ 下的模块里')
+  // 拆出来的 handler 必须真的在（空目录 = 搬了个壳）。用"包含"而不是全等：
+  // 这条链路后续任务还会继续往这个目录里放模块（例如 `auth.ts`）。
+  const parts = readdirSync(join(PLUGIN, 'src/host/operations/report-evaluation')).sort()
+  // `monitor.ts`（v1 面板完成度四条操作）已随协议 35 删除：页面不再追踪估值完成度。
+  for (const required of ['handoff.ts', 'intake.ts', 'auth.ts']) {
+    assert.equal(parts.includes(required), true, `report-evaluation/${required} 应当在（实际：${parts.join('、')}）`)
+  }
   // `core.ts` 只剩兼容转出：真实实现搬走之后它不该再带 handler。
   const core = readFileSync(join(PLUGIN, 'src/host/operations/core.ts'), 'utf8')
   assert.equal(/^    '/m.test(core), false, 'core.ts 不该再带操作 handler')

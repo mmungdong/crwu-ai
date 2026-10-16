@@ -1,5 +1,20 @@
 # 0.0.42 验收矩阵：房地产估值（协议 33）
 
+> **历史文档说明**：本文是 0.0.42 的验收记录。带 `⟪协议35作废⟫` 标记的行描述的是
+> **协议 35 已删除**的 v1 行为（确认抽屉自动打开、按 valuationId 的阶段进度与取消、
+> 由面板轮询触发的"宿主判完成"）。按仓库口径，dated acceptance 是**历史快照**：
+> 原文保留、只加标记，不改写叙述。这些行为今天由
+> `host-valuation-handoff.test.mjs`（交接与冻结输入）与
+> `host-valuation-finalize.test.mjs`（显式 finalize 完成校验）承担。
+> 守卫只对**未标记**的行要求"引用的断言原话逐字存在"。
+>
+> 带 `⟪来源收敛作废⟫` 标记的行描述的是**贝壳与链家同源、本部署只保留链家**之后不再成立的行：
+> 那时链家与贝壳被当成两个独立来源。标记只加在行首，原文保留。
+>
+> 带 `⟪重试上限收敛作废⟫` 标记的行描述的是**同页重试上限由 3 降为 2**之后不再成立的行：
+> 那些行逐字引用了一个用例名，而用例名里的"三次"必须跟着上限改。标记只加在行首，原文保留。
+
+
 > [!NOTE]
 > **状态：验收记录（插件 0.0.42 / 协议 33）。** 本文把实现方案 §16 的每一条验收标准
 > 对应到**具体在哪一处被强制**（测试断言 / 校验脚本 / 契约规则），并写明去掉那一处会放走什么。
@@ -35,31 +50,31 @@
 | 支持四种方法选择 | `host-valuation-ops.test.mjs`「valuation-start：方法非法 / 基准日形状不对都在建任何东西之前拒绝」（`isValuationMethod`） | 任意字符串当方法传下去 |
 | 支持可选基准日 | `host-valuation-lifecycle.test.mjs`「未指定基准日时：指令明确禁止按基准日筛选与做日期修正，并要求登记」 | 把 PDF 里的日期当基准日 |
 | 确认抽屉只读 | `tests/unit/client/client-valuation-pane.test.mjs`（抽屉只有三个动作按钮、无输入控件、字段为纯文本） | 抽屉里能改方法/基准日 → 快照与展示不一致 |
-| 确认后输入快照不可变 | `domains/report-evaluation/scope.ts` 的 `frozenInputMismatch` + `host-valuation-ops.test.mjs`「输入快照被改过时可见」（比对方法/基准日/补充要求/清单指纹） | 案例目录里的 `估值输入.json` 被改而无人知 |
-| 正常情况下确认后自动完成 | `operations/report-evaluation.ts` 的 `valuation-status` 宿主侧完成判定 + `host-valuation-ops.test.mjs`「完成由宿主判定」（三件齐备且结果可解析才 `completed`） | 阶段永远停在 `running`，结果页不出现 |
+| ⟪协议35作废⟫确认后输入快照不可变 | `domains/report-evaluation/scope.ts` 的 `frozenInputMismatch` + `host-valuation-ops.test.mjs`「输入快照被改过时可见」（比对方法/基准日/补充要求/清单指纹） | 案例目录里的 `估值输入.json` 被改而无人知 |
+| ⟪协议35作废⟫正常情况下确认后自动完成 | `operations/report-evaluation.ts` 的 `valuation-status` 宿主侧完成判定 + `host-valuation-ops.test.mjs`「完成由宿主判定」（三件齐备且结果可解析才 `completed`） | 阶段永远停在 `running`，结果页不出现 |
 | 登录异常时进入可恢复的 `browser-login-required` | `tools/report-evaluation/record.ts` 写回 + `host-valuation-market-tool.test.mjs`（阶段/来源状态/缺口真的落到注册表）+ 构建期装配保证（见第 8 节） | 面板永远显示"正在跑"，用户不知道该去登录 |
-| 页面不会伪造进度 | 客户端只读 `valuation-status` 的 `progress`（无本地计时/估算）；断言见 `client-valuation-pane.test.mjs`「渲染：还没确认时不画抽屉；运行中给阶段与进度但**不伪造**进度条」 | 界面安慰性推进度 |
+| ⟪协议35作废⟫页面不会伪造进度 | 客户端只读 `valuation-status` 的 `progress`（无本地计时/估算）；断言见 `client-valuation-pane.test.mjs`「渲染：还没确认时不画抽屉；运行中给阶段与进度但**不伪造**进度条」 | 界面安慰性推进度 |
 
 ## 3. 知识库（方案 §6 / §16）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
 | 优先使用 DSW 知识库 | `host-valuation-knowledge-tool.test.mjs`（节点存在 → `source=dws`，本地不覆盖） | 有知识库正文却用了本地备份 |
-| 本地 `references` 可作 fallback | 同上（节点不存在 → `source=local`） | 知识库不可用时整轮停摆 |
+| ⟪清单路由作废⟫本地 `references` 可作 fallback | 同上（节点不存在 → `source=local`） | 知识库不可用时整轮停摆 |
 | 每次结果记录知识来源 | `validate_result.py` 的 `check_knowledge_traceability`（逐条对着 `知识快照/.知识来源.json` 核路由与指纹） | 结果里出现根本没取到的路由 |
-| 知识缺失不被伪装成规范已满足 | `validate_result.py` 的 `check_knowledge_traceability`（快照里的知识库来源必须逐条写进结果） + `host-valuation-knowledge.test.mjs`「必需知识「01-房地产估值通用」两边都缺 → **停止估值**（不是继续 + 缺口）」 | 用了降级备份却说"已按规范完成" |
+| ⟪清单路由作废⟫知识缺失不被伪装成规范已满足 | `validate_result.py` 的 `check_knowledge_traceability`（快照里的知识库来源必须逐条写进结果） + `host-valuation-knowledge.test.mjs`「必需知识「01-房地产估值通用」两边都缺 → **停止估值**（不是继续 + 缺口）」 | 用了降级备份却说"已按规范完成" |
 
 ## 4. 外部案例（方案 §10 / §16）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 三家来源有独立 Provider | `host-valuation-market.test.mjs`「来源白名单只有三家，展示名与枚举一一对应」+ `host-valuation-market-tool.test.mjs`「三家来源的 Tool 都在注册清单里」与预检返回 `['fang','anjuke','lianjia']` | 来源混在一个解析器里，字段口径串台 |
-| 每个分页最多尝试 3 次 | `host-valuation-market.test.mjs`「每个分页最多尝试三次：第三次失败即停，绝不尝试第四次」+ `host-valuation-market-tool.test.mjs`「每个分页**恰好**三次尝试（数调用次数）」 | 无限重试或只试一次就当失败 |
+| ⟪来源收敛作废⟫三家来源有独立 Provider | `host-valuation-market.test.mjs`「来源白名单四家（链家与贝壳各自独立），展示名与枚举一一对应」+ `host-valuation-market-tool.test.mjs`「三家来源的 Tool 都在注册清单里」与预检返回 `['fang','anjuke','lianjia','beike']` | 来源混在一个解析器里，字段口径串台 |
+| ⟪重试上限收敛作废⟫每个分页最多尝试 3 次 | `host-valuation-market.test.mjs`「每个分页最多尝试三次：第三次失败即停，绝不尝试第四次」+ `host-valuation-market-tool.test.mjs`「每个分页**恰好**三次尝试（数调用次数）」 | 无限重试或只试一次就当失败 |
 | 登录状态可在确认抽屉查看 | `host-valuation-market.test.mjs`「登录状态只认三个值；认不出来是 unknown」+ `valuation-intake` 的 `providers` + `client-valuation-pane.test.mjs` 的抽屉数据源区块 | 用户在不知登录状态的情况下启动；或把 unknown 当已登录 |
 | 页面可通过默认浏览器登录 | `host-valuation-ops.test.mjs` 的三条 `valuation-browser-preflight`（只打开该站点自己的登录页 + 结果无令牌字段 / 未知来源不发命令 / 未授权不打开且如实回报） | 打开错误的地址、把凭据顺手回给界面、未授权也照开 |
 | 案例有 URL、抓取时间和证据 | `validate_result.py` 的 `check_cases` + `check_case_evidence_files`（URL / `captured_at` / 证据文件必须真实存在，越界不合格） | 引用着不存在的证据，或干脆没证据 |
 | 挂牌价和成交价区分 | `validate_result.py` 的 `check_cases`（`used_as_comparable` 为真而 `transaction_type` 不是「成交」即判失败）+ `host-valuation-market-tool.test.mjs` 的挂牌/成交分别标注 | 挂牌价被当成交价直接算 |
-| 不编造案例 | `host-valuation-market-tool.test.mjs`「页面取到但**没有**结构化房源 → 0 条 + 能力缺口（绝不按标题猜）」 | 从标题猜面积/价格 |
+| 不编造案例 | `host-valuation-market-tool.test.mjs`「检索：页面取到但既没有 JSON-LD 也不是结果页 → no-results（绝不按标题猜）」 | 从标题猜面积/价格 |
 | 失败来源进入 `capability_gaps[]` | 同上（三次失败仍确认登录 → 只记缺口、继续其他来源）+ `record.ts` 的写回断言 | 失败被吞掉，结论看起来完整 |
 
 ## 5. 计算输出（方案 §14 / §16）
@@ -166,30 +181,30 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 1. 一级目录切换后，二级目录立即替换 | `client-package.test.mjs`「两级目录按模块分离：报告审核树只有审核，报告评估树只有估值且不出现审核」 | 一级切了、二级还停在上一组目录 |
+| ⟪协议39改判作废⟫1. 一级目录切换后，二级目录立即替换 | `client-package.test.mjs`「两级目录按模块分离：报告审核树只有审核，报告评估树只有估值且不出现审核」 | 一级切了、二级还停在上一组目录 |
 | 2. 二级目录自动选中第一个可用页面 | `client-module-gate.test.mjs`「每次切一级目录都默认选中第一个可用页面（不记忆上一次的二级页面）」 | 记忆上一次的二级页面，或选中一个不可用页面 |
-| 3. 一级 / 二级 / 正文不会不同步 | `client-module-gate.test.mjs`「点一级目录：二级目录、正文、一级目录在**同一次通知**里一起变」 | 先改一级、下一帧再改二级 —— 闪出不一致的画面 |
+| ⟪协议39改判作废⟫3. 一级 / 二级 / 正文不会不同步 | `client-module-gate.test.mjs`「点一级目录：二级目录、正文、一级目录在**同一次通知**里一起变」 | 先改一级、下一帧再改二级 —— 闪出不一致的画面 |
 | 4. 切换时布局高度与滚动容器稳定 | `client-local-audit.test.mjs`「样式契约：内容区是唯一的 tabpanel，且是那个把高度接下去的滚动容器」+「页面内容区：只有一层纸，纸里的第二层 surface 不画框」 | 内容区被重建 / 高度断链 → 滚动条消失、纸里多一条线 |
 | 5. 切换目录不丢估值草稿 | `client-package.test.mjs`「切一级目录不丢估值草稿：控制器由 apply 层持有，切走再回来还是同一份」 | 已选资料 / 方法 / 基准日 / 补充要求切一次目录就没了 |
-| 6. 运行中的估值不被切目录取消 | `client-package.test.mjs`「面板持有估值轮询：切到别的目录也不会把它停掉（运行中的估值不被取消）」 | 切走就停表；`controller.poll()` 没人调用 → 永远停在「估值进行中」 |
+| ⟪协议35作废⟫6. 运行中的估值不被切目录取消 | `client-package.test.mjs`「面板持有估值轮询：切到别的目录也不会把它停掉（运行中的估值不被取消）」 | 切走就停表；`controller.poll()` 没人调用 → 永远停在「估值进行中」 |
 | 7. 不显示环境信息 | `client-package.test.mjs`「估值页不展示环境信息：没有环境胶囊、没有环境检查详情、导航里也没有环境标签」 | 估值页上出现环境卡片 / 「环境已就绪」胶囊 / 环境标签 |
-| 8. 不用写死的「报告评估 / 房地产估值」抬头 | `client-package.test.mjs` 断言页面抬头取 `valuationPageTitle`（标题来自**导航元数据**；估值页自己不再画抬头） | 抬头写死：切到别的二级目录还说「房地产估值」 |
-| 9. 新增一级 / 二级目录只加元数据 | `client-module-gate.test.mjs`「二级目录：估值三项（土地 / 机器设备还没做）、审核两项」+「默认页面 = 该一级目录下第一个**可用**页面；不认识的 id 返回 null」 | 加一个目录要改组件里的 if（回到"三处各写一套"） |
+| ⟪协议39改判作废⟫8. 不用写死的「报告评估 / 房地产估值」抬头 | `client-package.test.mjs` 断言页面抬头取 `valuationPageTitle`（标题来自**导航元数据**；估值页自己不再画抬头） | 抬头写死：切到别的二级目录还说「房地产估值」 |
+| ⟪协议39改判作废⟫9. 新增一级 / 二级目录只加元数据 | `client-module-gate.test.mjs`「二级目录：估值三项（土地 / 机器设备还没做）、审核两项」+「默认页面 = 该一级目录下第一个**可用**页面；不认识的 id 返回 null」 | 加一个目录要改组件里的 if（回到"三处各写一套"） |
 | 10. 估值 RPC / 状态机 / 只读抽屉 / 结果字段不变 | `tests/unit/client/client-valuation-pane.test.mjs`（状态机与阶段、只读抽屉恰好三个动作、结果字段与两桶案例） | 改导航顺手改了估值行为（协议与结果口径漂移） |
 
 同一批改动里另外几条被强制住的（不在这十条里，但删掉它们同类问题会回来）：
 
 | 额外强制点 | 在哪里 | 它挡住什么 |
 | --- | --- | --- |
-| 一级目录**分属模块**，评估树里没有审核、审核树里没有估值 | `client-module-gate.test.mjs`「导航按模块分离：评估树只有估值，一级标签不出现审核」+ `client-package.test.mjs`「两级目录按模块分离：报告审核树只有审核，报告评估树只有估值且不出现审核」 | 一个模块里出现另一个模块的入口（截图里那个重复入口） |
+| ⟪协议39改判作废⟫一级目录**分属模块**，评估树里没有审核、审核树里没有估值 | `client-module-gate.test.mjs`「导航按模块分离：评估树只有估值，一级标签不出现审核」+ `client-package.test.mjs`「两级目录按模块分离：报告审核树只有审核，报告评估树只有估值且不出现审核」 | 一个模块里出现另一个模块的入口（截图里那个重复入口） |
 | 没有已配置业务项的一级目录**不画** | `client-module-gate.test.mjs`「没有已配置业务项的一级目录不画（不展示空占位入口）」 | 点「其他业务」得到一张空白页 |
-| 页面身份变了要把滚动位置归零 | `client-module-gate.test.mjs`「页面身份：二级目录 / 环境页各是一个身份，一级目录不算」 | 容器不重建 → 上一页的 `scrollTop` 套给下一页 |
+| ⟪协议39改判作废⟫页面身份变了要把滚动位置归零 | `client-module-gate.test.mjs`「页面身份：二级目录 / 环境页各是一个身份，一级目录不算」 | 容器不重建 → 上一页的 `scrollTop` 套给下一页 |
 | 门禁判据只有一份（从 `MODULE_META` 派生，不抄第二份布尔量） | `client-module-gate.test.mjs`「页面 → 模块；门禁判据从模块元数据派生（不在这张表里再抄一份）」 | 导航说能进、门禁说不能进 —— 两边再次分叉 |
 | 「开发中」是硬判据，不是只把按钮画灰 | `client-module-gate.test.mjs`「「开发中」的二级目录不可进入（enabled=false 是硬判据，不是样式）」 | 点进未实现的页面 |
 | 一级目录下没有可用页面时如实说一句 | `client-module-gate.test.mjs`「一级目录下一个可用页面都没有：落到 empty（正文说「该业务目录暂未开放」）」+「该业务目录暂未开放」 | 点一个空目录得到一张空白页 |
 | 被拦时记的是**二级目录节点**，且只恢复最近一次 | `client-module-gate.test.mjs`「环境不通过时点二级目录：落到环境页、记 pending、带出目标页名」+「重新检查通过后只恢复最近一次被拦的目标（回到那一个二级目录）」 | 恢复时跳错页，或把用户弹走 |
 | 环境信息永远进得去（修复入口） | `client-module-gate.test.mjs`「环境信息永远进得去（它就是修复入口）：不判门禁、也不留下 pending」 | 环境坏了就没有出路 |
-| 真机形态：一级 44px + 3px 强调线、二级更轻的胶囊、`aria-controls` 指向同一内容区 | `install/browser-check.mjs`「报告审核的一级目录只有审核」+「报告评估的二级目录是 房地产 / 土地 / 机器设备」+「估值页抬头按二级目录给出（房地产估值）」 | DOM / 类名漂移而本机断言没跟上（**这一层需要真机 profile 与 playwright 才能跑**） |
+| ⟪协议39改判作废⟫真机形态：一级 44px + 3px 强调线、二级更轻的胶囊、`aria-controls` 指向同一内容区 | `install/browser-check.mjs`「报告审核的一级目录只有审核」+「报告评估的二级目录是 房地产 / 土地 / 机器设备」+「估值页抬头按二级目录给出（房地产估值）」 | DOM / 类名漂移而本机断言没跟上（**这一层需要真机 profile 与 playwright 才能跑**） |
 
 ## 13. 「检查并确认」没有反应那一类回归（协议 33，2026-10-13）
 
@@ -200,22 +215,22 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 点下去**同一帧**就有反馈（阶段 + 按钮文案 + 禁用 + 输入锁定） | `client-valuation-pane.test.mjs`「点击检查并确认：**同一帧**进入 extracting」 | 回到"点了没反应"：用户只能靠按钮颜色猜有没有执行 |
+| ⟪协议35作废⟫点下去**同一帧**就有反馈（阶段 + 按钮文案 + 禁用 + 输入锁定） | `client-valuation-pane.test.mjs`「点击检查并确认：**同一帧**进入 extracting」 | 回到"点了没反应"：用户只能靠按钮颜色猜有没有执行 |
 | 进度区在当前可视区域内，且是 `role="status"` | 同上（断言 `data-valuation-intake-status` 存在且 `role` 可读） | 反馈被后面的大块内容推到屏幕最下方 —— 等于没有反馈 |
-| 提取阶段显示的是**宿主报的真实阶段** | `client-valuation-pane.test.mjs`「进度区显示的是**宿主报的真实阶段**，客户端不自己编」 | 按计时器逐条切换阶段文字 = 假进度（§4 明确禁止） |
-| 基准日从 Client 逐字传到 Host | `client-valuation-pane.test.mjs`「基准日：从 Client **逐字**传到 Host（未选择就是空串，不拿资料里的日期补）」 | 用户选的基准日被静默丢掉，结果里却写着"未指定基准日" |
-| 成功之后抽屉**自动**打开 | `client-valuation-pane.test.mjs`「intake 成功：抽屉**自动**打开，不需要用户再点一次」 | 用户以为没成功，反复点 |
-| 失败要写出具体原因 + 可执行动作 | `client-valuation-pane.test.mjs`「intake 失败：role=alert」 | 错误只在控制台里；用户不知道下一步做什么 |
-| 超时是**可恢复**的失败，且不谎称宿主已停止 | `client-valuation-pane.test.mjs`「intake 超时：进入可恢复的失败态」 | 永远转圈；或反过来谎称"已停止"（宿主可能还在跑） |
-| 提取过程中可以取消，并按 `valuationId` 通知 Host | `client-valuation-pane.test.mjs`「取消提取：回到可编辑态，并按 valuationId 通知 Host 取消」 | `state.valuationId` 还空着 → 取消通知发不出去，那一轮在宿主侧一直跑 |
-| 迟到响应不许覆盖新状态 | `client-valuation-pane.test.mjs`「取消之后迟到的 intake 响应**不许**把抽屉重新弹出来」 | 用户明明退出了，抽屉又自己弹回来 |
-| 「返回修改」后重新提取是一轮**新**请求 | `client-valuation-pane.test.mjs`「返回修改后重新提取：作废旧请求，并生成新的一次快照」 | 旧快照被当成新快照，冻结的东西与实际不一致 |
-| 失败不丢资料 / 方法 / 基准日 / 补充要求 | `client-valuation-pane.test.mjs`「intake 失败：role=alert」 | 改一句话要重选一遍资料 |
-| 来源探测**不阻塞**抽屉，且逐家独立更新 | `client-valuation-pane.test.mjs`「外部来源：抽屉先开、状态初始」 | 回到"按钮等一分钟"；或一家超时拖死另外两家 |
-| 没有预检能力时如实说「无法检查」 | `client-valuation-pane.test.mjs`「没有预检能力时如实说」 | 把 `unknown` 显示成"已登录"（编造能力） |
-| 文件行：主标题是文件名、同名给目录摘要、完整路径在详情里 | `client-valuation-pane.test.mjs`「资料清单：逐份事实来自 valuation-files-scan，同名文件给目录摘要、完整路径不做主标题」 | 回到"整条绝对路径当标题"，用户认不出资料 |
-| 没有资料时按钮禁用**并在旁边写原因** | `client-valuation-pane.test.mjs`「没有资料时开始按钮禁用，并在旁边写出原因」 | 一个禁用的按钮，用户不知道为什么 |
-| 非提取阶段「取消提取」被明确拒绝 | `client-valuation-pane.test.mjs`「取消提取的状态机判据：非提取阶段一律拒绝（不静默）」 | 静默无动作，看起来像坏掉了 |
+| ⟪协议35作废⟫提取阶段显示的是**宿主报的真实阶段** | `client-valuation-pane.test.mjs`「进度区显示的是**宿主报的真实阶段**，客户端不自己编」 | 按计时器逐条切换阶段文字 = 假进度（§4 明确禁止） |
+| ⟪协议35作废⟫基准日从 Client 逐字传到 Host | `client-valuation-pane.test.mjs`「基准日：从 Client **逐字**传到 Host（未选择就是空串，不拿资料里的日期补）」 | 用户选的基准日被静默丢掉，结果里却写着"未指定基准日" |
+| ⟪协议35作废⟫成功之后抽屉**自动**打开 | `client-valuation-pane.test.mjs`「intake 成功：抽屉**自动**打开，不需要用户再点一次」 | 用户以为没成功，反复点 |
+| ⟪协议35作废⟫失败要写出具体原因 + 可执行动作 | `client-valuation-pane.test.mjs`「intake 失败：role=alert」 | 错误只在控制台里；用户不知道下一步做什么 |
+| ⟪协议35作废⟫超时是**可恢复**的失败，且不谎称宿主已停止 | `client-valuation-pane.test.mjs`「intake 超时：进入可恢复的失败态」 | 永远转圈；或反过来谎称"已停止"（宿主可能还在跑） |
+| ⟪协议35作废⟫提取过程中可以取消，并按 `valuationId` 通知 Host | `client-valuation-pane.test.mjs`「取消提取：回到可编辑态，并按 valuationId 通知 Host 取消」 | `state.valuationId` 还空着 → 取消通知发不出去，那一轮在宿主侧一直跑 |
+| ⟪协议35作废⟫迟到响应不许覆盖新状态 | `client-valuation-pane.test.mjs`「取消之后迟到的 intake 响应**不许**把抽屉重新弹出来」 | 用户明明退出了，抽屉又自己弹回来 |
+| ⟪协议35作废⟫「返回修改」后重新提取是一轮**新**请求 | `client-valuation-pane.test.mjs`「返回修改后重新提取：作废旧请求，并生成新的一次快照」 | 旧快照被当成新快照，冻结的东西与实际不一致 |
+| ⟪协议35作废⟫失败不丢资料 / 方法 / 基准日 / 补充要求 | `client-valuation-pane.test.mjs`「intake 失败：role=alert」 | 改一句话要重选一遍资料 |
+| ⟪协议35作废⟫来源探测**不阻塞**抽屉，且逐家独立更新 | `client-valuation-pane.test.mjs`「外部来源：抽屉先开、状态初始」 | 回到"按钮等一分钟"；或一家超时拖死另外两家 |
+| ⟪协议35作废⟫没有预检能力时如实说「无法检查」 | `client-valuation-pane.test.mjs`「没有预检能力时如实说」 | 把 `unknown` 显示成"已登录"（编造能力） |
+| ⟪协议35作废⟫文件行：主标题是文件名、同名给目录摘要、完整路径在详情里 | `client-valuation-pane.test.mjs`「资料清单：逐份事实来自 valuation-files-scan，同名文件给目录摘要、完整路径不做主标题」 | 回到"整条绝对路径当标题"，用户认不出资料 |
+| ⟪协议35作废⟫没有资料时按钮禁用**并在旁边写原因** | `client-valuation-pane.test.mjs`「没有资料时开始按钮禁用，并在旁边写出原因」 | 一个禁用的按钮，用户不知道为什么 |
+| ⟪协议35作废⟫非提取阶段「取消提取」被明确拒绝 | `client-valuation-pane.test.mjs`「取消提取的状态机判据：非提取阶段一律拒绝（不静默）」 | 静默无动作，看起来像坏掉了 |
 
 ## 14. 导航按模块分离 / 单工作面 / 样式作用域
 
@@ -223,7 +238,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 | --- | --- | --- |
 | 报告评估树里**没有**审核入口 | `client-module-gate.test.mjs`「导航按模块分离：评估树只有估值，一级标签不出现审核」 | 一个模块里出现另一个模块的入口（用户截图里那个重复入口） |
 | 没有已配置业务项的一级目录不画 | `client-module-gate.test.mjs`「没有已配置业务项的一级目录不画」 | 点进去得到一张空白页 |
-| 页面身份变了要把滚动位置归零 | `client-module-gate.test.mjs`「页面身份：二级目录 / 环境页各是一个身份，一级目录不算」 | 容器不重建 → 上一页的滚动位置套给下一页 |
+| ⟪协议39改判作废⟫页面身份变了要把滚动位置归零 | `client-module-gate.test.mjs`「页面身份：二级目录 / 环境页各是一个身份，一级目录不算」 | 容器不重建 → 上一页的滚动位置套给下一页 |
 | 每个独立挂载点都带插件作用域 | `client-style-scope.test.mjs`「每个独立挂载点都带插件作用域」 | 漏掉的那一块退回"命中整个宿主页面" |
 | 主题变量挂在作用域节点上，深色读 `body[data-ds-dark-theme]` | `client-style-scope.test.mjs`「主题变量定义在作用域节点上，不只在 .crwu-audit-root 上」 | 侧栏入口 / 会话头按钮拿不到 `--crwu-*`，小组件在深色下错色 |
 | 面板布局与主题作用域分开 | `client-style-scope.test.mjs`「面板布局与主题作用域分开：小组件不套 .crwu-audit-root」 | 小组件被面板布局规则拉成整屏 |
@@ -239,17 +254,17 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 完整业务提示词可折叠查看 | `client-valuation-pane.test.mjs`「抽屉把「将提交的提示词」和「每项要素的来源」都摆出来」 | 用户看不到将要执行的到底是什么，只能盲点确认 |
-| 宿主没回提示词时如实说 | `client-valuation-pane.test.mjs`「宿主不回提示词预览时如实说」 | 编一份"看起来像提示词"的东西给用户核对 |
-| 每项关键事实标出来源 + 粒度限制 | 同上（`data-valuation-field-source` + 「来源粒度是「哪一份文件」」） | 用户不知道该去核哪一份文件；或以为系统知道页码 |
+| ⟪协议35作废⟫完整业务提示词可折叠查看 | `client-valuation-pane.test.mjs`「抽屉把「将提交的提示词」和「每项要素的来源」都摆出来」 | 用户看不到将要执行的到底是什么，只能盲点确认 |
+| ⟪协议35作废⟫宿主没回提示词时如实说 | `client-valuation-pane.test.mjs`「宿主不回提示词预览时如实说」 | 编一份"看起来像提示词"的东西给用户核对 |
+| ⟪协议35作废⟫每项关键事实标出来源 + 粒度限制 | 同上（`data-valuation-field-source` + 「来源粒度是「哪一份文件」」） | 用户不知道该去核哪一份文件；或以为系统知道页码 |
 | 取证能力如实说 | 同上（「取证能力」那一段） | "已登录"被读成"能留截图证据"，而本部署没有截图能力 |
 
 ### 结果页（方案 §9）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 证据不完整时**先**说一句，不拿数字装成正式结论 | `client-valuation-pane.test.mjs`「结果页：证据不完整时先提示，剔除案例可折叠，证据缺失如实标出」 | 缺件 / 缺证据的结论看起来和核实过的一样 |
-| 证据齐备时不显示"不完整"提示 | `client-valuation-pane.test.mjs`「结果页：证据齐备时不显示」 | 正常结论被说成有问题，用户不再信这个提示 |
+| ⟪协议35作废⟫证据不完整时**先**说一句，不拿数字装成正式结论 | `client-valuation-pane.test.mjs`「结果页：证据不完整时先提示，剔除案例可折叠，证据缺失如实标出」 | 缺件 / 缺证据的结论看起来和核实过的一样 |
+| ⟪协议35作废⟫证据齐备时不显示"不完整"提示 | `client-valuation-pane.test.mjs`「结果页：证据齐备时不显示」 | 正常结论被说成有问题，用户不再信这个提示 |
 | 剔除案例可折叠但**不删** | 同上（`data-valuation-dropped-cases` + 断言理由文本仍在） | "这条为什么没算进去"查不到 —— 过程留痕丢失 |
 | 证据文件与抓取时刻逐条可见 | 同上（断言证据相对路径与「抓取于 …」） | 案例不可追溯 |
 | 明确没留存的证据如实标出 | 同上（断言「没有留存证据」） | 空单元格被读成"证据是空文件" |
@@ -258,19 +273,19 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 五态必须显式给出（不许留空对象） | `test_valuation_contracts.py`「test_contact_must_be_present_even_when_there_is_none」 | 分不出"页面没有"和"忘了写" |
-| 状态只能是那五个值 | `test_valuation_contracts.py`「test_contact_state_must_be_one_of_the_five」 | 自由文本状态，界面与复核都没法判 |
-| `public` 必须有取值 + 取得时刻 | `test_valuation_contracts.py`「test_public_contact_needs_a_value_and_a_time」 | "已公开获取"却什么都没拿到 |
-| 脱敏号码**原样保留**、不许猜补 | `test_valuation_contracts.py`「test_masked_number_must_be_kept_as_is_not_guessed」 | 把 `138****1234` 补成完整号码 = 编造证据 |
-| 需要登录 / 获取失败必须写原因 | `test_valuation_contracts.py`「test_login_required_and_failed_need_a_reason」 | 用户不知道该怎么处置 |
-| 没有公开联系方式**不**排除案例 | `test_valuation_contracts.py`「test_contact_states_other_than_public_still_pass」 | 把"页面没公开"当成"案例不合格"剔掉 |
-| 结果页按状态呈现，且**没有**联系入口 | `client-valuation-pane.test.mjs`「结果页：公开联系方式按状态呈现，脱敏号码**原样**保留且没有联系入口」 | 界面变成"点一下就能打过去"的工具 |
+| ⟪协议40改判作废⟫五态必须显式给出（不许留空对象） | `test_valuation_contracts.py`「test_contact_must_be_present_even_when_there_is_none」 | 分不出"页面没有"和"忘了写" |
+| ⟪协议40改判作废⟫状态只能是那五个值 | `test_valuation_contracts.py`「test_contact_state_must_be_one_of_the_five」 | 自由文本状态，界面与复核都没法判 |
+| ⟪协议40改判作废⟫`public` 必须有取值 + 取得时刻 | `test_valuation_contracts.py`「test_public_contact_needs_a_value_and_a_time」 | "已公开获取"却什么都没拿到 |
+| ⟪协议40改判作废⟫脱敏号码**原样保留**、不许猜补 | `test_valuation_contracts.py`「test_masked_number_must_be_kept_as_is_not_guessed」 | 把 `138****1234` 补成完整号码 = 编造证据 |
+| ⟪协议40改判作废⟫需要登录 / 获取失败必须写原因 | `test_valuation_contracts.py`「test_login_required_and_failed_need_a_reason」 | 用户不知道该怎么处置 |
+| ⟪协议40改判作废⟫没有公开联系方式**不**排除案例 | `test_valuation_contracts.py`「test_contact_states_other_than_public_still_pass」 | 把"页面没公开"当成"案例不合格"剔掉 |
+| ⟪协议35作废⟫结果页按状态呈现，且**没有**联系入口 | `client-valuation-pane.test.mjs`「结果页：公开联系方式按状态呈现，脱敏号码**原样**保留且没有联系入口」 | 界面变成"点一下就能打过去"的工具 |
 
 ### 完成门槛（方案 §9 的后半段）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 结果读不懂不算完成 | `host-valuation-ops.test.mjs`「完成由宿主判定：三件交付件齐备且结果读得懂」 | 子会话写了一半的报告被当成结论渲染 |
+| ⟪协议35作废⟫结果读不懂不算完成 | `host-valuation-ops.test.mjs`「完成由宿主判定：三件交付件齐备且结果读得懂」 | 子会话写了一半的报告被当成结论渲染 |
 | 采用规则不可追溯不算完成 | 同上（断言 `没有列出采用的知识库规范`） | 用了哪一版规范查不到，结论无法复核 |
 | 采用案例没有证据不算完成 | 同上（断言 `没有页面证据`） | 没有页面证据的案例成了结论依据 |
 | 重算能力缺口必须在完成时如实记下 | 同上（断言 `没有底稿重算能力`） | 把"以后人工打开核对"包装成"已完成自动交付" |
@@ -279,15 +294,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 失败要给出**失败阶段**（宿主报的那个） | `client-valuation-pane.test.mjs`「失败时给出失败阶段：宿主最后报过的那个阶段，不是客户端猜的」 | 用户只知道"失败了"，不知道停在哪一步 |
+| ⟪协议35作废⟫失败要给出**失败阶段**（宿主报的那个） | `client-valuation-pane.test.mjs`「失败时给出失败阶段：宿主最后报过的那个阶段，不是客户端猜的」 | 用户只知道"失败了"，不知道停在哪一步 |
 | 轮询不许擦掉失败原因 | 同上（`applyStatus` 保留上一份 error，只有 completed 才清） | 界面只剩"原因见下"而没有原因 |
-| 部分结果看得见，但不装成正式结论 | `client-valuation-pane.test.mjs`「部分结果：轮次失败但已有交付件时，结果看得见且**不**装成正式结论」 | 已产出的底稿被藏起来；或反过来当成正式结论 |
-| 失败且**没有**交付件时不渲染结果页 | `client-valuation-pane.test.mjs`「失败且**没有**交付件时不渲染结果页（不给一个空壳结论）」 | 一个没有任何数字的空壳"结论页" |
-| 正式完成时不打"阶段结果"标记 | `client-valuation-pane.test.mjs`「部分结果不覆盖正式完成：completed 时结果页不打"阶段结果"标记」 | 正常结论被误标成阶段结果 |
+| ⟪协议35作废⟫部分结果看得见，但不装成正式结论 | `client-valuation-pane.test.mjs`「部分结果：轮次失败但已有交付件时，结果看得见且**不**装成正式结论」 | 已产出的底稿被藏起来；或反过来当成正式结论 |
+| ⟪协议35作废⟫失败且**没有**交付件时不渲染结果页 | `client-valuation-pane.test.mjs`「失败且**没有**交付件时不渲染结果页（不给一个空壳结论）」 | 一个没有任何数字的空壳"结论页" |
+| ⟪协议35作废⟫正式完成时不打"阶段结果"标记 | `client-valuation-pane.test.mjs`「部分结果不覆盖正式完成：completed 时结果页不打"阶段结果"标记」 | 正常结论被误标成阶段结果 |
 | 单价旁边必须给出计价面积与计价单位 | 同上（断言「计价面积」与 `元/㎡`） | 只给一个数字、不说按多少面积算的，读的人没法复核 |
 | 资料之间的冲突要如实列出（含双方取值与当前采用） | `host-valuation-ops.test.mjs`「valuation-intake：多份资料对同一要素给出不同值时，冲突要**如实列出来**而不是静默取第一个」 | 系统替用户做了一个他没看见的选择 |
 | 值一致不算冲突（不制造噪音） | `host-valuation-ops.test.mjs`「valuation-intake：多份资料给出**相同**的值时不算冲突（不制造噪音）」 | 每份资料都报"冲突"，提示很快被忽略 |
-| 抽屉把冲突与「用户提供」的性质摆出来 | `client-valuation-pane.test.mjs`「抽屉把资料冲突与「用户提供」的性质都摆出来」 | 用户不知道补充要求不是文件原文，也不知道冲突存在 |
+| ⟪协议35作废⟫抽屉把冲突与「用户提供」的性质摆出来 | `client-valuation-pane.test.mjs`「抽屉把资料冲突与「用户提供」的性质都摆出来」 | 用户不知道补充要求不是文件原文，也不知道冲突存在 |
 | 宿主隔离：每条规则都在作用域内 | `client-style-scope.test.mjs`「宿主隔离：每条规则都限定在插件作用域内（插件不可能改到宿主元素）」 | 插件规则命中宿主元素 |
 | 宿主隔离：不用裸元素选择器 | `client-style-scope.test.mjs`「宿主隔离：插件规则不靠裸元素选择器命中宿主（button / input / a / p 一类）」 | `button { … }` 一类写法把宿主按钮一起改了 |
 | 宿主隔离：不在 `:root` / `body` 上声明插件变量 | `client-style-scope.test.mjs`「宿主隔离：插件不声明全局变量（:root / body 上不许有插件 token）」 | 插件改掉宿主的全局主题 |
@@ -303,53 +318,55 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 | 综合修正是**连乘**，不是百分比相加 | `test_market_rules.py`「test_combined_is_a_product_not_a_sum」 | 两项各 +10% 被算成 20%（正确是 21%） |
 | 修正方向：对象/案例指数定系数 | `test_market_rules.py`「test_ratio_direction」 | 系数上下颠倒，价格朝反方向修正 |
 | 取整用 Excel 口径（不是银行家舍入） | `test_market_rules.py`「test_uses_excel_half_up_not_bankers_rounding」 | 底稿（Excel）与 JSON 的数字对不上 |
-| 阈值与知识库参考逐字一致 | `test_market_rules.py`「test_thresholds_match_the_reference_document」 | 有人悄悄把 20% 改成 25% 而没人发现 |
-| 案例数量不足不许给正式单价 | `host-valuation-ops.test.mjs`「完成由宿主判定：三件交付件齐备且结果读得懂」 | 用 1〜2 个案例平均出一个"正式结论" |
+| ⟪协议42改判作废⟫阈值与知识库参考逐字一致（协议 35 起更强：**脚本里没有阈值**，值由知识快照传入） | `test_market_rules.py`「test_reference_describes_the_slot_not_the_value」 | 有人悄悄把 20% 改成 25% 而没人发现；或反过来，脚本里留一份会与规范漂移的内置值 |
+| ⟪协议35作废⟫案例数量不足不许给正式单价 | `host-valuation-ops.test.mjs`「完成由宿主判定：三件交付件齐备且结果读得懂」 | 用 1〜2 个案例平均出一个"正式结论" |
 | 金额口径必须勾稽 | 同上（断言 `对不上`） | 三个数各说一套却算完成 |
+
+> ⟪协议42改判作废⟫说明：旧结果链的参考契约断言随生产退出；当前契约是"工作簿自己的填写说明 descriptor 显式声明输入 / 公式 / 结果位"，由 `test_generic_workbook.py` 的 `test_missing_descriptor_is_rejected_not_legacy_fallback` / `test_explicit_descriptor_builds_arbitrary_sheet_structure` 与 `check_workbook_contract.py` 强制；数值阈值仍只来自本轮知识快照。
 
 ### 文件列表的四种形态（方案 §4 / §10；布局本身仍要真机看）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 少量文件：逐份都画、不折叠 | `client-valuation-pane.test.mjs`「少量文件：逐份都画出来，不做任何折叠」 | 三份文件也被折叠起来 |
-| 大量文件：有界列表 + 「查看全部 N 份」 | `client-valuation-pane.test.mjs`「大量文件：有界列表 + 「查看全部 N 份」，不把后续设置推到很远」 | 20 份文件把方法 / 基准日 / 操作区推到屏幕外 |
-| 长文件名：完整名称可查（行内截断交给 CSS） | `client-valuation-pane.test.mjs`「长文件名：行内截断，完整名称在 title 里查得到」 | 截断之后再也看不到完整名字 |
-| 解析失败：逐份给出具体原因 | `client-valuation-pane.test.mjs`「解析失败：逐份给出具体原因，而不是只说「未完成」」 | 用户只知道"有一份没读出来"，不知道是哪份、为什么 |
-| 扫描失败：说清是清单读不出来 | `client-valuation-pane.test.mjs`「扫描失败：说清楚是清单读不出来，而不是"你还没选"」 | 失败被读成"用户没选资料" |
+| ⟪协议35作废⟫少量文件：逐份都画、不折叠 | `client-valuation-pane.test.mjs`「少量文件：逐份都画出来，不做任何折叠」 | 三份文件也被折叠起来 |
+| ⟪协议35作废⟫大量文件：有界列表 + 「查看全部 N 份」 | `client-valuation-pane.test.mjs`「大量文件：有界列表 + 「查看全部 N 份」，不把后续设置推到很远」 | 20 份文件把方法 / 基准日 / 操作区推到屏幕外 |
+| ⟪协议35作废⟫长文件名：完整名称可查（行内截断交给 CSS） | `client-valuation-pane.test.mjs`「长文件名：行内截断，完整名称在 title 里查得到」 | 截断之后再也看不到完整名字 |
+| ⟪协议35作废⟫解析失败：逐份给出具体原因 | `client-valuation-pane.test.mjs`「解析失败：逐份给出具体原因，而不是只说「未完成」」 | 用户只知道"有一份没读出来"，不知道是哪份、为什么 |
+| ⟪协议35作废⟫扫描失败：说清是清单读不出来 | `client-valuation-pane.test.mjs`「扫描失败：说清楚是清单读不出来，而不是"你还没选"」 | 失败被读成"用户没选资料" |
 
 ### 规则检查记录与案例状态（方案 §8）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 规则 ID / 状态 / 阈值与计算模块是同一套词 | `test_valuation_contracts.py`「test_rule_ids_and_status_must_match_the_calculation_module」 | 计算模块说超限、结果里记成别的东西，两边长期分叉 |
-| 每条案例必须有 `rule_checks` | `test_valuation_contracts.py`「test_case_needs_rule_checks」 | 只有一句"符合要求"，复核的人没法重算 |
-| 规则项必须给 ID / 判定 / 理由 | `test_valuation_contracts.py`「test_rule_check_needs_id_verdict_and_reason」 | 判定无名无据 |
-| 阈值必须等于知识库口径 | `test_valuation_contracts.py`「test_threshold_must_equal_the_knowledge_value」 | 有人把 20% 悄悄改成 25% |
-| 数值型判定必须给出实际值 | `test_valuation_contracts.py`「test_numeric_verdict_needs_an_actual_value」 | 只有结论没有实际值 |
-| 剔除案例必须能对上触发它的规则 | `test_valuation_contracts.py`「test_dropped_case_needs_a_reason_not_a_one_liner」 | 状态说"未通过"，却不知道依据哪条规则 |
-| 状态与 `used_as_comparable` 必须一致 | `test_valuation_contracts.py`「test_status_and_used_as_comparable_must_agree」 | 一处说采用、一处说剔除 |
-| 状态枚举受约束 | `test_valuation_contracts.py`「test_status_enum」 | 自由文本状态 |
-| 组内比值必须能重算 | `test_valuation_contracts.py`「test_group_ratio_must_be_recomputable」 | 写一个好看的比值蒙过去 |
-| 比值超 1.2 必须有处置说明 | `test_valuation_contracts.py`「test_group_over_12_needs_an_explanation」 | 静默忽略组内不一致 |
-| 采用案例不许带着没通过的规则 | `test_valuation_contracts.py`「test_adopted_case_cannot_carry_a_failed_rule」+ `host-valuation-ops.test.mjs`「完成门槛：采用案例带着没通过的规则判定时不许算完成（规范允许的组内比值例外）」 | 有规则没过却当正式结论；宿主这一层不兜底则子会话跳过校验就漏 |
-| 结果页给出规则校验摘要 | `client-valuation-pane.test.mjs`「结果页给出规则校验摘要：逐条规则给出通过 / 未通过数与阈值，组内比值可复核」 | 用户看不到"按哪几条规则查过" |
-| 超限在摘要上明说并指向处置 | `client-valuation-pane.test.mjs`「组内比值超过 1.2 时摘要上明说"已超过阈值"，并把处置指向待确认事项」 | 超限被折进一个没有标记的数字里 |
+| ⟪协议40改判作废⟫规则 ID / 状态 / 阈值与计算模块是同一套词 | `test_valuation_contracts.py`「test_rule_ids_and_status_must_match_the_calculation_module」 | 计算模块说超限、结果里记成别的东西，两边长期分叉 |
+| ⟪协议40改判作废⟫每条案例必须有 `rule_checks` | `test_valuation_contracts.py`「test_case_needs_rule_checks」 | 只有一句"符合要求"，复核的人没法重算 |
+| ⟪协议40改判作废⟫规则项必须给 ID / 判定 / 理由 | `test_valuation_contracts.py`「test_rule_check_needs_id_verdict_and_reason」 | 判定无名无据 |
+| ⟪协议40改判作废⟫阈值必须等于知识库口径 | `test_valuation_contracts.py`「test_threshold_must_equal_the_knowledge_value」 | 有人把 20% 悄悄改成 25% |
+| ⟪协议40改判作废⟫数值型判定必须给出实际值 | `test_valuation_contracts.py`「test_numeric_verdict_needs_an_actual_value」 | 只有结论没有实际值 |
+| ⟪协议40改判作废⟫剔除案例必须能对上触发它的规则 | `test_valuation_contracts.py`「test_dropped_case_needs_a_reason_not_a_one_liner」 | 状态说"未通过"，却不知道依据哪条规则 |
+| ⟪协议40改判作废⟫状态与 `used_as_comparable` 必须一致 | `test_valuation_contracts.py`「test_status_and_used_as_comparable_must_agree」 | 一处说采用、一处说剔除 |
+| ⟪协议40改判作废⟫状态枚举受约束 | `test_valuation_contracts.py`「test_status_enum」 | 自由文本状态 |
+| ⟪协议40改判作废⟫组内比值必须能重算 | `test_valuation_contracts.py`「test_group_ratio_must_be_recomputable」 | 写一个好看的比值蒙过去 |
+| ⟪协议40改判作废⟫比值超 1.2 必须有处置说明 | `test_valuation_contracts.py`「test_group_over_12_needs_an_explanation」 | 静默忽略组内不一致 |
+| ⟪协议35作废⟫采用案例不许带着没通过的规则 | `test_valuation_contracts.py`「test_adopted_case_cannot_carry_a_failed_rule」+ `host-valuation-ops.test.mjs`「完成门槛：采用案例带着没通过的规则判定时不许算完成（规范允许的组内比值例外）」 | 有规则没过却当正式结论；宿主这一层不兜底则子会话跳过校验就漏 |
+| ⟪协议35作废⟫结果页给出规则校验摘要 | `client-valuation-pane.test.mjs`「结果页给出规则校验摘要：逐条规则给出通过 / 未通过数与阈值，组内比值可复核」 | 用户看不到"按哪几条规则查过" |
+| ⟪协议35作废⟫超限在摘要上明说并指向处置 | `client-valuation-pane.test.mjs`「组内比值超过 1.2 时摘要上明说"已超过阈值"，并把处置指向待确认事项」 | 超限被折进一个没有标记的数字里 |
 
 ### 抽屉动作与来源预检分类（方案 §5 / §11.2）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 抽屉动作恰好是 返回修改 / 重新检查 / 确认并开始 | `client-valuation-pane.test.mjs`「渲染：确认阶段画出只读抽屉，恰好三个按钮，且**没有任何**可编辑控件」 | 少一个「重新检查」，用户刚登录完只能返回表单从头再来 |
+| ⟪协议35作废⟫抽屉动作恰好是 返回修改 / 重新检查 / 确认并开始 | `client-valuation-pane.test.mjs`「渲染：确认阶段画出只读抽屉，恰好三个按钮，且**没有任何**可编辑控件」 | 少一个「重新检查」，用户刚登录完只能返回表单从头再来 |
 | 预检失败分类：网络 / 验证码 / 登录墙 / 站点错误 各说各的 | `host-valuation-market.test.mjs`「预检分类：网络失败 / 验证码 / 登录墙 / 站点错误 各自给不同的话」 | 一律报"无法检查"，用户不知道该去登录还是换网络 |
 | 验证码单独标记（插件不绕过验证） | 同上（`captcha === true` + 「不会绕过验证」） | 验证码被说成"你没登录"，用户反复登录也没用 |
-| 「页面结构无法识别」在**检索**那一层报 | `host-valuation-market-tool.test.mjs`「检索：页面取到但**没有**结构化房源 → 0 条 + 能力缺口（绝不按标题猜）」 | 预检时误判（首页本来就没有房源列表），或按标题猜数据 |
+| 「页面结构无法识别」在**检索**那一层报 | `host-valuation-market-tool.test.mjs`「检索：结果页结构在但选择器 0 命中 → template-stale（不是"该小区没有房源"）」 | 预检时误判（首页本来就没有房源列表），或按标题猜数据 |
 
 ### 底稿与结果 JSON 的一致性（方案 §8「截图编号」/ §9「三者一致」）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 采用案例的证据必须写进底稿的案例表 | `test_valuation_contracts.py`「test_workbook_must_carry_the_adopted_cases_evidence」 | 报告说留了证据、底稿上却是空的 |
-| 那一行被整行删掉也算不合格 | `test_valuation_contracts.py`「test_missing_evidence_row_is_an_error_not_a_silent_skip」 | "找不到就跳过"—— 证据留档整行消失而无人知 |
+| ⟪协议40改判作废⟫采用案例的证据必须写进底稿的案例表 | `test_valuation_contracts.py`「test_workbook_must_carry_the_adopted_cases_evidence」 | 报告说留了证据、底稿上却是空的 |
+| ⟪协议40改判作废⟫那一行被整行删掉也算不合格 | `test_valuation_contracts.py`「test_missing_evidence_row_is_an_error_not_a_silent_skip」 | "找不到就跳过"—— 证据留档整行消失而无人知 |
 
 ### 抓取失败分类与跨站去重（方案 §7.3）
 
@@ -359,10 +376,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 | 验证码优先于登录墙 | 同上（`captcha` 先于 `loginRequired`） | 被验证码挡住时说成"你没登录"，用户反复登录也过不去 |
 | 每一类有单独的人话 | 同上（九类标签互不相同） | 分类形同虚设（都显示同一句） |
 | 抓取通道把类别带进错误信息 | `host-valuation-market.test.mjs`「抓取通道：网络异常 / 白名单外重定向 / 状态码失败 都带上类别与可区分的话」 | 三次重试记录三行一模一样的 `HTTP 403` |
-| 跨站去重：同一套房源只算一条 | `host-valuation-market.test.mjs`「跨站去重：同一套房源在两个来源出现只算一条，且留下"与谁重复"的痕迹」 | 同一套房在两个站点各记一条，凑出假的可比实例数 |
+| ⟪协议42改判作废⟫跨站去重：同一套房源只算一条 | `host-valuation-market.test.mjs`「跨站去重：同一套房源在两个来源出现只算一条，且留下"与谁重复"的痕迹」 | 同一套房在两个站点各记一条，凑出假的可比实例数 |
 | 同小区**不同**房源不合并 | 同上（面积 / 价格不同 → 保持两条） | 靠"小区相同"合并，案例凭空少一条 |
 | 拿不到面积或价格时不参与合并 | 同上（指纹为空 → 照常保留） | 误并不同房源 |
 | 去重结果与合并条数进检索应答 | `host-valuation-market-tool.test.mjs`「跨站去重接进检索：结果里的案例数是**合并之后**的，并给出合并了几条」 | 界面报的案例数与实际采用数对不上 |
+
+> ⟪协议42改判作废⟫说明：旧"弱事实自动合并"已移除。当前身份只认 canonical URL：弱事实（小区 + 面积 + 价格）只标疑似重复、不自动合并，同一弱事实的不同 URL 各自占合格预算，由 `host-valuation-market-tool.test.mjs` 的 `同一弱事实的 20 个不同 URL 合格候选都要占合格预算` 与 `协议 40：未经知识评估的原始候选全部返回，合格预算不因原始条数增加` 强制。
 
 ### 交付校验进完成门槛（方案 §9：模板改坏 / 报告与结果对不上都不得完成）
 
@@ -370,49 +389,49 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workbook_contract.py
 | --- | --- | --- |
 | 校验结论写回轮次 | `host-valuation-artifact-validate.test.mjs`「校验结论要**写回轮次**：完成门槛据此判断"交付前两道校验都过了"」 | `completed` 只能相信模型说"我验过了" |
 | 写回与校验结论一致 | `host-valuation-artifact-validate.test.mjs`「校验结论与写回**一致**：过了就是 true，没过就是 false + 逐条原因」 | 把"没过"记成"没跑过"，界面给出错误的下一步 |
-| 没跑过交付校验不算完成 | `host-valuation-ops.test.mjs`「完成由宿主判定：三件交付件齐备且结果读得懂」 | 模板被改坏、报告与 JSON 对不上也照样 `completed` |
+| ⟪协议35作废⟫没跑过交付校验不算完成 | `host-valuation-ops.test.mjs`「完成由宿主判定：三件交付件齐备且结果读得懂」 | 模板被改坏、报告与 JSON 对不上也照样 `completed` |
 | 两道校验都要跑过才算有效结论 | `artifact-validate.ts` 的 `ranBoth`（脚本没跑成时按"没通过"记，不把"没跑成"当成"过了"） | 脚本一次都没跑成就当校验通过 |
 
 ### 方法判断记录与"不许静默切换"（方案 §7.2）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 方法判断必须留记录（采用哪个、依据） | `test_valuation_contracts.py`「test_screening_is_required」+「test_method_screening_needs_exactly_one_adopted」 | 只有一句"采用市场法"，看不出别的为什么不采用 |
-| 恰好一条 adopted 且与结论一致 | `test_valuation_contracts.py`「test_method_screening_must_agree_with_the_conclusion」 | 筛选记录说收益法、结论却是市场法 |
-| 每个方法都要写依据 | `test_valuation_contracts.py`「test_every_screened_method_needs_a_reason」 | "不符合要求"这种不可复核的一句话 |
-| 没有冲突要显式写 null | `test_valuation_contracts.py`「test_no_conflict_must_be_explicit_null」 | 分不出"没冲突"与"忘了写" |
-| **用户指定的方法不许被静默切换** | `test_valuation_contracts.py`「test_user_specified_method_cannot_be_switched_silently」+ `host-valuation-ops.test.mjs`「完成门槛：用户指定的方法被换掉时必须写出方法冲突（不许静默切换）」 | 用户选收益法、结果按市场法给数，界面上什么都不说 |
-| 冲突记录必须指向用户真正选的那个方法 | `test_valuation_contracts.py`「test_conflict_must_name_the_user_method」 | 冲突记录张冠李戴 |
-| 自动判定时不许造冲突 | `test_valuation_contracts.py`「test_no_conflict_when_the_user_specified_auto」 | 没有用户指定却报"方法冲突" |
-| 用户指定的方法就是采用的那个时冲突必须为 null | `test_valuation_contracts.py`「test_conflict_is_null_when_the_user_method_was_adopted」 | 无冲突也报冲突 |
-| 换了方法必须说明为什么 | `test_valuation_contracts.py`「test_conflict_reason_is_required」 | 换了却不给理由 |
-| 结果页把冲突摆在结论之前 | `client-valuation-pane.test.mjs`「用户指定的方法被换掉时，结果页把冲突摆在结论之前」 | 冲突被埋在正文里，用户看不到 |
-| 结果页给出方法判断记录 | `client-valuation-pane.test.mjs`「结果页给出方法判断记录：采用哪个、其他为什么不采用」 | 读者不知道别的方案为什么被排除 |
+| ⟪协议39改判作废⟫方法判断必须留记录（采用哪个、依据） | `test_valuation_contracts.py`「test_screening_is_required」+「test_method_screening_adopted_set_must_match_the_declared_methods」 | 只有一句"采用市场法"，看不出别的为什么不采用 |
+| ⟪协议40改判作废⟫恰好一条 adopted 且与结论一致 | `test_valuation_contracts.py`「test_method_screening_must_agree_with_the_conclusion」 | 筛选记录说收益法、结论却是市场法 |
+| ⟪协议40改判作废⟫每个方法都要写依据 | `test_valuation_contracts.py`「test_every_screened_method_needs_a_reason」 | "不符合要求"这种不可复核的一句话 |
+| ⟪协议40改判作废⟫没有冲突要显式写 null | `test_valuation_contracts.py`「test_no_conflict_must_be_explicit_null」 | 分不出"没冲突"与"忘了写" |
+| ⟪协议35作废⟫**用户指定的方法不许被静默切换** | `test_valuation_contracts.py`「test_user_specified_method_cannot_be_switched_silently」+ `host-valuation-ops.test.mjs`「完成门槛：用户指定的方法被换掉时必须写出方法冲突（不许静默切换）」 | 用户选收益法、结果按市场法给数，界面上什么都不说 |
+| ⟪协议40改判作废⟫冲突记录必须指向用户真正选的那个方法 | `test_valuation_contracts.py`「test_conflict_must_name_the_user_method」 | 冲突记录张冠李戴 |
+| ⟪协议40改判作废⟫自动判定时不许造冲突 | `test_valuation_contracts.py`「test_no_conflict_when_the_user_specified_auto」 | 没有用户指定却报"方法冲突" |
+| ⟪协议40改判作废⟫用户指定的方法就是采用的那个时冲突必须为 null | `test_valuation_contracts.py`「test_conflict_is_null_when_the_user_method_was_adopted」 | 无冲突也报冲突 |
+| ⟪协议40改判作废⟫换了方法必须说明为什么 | `test_valuation_contracts.py`「test_conflict_reason_is_required」 | 换了却不给理由 |
+| ⟪协议35作废⟫结果页把冲突摆在结论之前 | `client-valuation-pane.test.mjs`「用户指定的方法被换掉时，结果页把冲突摆在结论之前」 | 冲突被埋在正文里，用户看不到 |
+| ⟪协议35作废⟫结果页给出方法判断记录 | `client-valuation-pane.test.mjs`「结果页给出方法判断记录：采用哪个、其他为什么不采用」 | 读者不知道别的方案为什么被排除 |
 
 ### 结果页的案例来源 + 规则只在适用方法里执行（方案 §9 第 3 条 / §8）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 结果页给出最终采用案例的**来源分布** | `client-valuation-pane.test.mjs`「结果页给出最终采用案例的**来源分布**与每条的来源（§9 第 3 条）」 | 只给一个总数，看不出"结论压在几个站点上" |
+| ⟪协议35作废⟫结果页给出最终采用案例的**来源分布** | `client-valuation-pane.test.mjs`「结果页给出最终采用案例的**来源分布**与每条的来源（§9 第 3 条）」 | 只给一个总数，看不出"结论压在几个站点上" |
 | 每条案例标出来源站点 | 同上（`data-valuation-case-source`） | 复核时追不到这条案例是从哪个站点取的 |
-| 来源拿不到时不制造假分组 | `client-valuation-pane.test.mjs`「来源拿不到时不当成"有个空来源"（不制造假分组）」 | 结果页多出一行没有任何来源名的空分组 |
-| 比较案例调整规则**只在市场法**里执行 | `test_valuation_contracts.py`「test_market_rules_only_apply_to_the_market_method」 | 把 20% / 30% / 1.2 套到收益法 / 成本法上（那两条方法里没有"可比实例修正系数积"这一层） |
+| ⟪协议35作废⟫来源拿不到时不制造假分组 | `client-valuation-pane.test.mjs`「来源拿不到时不当成"有个空来源"（不制造假分组）」 | 结果页多出一行没有任何来源名的空分组 |
+| ⟪协议40改判作废⟫比较案例调整规则**只在市场法**里执行 | `test_valuation_contracts.py`「test_market_rules_only_apply_to_the_market_method」 | 把 20% / 30% / 1.2 套到收益法 / 成本法上（那两条方法里没有"可比实例修正系数积"这一层） |
 
 ### 底稿必须带上汇总依据与限制（方案 §8「计算表填写」）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 模板留出「权重 / 汇总依据」「已知限制」「待确认事项」三行 | `test_valuation_contracts.py`「test_template_must_keep_the_summary_basis_rows」+ `check_workbook_contract.py` 的 `REQUIRED_SUMMARY_ROWS` | "最终单价怎么汇总的"与"这份底稿到什么程度为止"没地方写；整行删掉也没人报 |
-| `manual_confirmation_items` 必须落进底稿的「待确认事项」行 | `test_valuation_contracts.py`「test_confirmation_items_must_reach_the_workbook」 | 报告上写了限制、交出去的底稿上看不出来（复核时最难发现的一类不一致） |
+| ⟪协议40改判作废⟫模板留出「权重 / 汇总依据」「已知限制」「待确认事项」三行 | `test_valuation_contracts.py`「test_template_must_keep_the_summary_basis_rows」+ `check_workbook_contract.py` 的 `REQUIRED_SUMMARY_ROWS` | "最终单价怎么汇总的"与"这份底稿到什么程度为止"没地方写；整行删掉也没人报 |
+| ⟪协议40改判作废⟫`manual_confirmation_items` 必须落进底稿的「待确认事项」行 | `test_valuation_contracts.py`「test_confirmation_items_must_reach_the_workbook」 | 报告上写了限制、交出去的底稿上看不出来（复核时最难发现的一类不一致） |
 
 ### 用用户实际模板 + 模板可追溯（方案 §7.1）
 
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
-| 必须用**给定的**那份模板，不许悄悄换成随包模板 | `test_valuation_contracts.py`「test_uses_the_template_it_was_given_not_the_shipped_one」 | 知识库里下载的用户模板被无视，底稿其实出自随包模板 |
-| 「外观类似但结构不同」的模板要在动手前拦住 | `test_valuation_contracts.py`「test_rejects_a_lookalike_template」 | 少一张表 / 表名不同的仿制模板填完一轮才发现，整轮白做 |
+| ⟪协议40改判作废⟫必须用**给定的**那份模板，不许悄悄换成随包模板 | `test_valuation_contracts.py`「test_uses_the_template_it_was_given_not_the_shipped_one」 | 知识库里下载的用户模板被无视，底稿其实出自随包模板 |
+| ⟪协议40改判作废⟫「外观类似但结构不同」的模板要在动手前拦住 | `test_valuation_contracts.py`「test_rejects_a_lookalike_template」 | 少一张表 / 表名不同的仿制模板填完一轮才发现，整轮白做 |
 | 拒绝时不留半成品 | 同上（`assertFalse(os.path.exists(self.out))`） | 半填的底稿看上去有数据，公式还会算出看起来正常的数 |
-| 模板缺失要报错，不能回退到默认 | `test_valuation_contracts.py`「test_missing_template_is_an_error_not_a_silent_default」 | `--template` 打错字就静默用随包模板 |
+| ⟪协议40改判作废⟫模板缺失要报错，不能回退到默认 | `test_valuation_contracts.py`「test_missing_template_is_an_error_not_a_silent_default」 | `--template` 打错字就静默用随包模板 |
 | 产物要说明用的是哪一份模板（路径 + 指纹） | 同上（`用户/知识库模板` + `sha256:…`） | 事后分不清底稿出自随包模板还是用户模板 |
 
 ### 这一层里查不了的（能力缺口，不是"已满足"）

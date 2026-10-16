@@ -9,7 +9,7 @@ import { text } from '../../../shared/utils/value.ts'
  * ## 为什么工具需要写轮次
  *
  * `browser-login-required` 与每个来源的登录/失败状态都不是"模型说一声"就能生效的：
- * 面板轮询的是**宿主的事实**（`valuation-status` 读注册表）。工具只把结论回给模型的话，
+ * 宿主侧的事实住在轮次注册表里（协议 35 起没有任何页面轮询它）。工具只把结论回给模型的话，
  * 界面永远停在"正在跑"—— 而"需要登录"这件事恰恰只有工具知道（它才是发请求的那一方）。
  *
  * ## 身份只从 Agent 取
@@ -49,7 +49,7 @@ function idle(reason: string): ValuationWriteback {
   return { ok: false, reason, valuationId: '' }
 }
 
-/** 记一次来源状态（`valuation-status` 的 `providerStates` 就来自它）。 */
+/** 记一次来源状态（`ValuationRecord.providerStates` 就来自它；能力门禁也读它）。 */
 export function recordProviderState(
   deps: ToolDeps,
   exec: ToolRunContext,
@@ -77,7 +77,7 @@ export function recordCapabilityGap(deps: ToolDeps, exec: ToolRunContext, gap: s
 /**
  * 记一次**交付校验**的结论（§9）。
  *
- * 为什么必须写回：完成门槛在宿主侧判（`valuation-status` 会读注册表）。校验只回给模型的话，
+ * 为什么必须写回：finalize 与能力的来源判据都读注册表。校验只回给模型的话，
  * "交付前两道校验都过了吗"就只有模型自己知道 —— 而 §9 明确要求 `completed` 不能靠模型声称。
  * 写回失败**不影响校验结论**（与其它写回同一条口径：如实进 warnings，不许静默）。
  */

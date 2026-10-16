@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1080" viewBox="0 0 1440 1080" role="img" aria-labelledby="title desc"><title id="title">房地产估值：来源门禁与窄面板深色设计</title><desc id="desc">设计方案静态示意图，使用虚构文件与状态，不代表当前运行界面。</desc><g font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Heiti SC,sans-serif">
+<rect x="0" y="0" width="1440" height="1080" rx="0" fill="#F4F5F7"/>
+<text x="36" y="50" font-size="22" font-weight="600" fill="#1D1D1F">案例来源门禁</text>
+<text x="36" y="78" font-size="14" font-weight="400" fill="#6E6E73">检查、登录与页面验证分别说明，动作与状态形成闭环。</text>
+<rect x="28" y="114" width="868" height="806" rx="14" fill="#FFFFFF" stroke="#E5E5E8"/>
+<text x="52" y="158" font-size="16" font-weight="600" fill="#1D1D1F">案例来源检查</text>
+<text x="52" y="188" font-size="14" font-weight="400" fill="#6E6E73">开始前需要确认必需来源已登录。</text>
+<line x1="52" y1="212" x2="872" y2="212" stroke="#E5E5E8" stroke-width="1"/>
+<text x="52" y="239" font-size="15" font-weight="600" fill="#1D1D1F">链家</text>
+<rect x="149" y="224" width="46" height="23" rx="6" fill="#EFF0F2"/>
+<text x="159" y="239" font-size="12" font-weight="400" fill="#6E6E73">必需</text>
+<text x="421" y="238" font-size="14" font-weight="400" fill="#414246">未登录</text>
+<text x="52" y="282" font-size="13" font-weight="400" fill="#6E6E73">在打开的浏览器窗口中完成登录，再重新检查。</text>
+<rect x="748" y="221" width="124" height="36" rx="10" fill="#EFF0F2"/>
+<text x="782.0" y="245.0" font-size="14" font-weight="400" fill="#1D1D1F">登录链家</text>
+<line x1="52" y1="343" x2="872" y2="343" stroke="#E5E5E8" stroke-width="1"/>
+<text x="52" y="370" font-size="15" font-weight="600" fill="#1D1D1F">贝壳</text>
+<rect x="149" y="355" width="46" height="23" rx="6" fill="#EFF0F2"/>
+<text x="159" y="370" font-size="12" font-weight="400" fill="#6E6E73">必需</text>
+<text x="421" y="369" font-size="14" font-weight="400" fill="#414246">需要完成验证</text>
+<text x="52" y="413" font-size="13" font-weight="400" fill="#6E6E73">登录状态已确认，还需要完成受保护页验证。</text>
+<rect x="700" y="352" width="172" height="36" rx="10" fill="#EFF0F2"/>
+<text x="744.0" y="376.0" font-size="14" font-weight="400" fill="#1D1D1F">打开验证窗口</text>
+<line x1="52" y1="474" x2="872" y2="474" stroke="#E5E5E8" stroke-width="1"/>
+<text x="52" y="501" font-size="15" font-weight="600" fill="#1D1D1F">其他来源</text>
+<rect x="149" y="486" width="46" height="23" rx="6" fill="#EFF0F2"/>
+<text x="159" y="501" font-size="12" font-weight="400" fill="#6E6E73">可选</text>
+<line x1="398" y1="497" x2="402" y2="501" stroke="#3F9D6A" stroke-width="2"/>
+<line x1="402" y1="501" x2="410" y2="492" stroke="#3F9D6A" stroke-width="2"/>
+<text x="421" y="500" font-size="14" font-weight="400" fill="#414246">已登录</text>
+<text x="52" y="544" font-size="13" font-weight="400" fill="#6E6E73">可选来源的状态不会额外阻塞本次输入。</text>
+<rect x="52" y="624" width="820" height="76" rx="10" fill="#FAFAFB"/>
+<text x="68" y="655" font-size="14" font-weight="600" fill="#1D1D1F">请在验证窗口完成操作</text>
+<text x="68" y="683" font-size="13" font-weight="400" fill="#6E6E73">完成后点击「重新检查」，页面会根据实际检查结果放行。</text>
+<line x1="28" y1="834" x2="896" y2="834" stroke="#E5E5E8" stroke-width="1"/>
+<rect x="742" y="858" width="130" height="36" rx="10" fill="#1D1D1F"/>
+<text x="779.0" y="882.0" font-size="14" font-weight="600" fill="#FFFFFF">重新检查</text>
+<text x="950" y="50" font-size="22" font-weight="600" fill="#1D1D1F">窄面板 · 深色</text>
+<text x="950" y="78" font-size="14" font-weight="400" fill="#6E6E73">按实际正文宽度适配，示意采用两列方法。</text>
+<rect x="950" y="114" width="450" height="906" rx="14" fill="#1B1C1F" stroke="#393A3E"/>
+<text x="970" y="156" font-size="16" font-weight="600" fill="#F2F2F3">房地产估值</text>
+<text x="970" y="188" font-size="14" font-weight="400" fill="#A1A1A6">当前支持住宅市场法。</text>
+<text x="970" y="228" font-size="16" font-weight="600" fill="#F2F2F3">估值资料</text>
+<rect x="970" y="246" width="192" height="44" rx="10" fill="#2E2F34"/>
+<text x="1038.0" y="274.0" font-size="14" font-weight="400" fill="#F2F2F3">添加文件</text>
+<rect x="1175" y="246" width="205" height="44" rx="10" fill="#2E2F34"/>
+<text x="1242.5" y="274.0" font-size="14" font-weight="400" fill="#F2F2F3">添加文件夹</text>
+<rect x="970" y="316" width="11.52" height="16" rx="2" fill="none" stroke="#A1A1A6"/>
+<line x1="974" y1="322" x2="979" y2="322" stroke="#A1A1A6" stroke-width="1"/>
+<line x1="974" y1="326" x2="979" y2="326" stroke="#A1A1A6" stroke-width="1"/>
+<text x="999" y="327" font-size="16" font-weight="400" fill="#F2F2F3">权属资料.pdf</text>
+<text x="999" y="352" font-size="13" font-weight="400" fill="#A1A1A6">PDF · 2.4 MB · 已纳入</text>
+<line x1="1348" y1="323" x2="1360" y2="335" stroke="#A1A1A6" stroke-width="1"/>
+<line x1="1360" y1="323" x2="1348" y2="335" stroke="#A1A1A6" stroke-width="1"/>
+<rect x="970" y="380" width="11.52" height="16" rx="2" fill="none" stroke="#A1A1A6"/>
+<line x1="974" y1="386" x2="979" y2="386" stroke="#A1A1A6" stroke-width="1"/>
+<line x1="974" y1="390" x2="979" y2="390" stroke="#A1A1A6" stroke-width="1"/>
+<text x="999" y="391" font-size="16" font-weight="400" fill="#F2F2F3">对象清单.xlsx</text>
+<text x="999" y="416" font-size="13" font-weight="400" fill="#A1A1A6">Excel · 84 KB · 已纳入</text>
+<line x1="1348" y1="387" x2="1360" y2="399" stroke="#A1A1A6" stroke-width="1"/>
+<line x1="1360" y1="387" x2="1348" y2="399" stroke="#A1A1A6" stroke-width="1"/>
+<line x1="970" y1="438" x2="1380" y2="438" stroke="#393A3E" stroke-width="1"/>
+<text x="970" y="472" font-size="16" font-weight="600" fill="#F2F2F3">评估方法</text>
+<rect x="970" y="490" width="198" height="44" rx="10" fill="#25262A" stroke="#D84A4A"/>
+<text x="1016.0" y="518.0" font-size="14" font-weight="600" fill="#F2F2F3">自动判定 · 推荐</text>
+<rect x="1182" y="490" width="198" height="44" rx="10" fill="#2E2F34"/>
+<text x="1260.0" y="518.0" font-size="14" font-weight="400" fill="#F2F2F3">市场法</text>
+<rect x="970" y="546" width="198" height="44" rx="10" fill="#2E2F34"/>
+<text x="1009.0" y="574.0" font-size="14" font-weight="400" fill="#A1A1A6">收益法 · 暂未开放</text>
+<rect x="1182" y="546" width="198" height="44" rx="10" fill="#2E2F34"/>
+<text x="1221.0" y="574.0" font-size="14" font-weight="400" fill="#A1A1A6">成本法 · 暂未开放</text>
+<text x="970" y="619" font-size="13" font-weight="400" fill="#A1A1A6">收益法、成本法暂未开放。</text>
+<text x="970" y="660" font-size="16" font-weight="600" fill="#F2F2F3">评估基准日 · 可选</text>
+<rect x="970" y="676" width="410" height="44" rx="10" fill="#1B1C1F" stroke="#6F717A"/>
+<text x="984" y="702" font-size="16" font-weight="400" fill="#A1A1A6">年 / 月 / 日</text>
+<text x="970" y="758" font-size="16" font-weight="600" fill="#F2F2F3">补充要求 · 可选</text>
+<rect x="970" y="774" width="410" height="96" rx="10" fill="#1B1C1F" stroke="#6F717A"/>
+<text x="984" y="800" font-size="16" font-weight="400" fill="#A1A1A6">填写资料说明与项目要求…</text>
+<text x="970" y="899" font-size="13" font-weight="400" fill="#A1A1A6">可填写资料说明，具体口径按规范核实。</text>
+<line x1="950" y1="935" x2="1400" y2="935" stroke="#393A3E" stroke-width="1"/>
+<text x="970" y="961" font-size="13" font-weight="400" fill="#A1A1A6">已纳入 2 份 · 下一步核对输入</text>
+<rect x="970" y="978" width="410" height="36" rx="10" fill="#F2F2F3"/>
+<text x="1161.0" y="1002.0" font-size="14" font-weight="600" fill="#17181A">确认</text>
+<text x="36" y="1056" font-size="12" font-weight="400" fill="#6E6E73">静态设计示意，所示站点状态与文件均为虚构；不是运行中页面截图。</text></g></svg>

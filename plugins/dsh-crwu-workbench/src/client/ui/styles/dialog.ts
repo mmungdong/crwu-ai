@@ -15,7 +15,6 @@ export const CRWU_DIALOG_STYLE_TEXT = `
   background: var(--crwu-menu-bg); border: 1px solid var(--crwu-border);
   border-radius: 10px; box-shadow: var(--crwu-shadow-menu); color: var(--crwu-text-primary);
   -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
-  transition: left 160ms var(--crwu-ease), top 160ms var(--crwu-ease);
 }
 .crwu-audit-float-menu {
   min-width: 150px; padding: 5px;
@@ -60,7 +59,7 @@ export const CRWU_DIALOG_STYLE_TEXT = `
 .crwu-audit-float-item:hover { background: var(--crwu-menu-hover); }
 .crwu-audit-float-item:active { background: var(--crwu-selected); }
 .crwu-audit-float-item:disabled { color: var(--crwu-text-tertiary); cursor: default; }
-.crwu-audit-float-item:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
+.crwu-audit-float-item:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: -2px; }
 
 /* 拉取报告资料 / 首次加载报告：等待页**只盖列表数据区**（页头 / 页签 / 工具条保持可见）。 */
 .crwu-audit-list-area { position: relative; min-height: 360px; }
@@ -75,7 +74,7 @@ export const CRWU_DIALOG_STYLE_TEXT = `
   position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%);
   width: 420px; max-width: calc(100vw - 48px); box-sizing: border-box;
   padding: var(--crwu-space-5); border-radius: var(--crwu-radius-lg);
-  border: 1px solid var(--crwu-border-strong); background: var(--crwu-surface);
+  border: 1px solid var(--crwu-border-strong); background: var(--crwu-popover-bg);
   box-shadow: var(--crwu-shadow-dialog);
   animation: crwu-audit-float-in 160ms var(--crwu-ease) both;
 }
@@ -92,8 +91,8 @@ export const CRWU_DIALOG_STYLE_TEXT = `
   transition: background 120ms var(--crwu-ease), border-color 120ms var(--crwu-ease);
 }
 .crwu-audit-ai-dialog-option:hover { background: var(--crwu-hover); border-color: var(--crwu-border-strong); }
-.crwu-audit-ai-dialog-option:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
-.crwu-audit-ai-dialog-option-on { border-color: color-mix(in srgb, var(--crwu-brand) 40%, transparent); }
+.crwu-audit-ai-dialog-option:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: -2px; }
+.crwu-audit-ai-dialog-option-on { border-color: var(--crwu-interactive-border); }
 .crwu-audit-ai-dialog-option-title { display: block; font-size: 13px; font-weight: 600; color: var(--crwu-text-primary); }
 .crwu-audit-ai-dialog-option-hint { display: block; margin-top: 2px; font-size: 12px; color: var(--crwu-text-secondary); }
 .crwu-audit-ai-dialog-actions { display: flex; justify-content: flex-end; margin-top: var(--crwu-space-4); }

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "crwu.valuation.knowledge-source.v1",
+  "title": "房地产估值知识来源（知识快照/知识来源.json）",
+  "description": "一条路由的知识与模板来源记录：这一轮用的是哪一版正文、哪一次快照、当时查过哪些位置。取哪几条路由由**知识库侧的 manifest** 声明（键位推导出 routeId），不由技能里的固定清单决定。正文一律实时下载，不落缓存；缓存只用于目录与检索（设计稿 §6.1 / §6.2）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "projectId", "spaceName", "spaceVerified", "routeId", "entries", "materializedAt"],
+  "properties": {
+    "schemaVersion": { "const": "crwu.valuation.knowledge-source.v1" },
+    "projectId": { "type": "string", "minLength": 1 },
+    "planId": {
+      "type": ["string", "null"],
+      "description": "还没有方案时为 null；按方案取数时必须有"
+    },
+    "spaceName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "**业务库**空间名。审核库的本地缓存不能拿来当业务库（设计稿 §2.1）"
+    },
+    "spaceVerified": {
+      "type": "boolean",
+      "description": "空间身份是否由 manifest 与来源交叉验证过；false 时不得据此继续"
+    },
+    "stage": {
+      "enum": ["grouping", "method-selection", "method", "data", "template-index", "template"],
+      "description": "**遗留字段**：按阶段物化的年代留下的，只为让改动之前落的快照仍读得过；新落盘不再写它（取数不再分阶段）。"
+    },
+    "routeId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "manifest 键位推导的逻辑槽位（`method-selection` / `method.<m>.guide` / `method.<m>.template`），不是库路径，也不是正文"
+    },
+    "mirrorRoot": {
+      "type": ["string", "null"],
+      "description": "仅当来源是身份已验证的本地镜像时记录；默认留空，不给模型任意根路径"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "nodeName", "resolvedPath", "source", "digest", "snapshotFile",
+          "bodyNonEmpty", "updatedAt"
+        ],
+        "properties": {
+          "nodeName": { "type": "string", "minLength": 1 },
+          "resolvedPath": { "type": "string", "minLength": 1 },
+          "source": { "enum": ["dws", "verified-mirror"] },
+          "digest": { "type": "string", "minLength": 1 },
+          "snapshotFile": {
+            "type": "string",
+            "minLength": 1,
+            "description": "相对本方案 知识快照/ 的落盘路径"
+          },
+          "mediaType": { "type": "string" },
+          "updatedAt": { "type": "string" },
+          "bodyNonEmpty": {
+            "type": "boolean",
+            "description": "正文非空校验；空文档必须返回未支持，不能当规则用"
+          },
+          "sectionIds": { "type": "array", "items": { "type": "string" } },
+          "ruleIds": { "type": "array", "items": { "type": "string" } },
+          "templateId": {
+            "type": ["string", "null"],
+            "description": "模板类条目必填：索引里已发布的 templateId"
+          },
+          "templateContractVersion": { "type": ["string", "null"] },
+          "templateVerified": {
+            "type": ["boolean", "null"],
+            "description": "xlsx 必须逐字节保存并验 ZIP/工作簿结构、公式区与输入映射；不能当 markdown 读回"
+          }
+        }
+      }
+    },
+    "lookupAttempts": {
+      "type": "array",
+      "description": "manifest 给的精确路径 → 同目录下同名文档 → 身份已验证镜像。所有候选都要留痕；多命中为 ambiguous，不选第一份",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["channel", "target", "outcome", "detail"],
+        "properties": {
+          "channel": { "enum": ["exact-route", "same-name", "mirror", "dws-tree"] },
+          "target": { "type": "string" },
+          "outcome": {
+            "enum": [
+              "found", "missing", "empty", "ambiguous", "unreadable",
+              "rejected-identity", "rejected-digest"
+            ]
+          },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "materializedAt": { "type": "string", "minLength": 1 },
+    "capabilityGaps": { "type": "array", "items": { "type": "string" } }
+  }
+}

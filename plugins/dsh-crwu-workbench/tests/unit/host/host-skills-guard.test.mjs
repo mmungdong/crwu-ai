@@ -195,6 +195,69 @@ test('the extended guard stays silent on prose, fixtures and non-business subpro
   assert.deepEqual(guard.scanSkillScript('r = subprocess.run(["textutil", "-convert", "docx", path])\n'), [])
 })
 
+test('the guard allows sys.executable subprocess while knowledge metadata stays in a JSON fixture', async () => {
+  // The real listing test keeps its pure business metadata in a JSON fixture, so the
+  // subprocess-bearing Python file itself carries no executable CLI literal. This Node
+  // unit test is outside the scanned installable Skills, so it may assert the value directly.
+  const fixturePath = join(ROOT, 'skills', 'biz', 'crwu-biz-valuation-realestate',
+    'scripts', 'fixtures', 'listing-knowledge-source.json')
+  const fixture = JSON.parse(await readFile(fixturePath, 'utf8'))
+  assert.equal(fixture.source, 'dws', 'JSON 夹具承载业务来源值，测试文件本身不再内联 CLI 字面量')
+  const source = [
+    'import json',
+    'import subprocess',
+    'import sys',
+    'with open("fixtures/listing-knowledge-source.json", encoding="utf-8") as handle:',
+    '    expected = json.load(handle)',
+    'completed = subprocess.run([sys.executable, "checker.py", "validate"])',
+    'assert data["knowledgeSources"][0]["source"] == expected["source"]',
+  ].join('\n')
+  assert.deepEqual(guard.scanSkillScript(source, 'test_listing_reference.py'), [],
+    'sys.executable 子进程与夹具里的业务元数据不得被拼成 CLI 旁路')
+})
+
+test('the guard still rejects an executable dws invocation in a Python test', () => {
+  const source = [
+    'import subprocess',
+    'completed = subprocess.run(["dws", "wiki", "+space-list", "--format", "json"])',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe.py').length > 0,
+    '真正的 dws 执行必须仍然被拒，不能为了消除误报放宽这条')
+})
+
+test('the guard rejects a dws binding reached by a later subprocess command list', () => {
+  // The assertion shares the binding line: a real binding must not be exempted by the assert text.
+  const source = [
+    'binary = "dws"; self.assertEqual(1, 1)',
+    'command = [binary, "drive"]',
+    'subprocess.run(command)',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-binding.py').length > 0,
+    '命令常量绑定到 "dws" 后经 subprocess.run(command) 执行必须被抓住')
+})
+
+test('a benign source-data value must not mask a real dws binding', () => {
+  // `{"source": "dws"}` is data, but the same line also binds `binary = "dws"`: the real
+  // binding must still be reported, not hidden behind the data-value exemption.
+  const source = [
+    'metadata = {"source": "dws"}; binary = "dws"',
+    'command = [binary, "drive"]',
+    'subprocess.run(command)',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-mixed.py').length > 0,
+    '同文件里的数据取值不得把真实的 dws 绑定/执行一起豁免掉')
+})
+
+test('the guard rejects a dws value reached dynamically from a data record', () => {
+  // The executable literal only lives as a data value; the exec call reads it back by key.
+  const source = [
+    'record = {"source": "dws"}',
+    'subprocess.run([record["source"], "drive"])',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-dynamic.py').length > 0,
+    '把业务 CLI 存进数据字典再动态取出执行，也必须被判成旁路')
+})
+
 test('the compatibility markers cannot switch the guard off inside a script', () => {
   // `legacy-compat` / `exempt-next` 是给 Markdown 章节用的 HTML 注释；若它们能作用于脚本，
   // 就等于给出一条「用注释关掉检查」的规避通道。脚本侧只认代码本身。
@@ -251,4 +314,49 @@ test('the vendored dws layer is untouched and still gated by its provenance', as
   assert.match(guard, /VENDORED/, '守卫必须显式排除 vendored 层')
   const { stdout } = await run('npm', ['run', 'dws:check'], { cwd: ROOT })
   assert.match(`${stdout}`, /provenance|dws/i)
+})
+
+test('the guard rejects a dws value reached dynamically through an intermediate command variable', () => {
+  // The data-record value is copied into `command` before the exec call; the guard must follow it.
+  const source = [
+    'record = {"source": "dws"}',
+    'command = [record["source"], "drive"]',
+    'subprocess.run(command)',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-record-command.py').length > 0,
+    '把业务 CLI 存进数据记录、再经中间命令变量交给 subprocess.run，也必须被判成旁路')
+})
+
+test('the guard rejects a dws value returned by a helper function', () => {
+  // The CLI literal only lives inside the function body; the exec call consumes the return value.
+  const source = [
+    'def binary():',
+    '    return {"source": "dws"}["source"]',
+    'subprocess.run([binary(), "drive"])',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-helper-return.py').length > 0,
+    '业务 CLI 由辅助函数返回后再执行，也必须被判成旁路')
+})
+
+test('the guard rejects a command variable reassigned from a data record', () => {
+  // A safe-looking first binding must not hide a later reassignment to the CLI value.
+  const source = [
+    'record = {"source": "dws"}',
+    'binary = sys.executable',
+    'binary = record["source"]',
+    'subprocess.run([binary, "drive"])',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-reassign.py').length > 0,
+    '命令变量被数据记录重新赋值后执行，也必须被判成旁路')
+})
+
+test('the guard rejects a conditional expression that can select a data record value', () => {
+  // The conditional can evaluate to the CLI value at runtime; the original guard fails closed.
+  const source = [
+    'record = {"source": "dws"}',
+    'command = "node" if condition else record["source"]',
+    'subprocess.run([command, "drive"])',
+  ].join('\n')
+  assert.ok(guard.scanSkillScript(source, 'probe-conditional.py').length > 0,
+    '条件表达式可能选中数据记录里的 CLI 值，也必须被判成旁路')
 })

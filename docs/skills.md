@@ -28,12 +28,11 @@ DSH 对每个 Skill 根只扫描一层，因此每一层都必须单独注册。
 
 | 目录 | 放什么 | 规矩 |
 | --- | --- | --- |
-| `references/` | 业务知识、计算规则与输出契约（含知识路由与降级口径） | 正文来自业务知识库；本地文件是**降级备份**，编号与库内路由不一致是刻意的（见 `references/08`） |
-| `template/` | 要被填充或渲染的正式模板（`valuation-workbook.xlsx` / `valuation-report.html` / `valuation-result.json`） | **只读**：产物一律写进估值案例目录，不许回写模板 |
-| `schemas/` | 结果 / 案例 / 对象的结构契约 | AI 输出的 JSON 结构校验 |
-| `examples/` | 通过校验的样例 | 样例必须**真的过**契约测试 |
-| `assets/` | logo / 字体 / 图标等静态资源 | 只放可再分发且注明来源的资源；现在是空占位 |
-| `scripts/` | 提取、构建、校验脚本与它们的测试 | 不含裸 `crwu` / `dws` / `ossutil` 调用（本仓技能守卫扫描） |
+| `references/` | 入口 Wiki 路由、执行工作流、通用工作簿与输出技术合同 | 业务正文只来自业务知识库；本地文件是**技术合同**，不是规范正文 |
+| `template/` | 报告 HTML 模板（`valuation-report.html`） | **只读**：产物一律写进估值案例目录，不许回写模板；计算表模板由本轮知识取回，不随包发布 |
+| `schemas/` | 报告数据 / 项目 / 对象 / 知识来源 / 规则参数的结构契约 | AI 输出的 JSON 结构校验；报告数据由 `build_report_data.py` 真实加载 |
+| `assets/` | 站点清单与资源说明 | 只放可再分发且注明来源的资源 |
+| `scripts/` | 提取、组装、计算、填报、校验脚本与它们的测试 | 不含裸 `crwu` / `dws` / `ossutil` 调用（本仓技能守卫扫描） |
 
 调用方式是**结构化 Tool**，不是命令行：`crwu_valuation_case_bootstrap`（读冻结输入）、
 `crwu_valuation_file_extract`、`crwu_valuation_knowledge_materialize`、`crwu_valuation_browser_preflight`、

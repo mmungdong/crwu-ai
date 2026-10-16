@@ -1,4 +1,3 @@
-import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../../shared/utils/value.ts'
 import { isSafeSeqNo } from '../../../shared/consts.ts'

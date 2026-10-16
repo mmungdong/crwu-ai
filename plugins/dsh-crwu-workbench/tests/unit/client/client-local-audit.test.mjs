@@ -601,7 +601,7 @@ function findByClass(node, className, into = null) {
 function buttonLabelsOf(node, into = []) {
   if (node === null || node === undefined || typeof node !== 'object') return into
   if (Array.isArray(node)) { for (const child of node) buttonLabelsOf(child, into); return into }
-  if (node.type === 'button' && typeof node.props?.children === 'string') into.push(node.props.children)
+  if (node.type === 'button') into.push(textOf(node.props?.children).join('').trim())
   buttonLabelsOf(node.props?.children, into)
   return into
 }
@@ -1466,7 +1466,7 @@ test('界面：整页只有一枚 primary（底部开始按钮），选择与卡
   const tree = renderPane(LocalAuditPane, { services, controller })
   const primary = collectByClass(tree, WORKBENCH_CLASSES_LOCAL.btnPrimary, [])
   assert.equal(primary.length, 1, `整页只允许一枚主按钮，实际 ${primary.length} 枚`)
-  assert.equal(primary[0].props.children, zhCN.localAuditNeedFilesButton, '主按钮是底部那枚（空态下显示"请选择文件后开始"）')
+  assert.equal(textOf(primary[0]).join(''), zhCN.localAuditNeedFilesButton, '主按钮是底部那枚（空态下显示"请选择文件后开始"）')
   // 选择按钮仍是次级（能点，只是不抢主操作的视觉）。
   // 这个替身只给了目录选择能力（`__DSH_HOST_PATHS__` 在测试环境里不存在 = 文件能力缺席），
   // 所以这里断言的是「选择文件夹」那一枚。
@@ -1525,10 +1525,10 @@ test('样式契约：页签 44px + 底部强调线；移除按钮命中区外扩
   )
   const loc = LOCAL_AUDIT_STYLE_TEXT
   assert.equal(loc.includes('.crwu-audit-tab {'), false, '页签样式不该长在本地审核模块里')
-  // 页签：44px 命中高度 + 选中项用品牌色画 3px 底部强调线（形状 + 颜色双重表达）。
+  // 页签：44px 命中高度 + 选中项用操作蓝画 3px 底部强调线（形状 + 颜色双重表达）。
   assert.match(CRWU_NAVIGATION_STYLE_TEXT, /\.crwu-audit-tab \{[\s\S]*?height: 44px/)
   assert.match(CRWU_NAVIGATION_STYLE_TEXT, /\.crwu-audit-tab::after \{[\s\S]*?height: 3px/)
-  assert.match(CRWU_NAVIGATION_STYLE_TEXT, /\.crwu-audit-tab-on::after \{ background: var\(--crwu-brand\); \}/)
+  assert.match(CRWU_NAVIGATION_STYLE_TEXT, /\.crwu-audit-tab-on::after \{ background: var\(--crwu-interactive\); \}/)
   // 移除按钮：视觉 28px、命中区靠 ::after 外扩 8px（触屏也点得到）。
   assert.match(loc, /\.crwu-audit-local-row-remove::after \{ content: ''; position: absolute; inset: -8px; \}/)
   // 骨架呼吸在 reduced-motion 下关掉。

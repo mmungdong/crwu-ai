@@ -1,4 +1,5 @@
 import { text } from '../../../../shared/utils/value.ts'
+import type { ParseFailureKind } from '../market/site-parsers.ts'
 import type { LoginState, MarketProviderId } from './login-state.ts'
 import { MARKET_PROVIDER_IDS, providerLabel } from './login-state.ts'
 
@@ -43,6 +44,20 @@ export interface MarketFetchResult {
   loginRequired: boolean
   captcha: boolean
   /**
+   * 页面级观察（需要登录 / 验证码 / 结构无法解析 / 恢复摘要）。
+   *
+   * 存在的理由：这些事实要进 `capabilityGaps` 与报告的技术过程，而它们**不是**失败的
+   * 全部含义 —— 一个"取到了但结构不认"的页面仍然要如实记下来。
+   */
+  notes?: string[]
+  /**
+   * 可见人机验证的**恢复摘要**（由浏览器传输层写入）。
+   *
+   * 只放安全事实：策略 / 尝试次数 / 前后挑战形态 / 最终 URL。**不含** Cookie、
+   * 挑战凭证或原始 CDP 指令。
+   */
+  recovery?: MarketRecoveryNote
+  /**
    * 失败的**类别**（§7.3 要求重试区分这几类，而不是把什么都写成一句"取不到"）。
    *
    * 为什么必须分类：它们的处置完全不同 —— 需要登录要去登录、验证码要人工过、
@@ -68,6 +83,26 @@ export type MarketFailureKind =
   | 'blocked'
   | 'unreadable'
   | 'unknown'
+
+/** 一条取数结果里的恢复摘要（进报告的技术过程）。 */
+export interface MarketRecoveryNote {
+  state: 'recovered' | 'waiting-user' | 'unsupported' | 'cancelled' | 'unavailable' | 'failed'
+  reasonCode: string
+  attempts: number
+  strategyId: string
+  beforeKind: string
+  afterKind: string
+  challengeVisible: boolean
+  /**
+   * 页面核验事实：最终 URL 是否回到该来源（`hostMatches`）、页面是否可读（`readable`）。
+   *
+   * `state=recovered` 单说一句"好了"事后无法核对；这两条加上 `challengeVisible=false`
+   * 才是"这一页可以当证据"的完整判据（挑战页与挑战画布永远不是证据）。
+   */
+  hostMatches: boolean
+  readable: boolean
+  finalUrl: string
+}
 
 /** 抓取通道（注入；生产用全局 `fetch`，测试用内存替身）。 */
 export type MarketTransport = (url: string, options: { signal?: AbortSignal }) => Promise<MarketFetchResult>
@@ -97,7 +132,7 @@ export interface MarketSearchResult {
   error: string
   /** 这一轮真正访问过的完整 URL（逐页、去重）。 */
   urls: string[]
-  /** 失败的页数（三次都失败的页）。 */
+  /** 失败的页数（两次都失败的页）。 */
   failedPages: number
   listings: RawListing[]
   /** 页面级观察（需要登录 / 验证码 / 结构无法解析）。 */
@@ -123,6 +158,13 @@ export interface MarketProvider {
     /** 真正取回的 URL（跟随重定向之后）。 */
     url: string
     status: number
+    /**
+     * 解析失败类别（`''` = 成功）。
+     *
+     * `template-stale` 与 `no-results` **必须分开**：前者是"站点改版了、我们的选择器过期"，
+     * 后者是"这个小区确实没有房源"。混成一句会让人去查小区，而不是去修解析。
+     */
+    failureKind?: ParseFailureKind
   }>
   /** 用系统默认浏览器打开该来源首页（登录动作）。返回空串 = 已受理。 */
   openLogin(openExternal: (url: string) => Promise<boolean>): Promise<string>

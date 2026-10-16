@@ -33,6 +33,13 @@ type Cookie struct {
 	Name   string
 	Domain string
 	Value  string
+	// Expires is the cookie's expiry as CDP reports it: seconds since the epoch,
+	// or -1 for a session cookie (valid until the browser closes).
+	//
+	// It is here because expiry is a **login** fact: a credential that is present
+	// but expired must not be read as "signed in", and one that is valid must not be
+	// read as "not signed in" just because the protected page asked for verification.
+	Expires float64
 }
 
 // Dial connects to a target's websocket debugger URL.
@@ -116,21 +123,49 @@ func (c *Client) Call(ctx context.Context, method string, params map[string]any)
 	}
 }
 
-// Cookies returns every cookie the browser currently holds.
+// Cookies returns every cookie the browser currently holds, across every site.
 //
-// It deliberately passes no `urls` filter: the caller needs to see the session
-// across the whole site, and a filtered read is how "signed out" gets mistaken for
-// "signed in somewhere else".
+// It uses `Storage.getCookies`, which is the **browser-wide** read. The obvious
+// looking alternative, `Network.getCookies` with no `urls`, is *not* browser-wide:
+// CDP scopes it to the current URL of the attached page, so it answers with
+// nothing on `about:blank` and with one site's cookies when the tab sits on the
+// other site's page. Measured on a real signed-in profile (2026-10-14):
+// 0 cookies on `about:blank`, 28 with explicit urls, 66 browser-wide — the first
+// shape is how "我已经登录了" turns into "没有登录凭据".
+//
+// Presence checks must not depend on which tab happens to be attached, so there is
+// no URL filter here by design. Callers that genuinely want page-scoped cookies
+// use CookiesForURLs.
 func (c *Client) Cookies(ctx context.Context) ([]Cookie, error) {
-	raw, err := c.Call(ctx, "Network.getCookies", nil)
+	raw, err := c.Call(ctx, "Storage.getCookies", nil)
 	if err != nil {
 		return nil, err
 	}
+	return decodeCookies(raw)
+}
+
+// CookiesForURLs returns the cookies that would be sent to the given URLs.
+//
+// This is the page-scoped read: use it when the question is "what does this page
+// see", never when the question is "is there a session somewhere in this browser".
+func (c *Client) CookiesForURLs(ctx context.Context, urls []string) ([]Cookie, error) {
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("CookiesForURLs 需要至少一个 URL：空 urls 会退回按当前页面读取")
+	}
+	raw, err := c.Call(ctx, "Network.getCookies", map[string]any{"urls": urls})
+	if err != nil {
+		return nil, err
+	}
+	return decodeCookies(raw)
+}
+
+func decodeCookies(raw json.RawMessage) ([]Cookie, error) {
 	var payload struct {
 		Cookies []struct {
-			Name   string `json:"name"`
-			Domain string `json:"domain"`
-			Value  string `json:"value"`
+			Name    string  `json:"name"`
+			Domain  string  `json:"domain"`
+			Value   string  `json:"value"`
+			Expires float64 `json:"expires"`
 		} `json:"cookies"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -138,7 +173,9 @@ func (c *Client) Cookies(ctx context.Context) ([]Cookie, error) {
 	}
 	cookies := make([]Cookie, 0, len(payload.Cookies))
 	for _, item := range payload.Cookies {
-		cookies = append(cookies, Cookie{Name: item.Name, Domain: item.Domain, Value: item.Value})
+		cookies = append(cookies, Cookie{
+			Name: item.Name, Domain: item.Domain, Value: item.Value, Expires: item.Expires,
+		})
 	}
 	return cookies, nil
 }

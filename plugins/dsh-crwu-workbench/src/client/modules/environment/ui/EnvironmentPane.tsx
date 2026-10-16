@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Badge, Button, Chip, LoadingBar, Meter, Notice, Spinner, StatusDot } from '../../../ui/primitives.tsx'
+import { Button, Chip, LoadingBar, Meter, Notice, Spinner, StatusDot } from '../../../ui/primitives.tsx'
 import { CheckIcon, DeveloperDiagnosticsIcon, WarnIcon } from '../../../ui/icons.tsx'
 import { WORKBENCH_CLASSES as C } from '../../../shell/consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
@@ -152,11 +152,15 @@ function shortSessionId(id: string): string {
   return (tail === '' ? id : tail).slice(0, 8)
 }
 
-/** 本地时刻；解析不出来就原样显示（不猜）。 */
+/** Local time as compact `YYYY-MM-DD HH:mm`; unparseable strings are shown raw (never guessed). */
 function localTime(iso: string): string {
   if (iso === '') return ''
   const parsed = Date.parse(iso)
-  return Number.isNaN(parsed) ? iso : new Date(parsed).toLocaleString()
+  if (Number.isNaN(parsed)) return iso
+  const at = new Date(parsed)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${String(at.getFullYear())}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+    + ` ${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
 
 /** 单行「标签 : 值」，值过长时换行而不是截断（路径与版本要能看全）。 */
@@ -259,6 +263,8 @@ function diagnosticRows(
     { label: zhCN.envConfigSource, value: env.configSource === '' ? zhCN.envNotConfigured : env.configSource },
     { label: zhCN.envCheckedAt, value: checkedAt === '' ? zhCN.envUnset : localTime(checkedAt) },
     { label: zhCN.envCaseRoot, value: env.workspace.path === '' ? zhCN.envUnset : env.workspace.path },
+    // The cwd / subagent explanation lives here now: the ordinary workspace hint stays plain prose.
+    { label: zhCN.envDiagWorkspaceExec, value: zhCN.wsCwdNote },
     { label: zhCN.envOssBucket, value: env.delivery.oss.bucket || zhCN.envNotConfigured },
     { label: zhCN.envOssPrefix, value: env.delivery.oss.prefix },
     { label: zhCN.envOssCredFile, value: env.delivery.ossCred.exists ? env.delivery.ossCred.path : zhCN.envOssCredMissing },
@@ -383,6 +389,10 @@ function StatusSummary(props: {
   // OSS 的探测结果里没有独立时间戳，所以"这次自检的时刻"（store 在应答落地时记的 `checkedAt`）
   // 仍可作为 OSS 事实时间；iFinD 的 checkedAt 则来自最近一次用户主动验证。
   const verifiedAt = lastVerifiedAt(props.env, props.checkedAt ?? '')
+  const checkedAtRaw = props.checkedAt ?? ''
+  // Identical parsed instants are one fact: show one combined label instead of two equal rows.
+  const sameVerifiedInstant = verifiedAt !== '' && checkedAtRaw !== ''
+    && !Number.isNaN(Date.parse(verifiedAt)) && Date.parse(verifiedAt) === Date.parse(checkedAtRaw)
   // 同一必检项可能同时产生 global / external-data 两条诊断 issue（例如 iFinD）。
   // 顶部数量必须跟 N/N 的必检项口径一致，不能把诊断作用域当成待配置项重复计数。
   const remaining = Math.max(0, head.total - head.passed)
@@ -427,11 +437,16 @@ function StatusSummary(props: {
       <div className={C.statusMeta}>
         <span>{`${zhCN.envStatusSummary}${String(head.passed)}/${String(head.total)}${zhCN.envStatusSummaryTail}`}</span>
         <span className={C.statusDot} />
-        <span>{`${zhCN.envStatusCheckedAt} ${props.checkedAt === '' ? zhCN.envUnset : localTime(props.checkedAt)}`}</span>
-        {verifiedAt === '' ? null : <>
-          <span className={C.statusDot} />
-          <span data-crwu-env-verified-at={verifiedAt}>{`${zhCN.envStatusVerifiedAt} ${localTime(verifiedAt)}`}</span>
-        </>}
+        {sameVerifiedInstant
+          // Same instant is one fact, not two: one combined label while keeping the verified hook.
+          ? <span data-crwu-env-verified-at={verifiedAt}>{`${zhCN.envStatusCheckedVerified} ${localTime(verifiedAt)}`}</span>
+          : <>
+              <span>{`${zhCN.envStatusCheckedAt} ${props.checkedAt === '' ? zhCN.envUnset : localTime(props.checkedAt)}`}</span>
+              {verifiedAt === '' ? null : <>
+                <span className={C.statusDot} />
+                <span data-crwu-env-verified-at={verifiedAt}>{`${zhCN.envStatusVerifiedAt} ${localTime(verifiedAt)}`}</span>
+              </>}
+            </>}
       </div>
       {/* 完成数量与进度合并成一条紧凑摘要（不再有三块技术指标卡）。 */}
       <Meter ratio={head.ratio} bad={!ok} />
@@ -737,14 +752,14 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
     // 首次加载时 busy 可能还没翻成 true（状态更新是异步的），所以「没有数据 + 没有错误」
     // 一律显示「正在检查」，避免先闪一个空面板再出现内容。
     if (props.error !== '') {
-      return <div>
+      return <div className="crwu-environment-page" data-crwu-environment="1">
         <Notice tone="warn">{props.error}</Notice>
         <div className={C.row}>
           <Button label={zhCN.envActionRecheck} onClick={props.onRefresh} />
         </div>
       </div>
     }
-    return <div className={C.loading}>
+    return <div className={`${C.loading} crwu-environment-page`} data-crwu-environment="1">
       <Spinner large />
       <span>{zhCN.loadingEnv}</span>
     </div>
@@ -755,7 +770,7 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
   const authorized = props.authorized ?? consentGranted(env)
   const activeStep = pickStep(setupSteps(setupStepInput(env, authorized), manualStep), manualStep)
 
-  return <div>
+  return <div className="crwu-environment-page" data-crwu-environment="1">
     {props.error === '' ? null : <Notice tone="warn">{props.error}</Notice>}
     <LoadingBar active={props.busy} />
 

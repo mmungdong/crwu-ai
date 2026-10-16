@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Button, Card } from '../../../ui/primitives.tsx'
+import { TextArea } from '../../../ui/components/index.ts'
 import { CheckIcon, WarnIcon } from '../../../ui/icons.tsx'
 import { LOCAL_AUDIT_CLASSES as L } from '../consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
@@ -52,6 +53,17 @@ function CopyFeedback(props: { copied: boolean; copyError: string }): React.Reac
     <div>{zhCN.localAuditCopyFullAccess}</div>
     <div>{zhCN.localAuditCopyKept}</div>
   </div>
+}
+
+/** Read-only prompt box: shared TextArea keeps the exact multi-line text selectable on focus. */
+function ReadOnlyPrompt(props: { value: string }): React.ReactElement {
+  return <TextArea
+    controlClassName={L.handoffPrompt}
+    value={props.value}
+    readOnly={true}
+    aria-label={zhCN.localAuditCopyPrompt}
+    onFocus={(event) => { (event as { target?: { select?: () => void } } | null)?.target?.select?.() }}
+  />
 }
 
 export function LocalAuditHandoffCard(props: LocalAuditHandoffCardProps): React.ReactElement {
@@ -109,13 +121,7 @@ export function LocalAuditHandoffCard(props: LocalAuditHandoffCardProps): React.
           <CopyFeedback copied={props.copied} copyError={props.copyError} />
         </span>
       </div>
-      {props.handoff === null ? null : <textarea
-        className={L.handoffPrompt}
-        readOnly={true}
-        aria-label={zhCN.localAuditCopyPrompt}
-        value={props.handoff.prompt}
-        onFocus={(event) => { (event.target as { select?: () => void }).select?.() }}
-      />}
+      {props.handoff === null ? null : <ReadOnlyPrompt value={props.handoff.prompt} />}
     </Card>
   }
 
@@ -139,12 +145,6 @@ export function LocalAuditHandoffCard(props: LocalAuditHandoffCardProps): React.
         <CopyFeedback copied={props.copied} copyError={props.copyError} />
       </span>
     </div>
-    <textarea
-      className={L.handoffPrompt}
-      readOnly={true}
-      aria-label={zhCN.localAuditCopyPrompt}
-      value={props.handoff.prompt}
-      onFocus={(event) => { (event.target as { select?: () => void }).select?.() }}
-    />
+    <ReadOnlyPrompt value={props.handoff.prompt} />
   </Card>
 }

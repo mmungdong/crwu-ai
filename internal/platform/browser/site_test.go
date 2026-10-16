@@ -24,9 +24,9 @@ func TestLoadSitesRejectsMissingRequiredField(t *testing.T) {
 		wantMention string
 	}{
 		{"no id", `[{"loginUrl":"https://a/","protectedUrl":"https://b/","authCookie":"c"}]`, "id"},
-		{"no loginUrl", `[{"id":"ke","protectedUrl":"https://b/","authCookie":"c"}]`, "loginUrl"},
-		{"no protectedUrl", `[{"id":"ke","loginUrl":"https://a/","authCookie":"c"}]`, "protectedUrl"},
-		{"no authCookie", `[{"id":"ke","loginUrl":"https://a/","protectedUrl":"https://b/"}]`, "authCookie"},
+		{"no loginUrl", `[{"id":"lianjia","protectedUrl":"https://b/","authCookie":"c"}]`, "loginUrl"},
+		{"no protectedUrl", `[{"id":"lianjia","loginUrl":"https://a/","authCookie":"c"}]`, "protectedUrl"},
+		{"no authCookie", `[{"id":"lianjia","loginUrl":"https://a/","protectedUrl":"https://b/"}]`, "authCookie"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,15 +43,15 @@ func TestLoadSitesRejectsMissingRequiredField(t *testing.T) {
 
 func TestLoadSitesRejectsDuplicateID(t *testing.T) {
 	body := `[
-		{"id":"ke","loginUrl":"https://a/","protectedUrl":"https://b/","authCookie":"c"},
-		{"id":"ke","loginUrl":"https://d/","protectedUrl":"https://e/","authCookie":"f"}
+		{"id":"lianjia","loginUrl":"https://a/","protectedUrl":"https://b/","authCookie":"c"},
+		{"id":"lianjia","loginUrl":"https://d/","protectedUrl":"https://e/","authCookie":"f"}
 	]`
 	_, err := LoadSites(writeSites(t, body))
 	if err == nil {
 		t.Fatal("LoadSites() = nil error, want duplicate-id error")
 	}
-	if !strings.Contains(err.Error(), "ke") {
-		t.Fatalf("LoadSites() error = %q, want it to mention the duplicate id %q", err.Error(), "ke")
+	if !strings.Contains(err.Error(), "lianjia") {
+		t.Fatalf("LoadSites() error = %q, want it to mention the duplicate id %q", err.Error(), "lianjia")
 	}
 }
 
@@ -63,7 +63,7 @@ func TestLoadSitesRejectsMissingFile(t *testing.T) {
 }
 
 func TestLoadSitesAcceptsWellFormedEntry(t *testing.T) {
-	body := `[{"id":"ke","label":"贝壳","loginUrl":"https://clogin.ke.com/login","protectedUrl":"https://bj.ke.com/ershoufang/chaoyang/","authCookie":"lianjia_token","authDomains":[".ke.com"]}]`
+	body := `[{"id":"lianjia","label":"链家","loginUrl":"https://clogin.lianjia.com/login","protectedUrl":"https://bj.lianjia.com/ershoufang/chaoyang/","authCookie":"lianjia_token","authDomains":[".lianjia.com"]}]`
 	sites, err := LoadSites(writeSites(t, body))
 	if err != nil {
 		t.Fatalf("LoadSites() error = %v, want nil", err)
@@ -72,22 +72,22 @@ func TestLoadSitesAcceptsWellFormedEntry(t *testing.T) {
 		t.Fatalf("LoadSites() returned %d sites, want 1", len(sites))
 	}
 	got := sites[0]
-	if got.ID != "ke" || got.Label != "贝壳" || got.AuthCookie != "lianjia_token" {
+	if got.ID != "lianjia" || got.Label != "链家" || got.AuthCookie != "lianjia_token" {
 		t.Fatalf("LoadSites() = %+v, want the fields read verbatim", got)
 	}
-	if len(got.AuthDomains) != 1 || got.AuthDomains[0] != ".ke.com" {
-		t.Fatalf("LoadSites() AuthDomains = %v, want [.ke.com]", got.AuthDomains)
+	if len(got.AuthDomains) != 1 || got.AuthDomains[0] != ".lianjia.com" {
+		t.Fatalf("LoadSites() AuthDomains = %v, want [.lianjia.com]", got.AuthDomains)
 	}
 }
 
 func TestFindSiteUnknownIDListsKnownIDs(t *testing.T) {
-	sites := []Site{{ID: "ke"}, {ID: "lianjia"}}
+	sites := []Site{{ID: "fang"}, {ID: "lianjia"}}
 	_, err := FindSite(sites, "anjuke")
 	if err == nil {
 		t.Fatal("FindSite() = nil error for an unknown id")
 	}
 	msg := err.Error()
-	for _, want := range []string{"anjuke", "ke", "lianjia"} {
+	for _, want := range []string{"anjuke", "fang", "lianjia"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("FindSite() error = %q, want it to mention %q", msg, want)
 		}
@@ -95,7 +95,7 @@ func TestFindSiteUnknownIDListsKnownIDs(t *testing.T) {
 }
 
 func TestFindSiteReturnsMatch(t *testing.T) {
-	sites := []Site{{ID: "ke", Label: "贝壳"}, {ID: "lianjia"}}
+	sites := []Site{{ID: "fang", Label: "房天下"}, {ID: "lianjia"}}
 	got, err := FindSite(sites, "lianjia")
 	if err != nil {
 		t.Fatalf("FindSite() error = %v, want nil", err)

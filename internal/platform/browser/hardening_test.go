@@ -188,14 +188,14 @@ func TestDoFetchAllowsPublicHTTPHost(t *testing.T) {
 		case strings.Contains(expression, "outerHTML"):
 			reply(map[string]any{"result": map[string]any{"type": "string", "value": "<html>ok</html>"}})
 		case strings.Contains(expression, "location.href"):
-			reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://bj.ke.com/x","title":"t","text":"in sale"}`}})
+			reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://bj.lianjia.com/x","title":"t","text":"in sale"}`}})
 		default:
 			reply(map[string]any{"result": map[string]any{"type": "number", "value": 200}})
 		}
 	})
 
 	out := filepath.Join(t.TempDir(), "o.html")
-	result, err := DoFetch(context.Background(), browser, Options{URL: "https://bj.ke.com/ershoufang/1.html", Out: out})
+	result, err := DoFetch(context.Background(), browser, Options{URL: "https://bj.lianjia.com/ershoufang/1.html", Out: out})
 	if err != nil {
 		t.Fatalf("DoFetch() error = %v, want nil for a public https host", err)
 	}
@@ -219,7 +219,7 @@ func TestDoFetchReportsUnknownWhenFactsAreUnreadable(t *testing.T) {
 		switch {
 		case strings.Contains(expression, "location.href"):
 			factsCalls++
-			value := `{"href":"https://bj.ke.com/x","title":"t","text":"in sale"}`
+			value := `{"href":"https://bj.lianjia.com/x","title":"t","text":"in sale"}`
 			if factsCalls > 1 {
 				value = "not json at all"
 			}
@@ -232,7 +232,7 @@ func TestDoFetchReportsUnknownWhenFactsAreUnreadable(t *testing.T) {
 	})
 
 	out := filepath.Join(t.TempDir(), "o.html")
-	result, err := DoFetch(context.Background(), browser, Options{URL: "https://bj.ke.com/x", Out: out})
+	result, err := DoFetch(context.Background(), browser, Options{URL: "https://bj.lianjia.com/x", Out: out})
 	if err != nil {
 		t.Fatalf("DoFetch() error = %v, want nil (an unreadable page is a classification, not an error)", err)
 	}
@@ -258,7 +258,7 @@ func TestDoShotRestoresViewportWhenVerificationFails(t *testing.T) {
 		}
 		switch {
 		case strings.Contains(expression, "location.href"):
-			reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://bj.ke.com/x","title":"t","text":"in sale"}`}})
+			reply(map[string]any{"result": map[string]any{"type": "string", "value": `{"href":"https://bj.lianjia.com/x","title":"t","text":"in sale"}`}})
 		case strings.Contains(expression, "getEntriesByType"):
 			reply(map[string]any{"result": map[string]any{"type": "string", "value": "200"}})
 		default:
@@ -271,7 +271,7 @@ func TestDoShotRestoresViewportWhenVerificationFails(t *testing.T) {
 	})
 
 	out := filepath.Join(t.TempDir(), "o.png")
-	if _, err := DoShot(context.Background(), browser, Options{URL: "https://bj.ke.com/x", Out: out}); err == nil {
+	if _, err := DoShot(context.Background(), browser, Options{URL: "https://bj.lianjia.com/x", Out: out}); err == nil {
 		t.Fatal("DoShot() = nil error for a blank capture, want a verification failure")
 	}
 	params := rec.lastParamsFor("Emulation.setDeviceMetricsOverride")

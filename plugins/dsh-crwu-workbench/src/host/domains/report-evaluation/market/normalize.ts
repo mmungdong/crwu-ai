@@ -2,6 +2,7 @@ import { text } from '../../../../shared/utils/value.ts'
 import type { MarketProviderId } from '../browser/login-state.ts'
 import { providerLabel } from '../browser/login-state.ts'
 import type { RawListing } from '../browser/provider.ts'
+import { canonicalListingUrl } from './candidates.ts'
 
 /**
  * 外部案例的**字段标准化**与"挂牌 / 成交"纪律。
@@ -30,8 +31,9 @@ export type TransactionType = '挂牌' | '成交' | '询价' | '未知'
 /** 判定词表（按"越明确越优先"的顺序排列）。 */
 const TRANSACTION_RULES: Array<{ type: TransactionType; patterns: RegExp[] }> = [
   // 先认"成交"：页面同时出现"成交价 180 万（挂牌价 200 万）"时必须算成交。
-  { type: '成交', patterns: [/成交价/, /已成交/, /成交总价/, /成交单价/, /transaction/i, /sold/i] },
-  { type: '挂牌', patterns: [/挂牌价/, /挂牌/, /售价/, /报价/, /要价/, /总价/, /万\/套/, /listing/i] },
+  // `\bsold\b`（词边界）而不是 `/sold/`：后者会把 "unsold" 也读成成交。
+  { type: '成交', patterns: [/成交价/, /已成交/, /成交总价/, /成交单价/, /\bsold\b/i] },
+  { type: '挂牌', patterns: [/挂牌价/, /挂牌/, /售价/, /报价/, /要价/, /总价/, /万\/套/, /\blisting\b/i] },
   { type: '询价', patterns: [/询价/, /面议/, /价格待定/] },
 ]
 
@@ -181,6 +183,23 @@ export function transactionTypeOf(...sources: unknown[]): TransactionType {
 }
 
 /**
+ * Explicit transaction type from a dedicated field value, else `null`.
+ *
+ * Empty values are not facts and unknown wording is not guessed.
+ */
+export function explicitTransactionTypeOf(value: unknown): TransactionType | null {
+  const raw = text(value).trim()
+  if (raw === '') return null
+  // Negative wording first: 未成交 / 未售出 / unsold are not 成交.
+  if (/未成交|未售出|尚未成交|流拍|unsold/i.test(raw)) return '挂牌'
+  if (/成交/.test(raw)) return '成交'
+  if (/挂牌|出售|在售/.test(raw)) return '挂牌'
+  if (/询价|面议|价格待定/.test(raw)) return '询价'
+  if (/未知|不详|暂无/.test(raw)) return '未知'
+  return null
+}
+
+/**
  * 单价：优先用页面给的单价，否则由总价 / 面积算。
  *
  * 两条都不成立时返回 `null`（**不填 0**："没有单价"与"单价为零"在后续校验里完全不同）。
@@ -210,15 +229,12 @@ export function normalizeCase(raw: RawListing, options: NormalizeOptions = {}): 
   if (area === null) notes.push('页面没有给出可解析的建筑面积')
   if (price === null) notes.push('页面没有给出可解析的价格')
 
-  // 交易类型的判据是**页面上真的写了什么**：显式字段优先，其次标题与原始字段全文。
-  const explicit = pickField(fields, 'transactionType')
-  const transactionType = transactionTypeOf(
-    explicit,
-    title,
-    priceRaw,
-    ...Object.keys(fields),
-    ...Object.values(fields),
-  )
+  // Explicit transaction type wins; only nonempty field values are facts (never empty keys).
+  const explicit = explicitTransactionTypeOf(pickField(fields, 'transactionType'))
+  const nonEmptyFields = Object.entries(fields)
+    .filter(([, value]) => text(value).trim() !== '')
+    .map(([key, value]) => `${key} ${text(value)}`)
+  const transactionType = explicit ?? transactionTypeOf(title, priceRaw, ...nonEmptyFields)
   if (transactionType === '未知') notes.push('页面未标明挂牌/成交：按「未知」处理，不得直接当作成交可比实例')
 
   const unitPrice = unitPriceOf(price, area, pickField(fields, 'unitPrice'))
@@ -267,7 +283,7 @@ export function normalizeCase(raw: RawListing, options: NormalizeOptions = {}): 
  * 而且要留下修正依据）。`未知` 同样不可以 —— 缺省朝安全一侧倒。
  */
 /**
- * **跨站去重**的同一套房源指纹（§7.3：链家与贝壳可能重复展示同一房源，不能算两个案例）。
+ * **跨站去重**的同一套房源指纹（§7.3：链家与房天下可能重复展示同一房源，不能算两个案例）。
  *
  * 为什么不能只按 URL 去重：同一套房在房天下与链家是**两条不同的 URL**，按 URL 去重等于没去。
  * 所以指纹取"可跨站比较的那几个事实"：小区/地址（归一化）+ 建筑面积 + 价格档。
@@ -291,28 +307,43 @@ export function crossSiteKey(item: ValuationCase): string {
 }
 
 /**
- * 对**全部来源**的标准化案例做跨站去重：同一套房源只留最先出现的那一条。
+ * 对**全部来源**的标准化案例做跨站去重：只有同一 canonical URL 才算同一套房源。
  *
- * 保留的是先出现的那一条（调用方的来源顺序），并在被合并掉的那条的 `notes` 里留一句
- * "与 <来源> 的同一房源重复" —— 去重不等于把过程删掉：要能看出来合并了什么。
+ * 弱事实（小区 + 面积 + 价格）相同**只是疑似重复**：来自不同 URL 的记录一律保留，
+ * 只在两边的 `notes` 里留一句痕迹。合并时保留先出现的那一条并注明与谁重复。
  */
 export function dedupeAcrossSources(cases: readonly ValuationCase[]): ValuationCase[] {
-  const seen = new Map<string, ValuationCase>()
+  const byCanonical = new Map<string, ValuationCase>()
   const out: ValuationCase[] = []
   for (const item of cases) {
-    const key = crossSiteKey(item)
-    if (key === '') {
-      // 拿不到指纹的案例照常保留：宁可有两条重复，也不要把一条独立案例并掉。
+    const canonical = canonicalListingUrl(item.url)
+    if (canonical === '') {
+      // 没有可用 URL：照常保留，不靠弱事实合并。
       out.push(item)
       continue
     }
-    const first = seen.get(key)
+    const first = byCanonical.get(canonical)
     if (first === undefined) {
-      seen.set(key, item)
+      byCanonical.set(canonical, item)
       out.push(item)
       continue
     }
-    first.notes = [...first.notes, `与 ${item.sourceLabel} 的同一房源重复（${item.url}）：已按跨站去重合并为一条`]
+    first.notes = [...first.notes, `与 ${item.sourceLabel} 的同一房源重复（${item.url}）：已按同一 canonical URL 合并为一条`]
+  }
+
+  // Weak facts are a suspicion only: mark both, never merge different canonical URLs.
+  const byWeak = new Map<string, ValuationCase>()
+  for (const item of out) {
+    const weak = crossSiteKey(item)
+    if (weak === '') continue
+    const first = byWeak.get(weak)
+    if (first === undefined) {
+      byWeak.set(weak, item)
+      continue
+    }
+    if (canonicalListingUrl(first.url) === canonicalListingUrl(item.url)) continue
+    first.notes = [...first.notes, `弱事实与 ${item.sourceLabel}（${item.url}）相同：仅标记疑似重复，未合并`]
+    item.notes = [...item.notes, `弱事实与 ${first.sourceLabel}（${first.url}）相同：仅标记疑似重复，未合并`]
   }
   return out
 }

@@ -25,6 +25,8 @@ const { PLUGIN_INJECT, PLUGIN_NAME } = await import(new URL('src/host/consts.ts'
 const { RPC_BODY_MAX_BYTES } = await import(new URL('src/host/core/http/consts.ts', ROOT).href)
 const { createWorkbenchState, workspaceView } = await import(new URL('src/host/core/state/store.ts', ROOT).href)
 const { createValuationOperations } = await import(new URL('src/host/operations/report-evaluation.ts', ROOT).href)
+const { createValuationBrowserRuntime } = await import(
+  new URL('src/host/domains/report-evaluation/browser/runtime.ts', ROOT).href)
 const { ValuationLifecycles } = await import(new URL('src/host/domains/report-evaluation/lifecycle/index.ts', ROOT).href)
 const { ValuationScopes } = await import(new URL('src/host/domains/report-evaluation/scope.ts', ROOT).href)
 const { createCoreOperations } = await import(new URL('src/host/operations/core.ts', ROOT).href)
@@ -275,13 +277,21 @@ function operationsFor(config = {}, sessions, world = fakeWorld(), extraResolver
   // 自助更新：用**真实**操作层（不注入 Plugin Manager —— 该 ctx 的 `get` 也回不出它，
   // 所以检查停在 `unsupported/manager-unavailable`，不会打 registry），与 apply() 同一条组合路径。
   const lifecycles = new ValuationLifecycles()
-  const valuation = createValuationOperations({
-    ctx, state, world,
-    access: makeTestAccess(ctx, { state }).access,
-    python,
-    lifecycles,
-    scopes: new ValuationScopes(),
+  // 与 `apply()` **同一条组合路径**：门禁三操作（preflight / login / login-cancel）来自浏览器 runtime，
+  // 不在 `createValuationOperations` 里。fixture 少 spread 它，`boot.ported.done` 就会缺这三条，
+  // 而生产环境是齐的 —— 那是"测试夹具与装配不一致"，不是真实缺陷。
+  const browserRuntime = createValuationBrowserRuntime({
+    ctx, config: resolved, access: makeTestAccess(ctx, { state }).access, world,
   })
+  const valuation = {
+    ...createValuationOperations({
+      ctx, state, world,
+      access: makeTestAccess(ctx, { state }).access,
+      lifecycles,
+      scopes: new ValuationScopes(),
+    }),
+    ...browserRuntime.operations,
+  }
   const update = createUpdateOperations({
     ctx,
     state,
@@ -393,7 +403,20 @@ test('ping and boot answer with the state the panel needs to render', async () =
   //      结果里却写"未指定基准日"，这是会把业务结果弄错的一类）；
   //   ② `valuation-intake` 不再在返回前串行预检三家站点，`providers` 初始为「尚未检查」；
   //   ③ `valuation-status` 的 `progress.stage` 开始承载提取阶段（进度区显示真实阶段）。
-  assert.equal(WORKBENCH_PROTOCOL, 34, '估值提取链路必须识别旧 Host')
+  // 协议 35（2026-10-14）= 估值改成"启动页 + 父会话跳转"（删四条运行期操作、加门禁两条）；
+  // 36 = 门禁逐站结论新增 `verdict` / `protectedUrl` / `challenge`（人机验证）；
+  // 37 = 启动页的流程恢复与资料范围闭环：`creationDisposition` / 真实文件明细 + `excluded` /
+  //      受控的「打开验证窗口」操作。
+  // 协议 39（2026-10-15）= 通用估值入口与可选登录：资产类型进契约、门禁阶段删除、
+  //   能力状态带 `checkedAt`、登录不再阻断整轮。旧 Host 必须被这一条挡住。
+  // 协议 40（2026-10-16）= v2 交付口径 + 规则参数 + 项目收口：交付校验走报告数据、
+  //   知识物化新增 `stage=parameters`、finalize 新增 `target=project` 与 `projectSummary`。
+  // Protocol 41 (2026-10-16) = knowledge assessments + canonical-URL identity + durable list
+  //   snapshots. Protocol 42 = detail capture (actual URL + immutable PNG + manifest) and the
+  //   background controlled-target browser flow. Both changed observable Tool output semantics,
+  //   so an old Host must be recognized by the current generation.
+  assert.equal(WORKBENCH_PROTOCOL, 42,
+    '协议 41（列表快照 / 评估采用 / URL 身份）与协议 42（详情取证 / 案例证据 / 后台浏览器）进契约必须识别旧 Host')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -455,6 +478,14 @@ test('the Host half still registers the frozen inventory of operations', async (
   // `-status` / `-cancel`；45 → 46：再加 `dws-login-cancel`（取消正在跑的 loopback 登录 ——
   // 两条路抢同一把 `.dws` 锁，没有它员工点了登录钉钉就只能干等）。协议 22 删掉的两阶段登录这次以**新操作**恢复（loopback 的
   // `dws-login` 语义未变），旧宿主没有它们、新界面点下去只会 404，所以必须靠协议号分开。
+  // 46 → 52（协议 35，2026-10-14）：估值改成"启动页 + 父会话跳转" —— 删掉四条运行期完成度操作
+  // （`valuation-status` / `valuation-result` / `valuation-open-artifact` / 运行期 `valuation-cancel`），
+  // 加入门禁登录两条（`valuation-browser-login` / `-login-cancel`）。
+  // 52 → 53（协议 37，2026-10-14）：新增 `valuation-browser-open-verification`
+  // （受控的「打开验证窗口」：只提交 siteId，URL 与 profile 都由 Host 定）。
+  // 53 → 54（P18，2026-10-15）：新增 `valuation-project-resume`（项目归属的显式恢复）。
+  // 新增操作**同样是跨进程契约变化**：旧宿主没有它，靠它恢复的界面只会 404 —— 需要协议号分开
+  // （协议号本身在 `src/shared/consts.ts`，不在本文件）。
   assert.equal(FROZEN_OPERATION_COUNT, 54)
 })
 
@@ -527,8 +558,10 @@ test('every operation the client facade sends is declared as ported', async () =
   const { operations } = operationsFor()
   const boot = await operations.boot()
   const { OPERATION_OF } = await import(new URL('src/client/modules/report-audit/api.ts', ROOT).href)
+  const { VALUATION_OPERATION_OF } = await import(
+    new URL('src/client/modules/report-evaluation/api.ts', ROOT).href)
   const declared = new Set([...boot.ported.done, ...boot.ported.todo])
-  for (const [method, op] of Object.entries(OPERATION_OF)) {
+  for (const [method, op] of Object.entries({ ...OPERATION_OF, ...VALUATION_OPERATION_OF })) {
     assert.ok(declared.has(op), `门面方法 ${method} 发出 ${op}，但 ported 列表没登记它`)
   }
   assert.deepEqual(boot.ported.todo, [], '收尾之后不该还有 todo')

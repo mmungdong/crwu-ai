@@ -9,6 +9,13 @@
  * 4. 提取器报的能力缺口必须上浮，且**不许**被静默吞掉（否则结果 JSON 会假装"都读到了"）；
  * 5. 输入清单指纹按**相对路径排序**后计算：同一批资料重选一次顺序变了，指纹必须不变
  *    （否则历史结果再也对不上，用户看到的"重传同一份文件结果对不上"就是这么来的）。
+ *
+ * ## 计划 Task 2 之后的边界（本文件后半段）
+ *
+ * 归档预览（`preview.ts` / `metadata.ts`）只做**本机**的事：扫描、复制、验指纹、算摘要。
+ * 它**不**调用 Python 提取、**不**拉知识库、**不**发任何网络请求、**不**调模型 ——
+ * 这三条现在由这里的结构断言钉住（提取与知识物化都归父会话）。预览的行为断言见
+ * `host-valuation-handoff.test.mjs`。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -16,17 +23,21 @@ import test from 'node:test'
 const ROOT = new URL('../../../', import.meta.url)
 
 const {
-  buildIntakeManifest,
   contentTypeOf,
-  dedupeOrdered,
   extensionOf,
   isSupportedFileName,
   kindLabel,
   kindOf,
-  runExtraction,
+} = await import(new URL('src/host/domains/report-evaluation/intake/classify.ts', ROOT).href)
+const {
+  buildIntakeManifest,
   sha256OfBytes,
   validateIntakeSelection,
-} = await import(new URL('src/host/domains/report-evaluation/intake/index.ts', ROOT).href)
+} = await import(new URL('src/host/domains/report-evaluation/intake/manifest.ts', ROOT).href)
+const { runExtraction } = await import(
+  new URL('src/host/domains/report-evaluation/intake/extract.ts', ROOT).href)
+const { dedupeOrdered } = await import(
+  new URL('src/host/domains/report-evaluation/intake/types.ts', ROOT).href)
 
 // ── 类型判定 ────────────────────────────────────────────────────────────────
 
@@ -304,12 +315,14 @@ test('资料入口层不直接执行命令或读写文件（结构边界）', as
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 
   /**
-   * 纯逻辑层（判定 / 清单 / 编排 / 契约）**一行外部动作都不许有**。
+   * 纯逻辑层（判定 / 清单 / 编排 / 契约 / 元信息 / 归档预览）**一行外部动作都不许有**。
    *
    * `python-extractor.ts` 是刻意例外的**后端**：它就是要落脚本、起进程、读结果文件。
    * 边界仍然成立，因为它是唯一一个 —— 所以下面第二条断言把它钉成白名单里的**唯一**成员。
+   * Task 2 新增的 `preview.ts` / `metadata.ts` 走**注入**（`PreviewDeps`）：扫描、复制、
+   * 读归档副本都由调用方给，于是"预览到底做了什么"在一处看得见，也能被直接单测。
    */
-  const PURE = ['classify.ts', 'extract.ts', 'index.ts', 'manifest.ts', 'types.ts']
+  const PURE = ['classify.ts', 'extract.ts', 'manifest.ts', 'metadata.ts', 'preview.ts', 'types.ts']
   for (const name of PURE) {
     const code = await codeOf(name)
     for (const banned of ['node:child_process', 'ctx.shell', 'runShell', 'readFileSync', 'execSync', 'writeCaseText']) {
@@ -325,4 +338,26 @@ test('资料入口层不直接执行命令或读写文件（结构边界）', as
   }
   assert.deepEqual(touchingShell.sort(), ['python-extractor.ts'],
     '只有 Python 后端这一个文件可以落脚本 / 起进程；编排层保持纯粹才能被直接单测')
+})
+
+test('归档预览层不做提取、不发网络、不拉知识、不调模型（Task 2 的新边界）', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const dir = new URL('src/host/domains/report-evaluation/intake/', ROOT)
+  const strip = (source) => source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+
+  // 提取：以前确认抽屉打开时就会调 Python 提取正文 —— 现在是父会话的事。
+  const extraction = ['runExtraction', 'pythonFileExtractor', 'extract_files.py', 'node:child_process', 'python']
+  // 知识：确认前不拉任何规范正文（按阶段物化归父会话）。
+  const knowledge = ['resolveKnowledgePlan', 'materializeKnowledge', 'knowledge/', 'dws']
+  // 网络与模型：预览一个请求都不发，也不碰 Agent。
+  const external = ['fetch(', 'node:http', 'node:https', 'node:net', 'ctx.get(', 'followup', 'agents']
+
+  for (const name of ['preview.ts', 'metadata.ts']) {
+    const code = strip(await readFile(new URL(name, dir), 'utf8'))
+    for (const needle of [...extraction, ...knowledge, ...external]) {
+      assert.equal(code.includes(needle), false, `${name} 不许出现「${needle}」`)
+    }
+  }
 })

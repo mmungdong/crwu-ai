@@ -17,7 +17,7 @@ const (
 	VerdictBlocked   Verdict = "blocked"
 )
 
-// loginWall markers, observed on clogin.ke.com / clogin.lianjia.com.
+// loginWall markers, observed on clogin.lianjia.com.
 var loginWallTextMarkers = []string{"用户登录", "手机快捷登录", "我已阅读并同意"}
 
 // captcha markers. "拖动滑块" shows up on both the login page's puzzle and the

@@ -31,15 +31,15 @@ test('对象 schema 的 fieldLabels 就是方案 §5.4 的那 12 项', () => {
   assert.deepEqual(schema.properties.fieldLabels.items.enum, CANONICAL)
 })
 
-test('Host 的要素清单与 schema / 方案一致（它算 missingFields）', () => {
-  assert.deepEqual([...VALUATION_FIELD_KEYS], CANONICAL)
+test('Host 侧不再有"抽屉要素清单"：协议 35 起抽屉只显示文件元信息与用户输入', () => {
+  // v1 的 `VALUATION_FIELD_KEYS` 是**确认抽屉**的数据源（界面据此画"资料中读到的信息 /
+  // 缺失信息"两栏）。v2 把这个清单整块从抽屉里拿掉了 —— 抽屉只显示文件元信息与用户填的条件。
+  // 所以这里反过来钉：它**不许**再作为 Host 的操作层导出回来（回来就等于抽屉又在展示业务字段）。
+  assert.equal(VALUATION_FIELD_KEYS, undefined, 'Host 不该再导出抽屉要素清单')
+  // 12 个标签仍然是**会话内对象契约**的一部分（`valuation-object.schema.json`），
+  // 由上面的第一条断言把守 —— 业务字段没有被删除，只是不再出现在启动页抽屉里。
 })
 
-test('界面的要素标签与 schema / Host 一致（顺序也一致，抽屉按它排版）', () => {
-  assert.deepEqual(VALUATION_FIELD_LABELS.map((row) => row.key), CANONICAL)
-  // 每一行都要有中文显示名（抽屉里显示的是 label，不是 key）。
-  for (const row of VALUATION_FIELD_LABELS) {
-    assert.equal(typeof row.label, 'string')
-    assert.notEqual(row.label.trim(), '')
-  }
+test('Client 侧不再有"抽屉要素清单"：确认抽屉不展示业务字段', () => {
+  assert.equal(VALUATION_FIELD_LABELS, undefined, 'Client 不该再导出抽屉要素标签')
 })

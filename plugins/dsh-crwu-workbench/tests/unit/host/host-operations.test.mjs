@@ -12,6 +12,8 @@ const ROOT = new URL('../../../', import.meta.url)
 const { FROZEN_OPERATIONS, FROZEN_OPERATION_COUNT } = await import(
   new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
 const { OPERATION_OF } = await import(new URL('src/client/modules/report-audit/api.ts', ROOT).href)
+const { VALUATION_OPERATION_OF } = await import(
+  new URL('src/client/modules/report-evaluation/api.ts', ROOT).href)
 
 test('冻结名单自身自洽：无重复、全小写连字符、数量对得上', () => {
   assert.equal(FROZEN_OPERATIONS.length, FROZEN_OPERATION_COUNT)
@@ -34,8 +36,13 @@ test('门面覆盖除 HOST_ONLY 之外的全部操作（少一个的表现是点
   // 四项临时豁免已删除 —— 再往这里加回任何 `update-*`，就等于承认客户端少了一个入口。
   // 协议 18 追加第三个：`trust` 保留一代但**不再授予任何权限**（新客户端走
   // `local-access-grant` / `local-access-revoke`），所以它只存在于 Host 侧。
+  //
+  // P18 追加第五个：`valuation-project-resume`（项目归属的显式恢复）。它是**权威判据**的入口
+  // ——"把案例访问权重新授予哪一条会话"不该由模型提交 `projectId` 就能触发，所以它是 Host 侧
+  // 的受控操作；Client 门面（`src/client/**`）的接线是另一处的改动，接上之后必须从这里删掉。
   const HOST_ONLY = ['ping', 'audit-release', 'trust', 'access-diagnostics']
-  const facade = new Set(Object.values(OPERATION_OF))
+  // 估值操作不经过审核门面：清单在 `modules/report-evaluation/api.ts`，合并后一起对账。
+  const facade = new Set([...Object.values(OPERATION_OF), ...Object.values(VALUATION_OPERATION_OF)])
   const missing = FROZEN_OPERATIONS.filter((name) => !facade.has(name) && !HOST_ONLY.includes(name))
   assert.deepEqual(missing, [], `Host 有但门面没有：${missing.join(' ')}`)
   const extra = [...facade].filter((name) => !FROZEN_OPERATIONS.includes(name))

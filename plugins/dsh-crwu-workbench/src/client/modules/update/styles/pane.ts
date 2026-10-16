@@ -18,7 +18,7 @@ export const UPDATE_STYLE_TEXT = `
    ──────────────────────────────────────────────────────────────────────────── */
 .crwu-audit-update-badge { cursor: pointer; font-family: inherit; }
 .crwu-audit-update-badge:hover { background: var(--crwu-hover); border-color: var(--crwu-border-strong); }
-.crwu-audit-update-badge:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-update-badge:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
 .crwu-audit-version.crwu-audit-update-badge-accent {
   color: var(--crwu-brand);
   border-color: color-mix(in srgb, var(--crwu-brand) 45%, transparent);

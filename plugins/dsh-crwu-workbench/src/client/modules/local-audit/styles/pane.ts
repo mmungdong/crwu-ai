@@ -106,7 +106,7 @@ export const LOCAL_AUDIT_STYLE_TEXT = `
 /* 文件行里名字**不许截断**：完整展示（长名换行），这是用户口径里的"完整展示文件名称"。 */
 .crwu-audit-local-list-row-file .crwu-audit-local-row-name { font-size: 12px; }
 .crwu-audit-local-row-remove:hover { background: var(--crwu-control); color: var(--crwu-text-primary); }
-.crwu-audit-local-row-remove:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 1px; }
+.crwu-audit-local-row-remove:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 1px; }
 
 .crwu-audit-local-summary { margin-top: var(--crwu-space-2); padding-top: 10px; border-top: 1px solid var(--crwu-border); color: var(--crwu-text-secondary); font-size: 12px; }
 .crwu-audit-local-skipped-note { margin-top: 4px; color: var(--crwu-text-tertiary); font-size: 12px; }
@@ -116,7 +116,7 @@ export const LOCAL_AUDIT_STYLE_TEXT = `
   border-radius: var(--crwu-radius-sm);
 }
 .crwu-audit-local-skipped-summary:hover { color: var(--crwu-text-primary); }
-.crwu-audit-local-skipped-summary:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-local-skipped-summary:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
 .crwu-audit-local-skipped-hint { margin-left: var(--crwu-space-2); color: var(--crwu-text-tertiary); }
 
 /* 扫描骨架：三行浅灰条 + 一句状态。不做渐变动画，只做很轻的呼吸（reduced-motion 下关闭）。 */
@@ -199,13 +199,11 @@ export const LOCAL_AUDIT_STYLE_TEXT = `
 .crwu-audit-local-handoff-steps { margin: var(--crwu-space-2) 0 0; padding-left: 18px; color: var(--crwu-text-body); font-size: 12px; line-height: 20px; }
 .crwu-audit-local-handoff-actions { display: flex; gap: var(--crwu-space-2); flex-wrap: wrap; margin-top: var(--crwu-space-3); }
 .crwu-audit-local-handoff-copied { color: var(--crwu-text-secondary); font-size: 12px; line-height: 20px; margin-top: 6px; }
+/* Layout/monospace only; the shared TextArea owns border, fill and focus. */
 .crwu-audit-local-handoff-prompt {
-  box-sizing: border-box; width: 100%; min-height: 120px; margin-top: var(--crwu-space-3);
-  padding: 10px 12px;
-  border: 1px solid var(--crwu-border); border-radius: 9px;
-  background: var(--crwu-input-bg); color: var(--crwu-text-body);
+  box-sizing: border-box; width: 100%; min-height: 120px; max-height: 240px; margin-top: var(--crwu-space-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 18px;
-  white-space: pre-wrap; overflow-wrap: anywhere; resize: vertical;
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
 
 /* ── 底部主操作 ───────────────────────────────────────────────────────── */

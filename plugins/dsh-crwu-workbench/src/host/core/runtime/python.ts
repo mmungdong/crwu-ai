@@ -25,9 +25,15 @@ import type { WorldFacts } from '../platform/world.ts'
 /** 审核脚本真正需要的包；缺任何一个都算运行时不可用。 */
 export const REQUIRED_PYTHON_PACKAGES = ['openpyxl'] as const
 
-/** 顺带记录版本的常见包（缺失不算故障，只用于环境页展示）。 */
+/**
+ * 顺带记录版本的常见包（缺失不算故障，只用于环境页展示）。
+ *
+ * `pypdf` 是**PDF 文本层**的唯一读取通道（2026-10-15 实查：DSH 自带 Python 3.12 原本没有它，
+ * 于是估值资料里的 PDF 全部只能报"没有可用的 PDF 文本读取库"，逐页事实也无从产生）。
+ * 它仍然**不进**必需清单：缺了只把那一份资料记成 capability gap，不阻断其它资料与流程。
+ */
 export const TRACKED_PYTHON_PACKAGES = [
-  'openpyxl', 'python-docx', 'python-pptx', 'Pillow', 'lxml', 'numpy', 'pandas', 'XlsxWriter',
+  'openpyxl', 'python-docx', 'python-pptx', 'Pillow', 'lxml', 'numpy', 'pandas', 'XlsxWriter', 'pypdf',
 ] as const
 
 /** 运行时状态：`ok` 可用；`capability-gap` 拿不到运行时工具；`missing-package` 缺必需包；`failed` 其它失败。 */

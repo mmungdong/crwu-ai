@@ -7,6 +7,11 @@
  * **"没有交付件"与"交付件不合格"必须都报失败。** 一个只回 `ok:false` 却说不清缺哪一件的
  * 校验工具，会让人反复重跑估值而不是去补那一件文件；而"文件不齐还算通过"更糟 ——
  * 它会把没有底稿的结论放出去。
+ *
+ * 协议迁移后，交付口径是 **`估值报告数据.json`（report-data.v2）**：交付校验复用
+ * `build_report_data.py --validate <data>`（`validate_report_data` 的唯一调用入口），
+ * 把脚本与它真正加载的 Schema 一起落进案例目录；旧 `估值结果.json` / `validate_result.py`
+ * 不再是交付必需，也不再被调用。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -30,6 +35,15 @@ const { createWorkbenchState } = await import(new URL('src/host/core/state/store
 const WORKSPACE = '/cases/space'
 const VALUATION_ID = '估值-20261012-180000-cc33'
 const CASE_DIR = `${WORKSPACE}/${VALUATION_ID}`
+// 交付件按方案隔离：`方案/<planId>/`（设计稿 §11.1）。
+const PLAN_ID = 'plan-001'
+const PLAN_DIR = `${CASE_DIR}/方案/${PLAN_ID}`
+
+/** v2 交付数据（取代旧的 `估值结果.json`）。 */
+const REPORT_DATA_FILE = '估值报告数据.json'
+const LEGACY_RESULT_FILE = '估值结果.json'
+const REPORT_DATA_SCRIPT = 'build_report_data.py'
+const REPORT_DATA_SCHEMA_PATH = 'schemas/valuation-report-data.schema.json'
 
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
@@ -42,8 +56,9 @@ const CONFIG = {
  *
  * `mkdir` 与只读探测照常成功（案例目录要建得出来、后置条件要读得到）；
  * Python 脚本调用由 `scriptRoute` 决定 stdout / 退出码。
+ * `stageWriteFails` 让 `scripts/` 下的落盘失败，用来验证"落盘失败不算通过"。
  */
-function makeCtx({ scriptRoute = () => ({ stdout: 'OK: 通过\n', exitCode: 0 }) } = {}) {
+function makeCtx({ scriptRoute = () => ({ stdout: 'OK: 通过\n', exitCode: 0 }), stageWriteFails = false } = {}) {
   const files = new Map()
   const directories = new Set([WORKSPACE, CASE_DIR])
   const commands = []
@@ -55,7 +70,16 @@ function makeCtx({ scriptRoute = () => ({ stdout: 'OK: 通过\n', exitCode: 0 })
       return files.has(target.targetKey) ? { type: 'file', size: String(files.get(target.targetKey)).length, version: 'v' } : undefined
     },
     async readText(target) { return files.get(target.targetKey) ?? '' },
-    async writeText(target, content) { files.set(target.targetKey, content); return { operation: 'create', version: 'v' } },
+    async writeText(target, content) {
+      const key = String(target.targetKey)
+      if (stageWriteFails && key.startsWith(`${CASE_DIR}/scripts/`)) {
+        const error = new Error(`cannot write "${key}": file access denied under workspace-write mode`)
+        error.code = 'FS_SANDBOX_DENIED'
+        throw error
+      }
+      files.set(key, content)
+      return { operation: 'create', version: 'v' }
+    },
     contains(parent, child) {
       const p = String(parent.displayPath).replace(/[\\/]+$/, '')
       const c = String(child.displayPath)
@@ -73,7 +97,8 @@ function makeCtx({ scriptRoute = () => ({ stdout: 'OK: 通过\n', exitCode: 0 })
       })
       const isMkdir = command.startsWith('mkdir')
       const isProbe = probe !== undefined
-      const isPython = command.includes('python') || command.includes('check_workbook_contract') || command.includes('validate_result')
+      const isPython = command.includes('python') || command.includes('build_report_data')
+        || command.includes('check_workbook_contract') || command.includes('validate_result')
       const spec = isPython && !isMkdir && !isProbe ? scriptRoute(command) : { stdout: '', exitCode: 0 }
       const exitCode = isMkdir || isProbe ? 0 : spec.exitCode
       applyShellEffect(command, exitCode, {
@@ -166,11 +191,24 @@ function execOf(sessionId) {
   }
 }
 
-/** 把三个交付件都放好（内容不必真实：脚本是替身）。 */
+/**
+ * 把 v2 交付件放好（内容不必真实：脚本是替身）。
+ *
+ * 刻意**不放** `估值结果.json`：新交付口径不依赖旧结果 JSON。
+ */
 function placeDeliverables(ctx) {
-  ctx.files.set(`${CASE_DIR}/估值底稿.xlsx`, 'xlsx-bytes')
-  ctx.files.set(`${CASE_DIR}/估值报告.html`, '<html>报告</html>')
-  ctx.files.set(`${CASE_DIR}/估值结果.json`, '{"valuationId":"x"}')
+  ctx.files.set(`${PLAN_DIR}/估值底稿.xlsx`, 'xlsx-bytes')
+  ctx.files.set(`${PLAN_DIR}/估值报告.html`, '<html>报告</html>')
+  ctx.files.set(`${PLAN_DIR}/${REPORT_DATA_FILE}`, '{"schemaVersion":"crwu.valuation.report-data.v2"}')
+}
+
+/** 只回答报告数据校验脚本的调用（其它交付脚本一律通过）。 */
+function reportDataRoute(spec) {
+  return (command) => (command.includes(REPORT_DATA_SCRIPT) ? spec : { stdout: 'OK: 通过\n', exitCode: 0 })
+}
+
+function reportDataCheckOf(result) {
+  return result.checks.find((item) => item.script.includes(REPORT_DATA_SCRIPT))
 }
 
 test('注册面：交付校验 Tool 在注册清单里，且**不在**审核必需集', () => {
@@ -181,105 +219,118 @@ test('注册面：交付校验 Tool 在注册清单里，且**不在**审核必�
 test('非估值会话被拒', async () => {
   const { deps } = makeDeps()
   const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf('随便一条会话'))
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf('随便一条会话'))
   assert.equal(result.ok, false)
   assert.equal(result.errorKind, 'policy')
 })
 
-test('交付件齐备且两份校验通过 → ok，并给出每个交付件的字节数与指纹', async () => {
+test('v2 交付件齐备且报告数据校验通过 → ok，并给出每个交付件的字节数与指纹', async () => {
   const ctx = makeCtx()
   placeDeliverables(ctx)
   const { deps } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
 
   const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf(sessionId))
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
 
   assert.equal(result.ok, true, result.error)
-  assert.deepEqual(result.checks.map((item) => item.name), ['工作簿契约', '结果口径'])
-  assert.equal(result.checks.every((item) => item.ok), true)
   assert.deepEqual(result.problems, [])
-  // 清单覆盖全部中间件与交付件；存在的都有指纹，不存在的 bytes=0 / digest 空。
+  // 报告数据必须被登记为一个存在的交付件，且走的是 v2 名称。
+  const reportData = result.artifacts.find((item) => item.name === REPORT_DATA_FILE)
+  assert.ok(reportData !== undefined, `交付清单要包含 ${REPORT_DATA_FILE}`)
+  assert.equal(reportData.exists, true)
+  assert.ok(reportData.bytes > 0)
+  assert.match(reportData.digest, /^sha256:[0-9a-f]{64}$/)
+  // 清单仍覆盖全部中间件与交付件；存在的都有指纹，不存在的 bytes=0 / digest 空。
   assert.deepEqual(result.artifacts.map((item) => item.name), [...VALUATION_OUTPUT_FILES])
-  const workbook = result.artifacts.find((item) => item.name === '估值底稿.xlsx')
-  assert.equal(workbook.exists, true)
-  assert.ok(workbook.bytes > 0)
-  assert.match(workbook.digest, /^sha256:[0-9a-f]{64}$/)
   const params = result.artifacts.find((item) => item.name === '估值参数.json')
   assert.deepEqual(params, { name: '估值参数.json', exists: false, bytes: 0, digest: '' })
+  const check = reportDataCheckOf(result)
+  assert.ok(check !== undefined, '要通过 build_report_data.py --validate 校验报告数据')
+  assert.equal(check.ok, true)
 })
 
-test('两个校验脚本都被**落到案例目录的 scripts/ 里**再执行（不放后门）', async () => {
+test('报告数据校验：脚本与它加载的 Schema 一起落到案例目录，旧结果链路不出现', async () => {
   const ctx = makeCtx()
   placeDeliverables(ctx)
   const { deps } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
 
-  await valuationArtifactValidateTools(deps)[0].execute({ caseDir: CASE_DIR }, execOf(sessionId))
+  const result = await valuationArtifactValidateTools(deps)[0]
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
+  assert.equal(result.ok, true, result.error)
 
-  assert.equal(ctx.files.has(`${CASE_DIR}/scripts/check_workbook_contract.py`), true)
-  assert.equal(ctx.files.has(`${CASE_DIR}/scripts/validate_result.py`), true)
-  // argv 里的解释器参数必须是案例内的脚本路径。
-  for (const command of ctx.commands) {
-    if (!command.includes('python')) continue
-    if (!/check_workbook_contract|validate_result/.test(command)) continue
-    assert.match(command, new RegExp(`${CASE_DIR}/scripts/(check_workbook_contract|validate_result)\\.py`))
-  }
+  // 脚本落在案例内的 scripts/ 下（`python.script.run` 只接受案例内脚本路径）。
+  assert.equal(ctx.files.has(`${CASE_DIR}/scripts/${REPORT_DATA_SCRIPT}`), true)
+  // **它真正加载的 Schema** 也要在案例内：否则脚本读不到 schema，会 fail closed。
+  assert.equal(ctx.files.has(`${CASE_DIR}/${REPORT_DATA_SCHEMA_PATH}`), true)
+  // 旧结果链路不许再被落盘或调用。
+  assert.equal(ctx.files.has(`${CASE_DIR}/scripts/validate_result.py`), false)
+  assert.equal(ctx.files.has(`${PLAN_DIR}/${LEGACY_RESULT_FILE}`), false)
+  assert.equal(ctx.commands.some((command) => command.includes('validate_result')), false)
+
+  const validateCommand = ctx.commands.find((command) => command.includes(REPORT_DATA_SCRIPT))
+  assert.ok(validateCommand !== undefined, `要调用 ${REPORT_DATA_SCRIPT}`)
+  assert.match(validateCommand, /build_report_data\.py'? --validate/)
+  assert.match(validateCommand, new RegExp(`${REPORT_DATA_FILE.replace('.', '\\.')}`))
+  // 校验模式不许带 `--out`（它只读、不产出）。
+  assert.equal(validateCommand.includes('--out'), false)
 })
 
-test('结果口径校验不过 → ok:false，并逐条带回脚本报的问题', async () => {
+test('报告数据校验不过 → ok:false，并逐条带回脚本报的问题', async () => {
   const ctx = makeCtx({
-    scriptRoute: (command) => (command.includes('validate_result')
-      ? { stdout: 'FAIL baseDate 为空，但 manual_confirmation_items 里没有「本次未指定评估基准日」\nFAIL 结果契约不通过\n', exitCode: 1 }
-      : { stdout: 'OK: 通过\n', exitCode: 0 }),
+    scriptRoute: reportDataRoute({
+      stdout: 'FAIL $.conclusions: 缺少对象结论\nFAIL 报告数据未通过 Schema 校验\n', exitCode: 1,
+    }),
   })
   placeDeliverables(ctx)
   const { deps } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
 
   const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf(sessionId))
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
 
   assert.equal(result.ok, false)
   assert.equal(result.errorKind, 'input')
   assert.match(result.error, /交付校验未通过/)
-  assert.equal(result.problems.some((item) => /结果口径/.test(item)), true, '问题要带上是哪一份校验报的')
-  assert.match(result.problems.join('；'), /未指定评估基准日/)
-  const workbookCheck = result.checks.find((item) => item.name === '工作簿契约')
-  const resultCheck = result.checks.find((item) => item.name === '结果口径')
-  assert.equal(workbookCheck.ok, true)
-  assert.equal(resultCheck.ok, false)
+  assert.equal(result.problems.some((item) => /报告数据/.test(item)), true, '问题要带上是哪一份校验报的')
+  assert.match(result.problems.join('；'), /缺少对象结论/)
+  assert.equal(reportDataCheckOf(result)?.ok, false)
 })
 
-test('工作簿契约不过 → ok:false（且不去跑结果口径以外的事）', async () => {
-  const ctx = makeCtx({
-    scriptRoute: (command) => (command.includes('check_workbook_contract')
-      ? { stdout: 'FAIL 底稿里有隐藏表：案例\n', exitCode: 1 }
-      : { stdout: 'OK: 通过\n', exitCode: 0 }),
-  })
+test('缺 v2 报告数据 → 直接报缺哪一件，并**不**去跑那份校验', async () => {
+  const ctx = makeCtx()
+  // 只有旧结果 JSON：新交付口径不认它，必须如实报缺报告数据。
+  ctx.files.set(`${PLAN_DIR}/估值底稿.xlsx`, 'xlsx-bytes')
+  ctx.files.set(`${PLAN_DIR}/估值报告.html`, '<html>报告</html>')
+  ctx.files.set(`${PLAN_DIR}/${LEGACY_RESULT_FILE}`, '{"valuationId":"x"}')
+  const { deps } = makeDeps({ ctx })
+  const sessionId = openValuation(deps)
+
+  const result = await valuationArtifactValidateTools(deps)[0]
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
+
+  assert.equal(result.ok, false)
+  assert.match(result.problems.join('；'), new RegExp(`缺少交付件：${REPORT_DATA_FILE}`))
+  assert.equal(result.problems.some((item) => item.includes(`缺少交付件：${LEGACY_RESULT_FILE}`)), false,
+    '旧结果 JSON 不再是必需交付件')
+  assert.equal(result.checks.some((item) => item.script.includes(REPORT_DATA_SCRIPT)), false,
+    '报告数据不在就不跑它的校验')
+})
+
+test('落盘脚本失败 → ok:false（"没跑成"绝不当成"通过"）', async () => {
+  const ctx = makeCtx({ stageWriteFails: true })
   placeDeliverables(ctx)
   const { deps } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
 
   const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf(sessionId))
-  assert.equal(result.ok, false)
-  assert.match(result.problems.join('；'), /隐藏表/)
-})
-
-test('缺交付件 → 直接报缺哪一件，并**不**去跑那份校验（少一句误导性的"找不到"）', async () => {
-  const ctx = makeCtx()
-  ctx.files.set(`${CASE_DIR}/估值结果.json`, '{}')
-  const { deps } = makeDeps({ ctx })
-  const sessionId = openValuation(deps)
-
-  const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf(sessionId))
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
 
   assert.equal(result.ok, false)
-  assert.match(result.problems.join('；'), /缺少交付件：估值底稿\.xlsx/)
-  assert.match(result.problems.join('；'), /缺少交付件：估值报告\.html/)
-  assert.deepEqual(result.checks.map((item) => item.name), ['结果口径'], '底稿不在就不跑工作簿契约')
+  assert.ok(result.problems.length > 0, '落盘失败要有具体原因')
+  assert.equal(ctx.commands.some((command) => command.includes(REPORT_DATA_SCRIPT)), false,
+    '脚本没落盘就不该去执行它')
 })
 
 test('DSH Python 不可用 → 如实报能力缺口（不退回系统解释器，也不谎报通过）', async () => {
@@ -296,27 +347,51 @@ test('DSH Python 不可用 → 如实报能力缺口（不退回系统解释器�
   }
   const sessionId = openValuation(deps)
   const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf(sessionId))
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
 
   assert.equal(result.ok, false)
   assert.match(result.problems.join('；'), /Python 不可用/)
-  assert.equal(result.ok === false && result.checks.every((item) => item.ok === false), true)
 })
 
 test('脚本超时也算不通过（不许把"没跑完"当成通过）', async () => {
   const ctx = makeCtx({
-    scriptRoute: (command) => (command.includes('validate_result')
-      ? { stdout: 'FAIL 结果契约不通过\n', exitCode: 1, stderr: 'timeout' }
-      : { stdout: 'OK: 通过\n', exitCode: 0 }),
+    scriptRoute: reportDataRoute({ stdout: 'FAIL 报告数据未通过 Schema 校验\n', exitCode: 1, stderr: 'timeout' }),
   })
   placeDeliverables(ctx)
   const { deps } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
   const result = await valuationArtifactValidateTools(deps)[0]
-    .execute({ caseDir: CASE_DIR }, execOf(sessionId))
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
   assert.equal(result.ok, false)
-  const check = result.checks.find((item) => item.name === '结果口径')
-  assert.equal(check.ok, false)
+  assert.equal(reportDataCheckOf(result)?.ok, false)
+})
+
+test('方案隔离：另一个方案的交付件不会被借来通过', async () => {
+  const ctx = makeCtx()
+  placeDeliverables(ctx)
+  const { deps } = makeDeps({ ctx })
+  const sessionId = openValuation(deps)
+
+  const result = await valuationArtifactValidateTools(deps)[0]
+    .execute({ caseDir: CASE_DIR, planId: 'plan-002' }, execOf(sessionId))
+
+  assert.equal(result.ok, false)
+  assert.match(result.problems.join('；'), new RegExp(`缺少交付件：${REPORT_DATA_FILE}`))
+  assert.equal(ctx.commands.some((command) => command.includes(REPORT_DATA_SCRIPT)), false)
+})
+
+test('修订隔离：revision=2 读 修订/2/，不会拿方案根的交付件顶替', async () => {
+  const ctx = makeCtx()
+  placeDeliverables(ctx)
+  const { deps } = makeDeps({ ctx })
+  const sessionId = openValuation(deps)
+
+  const result = await valuationArtifactValidateTools(deps)[0]
+    .execute({ caseDir: CASE_DIR, planId: PLAN_ID, revision: 2 }, execOf(sessionId))
+
+  assert.equal(result.ok, false)
+  assert.match(result.problems.join('；'), new RegExp(`缺少交付件：${REPORT_DATA_FILE}`))
+  assert.equal(ctx.commands.some((command) => command.includes(REPORT_DATA_SCRIPT)), false)
 })
 
 test('校验结论要**写回轮次**：完成门槛据此判断"交付前两道校验都过了"', async () => {
@@ -325,9 +400,9 @@ test('校验结论要**写回轮次**：完成门槛据此判断"交付前两道
   const { deps, lifecycles } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
 
-  await valuationArtifactValidateTools(deps)[0].execute({ caseDir: CASE_DIR }, execOf(sessionId))
+  await valuationArtifactValidateTools(deps)[0].execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
   const record = lifecycles.get(VALUATION_ID)
-  assert.equal(record.validationPassed, true, '两道校验都过 → 写回 true')
+  assert.equal(record.validationPassed, true, '校验通过 → 写回 true')
   assert.deepEqual(record.validationProblems, [])
 })
 
@@ -336,7 +411,7 @@ test('校验结论与写回**一致**：过了就是 true，没过就是 false +
   placeDeliverables(ctx)
   const { deps, lifecycles } = makeDeps({ ctx })
   const sessionId = openValuation(deps)
-  const result = await valuationArtifactValidateTools(deps)[0].execute({ caseDir: CASE_DIR }, execOf(sessionId))
+  const result = await valuationArtifactValidateTools(deps)[0].execute({ caseDir: CASE_DIR, planId: PLAN_ID }, execOf(sessionId))
   const record = lifecycles.get(VALUATION_ID)
   assert.equal(record.validationPassed, result.ok,
     '写回必须与校验结论一致：把"没过"记成"没跑过"会让界面给出错误的下一步')

@@ -43,7 +43,7 @@ const TRICKY_ARG = "Case's $work [1] 中文 `id` $(echo pwned) ; echo INJECTED"
 const EXEC_DIR_NAME = "Case's $work [1] 中文"
 
 function hasCommand(name, probe) {
-  const result = spawnSync(name, probe, { encoding: 'utf8' })
+  const result = spawnSync(name, probe, { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
   return result.error === undefined && result.status === 0
 }
 
@@ -239,6 +239,10 @@ for (const provider of PROVIDERS) {
 
           // POSIX：锁探测必须有正向结论。`lsof` 在多数发行版里默认存在；
         // 没有就跳过这一条（探测命令本身由 `lockProbeCommand` 的单元测试守住）。
+        if (!hasCommand('lsof', ['-v'])) {
+          t.diagnostic('本机 lsof 不可用或无响应，跳过锁探测的真实运行（命令形状由单元测试覆盖）')
+          return
+        }
         const probeTarget = join(sandbox.dir, 'lock-target')
         writeFileSync(probeTarget, 'x')
         const lockProbe = provider.run(lockProbeCommand(probeTarget, provider.platform))

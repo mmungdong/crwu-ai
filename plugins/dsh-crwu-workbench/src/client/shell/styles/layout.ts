@@ -1,10 +1,12 @@
 /**
- * 工作台面板布局：应用底 → Workspace Surface → 内容区三层，以及**唯一的滚动容器**。
+ * Workbench panel layout: app background -> Workspace Surface -> content, and scroll ownership.
  *
  * 滚动归属这一条是必须的，不是样式偏好：DSH 的主内容列（centerCol）是
  * `display:flex + overflow:hidden + height:100vh`，它**不滚动**，而是把滚动交给面板。
- * 内容区外壳（`.crwu-audit-tab-panel`）是唯一的滚动容器，所以切目录时宽度、高度稳定，
- * 目录条也始终留在顶部。
+ * The tab panel (`.crwu-audit-tab-panel`) is the scrolling container for the audit page, so
+ * directory switches keep a stable width/height and the tab row stays at the top. Valuation is the
+ * exception: it is a fixed-height workface, the shell does not scroll, and scrolling belongs to the
+ * workface body (see the `data-workbench-page` overrides).
  */
 
 export const CRWU_LAYOUT_STYLE_TEXT = `
@@ -24,8 +26,14 @@ export const CRWU_LAYOUT_STYLE_TEXT = `
   -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
 }
 
-/* 环境信息（不是目录树里的一页）：自己一块，顶部那颗「返回工作台」只在环境已通过时给。 */
-.crwu-audit-env-screen { flex: none; display: flex; flex-direction: column; gap: var(--crwu-space-3); }
+/* 环境信息（不是目录树里的一页）：自己一块，顶部那颗「返回工作台」只在环境已通过时给。
+   Capped at the same width as the valuation workface and centered, so the back button and the
+   cards below share one left edge. */
+.crwu-audit-env-screen {
+  box-sizing: border-box; flex: none; display: flex; flex-direction: column;
+  gap: var(--crwu-space-3);
+  width: 100%; max-width: 1120px; min-width: 0; margin-inline: auto;
+}
 .crwu-audit-surface {
   box-sizing: border-box; display: flex; flex-direction: column;
   height: 100%; min-height: 0; overflow: hidden;
@@ -67,6 +75,15 @@ export const CRWU_LAYOUT_STYLE_TEXT = `
   border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-xl);
   background: var(--crwu-surface); box-shadow: var(--crwu-shadow-surface);
 }
+/* Valuation is a fixed-height workface: the outer content area no longer scrolls (that would
+   create two vertical scrollbars); scrolling belongs to the workface body only. The audit pages
+   keep their existing scroll ownership. */
+.crwu-audit-tab-panel[data-workbench-page="valuation"] { overflow: hidden; }
+/* Valuation paper has **no padding of its own**: the workface is a fixed-height column whose
+   body and footer own their insets. That is what lets the footer band reach the paper's own
+   left / right / bottom edge (2026-10-16 user feedback: a white line under the band). Padding
+   here would show up again as exactly that line, so keep it at 0 for the valuation page. */
+.crwu-audit-page-paper[data-workbench-page="valuation"] { padding: 0; }
 /* 纸里的子页面**只有一层框**：报告审核页自己也带一层 surface（它单独渲染时要用），
    在这里必须把那圈描边撤掉 —— 否则它正好落在页头下面，看起来就是"多了一条横线"
    （2026-10-11 用户实测反馈；样式判据见 client-local-audit 的结构用例）。 */

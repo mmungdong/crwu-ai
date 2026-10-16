@@ -1,277 +1,401 @@
 import * as React from 'react'
+import { text } from '../../../../shared/utils/value.ts'
 import { SideDrawer } from '../../../ui/SideDrawer.tsx'
-import { Badge } from '../../../ui/primitives.tsx'
+import { FileIcon } from '../../../ui/icons.tsx'
 import { zhCN } from '../../../locales/zh-CN.ts'
+import { ValuationCapabilityArea } from './ValuationCapabilityArea.tsx'
+import { Button } from '../../../ui/components/index.ts'
+import { VALUATION_CLASSES as V } from '../model/styles.ts'
 import {
-  fieldRowsOf,
+  assetTypeLabelOf,
+  createdAtTextOf,
+  dirnameOf,
+  duplicateNamesOf,
+  fileKindLabel,
+  fileKindOf,
+  formatBytes,
+  valuationMethodHintOf,
   valuationMethodLabel,
-  type ValuationIntakeView,
-  type ValuationMethod,
 } from '../model/valuation-state.ts'
+import type {
+  ArchivedMaterialView,
+  ValuationPreviewView,
+} from '../../../../shared/contracts/report-evaluation.ts'
+import type { ValuationPageState } from '../model/valuation-state.ts'
 
 /**
- * **只读确认抽屉**（方案 §5.4）。
+ * **只读确认抽屉**（设计稿 §10）。
  *
- * ## 只读是结构性的，不是"没绑 onClick"
+ * ## 它展示什么
  *
- * 这个组件**只接收**一个 `intake`（Host 回填的事实）和三个回调（返回 / 确认 / 取消）。
- * 它没有 `onChange`，也没有可编辑控件 —— 输入框、下拉、日期选择器**一个都不存在**，
- * 于是"在抽屉里改方法/基准日/提示词"在类型上就写不出来。
- * 与之配套的状态机判据是 `canEditInputs(phase)`（`confirmation` 阶段为 false）。
+ * 1. **本轮估值摘要**：资产类型、评估方法、真实纳入份数、基准日 —— 用轻量键值面呈现，
+ *    四个关键事实在第一屏就能扫到（以前三十份文件会把方法与日期推到底部）；
+ * 2. **补充条件**：评估目的、价值类型、补充要求（保留原换行的完整用户输入，可展开）；
+ * 3. **本次纳入的资料**：文件名是主信息、类型/大小是次信息；完整路径 / 创建时间 / 重复说明
+ *    **按需展开**（不再逐行平铺，把主要信息淹掉）；
+ * 4. **未纳入项**：默认只给数量与摘要，可展开逐条看原因；
+ * 5. **信息获取辅助 · 可选**：链家状态与适用动作。它**不是**估值启动的门禁 ——
+ *    未登录 / 未知 / 检查失败都可以继续。
  *
- * ## 三个按钮之外不加东西
+ * 上一版抽屉里塞了知识库状态、已知/缺失字段、冲突表、完整 Prompt、取证能力与输入摘要 ——
+ * 那些是**父会话**要做的判断，放在"请核对资料"的抽屉里只会让人以为要在这里改。
+ * 它们一个都不许回来；但辅助能力**是允许的环境操作**（登录 / 检查 / 验证），
+ * 所以这一版明确把辅助区放进来（旧约束"抽屉里一个能力都不许出现"已作废）。
  *
- * 方案明确"按钮只有 返回修改 / 确认并开始估值 / 取消"。不提供"去登录"之类的旁路 ——
- * 登录是外部能力动作，见进度页；抽屉里只如实**展示**登录状态。
+ * ## 只读是结构性的
+ *
+ * 资产类型与评估方法**取自 Host 的 `preview`**（`prepareReady` 已经校验过完整性与一致性），
+ * 组件不再接收一份可能漂移的草稿方法 —— 因此"抽屉里显示的条件"与"被冻结的输入"
+ * 在类型上就是同一份事实。
+ *
+ * ## 创建期间
+ *
+ * 点击「开始估值」之后**继续显示同一个抽屉实例**，footer 主按钮变成「正在创建会话…」；
+ * X / Escape / 遮罩 / 返回修改四条关闭路径一起失效，并在状态区说明原因（不弹二次确认）。
  */
-
 export interface ValuationConfirmationDrawerProps {
-  intake: ValuationIntakeView
-  /** 用户在表单里选的方法（`intake.method` 是 Host 回显，两者应当一致）。 */
-  method: ValuationMethod
+  preview: ValuationPreviewView
+  /** 整页状态：辅助区与创建期间的长等待说明都要用它（业务条件仍然只来自 `preview`）。 */
+  state: ValuationPageState
   open: boolean
-  /** 外部来源预检的进行状态：`checking` 时那三行显示「检查中」。 */
-  providerCheck?: 'idle' | 'checking' | 'done'
-  /** 逐家的最新状态（探测结果局部更新到这里；缺项时用 `intake.providers` 的初值）。 */
-  providerStates?: Record<string, { state: string; attempts: number; detail: string }>
+  /** 交接已经开始：主按钮换成「正在创建会话…」、关闭路径全部失效。 */
+  creating: boolean
+  /** 正在播退出动画（父层 150ms 后卸载）。 */
+  closing?: boolean
+  /** 创建超过 15 秒的说明（`''` = 还没到）。 */
+  slow?: boolean
   onBack: () => void
   onConfirm: () => void
-  /**
-   * 「重新检查」：再问一次宿主（资料提取 + 规则定位 + 外部来源状态）。
-   *
-   * 它是 §5 点名的三个动作之一：用户可能刚在默认浏览器登录完、或刚补了一份规范，
-   * 这时要能**就地把这一轮重查一遍**，而不是返回表单从头再来。
-   */
-  onRecheck?: () => void
-  /** 打开该站点自己的公开登录页（不读 Cookie、不导出凭据）。 */
-  onOpenLogin?: (providerId: string) => void
+  /** 信息获取辅助区（可选能力，两个 UI 实例共用同一份 controller 动作）。 */
+  onCheckCapability: () => void
+  onLoginSite: (siteId: string) => void
+  onVerifySite: (siteId: string) => void
+  onCancelLogin: (jobId: string) => void
+  /** 关闭动画完成后由父层把焦点还给「核对资料」。 */
+  returnFocusTo?: { current: { focus?: () => void } | null } | null
 }
 
-/** 来源状态的人话 + 语气（认不出来就是"无法检查"，**不猜**成已登录）。 */
-function providerLabelOf(state: string, checking: boolean): string {
-  if (checking) return zhCN.valuationProviderChecking
-  if (state === 'authenticated') return zhCN.valuationDrawerProviderReady
-  if (state === 'unauthenticated') return zhCN.valuationDrawerProviderLogin
-  if (state === 'unknown') return zhCN.valuationProviderCannotCheck
-  return zhCN.valuationProviderUnchecked
+/** 复制成功的短反馈时长（之后恢复原状，不改变按钮 / 行宽，不抢焦点）。 */
+export const COPY_FEEDBACK_MS = 1_500
+
+/** 补充要求超过这个长度才给"展开全部"（短内容不需要多一次点击）。 */
+export const PROMPT_EXPAND_THRESHOLD = 240
+
+type CopyState = '' | 'done' | 'failed'
+
+/** 复制路径：只写本机剪贴板，不写日志、不进模型（设计稿 §10.3）。 */
+export function CopyPathButton(props: { path: string }): React.ReactElement {
+  const [state, setState] = React.useState<CopyState>('')
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 卸载时清掉计时器：留一个会写已卸载组件状态的 timer 是最典型的泄漏。 */
+  React.useEffect(() => () => {
+    if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
+  }, [])
+  const copy = (): void => {
+    if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
+    // 短确认 1.5 秒后**恢复**（以前 done 一旦置真就再也不下来了）；不抢焦点。
+    const settle = (next: Exclude<CopyState, ''>): void => {
+      setState(next)
+      timer.current = setTimeout(() => {
+        timer.current = null
+        setState('')
+      }, COPY_FEEDBACK_MS)
+    }
+    try {
+      const clipboard = (globalThis as {
+        navigator?: { clipboard?: { writeText?: (value: string) => Promise<void> } }
+      }).navigator?.clipboard?.writeText
+      if (typeof clipboard !== 'function') { settle('failed'); return }
+      void Promise.resolve(clipboard.call((globalThis as { navigator?: unknown }).navigator, props.path))
+        .then(() => { settle('done') })
+        .catch(() => { settle('failed') })
+    } catch (error) {
+      void error
+      settle('failed')
+    }
+  }
+  return <>
+    <Button variant="text" size="sm" className="crwu-valuation-copy" onClick={copy}>{zhCN.valuationDrawerCopyPath}</Button>
+    {/* 复制失败时路径依旧可选中，这里说明"请手动复制"。 */}
+    {state === 'done' ? <span className="crwu-valuation-copy-state" role="status">{zhCN.valuationDrawerCopied}</span> : null}
+    {state === 'failed' ? <span className="crwu-valuation-copy-state" role="status">{zhCN.valuationDrawerCopyFailed}</span> : null}
+  </>
 }
 
-function providerTone(state: string, checking: boolean): 'ok' | 'medium' | 'low' {
-  if (checking) return 'low'
-  if (state === 'authenticated') return 'ok'
-  if (state === 'unauthenticated') return 'medium'
-  return 'low'
+/** 一条只读键值（摘要面用；`dl` 的语义靠父子结构，不靠视觉）。 */
+function Kv(props: { term: string; children: React.ReactNode; wide?: boolean }): React.ReactElement {
+  return <>
+    <dt>{props.term}</dt>
+    <dd {...(props.wide === true ? { 'data-valuation-kv-wide': 'true' } : {})}>{props.children}</dd>
+  </>
 }
 
-function fileStatusText(status: string): string {
-  return status === 'parsed' ? zhCN.valuationDrawerFileStatusParsed : zhCN.valuationDrawerFileStatusUnparsed
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  if (bytes < 1024) return `${String(bytes)} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+/** 一份资料的紧凑主行 + 按需展开的完整详情。 */
+function FileRow(props: {
+  file: ArchivedMaterialView
+  duplicated: boolean
+  duplicateOfName: string | null
+  open: boolean
+  onToggle: (fileId: string) => void
+}): React.ReactElement {
+  const { file } = props
+  const kind = file.kind === '' ? fileKindOf(file.fileName) : file.kind
+  const size = formatBytes(file.sizeBytes)
+  const detailsId = `crwu-valuation-file-details-${file.fileId}`
+  return <li className={V.drawerFileRow} data-valuation-drawer-file={file.fileId}>
+    <span className="crwu-valuation-drawer-file-icon" aria-hidden="true"><FileIcon size={14} /></span>
+    <span className={V.drawerFileMain}>
+      <span className="crwu-valuation-drawer-file-name">{file.fileName}</span>
+      <span className="crwu-valuation-drawer-file-meta">
+        {kind === '' ? null : <span>{fileKindLabel(kind)}</span>}
+        {size === '' ? null : <span>{size}</span>}
+        {/* 同名材料：主行就给出所在目录，两条同名也分得开（完整路径在详情里）。 */}
+        {props.duplicated && dirnameOf(file.absolutePath) !== ''
+          ? <span className="crwu-valuation-drawer-file-dir">{dirnameOf(file.absolutePath)}</span>
+          : null}
+      </span>
+    </span>
+    <Button
+      variant="text"
+      size="sm"
+      className="crwu-valuation-more crwu-valuation-drawer-file-toggle"
+      aria-expanded={props.open}
+      aria-controls={detailsId}
+      onClick={() => { props.onToggle(file.fileId) }}
+    >{props.open ? zhCN.valuationDrawerDetailsHide : zhCN.valuationDrawerDetails}</Button>
+    <div className={V.drawerFileDetails} id={detailsId} hidden={!props.open}>
+      {/* 原始绝对路径：可换行、可选中复制（核对"我选的是哪一份"靠它）。 */}
+      <span className="crwu-valuation-drawer-file-path" data-valuation-drawer-path={file.fileId}>
+        {file.absolutePath}
+      </span>
+      <span className={V.drawerFileTools}>
+        {(kind === '' ? null : <span className="crwu-valuation-drawer-file-meta">{fileKindLabel(kind)}</span>)}
+        {(size === '' ? null : <span className="crwu-valuation-drawer-file-meta">{size}</span>)}
+        {/* 创建时间是 ISO-8601 **UTC** 字面量：必须标注 UTC，避免被读成本地时间。 */}
+        <span className="crwu-valuation-drawer-file-meta">
+          {zhCN.valuationDrawerCreatedAt.replace('{at}', createdAtTextOf(file.createdAt))}
+        </span>
+      </span>
+      <span className={V.drawerFileTools}>
+        <CopyPathButton path={file.absolutePath} />
+      </span>
+      {/* 重名：附短 fileId（同名不同路径的两条都要分得开）。 */}
+      {props.duplicated
+        ? <span className="crwu-valuation-drawer-file-dup" data-valuation-drawer-duplicate-name={file.fileId}>
+          {zhCN.valuationDrawerDuplicateName.replace('{fileId}', file.fileId)}
+        </span>
+        : null}
+      {/* 重复内容：不同路径、字节相同 —— 两条都留着，只把来源关系写出来。 */}
+      {file.duplicateOf === null
+        ? null
+        : <span className="crwu-valuation-drawer-file-dup" data-valuation-drawer-duplicate-content={file.duplicateOf}>
+          {props.duplicateOfName === null
+            ? zhCN.valuationDrawerDuplicateContent.replace('{fileId}', file.duplicateOf)
+            : zhCN.valuationDrawerDuplicateContentNamed
+              .replace('{name}', props.duplicateOfName)
+              .replace('{fileId}', file.duplicateOf)}
+        </span>}
+    </div>
+  </li>
 }
 
 export function ValuationConfirmationDrawer(props: ValuationConfirmationDrawerProps): React.ReactElement {
-  const { intake } = props
-  const rows = fieldRowsOf(intake.extractedFields)
+  const { preview } = props
+  const duplicates = duplicateNamesOf(preview.files)
+  const nameOfId = new Map(preview.files.map((file) => [file.fileId, file.fileName]))
+  const methodLabel = valuationMethodLabel(preview.methodRequest)
+  const methodHint = valuationMethodHintOf(preview.methodRequest)
+  const assetLabel = assetTypeLabelOf(preview.assetType)
+  const prompt = preview.supplementalPrompt
+  const [openFiles, setOpenFiles] = React.useState<Record<string, boolean>>({})
+  const [promptExpanded, setPromptExpanded] = React.useState(false)
+  const [skippedOpen, setSkippedOpen] = React.useState(false)
+  const unspecified = text(preview.purpose) === '' || text(preview.valueType) === ''
+    || preview.baseDate === null || preview.baseDate === ''
 
-  /**
-   * 焦点管理（§11.3）：
-   * - 打开时把焦点送进抽屉的**主操作**（确认并开始估值），键盘用户不用先 Tab 一圈；
-   * - 关闭 / 返回修改由调用方（`ReportEvaluationPane` 那一侧的表单）把焦点送回
-   *   「检查并确认」—— 抽屉自己卸载后没有可聚焦的东西，只能由仍在的那一侧接手。
-   *
-   * `?.` 一路兜底：注入式渲染替身里 ref 不接 DOM，这时静默跳过即可。
-   */
-  const confirmRef = React.useRef<HTMLButtonElement | null>(null)
-  React.useEffect(() => {
-    if (!props.open) return
-    confirmRef.current?.focus?.()
-  }, [props.open])
-
-  // `SideDrawer` 自己管开关动画与 Esc：`open` 为假时父层直接不渲染它，
-  // 所以这里只在打开时才渲染，避免抽屉内容参与关闭动画期间的可访问性树。
+  // `SideDrawer` 自己管开关动画与 Esc；`open` 为假时父层直接不渲染它。
   if (!props.open) return <></>
   return <SideDrawer
     title={zhCN.valuationDrawerTitle}
+    description={zhCN.valuationDrawerSubtitle}
     onClose={props.onBack}
+    closing={props.closing === true}
+    closeDisabled={props.creating}
+    initialFocus="heading"
+    returnFocusTo={props.returnFocusTo ?? null}
     // 稳定的测试锚点：抽屉"打开了没有"不该靠猜类名组合。
     dataAttributes={{ 'data-valuation-confirmation-drawer': 'true' }}
-  >
-    <div className="crwu-valuation-drawer-actions">
-      <button type="button" className="crwu-valuation-btn" onClick={props.onBack}>{zhCN.valuationDrawerBack}</button>
-      {/* §5 点名的三个动作：返回修改 / 重新检查 / 确认并开始。
-          「取消本轮」在进度页与结果页（那时才真的有一轮在跑 / 已跑完）。 */}
-      <button
-        type="button"
-        className="crwu-valuation-btn"
-        onClick={() => { props.onRecheck?.() }}
-      >{zhCN.valuationDrawerRecheck}</button>
-      <button
-        type="button"
-        ref={confirmRef}
-        className="crwu-valuation-btn crwu-valuation-btn-primary"
+    footer={<div className={V.drawerFooter}>
+      {/* 创建期间：返回修改不可用（它会让"正在按什么输入创建"变得说不清）。 */}
+      <Button
+        variant="secondary"
+        className={V.btn}
+        disabled={props.creating}
+        onClick={props.onBack}
+      >{zhCN.valuationDrawerBack}</Button>
+      <Button
+        variant="primary"
+        className={`${V.btn} ${V.btnPrimary}`}
+        disabled={props.creating}
+        loading={props.creating}
         onClick={props.onConfirm}
-      >
-        {zhCN.valuationDrawerConfirm}
-      </button>
-    </div>
-    <p className="crwu-valuation-drawer-note">{zhCN.valuationDrawerReadonly}</p>
-
-    <section className="crwu-valuation-drawer-section">
-      <h4>{zhCN.valuationDrawerFiles}</h4>
-      <ul className="crwu-valuation-drawer-files">
-        {intake.files.map((file) => <li key={`${file.relativePath || file.fileName}`}>
-          <span className="crwu-valuation-drawer-file-name">{file.fileName}</span>
-          <span className="crwu-valuation-drawer-file-meta">{file.kind} · {formatBytes(file.sizeBytes)}</span>
-          <Badge text={fileStatusText(file.status)} tone={file.status === 'parsed' ? 'ok' : 'medium'} />
-          {file.note === '' ? null : <span className="crwu-valuation-drawer-file-note">{file.note}</span>}
-        </li>)}
-      </ul>
-    </section>
-
-    <section className="crwu-valuation-drawer-section">
-      <h4>{zhCN.valuationMethodTitle}</h4>
-      <p data-valuation-readonly="method">
-        {valuationMethodLabel(props.method)}
-        {props.method === 'auto' ? <span className="crwu-valuation-drawer-note-inline"> · {zhCN.valuationDrawerMethodAuto}</span> : null}
+      >{props.creating ? zhCN.valuationCreatingSession : zhCN.valuationDrawerConfirm}</Button>
+    </div>}
+  >
+    {/* 创建期间的状态说明：**不**覆盖整个抽屉的大 spinner，待核对内容继续可读。 */}
+    {props.creating
+      ? <p className="crwu-valuation-drawer-status" role="status" data-valuation-creating="true">
+        {props.slow === true ? zhCN.valuationCreatingSlow : zhCN.valuationCreatingNote}
+        <span className="crwu-valuation-drawer-status-lock">{zhCN.valuationCreatingCannotClose}</span>
       </p>
-      <h4>{zhCN.valuationBaseDateTitle}</h4>
-      <p data-valuation-readonly="baseDate">
-        {intake.baseDate === '' ? zhCN.valuationResultNoBaseDate : intake.baseDate}
-      </p>
-      <h4>{zhCN.valuationDrawerPrompt}</h4>
-      <p data-valuation-readonly="prompt">
-        {intake.supplementalPrompt === '' ? zhCN.valuationDrawerNone : intake.supplementalPrompt}
-      </p>
-    </section>
+      : null}
 
-    <section className="crwu-valuation-drawer-section">
-      <h4>{zhCN.valuationDrawerKnown}</h4>
-      <dl className="crwu-valuation-drawer-fields">
-        {rows.filter((row) => !row.missing).map((row) => <React.Fragment key={row.key}>
-          <dt>{row.label}</dt>
-          <dd>
-            {row.value}
-            {/* 每项关键事实的来源。提取器以**文件**为粒度（不回页码 / 工作表位置），
-                所以这里如实标到文件，并在下面说明粒度限制。 */}
-            {intake.fieldSources[row.key] === undefined
-              ? null
-              : <span className="crwu-valuation-drawer-source" data-valuation-field-source={row.key}>
-                {zhCN.valuationDrawerSourceFrom.replace('{file}', intake.fieldSources[row.key])}
-              </span>}
-          </dd>
-        </React.Fragment>)}
-      </dl>
-      <p className="crwu-valuation-drawer-note">{zhCN.valuationDrawerSourceGranularity}</p>
-
-      {/* **资料之间的冲突**：同一要素在不同资料里不一致时，双方来源都要留，并写明当前采用哪一份
-          （§4「用户补充与文件内容冲突时保留双方来源，并在确认信息中说明」的同类要求）。 */}
-      <h4>{zhCN.valuationDrawerConflicts}</h4>
-      {intake.fieldConflicts.length === 0
-        ? <p className="crwu-valuation-drawer-none">{zhCN.valuationDrawerNone}</p>
-        : <ul className="crwu-valuation-drawer-conflicts">
-          {intake.fieldConflicts.map((conflict) => <li key={conflict.label} data-valuation-field-conflict={conflict.label}>
-            <span className="crwu-valuation-drawer-conflict-label">{conflict.label}</span>
-            <ul>
-              {conflict.values.map((one) => <li key={`${one.file}-${one.value}`}>
-                <span className="crwu-valuation-drawer-conflict-source">{one.file}</span>
-                <span className="crwu-valuation-drawer-conflict-value">{one.value}</span>
-                {intake.fieldSources[conflict.label] === one.file
-                  ? <span className="crwu-valuation-drawer-conflict-current">{zhCN.valuationDrawerConflictCurrent}</span>
-                  : null}
-              </li>)}
-            </ul>
-          </li>)}
-        </ul>}
-      {/* 用户补充要求是**用户提供**的事实，不是文件原文 —— 这一条要说在明处。 */}
-      <h4>{zhCN.valuationDrawerPromptSource}</h4>
-      <p className="crwu-valuation-drawer-note">{zhCN.valuationDrawerPromptSourceNote}</p>
-      <h4>{zhCN.valuationDrawerMissing}</h4>
-      {rows.filter((row) => row.missing).length === 0
-        ? <p className="crwu-valuation-drawer-none">{zhCN.valuationDrawerNone}</p>
-        : <ul className="crwu-valuation-drawer-missing">
-          {rows.filter((row) => row.missing).map((row) => <li key={row.key}>{row.label}</li>)}
-        </ul>}
-    </section>
-
-    <section className="crwu-valuation-drawer-section">
-      <h4>{zhCN.valuationDrawerUnparsed}</h4>
-      {intake.unparsed.length === 0
-        ? <p className="crwu-valuation-drawer-none">{zhCN.valuationDrawerNone}</p>
-        : <ul>{intake.unparsed.map((name) => <li key={name}>{name}</li>)}</ul>}
-      <h4>{zhCN.valuationDrawerKnowledge}</h4>
-      <p>{intake.knowledge.space}：{intake.knowledge.ready ? zhCN.valuationDrawerFileStatusParsed : zhCN.valuationDrawerFileStatusUnparsed}</p>
-      {/* 逐条给出**路由 + 来源 + 版本信息**（更新时间与正文指纹）：规范用了哪一版要可追溯。 */}
-      <ul className="crwu-valuation-drawer-knowledge">
-        {intake.knowledge.sources.map((source) => <li key={source.route} data-valuation-knowledge-route={source.route}>
-          <span className="crwu-valuation-drawer-knowledge-route">{source.route}</span>
-          <span className="crwu-valuation-drawer-knowledge-meta">
-            {source.source}
-            {source.updatedAt === '' ? null : ` · ${zhCN.valuationDrawerUpdatedAt.replace('{at}', source.updatedAt)}`}
-            {source.digest === '' ? null : ` · ${source.digest}`}
+    {/* ── 本轮估值：四个关键事实在第一屏 ─────────────────────────────────── */}
+    <section className={V.drawerSummary} data-valuation-drawer-summary="true">
+      <h4>{zhCN.valuationDrawerSummary}</h4>
+      <dl className={V.drawerKv}>
+        <Kv term={zhCN.valuationDrawerAssetTitle}>
+          <span data-valuation-readonly="assetType">
+            {assetLabel === '' ? zhCN.valuationDrawerUnspecified : assetLabel}
           </span>
-        </li>)}
-      </ul>
-      {intake.knowledge.gaps.length === 0 ? null : <ul className="crwu-valuation-drawer-gaps">
-        {intake.knowledge.gaps.map((gap) => <li key={gap}>{gap}</li>)}
-      </ul>}
-      <h4>{zhCN.valuationDrawerProviders}</h4>
-      {/* 三行来源：**彼此独立**。某一家超时不影响另外两家的结论（§11.2）。 */}
-      <ul className="crwu-valuation-drawer-providers">
-        {intake.providers.map((provider) => {
-          const live = props.providerStates?.[provider.id]
-          const raw = live?.state ?? provider.state
-          // 探测还在跑、而这一家还没有结论（`unknown`）时显示「检查中」——
-          // 但**已经有结论**的那几家照常显示结论，一家超时不拖累另外两家。
-          const checking = props.providerCheck === 'checking' && (raw === 'unknown' || raw === 'checking')
-          const state = checking ? 'checking' : raw
-          const detail = checking ? '' : (live?.detail ?? provider.detail)
-          const needsLogin = state === 'unauthenticated'
-          return <li key={provider.id} data-valuation-provider={provider.id} data-valuation-provider-state={state}>
-            <span className="crwu-valuation-drawer-provider-name">{provider.label}</span>
-            <Badge text={providerLabelOf(state, checking)} tone={providerTone(state, checking)} />
-            {detail === '' ? null : <span className="crwu-valuation-drawer-provider-detail">{detail}</span>}
-            {needsLogin && props.onOpenLogin !== undefined
-              ? <button
-                type="button"
-                className="crwu-valuation-btn"
-                onClick={() => { props.onOpenLogin?.(provider.id) }}
-              >{zhCN.valuationProviderOpenLogin}</button>
+        </Kv>
+        <Kv term={zhCN.valuationDrawerMethodTitle}>
+          <span data-valuation-readonly="method">
+            {methodLabel === '' ? zhCN.valuationDrawerUnspecified : methodLabel}
+          </span>
+        </Kv>
+        <Kv term={zhCN.valuationDrawerDataCount}>
+          <span data-valuation-readonly="fileCount">
+            {zhCN.valuationDrawerFileCount.replace('{count}', String(preview.files.length))}
+          </span>
+        </Kv>
+        <Kv term={zhCN.valuationDrawerBaseDateTitle}>
+          <span data-valuation-readonly="baseDate">
+            {preview.baseDate === null || preview.baseDate === ''
+              ? zhCN.valuationDrawerNoBaseDate
+              : preview.baseDate}
+          </span>
+        </Kv>
+      </dl>
+      {/* 方法说明**与本次选择相符**（自动判定与三种指定方法各说各的）。 */}
+      {methodLabel === ''
+        ? null
+        : <p className="crwu-valuation-hint" data-valuation-drawer-method-hint={preview.methodRequest}>
+          {methodHint === '' ? methodLabel : zhCN.valuationMethodHintOnce
+            .replace('{label}', methodLabel)
+            .replace('{hint}', methodHint)}
+        </p>}
+    </section>
+
+    {/* ── 补充条件 ──────────────────────────────────────────────────────── */}
+    <section className={V.drawerSummary} data-valuation-drawer-conditions="true">
+      <h4>{zhCN.valuationDrawerConditions}</h4>
+      <dl className={V.drawerKv}>
+        <Kv term={zhCN.valuationDrawerPurposeTitle}>
+          <span data-valuation-readonly="purpose">
+            {text(preview.purpose) === '' ? zhCN.valuationDrawerNoPurpose : preview.purpose}
+          </span>
+        </Kv>
+        <Kv term={zhCN.valuationDrawerValueTypeTitle}>
+          <span data-valuation-readonly="valueType">
+            {text(preview.valueType) === '' ? zhCN.valuationDrawerNoValueType : preview.valueType}
+          </span>
+        </Kv>
+      </dl>
+      <div className="crwu-valuation-drawer-blocks">
+        <span className="crwu-valuation-drawer-block-title">{zhCN.valuationDrawerPromptTitle}</span>
+        {prompt === ''
+          ? <p className="crwu-valuation-hint">{zhCN.valuationDrawerPromptNone}</p>
+          : <>
+            {/* 用户原文：保留换行；长内容可展开，展开后进入**同一条**正文滚动。 */}
+            <p className="crwu-valuation-drawer-prompt" data-valuation-readonly="prompt">
+              {!promptExpanded && prompt.length > PROMPT_EXPAND_THRESHOLD
+                ? `${prompt.slice(0, PROMPT_EXPAND_THRESHOLD)}…`
+                : prompt}
+            </p>
+            {prompt.length > PROMPT_EXPAND_THRESHOLD
+              ? <Button
+                variant="text"
+                size="sm"
+                className="crwu-valuation-more"
+                aria-expanded={promptExpanded}
+                onClick={() => { setPromptExpanded(!promptExpanded) }}
+              >{promptExpanded ? zhCN.valuationDrawerPromptCollapse : zhCN.valuationDrawerPromptExpand}</Button>
               : null}
-          </li>
-        })}
-      </ul>
-      <h4>{zhCN.valuationDrawerBrowser}</h4>
-      <p>{intake.providers
-        .filter((item) => (props.providerStates?.[item.id]?.state ?? item.state) !== 'authenticated')
-        .map((item) => item.label).join('、') || zhCN.valuationDrawerNone}</p>
-      {/* 取证能力如实说：本部署没有页面截图能力时，"已登录"也不代表能留下截图证据。 */}
-      <h4>{zhCN.valuationDrawerEvidence}</h4>
-      <p>{zhCN.valuationDrawerEvidenceNote}</p>
+          </>}
+      </div>
+      {/* 未指定条件的**必要影响**合并成一条（不逐字段各附一段提示）。 */}
+      {unspecified
+        ? <p className="crwu-valuation-hint" data-valuation-drawer-unspecified="true">
+          {zhCN.valuationDrawerUnspecifiedNote}
+        </p>
+        : null}
     </section>
 
-    <section className="crwu-valuation-drawer-section">
-      <h4>{zhCN.valuationDrawerPromptFull}</h4>
-      {/* 完整业务提示词：与执行时同一个构造器生成，可折叠查看（默认收起，避免盖住确认信息）。 */}
-      {intake.prompt === ''
-        ? <p className="crwu-valuation-drawer-none">{zhCN.valuationDrawerPromptUnavailable}</p>
-        : <details className="crwu-valuation-drawer-prompt">
-          <summary>{zhCN.valuationDrawerPromptShow}</summary>
-          <pre data-valuation-prompt-full="true">{intake.prompt}</pre>
-        </details>}
+    {/* ── 本次纳入的资料 ────────────────────────────────────────────────── */}
+    <section className={V.drawerSummary} data-valuation-drawer-files-section="true">
+      <h4>
+        {zhCN.valuationDrawerFiles}
+        <span className="crwu-valuation-drawer-count">
+          {zhCN.valuationDrawerFileCount.replace('{count}', String(preview.files.length))}
+        </span>
+      </h4>
+      {/* 选的是文件夹时，展示的是**实际归档文件**（不再只显示入口文件夹名）。 */}
+      <ul className="crwu-valuation-drawer-files">
+        {preview.files.map((file) => <FileRow
+          key={file.fileId}
+          file={file}
+          duplicated={duplicates.has(file.fileName)}
+          duplicateOfName={file.duplicateOf === null ? null : (nameOfId.get(file.duplicateOf) ?? null)}
+          open={openFiles[file.fileId] === true}
+          onToggle={(fileId) => {
+            setOpenFiles((prev) => ({ ...prev, [fileId]: prev[fileId] !== true }))
+          }}
+        />)}
+      </ul>
+      {duplicates.size === 0
+        ? null
+        : <p className="crwu-valuation-drawer-note">
+          {zhCN.valuationDrawerDuplicateNames.replace('{count}', String(duplicates.size))}
+        </p>}
     </section>
 
-    {(intake.capabilityGaps.length > 0 || intake.warnings.length > 0) ? <section className="crwu-valuation-drawer-section">
-      <h4>{zhCN.valuationResultGaps}</h4>
-      <ul className="crwu-valuation-drawer-gaps">
-        {[...intake.capabilityGaps, ...intake.warnings].map((gap) => <li key={gap}>{gap}</li>)}
-      </ul>
-    </section> : null}
+    {/* 未纳入项属于"资料范围说明"：默认只给数量，原因按需展开。 */}
+    {preview.skipped.length === 0
+      ? null
+      : <section className={V.drawerSummary} data-valuation-drawer-skipped="true">
+        <Button
+          variant="text"
+          size="sm"
+          className="crwu-valuation-more"
+          aria-expanded={skippedOpen}
+          aria-controls="crwu-valuation-drawer-skipped-list"
+          onClick={() => { setSkippedOpen(!skippedOpen) }}
+        >{zhCN.valuationDrawerSkippedTitle.replace('{count}', String(preview.skipped.length))}</Button>
+        <ul className="crwu-valuation-skipped" id="crwu-valuation-drawer-skipped-list" hidden={!skippedOpen}>
+          {preview.skipped.map((item) => <li key={item}>
+            <span className="crwu-valuation-skipped-name">{item}</span>
+          </li>)}
+        </ul>
+      </section>}
 
-    <p className="crwu-valuation-drawer-digest">{zhCN.valuationDrawerDigest}：{intake.digest}</p>
+    {/* ── 信息获取辅助 · 可选 ─────────────────────────────────────────────
+        这里的资产/方法/材料是**只读输入**；登录、检查、验证属于允许的环境操作。
+        未登录 / 未知 / 检查失败都**不是**估值启动的门禁。 */}
+    <section className={V.drawerSummary} data-valuation-drawer-capability="true">
+      <h4>
+        {zhCN.valuationCapabilityTitle}
+        <span className="crwu-valuation-drawer-count"> · {zhCN.valuationCapabilityOptional}</span>
+      </h4>
+      <ValuationCapabilityArea
+        state={props.state}
+        // 创建期间**不再发起**新的登录 / 验证 / 检查（在途任务仍可取消）。
+        locked={props.creating}
+        onRecheck={props.onCheckCapability}
+        onLogin={props.onLoginSite}
+        onCancelLogin={props.onCancelLogin}
+        onVerify={props.onVerifySite}
+      />
+    </section>
   </SideDrawer>
 }

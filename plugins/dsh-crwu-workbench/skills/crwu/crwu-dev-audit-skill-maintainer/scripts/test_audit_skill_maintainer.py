@@ -795,6 +795,51 @@ class AuditSkillMaintainerCheckerTest(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_skill_path_lint_exempts_runtime_knowledge_cache_roots(self):
+        """`~/.crwu/knowledge` 与它的子路径是**运行时缓存**，未生成不算引用缺失。
+
+        为什么必须豁免（而不是让每台机器先建目录）：`crwu-dws` 的 M1/M3 才会创建这棵树，
+        一份刚安装、还没跑过任何审核的技能副本不该因此判不合格 —— 那会把"还没生成缓存"
+        报成"文档引用了一个不存在的路径"，而两者是完全不同的事（`dws-dir-cache` 早就被单独豁免，
+        父目录却漏了，属于同一条纪律没贯彻）。
+        """
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            skill = root / "crwu-demo-runtime"
+            _write(skill / "SKILL.md", textwrap.dedent("""
+                ---
+                name: crwu-demo-runtime
+                ---
+
+                目录缓存落在 `~/.crwu/knowledge/dws-dir-cache` 下。
+                正文与索引都放在 `~/.crwu/knowledge` 里。
+                缓存文件写进 `~/.crwu/knowledge/dws-dir-cache/<space>/catalog.json`。
+            """).strip() + "\n")
+
+            errors, _warnings = module.skill_path_problems(str(root))
+
+            self.assertEqual([], errors, f"运行时缓存根不该被判引用缺失：{errors}")
+
+    def test_skill_path_lint_still_flags_a_missing_local_knowledge_path(self):
+        """但**真的**引用了不存在的本地路径仍要拦下（豁免只针对运行时缓存根）。"""
+        module = self._kb_tool()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            skill = root / "crwu-demo-missing"
+            _write(skill / "SKILL.md", textwrap.dedent("""
+                ---
+                name: crwu-demo-missing
+                ---
+
+                先读 `~/.crwu/knowledge/不存在的本地知识库/某个规范.md`。
+            """).strip() + "\n")
+
+            errors, _warnings = module.skill_path_problems(str(root))
+
+            self.assertEqual(1, len(errors), errors)
+            self.assertIn("路径不存在", errors[0])
+
     def test_repo_reference_lint_flags_repo_directories_in_skill_content(self):
         """技能正文不得引用代码仓库目录：技能以副本安装时这些路径不存在。"""
         cases = [

@@ -17,10 +17,13 @@ export const REPORT_AUDIT_STYLE_TEXT = `
    （注意：这段注释在模板字符串里，**不能出现反引号**，否则会把样式文本截断。）
    ──────────────────────────────────────────────────────────────────── */
 .crwu-audit-table {
-  width: 100%; min-width: 1000px;
+  width: 100%; min-width: 1200px;
   border-collapse: collapse; table-layout: fixed;
 }
-/* Seven columns share the page width; identifiers and dates stay unwrapped. */
+/* Seven columns share the page width; identifiers and dates stay unwrapped.
+   min-width is the intrinsic floor: the 16% action column must still fit one primary button plus
+   the 32px whale and ••• (16% of 1200 = 192px, ~24px padding, ~158px of controls). Narrower panels
+   scroll the table wrap instead of shrinking those controls. */
 .crwu-audit-col-name { width: 16%; }
 .crwu-audit-col-seq-no { width: 23%; }
 .crwu-audit-col-risk { width: 6%; }
@@ -80,40 +83,16 @@ export const REPORT_AUDIT_STYLE_TEXT = `
 .crwu-audit-toolbar { display: flex; align-items: center; gap: var(--crwu-space-2); margin: 0 0 var(--crwu-space-3); }
 .crwu-audit-search {
   position: relative; display: inline-flex; align-items: center;
-  width: 400px; max-width: 100%; flex: 0 1 auto;
+  width: 400px; max-width: 100%; flex: 0 1 auto; min-width: 0;
 }
-.crwu-audit-search .crwu-audit-input { width: 100%; padding-left: 34px; padding-right: 32px; }
-.crwu-audit-search-glyph {
-  position: absolute; left: 11px; display: inline-flex; pointer-events: none;
-  color: var(--crwu-text-tertiary);
-}
-.crwu-audit-search-clear {
-  position: absolute; right: 9px; width: 20px; height: 20px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: 999px; background: var(--crwu-control);
-  color: var(--crwu-control-text); font-family: inherit; font-size: 13px; line-height: 1;
-  cursor: pointer;
-  transition: background 120ms var(--crwu-ease), color 120ms var(--crwu-ease);
-}
-.crwu-audit-search-clear::after { content: ''; position: absolute; inset: -12px; }
-.crwu-audit-search-clear:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
-.crwu-audit-search-clear:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
+.crwu-audit-search .crwu-audit-input { width: 100%; }
+.crwu-audit-search-glyph { display: inline-flex; align-items: center; color: var(--crwu-text-tertiary); }
+.crwu-audit-search-clear { display: inline-flex; align-items: center; justify-content: center; }
 .crwu-audit-search-action { display: inline-flex; align-items: center; }
-/* 输入框：默认只有一层比底更浅的填充，**没有黑色边框**；聚焦才浮起白底 + 一圈极轻的环。 */
-.crwu-audit-input {
-  box-sizing: border-box; height: 38px; min-width: 0; padding: 0 var(--crwu-space-3);
-  border: 1px solid transparent; border-radius: 9px;
-  background: var(--crwu-input-bg); color: var(--crwu-text-primary);
-  font-family: inherit; font-size: 13px;
-  transition: background 120ms var(--crwu-ease), border-color 120ms var(--crwu-ease),
-    box-shadow 120ms var(--crwu-ease);
-}
-.crwu-audit-input::placeholder { color: var(--crwu-text-tertiary); }
-.crwu-audit-input:focus-visible {
-  outline: none; background: var(--crwu-surface);
-  border-color: var(--crwu-border-strong);
-  box-shadow: 0 0 0 3px var(--crwu-focus-ring);
-}
+/* The refresh control sits next to the 42px shared field; match it on desktop (the shared coarse
+   min-height: 44px still wins on touch pointers). */
+.crwu-audit-search-action .crwu-ui-btn { height: 42px; }
+/* Search input, glyph and clear colour/fill/focus are owned by the shared TextInput family. */
 
 /* ── 列表：表头 39px / 行 82px / 发丝分隔 / 只在行上 hover ─────────────────── */
 .crwu-audit-table-wrap { overflow-x: auto; }
@@ -142,7 +121,10 @@ export const REPORT_AUDIT_STYLE_TEXT = `
 .crwu-audit-risk-dot-ok { background: var(--crwu-risk-c); }
 
 /* ── 操作列：一个主操作 + 小鲸鱼 + 必要时一个 •••，水平排列，永不纵向堆叠 ────── */
-.crwu-audit-row-actions { display: flex; align-items: center; gap: var(--crwu-space-2); flex-wrap: nowrap; }
+.crwu-audit-row-actions { display: flex; align-items: center; gap: var(--crwu-space-2); flex-wrap: nowrap; min-width: max-content; }
+/* The row keeps its intrinsic width; a too-narrow table scrolls in the wrap instead of squeezing
+   the whale / ••• into 25.8px slivers. */
+.crwu-audit-row-actions > * { flex: none; }
 /* 「审核中」不是可点的任务按钮：它只是主位上的一个状态（避免重复触发）。 */
 .crwu-audit-progress-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
@@ -164,11 +146,11 @@ export const REPORT_AUDIT_STYLE_TEXT = `
   cursor: pointer; vertical-align: middle;
   transition: background 110ms var(--crwu-ease), color 110ms var(--crwu-ease), transform 110ms var(--crwu-ease);
 }
-.crwu-audit-ai-row-btn:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); transform: translateY(-1px); }
+.crwu-audit-ai-row-btn:hover { background: var(--crwu-control-hover); color: var(--crwu-interactive); transform: translateY(-1px); }
 .crwu-audit-ai-row-btn:active { background: var(--crwu-control-active); transform: scale(0.94); }
-.crwu-audit-ai-row-btn:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-ai-row-btn:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
 .crwu-audit-ai-row-btn:disabled { opacity: 0.5; cursor: default; }
-.crwu-audit-ai-row-btn-on { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
+.crwu-audit-ai-row-btn-on { background: var(--crwu-control-hover); color: var(--crwu-interactive); }
 /* •••：与刷新 / 小鲸鱼**同一套中性底**；菜单打开时换到 active 那一格
    （不再有"实心反色"或"完全透明"这两种被用户指出不一致的形态）。 */
 .crwu-audit-menu {
@@ -178,10 +160,10 @@ export const REPORT_AUDIT_STYLE_TEXT = `
   font-family: inherit; font-size: 15px; line-height: 1; letter-spacing: 1px; cursor: pointer;
   transition: background 110ms var(--crwu-ease), color 110ms var(--crwu-ease), transform 110ms var(--crwu-ease);
 }
-.crwu-audit-menu:hover { background: var(--crwu-control-hover); color: var(--crwu-text-primary); }
+.crwu-audit-menu:hover { background: var(--crwu-control-hover); color: var(--crwu-interactive); }
 .crwu-audit-menu:active { background: var(--crwu-control-active); transform: scale(0.94); }
-.crwu-audit-menu:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
-.crwu-audit-menu-open, .crwu-audit-menu-open:hover { background: var(--crwu-control-active); color: var(--crwu-text-primary); }
+.crwu-audit-menu:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
+.crwu-audit-menu-open, .crwu-audit-menu-open:hover { background: var(--crwu-control-active); color: var(--crwu-interactive); }
 
 /* ── AI 审核结果：默认只给数量，悬停/聚焦信息图标再展开交付件明细 ── */
 .crwu-audit-result-files { display: inline-flex; align-items: center; gap: 7px; }
@@ -201,8 +183,8 @@ export const REPORT_AUDIT_STYLE_TEXT = `
 }
 /* 18px 的视觉对表格密度是对的，但命中区太小：用一层不可见 ::after 往外扩到 44×44。 */
 .crwu-audit-result-info::after { content: ''; position: absolute; inset: -13px; }
-.crwu-audit-result-info:hover, .crwu-audit-result-info:focus-visible { color: var(--crwu-text-primary); border-color: var(--crwu-brand); }
-.crwu-audit-result-info:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: 2px; }
+.crwu-audit-result-info:hover, .crwu-audit-result-info:focus-visible { color: var(--crwu-interactive); border-color: var(--crwu-interactive); }
+.crwu-audit-result-info:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
 .crwu-audit-result-loading { display: inline-flex; align-items: center; height: 22px; color: var(--crwu-text-tertiary); }
 .crwu-audit-result-spinner {
   width: 14px; height: 14px; border: 2px solid var(--crwu-border);
@@ -225,33 +207,27 @@ export const REPORT_AUDIT_STYLE_TEXT = `
   padding: var(--crwu-space-4) 0 var(--crwu-space-1);
   font-size: 12px; color: var(--crwu-text-secondary);
 }
+/* Layout only: the shared text/soft button variants own colour, hover and disabled. */
 .crwu-audit-pager-nav, .crwu-audit-pager-page {
-  box-sizing: border-box; min-width: 28px; height: 28px; padding: 0 6px;
+  box-sizing: border-box; min-width: 28px; padding: 0 6px;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid transparent; border-radius: 8px; background: transparent;
-  color: var(--crwu-text-secondary); font-family: inherit; font-size: 12.5px;
-  font-variant-numeric: tabular-nums; cursor: pointer;
-  transition: background 120ms var(--crwu-ease), color 120ms var(--crwu-ease);
+  border-radius: 8px; cursor: pointer; font-variant-numeric: tabular-nums;
 }
 .crwu-audit-pager-nav { font-size: 14px; line-height: 1; }
-.crwu-audit-pager-nav:hover:not(:disabled), .crwu-audit-pager-page:hover:not(:disabled) {
-  background: var(--crwu-hover); color: var(--crwu-text-primary);
-}
-.crwu-audit-pager-nav:disabled, .crwu-audit-pager-page:disabled { opacity: 0.4; cursor: not-allowed; }
-.crwu-audit-pager-page-on {
-  background: var(--crwu-selected); color: var(--crwu-text-primary); font-weight: 600;
+.crwu-audit-pager-nav:disabled, .crwu-audit-pager-page:disabled { cursor: not-allowed; }
+/* Active page: solid blue with paired white text. */
+.crwu-audit-pager-page.crwu-audit-pager-page-on {
+  background: var(--crwu-interactive); color: var(--crwu-primary-text); font-weight: 600;
 }
 .crwu-audit-pager-gap { padding: 0 2px; color: var(--crwu-text-tertiary); }
-.crwu-audit-pager-jump { display: inline-flex; align-items: center; gap: 6px; margin-left: var(--crwu-space-2); }
-.crwu-audit-pager-jump-input {
-  box-sizing: border-box; width: 60px; height: 28px; padding: 0 var(--crwu-space-2);
-  border: 1px solid var(--crwu-border-strong); border-radius: 8px;
-  background: var(--crwu-surface-subtle); color: var(--crwu-text-primary);
-  font-family: inherit; font-size: 12.5px; text-align: center;
+.crwu-audit-pager-jump {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: var(--crwu-space-2); white-space: nowrap;
 }
-.crwu-audit-pager-jump-input:focus-visible {
-  outline: none; background: var(--crwu-surface); box-shadow: 0 0 0 3px var(--crwu-focus-ring);
-}
+.crwu-audit-pager-jump .crwu-audit-muted { white-space: nowrap; }
+/* Jump field: compact fixed wrapper; owning ancestor beats the shared width:100% (equal specificity). */
+.crwu-audit-pager-jump .crwu-audit-pager-jump-input { box-sizing: border-box; width: 60px; flex: none; }
+.crwu-audit-pager-jump .crwu-audit-pager-jump-input .crwu-ui-input { width: 100%; text-align: center; }
 
 /* ── 滚动条美化（报告审核正文的横向 + 纵向）────────────────────────────────
    走 DSH 自带的滚动条 token（--dsh-scrollbar-thumb 由侧栏那种容器注入，

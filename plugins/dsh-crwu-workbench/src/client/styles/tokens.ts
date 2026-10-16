@@ -33,20 +33,20 @@ export const CRWU_TOKEN_STYLE_TEXT = `
   --crwu-pad-x: 24px;
 
   /* 面与线 */
-  --crwu-app-bg: #F4F5F7;
-  --crwu-workspace-bg: #F7F8FA;
+  --crwu-app-bg: #F5F5F7;
+  --crwu-workspace-bg: #FFFFFF;
   --crwu-header-bg: rgba(255, 255, 255, 0.92);
   --crwu-surface: #FFFFFF;
-  --crwu-surface-subtle: #FAFAFB;
+  --crwu-surface-subtle: #F8F9FB;
   --crwu-hover: #F5F6F7;
   --crwu-selected: #F0F1F3;
   --crwu-border: rgba(0, 0, 0, 0.06);
   --crwu-border-strong: rgba(0, 0, 0, 0.10);
 
   /* 文字三级 + 三种专用前景 */
-  --crwu-text-primary: #1D1D1F;
-  --crwu-text-secondary: #6E6E73;
-  --crwu-text-tertiary: #9A9A9F;
+  --crwu-text-primary: #171A21;
+  --crwu-text-secondary: #686F7D;
+  --crwu-text-tertiary: #697384;
   --crwu-text-body: #414246;
   --crwu-text-mono: #48494D;
   --crwu-text-hash: #A0A1A5;
@@ -72,20 +72,51 @@ export const CRWU_TOKEN_STYLE_TEXT = `
      用户口径（2026-09-23）：「操作列的按钮颜色不一致，还有刷新按钮」—— 一个填充、一个全透明、
      一个又是 Ghost，同一行里三种底。现在三处都走这三个格，只有主操作是实心。
      取值必须与 --crwu-hover（行悬停底）**分得开**，否则悬停到那一行时控件的底会被吃掉。 */
-  --crwu-control: #EFF0F2;
-  --crwu-control-hover: #E4E5E8;
-  --crwu-control-active: #DADCE0;
-  --crwu-control-text: #5F6065;
+  --crwu-control: var(--crwu-interactive-soft);
+  --crwu-control-hover: #E1ECFD;
+  --crwu-control-active: #CFE0FA;
+  --crwu-control-text: var(--crwu-interactive);
   /* 浮层菜单项自己的悬停底（在 --crwu-menu-bg 上，与中性控件不是同一层）。 */
   --crwu-menu-hover: #F3F4F5;
   --crwu-menu-bg: rgba(255, 255, 255, 0.98);
-  --crwu-primary-bg: #1D1D1F;
-  --crwu-primary-bg-hover: #000000;
+  --crwu-primary-bg: #1668DC;
+  --crwu-primary-bg-hover: #0958D9;
   --crwu-primary-text: #FFFFFF;
+  /* Interaction accent, input surface and required boundaries for the shared controls. */
+  --crwu-interactive: #1668DC;
+  --crwu-interactive-soft: #EFF5FF;
+  --crwu-interactive-border: #B5CEF3;
+  --crwu-field-bg: #FFFFFF;
+  --crwu-field-border: #8A919E;
+  --crwu-field-border-hover: #6E7480;
+  --crwu-field-placeholder: #697384;
+  --crwu-popover-bg: #FFFFFF;
+  --crwu-popover-border: #E6E8ED;
+  --crwu-popover-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  --crwu-z-popover: 40;
+  --crwu-day-hover-bg: #EFF5FF;
+  --crwu-day-selected-bg: #1668DC;
+  --crwu-day-selected-text: #FFFFFF;
+  --crwu-day-today-border: #1668DC;
+  /* Contrast-safe small error text and white-on-danger background. */
+  --crwu-error-text: #B42318;
+  --crwu-danger-bg: #C4320A;
   --crwu-tip-bg: rgba(38, 38, 40, 0.96);
   --crwu-tip-text: #FFFFFF;
   --crwu-focus-ring: rgba(0, 0, 0, 0.035);
   --crwu-scrim: rgba(0, 0, 0, 0.32);
+
+  /* 估值语义槽（协议 37）：两个只在估值模块用的语义名。
+     ① 必要输入框的边界：当前 --crwu-border 太浅，单独识别不出输入框（设计稿 §6.3）；
+     ② 必要的帮助文案：tertiary 对白底约 2.80:1，承载不了"为什么要这样填"。
+     两者都只是**引用已有取值**，不改其他模块的 tertiary / 品牌红 / 全局边框。 */
+  --crwu-valuation-field-border: #85858B;
+  /* 悬停时"边界略增强"：比静止再深一档，但不到焦点环那种强调。 */
+  --crwu-valuation-field-border-hover: #6E6E73;
+  --crwu-valuation-hint-text: #6E6E73;
+  /* 估值工作面的**内容内缩**：底栏底色通栏、内容按同一个量退回来 ——
+     于是"文字/按钮离边框有距离"与"与上方正文左对齐"能同时成立。 */
+  --crwu-valuation-inset: 12px;
 
   /* 投影：只在这五个语义槽里，组件不自己拼阴影 */
   --crwu-shadow-tab: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -96,18 +127,18 @@ export const CRWU_TOKEN_STYLE_TEXT = `
 }
 /* 深色：同一套语义名的另一份取值。品牌红与风险色保持上面那份（它们不随主题变）。 */
 body[data-ds-dark-theme] [data-crwu-scope="workbench"] {
-  --crwu-app-bg: #111214;
-  --crwu-workspace-bg: #141517;
+  --crwu-app-bg: #101216;
+  --crwu-workspace-bg: #191C22;
   --crwu-header-bg: #161719;
-  --crwu-surface: #1B1C1F;
-  --crwu-surface-subtle: #202124;
+  --crwu-surface: #191C22;
+  --crwu-surface-subtle: #22262F;
   --crwu-hover: #222326;
   --crwu-selected: #25262A;
   --crwu-border: rgba(255, 255, 255, 0.06);
   --crwu-border-strong: rgba(255, 255, 255, 0.10);
 
-  --crwu-text-primary: #F2F2F3;
-  --crwu-text-secondary: #A1A1A6;
+  --crwu-text-primary: #F1F3F7;
+  --crwu-text-secondary: #ABB3C1;
   --crwu-text-tertiary: #6F7075;
   --crwu-text-body: #C8C9CD;
   --crwu-text-mono: #B8B9BE;
@@ -118,17 +149,39 @@ body[data-ds-dark-theme] [data-crwu-scope="workbench"] {
   --crwu-input-bg: #202124;
   /* 次级控件同一套中性底：必须比 --crwu-hover（行悬停 #222326）亮一档，
      否则悬停到那一行时「小鲸鱼 / •••」的底和行底糊成一片（用户报的"颜色不一致"里的一条）。 */
-  --crwu-control: #2E2F34;
-  --crwu-control-hover: #3A3B41;
-  --crwu-control-active: #45464C;
-  --crwu-control-text: #A1A1A6;
+  --crwu-control: var(--crwu-interactive-soft);
+  --crwu-control-hover: #2A3F5E;
+  --crwu-control-active: #33507A;
+  --crwu-control-text: var(--crwu-interactive);
   --crwu-menu-hover: #2F3034;
   --crwu-menu-bg: rgba(27, 28, 31, 0.98);
-  --crwu-primary-bg: #F2F2F3;
-  --crwu-primary-bg-hover: #FFFFFF;
-  --crwu-primary-text: #17181A;
+  --crwu-primary-bg: #286BD6;
+  --crwu-primary-bg-hover: #347CE9;
+  --crwu-primary-text: #FFFFFF;
+  --crwu-interactive: #82B7FF;
+  --crwu-interactive-soft: #22334C;
+  --crwu-interactive-border: #486C9D;
+  --crwu-field-bg: #20242C;
+  --crwu-field-border: #667285;
+  --crwu-field-border-hover: #7C879A;
+  --crwu-field-placeholder: #9CA6B6;
+  --crwu-popover-bg: #191C22;
+  --crwu-popover-border: #343A46;
+  --crwu-popover-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --crwu-z-popover: 40;
+  --crwu-day-hover-bg: #22334C;
+  --crwu-day-selected-bg: #286BD6;
+  --crwu-day-selected-text: #FFFFFF;
+  --crwu-day-today-border: #82B7FF;
+  --crwu-error-text: #FFB4AB;
+  --crwu-danger-bg: #C93A3A;
   --crwu-tip-bg: rgba(62, 62, 66, 0.96);
   --crwu-tip-text: #FFFFFF;
+  /* 估值语义槽的深色取值（同上，只服务估值模块）。 */
+  --crwu-valuation-field-border: #6F717A;
+  --crwu-valuation-field-border-hover: #8A8C95;
+  --crwu-valuation-hint-text: #A1A1A6;
+  --crwu-valuation-inset: 12px;
   --crwu-focus-ring: rgba(255, 255, 255, 0.06);
   /* 遮罩轻到能看见"抽屉是从哪一行打开的"（用户口径：.30–.36 + blur ≤3px）。 */
   --crwu-scrim: rgba(0, 0, 0, 0.34);

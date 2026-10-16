@@ -4,7 +4,7 @@ import type { DwsLocalDoctorView, DwsLocalRepairView } from '../../../shared/typ
 import type { AccessDiagnostic } from '../../core/access/diagnostics.ts'
 import type { LocalAccessBroker } from '../../core/access/broker.ts'
 import {
-  classifyAccessFailure, credentialStoreDeniedIn, lockRelatedIn, type AccessErrorClass,
+  classifyAccessFailure, credentialStoreDeniedIn, lockRelatedIn,
 } from '../../core/access/classify.ts'
 import type { LocalAccessSource } from '../../core/access/operations.ts'
 import { fileSystem, resolveTarget } from '../../core/fs/paths.ts'
@@ -233,16 +233,10 @@ export function parseAclVerdict(stdout: string): { owner: boolean | null; modify
   if (required === 0) return { owner, modify: null }
   return { owner, modify: (effective & required) === required }
 }
-/** POSIX：`<uid> <mode>`（macOS `stat -f %u %Lp` / GNU `stat -c %u %a`）。 */
-function parseOwnerMode(stdout: string): { uid: string; mode: string } {
-  const parts = stdout.trim().split(/\s+/)
-  return { uid: parts[0] ?? '', mode: parts[1] ?? '' }
-}
-
 /**
  * `stat` 的所有者/模式读取，**形状必须对**才产生结论：形如 `<uid> <mode>`。
  *
- * 为什么不能像 `parseOwnerMode` 那样"拿到什么算什么"：它把第一个 token 当 uid、第二个当 mode，
+ * 为什么不能"拿到什么算什么"：把第一个 token 当 uid、第二个当 mode，
  * 于是一份**只有模式**的输出（`644`）会被读成"uid=644" —— 与当前账户不等 → 结论变成
  * "这个文件不是你的"，修复直接跳过。那不是安全，是**把可修的问题变成不可修的**
  *（2026-09-29 复查第 3 条时被夹具当场抓到：`.data.lock` 明明是我们的、写得进去，却被跳过）。

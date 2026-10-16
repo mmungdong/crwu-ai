@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../../shared/utils/value.ts'
 import { joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { basenameLocalPath } from '../../../shared/utils/local-path.ts'
-import { fileSystem, readTextIfExists, resolveTarget } from '../../core/fs/paths.ts'
+import { readTextIfExists } from '../../core/fs/paths.ts'
 import { parseJsonLoose } from '../../../shared/utils/json.ts'
 import { DINGTALK_TARGET, DWS_MAX_PAGES } from '../../integrations/dws/consts.ts'
 import { buildPublishPlan, nodeSize } from '../../integrations/dws/plan.ts'
@@ -14,7 +14,7 @@ import { localDeliveryRefused, requireCaseAccess } from '../../domains/report-au
 import { dwsJson, type DwsJsonOptions } from './dws-json.ts'
 import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
 import { failure, jsonObject, renderJson } from '../common/outcome.ts'
-import { callerSession, credentialsTrusted, toolContext, type ToolDeps } from '../common/types.ts'
+import { callerSession, toolContext, type ToolDeps } from '../common/types.ts'
 import { caseScopes } from './case-scopes.ts'
 
 /**

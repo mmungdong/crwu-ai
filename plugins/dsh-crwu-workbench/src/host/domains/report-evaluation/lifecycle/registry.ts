@@ -134,7 +134,7 @@ export class ValuationLifecycles {
     return this.update(valuationId, 'cancelled', { error: text(reason) })
   }
 
-  /** 记一次来源状态（`valuation-status` 的 `providerStates` 就来自它）。 */
+  /** 记一次来源状态（`ValuationRecord.providerStates` 就来自它）。 */
   setProviderState(valuationId: string, providerId: string, state: ProviderState): { ok: boolean; error: string } {
     const record = this.get(valuationId)
     if (record === undefined) return { ok: false, error: `没有这一轮估值：${text(valuationId)}` }
@@ -190,7 +190,7 @@ export class ValuationLifecycles {
    * 有界淘汰：**先删终态**（它们已经没用了），全都是未结束的轮次时删最旧的那一个。
    *
    * ⚠️ 这里必须真的**删除**，不能"只标成失败"：标记不减少条目数，循环会一路把每一轮都标成
-   * 失败（写这条时就是这么错的，用例当场抓住）。被淘汰的轮次在 `valuation-status` 里表现为
+   * 失败（写这条时就是这么错的，用例当场抓住）。被淘汰的轮次在注册表里表现为
    * `known: false` —— 界面据此说"宿主没有这一轮的记录（重启或已被更新的轮次挤掉）"，
    * 那比留一条被改得面目全非的记录更诚实。
    */

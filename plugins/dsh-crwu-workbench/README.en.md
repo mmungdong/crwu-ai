@@ -9,14 +9,13 @@ The **audit workbench** for DeepSeek Harness (DSH): self-check the environment �
 "报告审核" tasks from H3Yun → dispatch exactly one AI audit subagent → watch it, stop it, restart it →
 auto-upload deliverables to Aliyun OSS → open the cloud-hosted audit opinion.
 
-The workbench body opens with **two directory levels**, and there are **two separate trees — one per
-sidebar module**. Under **报告评估 (Report Evaluation)** the first level holds only **估值 (valuation)**
-(second level → 房地产 / 土地·in development / 机器设备·in development); under **报告审核 (Report Audit)**
-it holds only **审核 (audit)** (second level → 报告审核 / 本地审核). The page body and its title always
-follow the **second** level (估值 / 房地产 → 「房地产估值」); switching the first level replaces the second
-level and the body in **one** state update and defaults to the first enabled page. Module ownership lives in
-the navigation metadata, so the valuation tree never shows an audit entry and vice versa. A first-level
-directory with **no configured business item** (其他业务) is not drawn at all — no empty placeholder entry.
+The workbench body opens with a **directory bar**, and there are **two separate trees — one per
+sidebar module**. Under **报告评估 (Report Evaluation)** the first level holds only **估值 (valuation)**,
+which **is itself the page** (protocol 39 removed the real-estate second level); under
+**报告审核 (Report Audit)** it holds **审核 (audit)** (second level → 报告审核 / 本地审核). Switching the
+first level replaces the landing point and the body in **one** state update. Module ownership lives in
+the navigation metadata, so the valuation tree never shows an audit entry and vice versa. A directory with
+**no configured child and no page of its own** (其他业务) is not drawn at all — no empty placeholder entry.
 **环境信息 (environment) is not a directory page**: it is the outer gate (where a failing self-check lands,
 and where you go to configure things).
 
@@ -29,19 +28,40 @@ history, no sidecar, no cross-conversation monitoring, and uploads or downloads 
 only in that conversation and its temporary case directory. The report-audit flow and its deliverables are
 unchanged.
 
-**估值 / 房地产** (the first sidebar card row, **报告评估 (Report Evaluation)**), is the **real-estate valuation** business module
+**估值** (the first sidebar card row, **报告评估 (Report Evaluation)**), is the **generic valuation** entry point
 (available since protocol 32; since protocol 33 its input page is a **single workface** rather than a
-two-column layout)
-(available since protocol 32): upload PDF / Word / Excel / images (the Host copies them byte-for-byte into
-this run's valuation case directory and records a sha256), choose a valuation method (auto / market / income /
-cost), optionally set a valuation base date and a supplemental instruction, and review the run's inputs in a
-**read-only confirmation drawer** before confirming. After confirmation the inputs are frozen, the Host creates
-a valuation session in the selected workspace and sends it a fixed instruction; the session then gathers data
-(the real-estate rules from the DSW business knowledge base and public listings from 房天下 / 安居客 / 链家·贝壳,
-at most 3 attempts per page), fills the workbook, and cross-checks it, producing `估值结果.json`,
-`估值报告.html`, and `估值底稿.xlsx`. Valuing **without** a base date is supported: the result records
-「本次未指定评估基准日」and skips base-date filtering and date adjustment. All numeric conclusions follow the
-**recalculated** workbook, and delivery requires passing both the workbook contract and the result-contract checks.
+two-column layout; since protocol 35 it is **confirm-and-hand-off**; since protocol 39 the real-estate
+second level is gone and site login is an optional capability; since 0.0.46 the two required fields moved
+directly below the materials section, both use the same single-select control, and the drawer was
+reorganised; since 0.0.47 / protocol 40 delivery is unified on `估值报告数据.json`, knowledge
+materialisation supports `stage=parameters`, and finalize supports `target=project` close-out): pick 1–30 materials recursively (the Host copies them byte-for-byte into this run's valuation
+case directory and records a sha256), then choose the **two required fields** — an **asset type** (real estate
+today; it starts empty and confirmation is blocked until chosen) and a **valuation method**
+(**auto, market comparison, income and cost are all selectable**; auto is an explicit option, not a default) —
+optionally set the purpose, value type, valuation base date and a supplemental instruction, and press
+**「核对资料」(check materials)** to open a **read-only confirmation drawer** whose first screen is this run's
+asset type / method / material count / base date. The **「信息获取辅助 · 可选」(optional information
+retrieval assistance)** area below (formerly "case sources") lists the real state of each case
+source together with login / verification entry points — not signed in, unknown, or a failing site **never**
+blocks filling in the form or starting the run; the parent session receives the per-source policy and its
+reason and then follows the knowledge base's channel and fallback rules (Lianjia first; Fang and Anjuke as registered fallbacks when
+Lianjia does not cover the area, is not signed in, or has too few cases; the **Host keeps a persistent
+retrieval budget** — 10 pages / 20 candidates per source per group per round, stopping at whichever hits
+first, and neither keyword changes nor retries reset it).
+
+After confirmation the inputs are frozen, the Host creates **exactly one** parent valuation session in the
+selected workspace and sends it a fixed instruction, then opens it automatically — there is **no** progress
+page, no result page, and no completion polling. Analysis, object identification, plan splitting, method
+selection, retrieval (real-estate rules from the DSW business knowledge base; public listings from 链家
+and others, at most 3 attempts per page, with visible CAPTCHAs attempted first by a fixed script), scripted
+calculation and delivery all happen inside that session; each plan of a project lands under `方案/<planId>/`.
+
+Two deliverables: the **full-process HTML report** (`估值报告.html`) and the **calculation workbook**
+(`估值底稿.xlsx`). Valuing **without** a base date is supported: the report records 「本次未指定评估基准日」
+and skips base-date filtering and date adjustment. All numeric conclusions follow the **recalculated**
+workbook; completion is decided by `crwu_valuation_finalize` from real files (missing screenshots, no
+recalculation record, or a missing plan directory all downgrade the status), and delivery requires passing
+both the workbook contract and the result-contract checks.
 
 The audit process itself is **not** in this repository; the `crwu-audit` skill family runs it.
 This repository only *dispatches, watches, and ships back*.

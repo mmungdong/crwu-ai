@@ -63,7 +63,7 @@ func evaluateResponder(value string) func(*websocket.Conn, map[string]any) {
 
 func TestFactsParsesEvaluateResult(t *testing.T) {
 	payload, err := json.Marshal(map[string]string{
-		"href": "https://bj.ke.com/ershoufang/chaoyang/", "title": "二手房", "text": "在售",
+		"href": "https://bj.lianjia.com/ershoufang/chaoyang/", "title": "二手房", "text": "在售",
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -80,7 +80,7 @@ func TestFactsParsesEvaluateResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Facts() error = %v, want nil", err)
 	}
-	if facts.Href != "https://bj.ke.com/ershoufang/chaoyang/" || facts.Title != "二手房" || facts.Text != "在售" {
+	if facts.Href != "https://bj.lianjia.com/ershoufang/chaoyang/" || facts.Title != "二手房" || facts.Text != "在售" {
 		t.Fatalf("Facts() = %+v, want all three fields parsed", facts)
 	}
 }

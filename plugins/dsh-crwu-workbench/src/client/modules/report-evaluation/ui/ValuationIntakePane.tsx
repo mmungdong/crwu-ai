@@ -1,75 +1,119 @@
 import * as React from 'react'
 import { FileIcon, FolderIcon, CloseIcon } from '../../../ui/icons.tsx'
 import { zhCN } from '../../../locales/zh-CN.ts'
+import { VALUATION_PROMPT_MAX_LENGTH } from '../../../../shared/consts.ts'
+import { ASSET_TYPES } from '../../../../shared/contracts/valuation-project.ts'
+import { ValuationCapabilityArea } from './ValuationCapabilityArea.tsx'
+import { Button, DatePicker, FormField, IconButton, Select, TextArea, TextInput, type SelectOption } from '../../../ui/components/index.ts'
+import { useInstanceId } from '../../../ui/components/ids.ts'
+import { VALUATION_CLASSES as V } from '../model/styles.ts'
 import {
+  actionSummaryOf,
   canEditInputs,
+  entryStatusText,
+  fileKindLabel,
+  fileKindOf,
+  fileStatusOf,
+  scopeCountsText,
+  sizeTextOf,
+  startDisabledReason,
   valuationMethodOptions,
-  type ValuationMethod,
+  type ValuationFileRowView,
+  type ValuationMethodChoice,
   type ValuationPageState,
   type ValuationSelectedFileView,
 } from '../model/valuation-state.ts'
 
 /**
- * 估值输入表单 —— **一个完整的工作面，按任务顺序纵向排列**（§3）。
+ * 估值输入工作面 —— **按任务顺序纵向排列**（设计稿 §8 / §9）。
  *
  * ```text
- * 估值资料            [添加文件] [添加文件夹]
- * 空态上传区 / 紧凑文件列表
- * ─────────────────────────────────────
- * 评估方法
- * 自动判定  市场法  收益法  成本法      ← 紧凑四项，宽屏一行
- * 当前选项的一句说明                     ← 只说一次
- * 评估基准日 · 可选   留空说明
- * ─────────────────────────────────────
- * 补充要求 · 可选
- * 多行输入框
- * ─────────────────────────────────────
- * 已添加 N 份资料                        [检查并确认]
+ * 估值资料                             [选择文件] [选择文件夹]
+ * v 项目资料            文件夹 · 纳入 3 份            [移除文件夹]
+ *    权属资料.pdf       PDF · 2.4 MB   已纳入        [移除]
+ * 已纳入 3 / 30 份；跳过 1 项                          [查看跳过项]
+ * ─────────────────────────────────────────────────────────────
+ * 资产类型 *                     评估方法 *
+ * [请选择资产类型        ▾]     [请选择评估方法        ▾]
+ * ─────────────────────────────────────────────────────────────
+ * 补充条件 · 可选
+ * 评估目的          价值类型          评估基准日
+ * [          ]     [          ]     [                ]
+ * 补充要求
+ * [                                                  ]
+ * ─────────────────────────────────────────────────────────────
+ * 信息获取辅助 · 可选
+ * 链家   尚未检查                            [检查状态]
+ * 用于辅助获取公开信息；未登录可继续估值。
+ * ─────────────────────────────────────────────────────────────
+ * 就绪摘要 / 下一步提示                    [核对资料]
  * ```
  *
- * ## 为什么不再是左右等宽双栏
+ * ## 六条硬口径
  *
- * 以前是"左资料 / 右设置"的 1:1 网格。左边只有少量文件时下半屏全空，右边把方法、基准日、
- * 补充要求竖着叠成三张大卡 —— 两栏都难看，而且主操作被推到屏幕下方。**纵向任务流**同时
- * 解决这两件事：内容按用户实际的操作顺序排，主操作跟在最后，工作面上限宽居中。
+ * 1. **一屏一个 primary**：右下角**唯一**的实心按钮就是「核对资料」（逐字）；
+ * 2. **两个必填项紧跟资料区**：资产类型与评估方法排在**所有**可选条件与辅助能力之前，
+ *    两者用同一种单选下拉；长文件清单靠紧凑行、目录折叠与摘要消化，不把它们推下去；
+ * 3. **禁用必须说原因**：可见文字 + `aria-describedby` 关联到按钮上，不只挂 `title`；
+ *    字段级错误只在失焦或清空已填值之后出现 —— 初次进入不是满屏红字；
+ * 4. **份数以递归去重后的文件数**为准（用户选中的目录数不作数），>30 整批阻止、不截取；
+ *    评估目的 / 价值类型**不预置任何正式结论**：未填就是空，界面按"未指定"解释；
+ * 5. **入口与实际文件是两层**：文件夹能真的展开/收起、里面的每一份能单独移除（写进排除范围，
+ *    重扫与归档都不再出现）—— 被收起的后代不留在键盘顺序里；
+ * 6. **移除可撤销**：反馈在资料区下方，8 秒内有效；准备确认时冻结范围、隐藏撤销。
  *
- * 响应式以**面板实际可用宽度**为准（容器查询），不是浏览器窗口宽度：宿主侧栏展开后
- * 面板可能只有 500px，那时还按窗口宽度套宽屏布局就会横向溢出。
- *
- * ## 这个组件不认识 RPC
- *
- * 它只接收状态与回调，由 controller 落状态与调 Host。"能改输入"的判据只有一处
- *（状态机的 `canEditInputs`），组件不自己判断阶段。
- *
- * ## 「读取状态」只能说实话
- *
- * 逐份资料的状态来自 `valuation-files-scan`（文件名 / 大小 / 读得出来吗）。扫描还没回来时
- * 显示"正在读取资料清单…"，**不预告**某一份能不能解析出来。
+ * 这个组件不认识 RPC：它只接收状态与回调，"能不能改"的唯一判据是状态机的 `canEditInputs`。
  */
 
 export interface ValuationIntakePaneProps {
   state: ValuationPageState
   onPickFiles: () => void
   onPickFolder: () => void
+  /** 移除一个**选择入口**（文件夹或直接选中的文件）。 */
   onRemoveSelection: (path: string) => void
-  onMethodChange: (method: ValuationMethod) => void
+  /** 逐个移除一份具体文件（写进排除范围）。 */
+  onExcludeFile: (path: string) => void
+  /** 重新纳入之前被移除的文件。 */
+  onReincludeFile: (path: string) => void
+  /** 撤销最近一次移除。 */
+  onUndoRemoval: () => void
+  /** 扫描失败 / 清单不完整时的「重新读取清单」。 */
+  onRescan: () => void
+  onMethodChange: (method: ValuationMethodChoice) => void
+  /** 选资产类型（空串 = 还没选；状态机只接受已登记的取值）。 */
+  onAssetTypeChange: (assetType: string) => void
+  /** 查一次信息获取辅助能力状态（进页面不自动查；辅助区与抽屉各触发一次）。 */
+  onCheckCapability: () => void
+  /** 为某个来源拉起登录窗口（可选能力，失败不拦页面）。 */
+  onLoginSite: (siteId: string) => void
+  /** 打开某个来源的验证窗口（已登录但页面要人机验证时唯一的出路）。 */
+  onVerifySite: (siteId: string) => void
+  /** 取消本页发起的那条登录任务。 */
+  onCancelLogin: (jobId: string) => void
   onBaseDateChange: (value: string) => void
+  /** 评估目的（空串 = 未指定）。 */
+  onPurposeChange: (value: string) => void
+  /** 价值类型（空串 = 未指定）。 */
+  onValueTypeChange: (value: string) => void
   onPromptChange: (value: string) => void
-  /** 「检查并确认」：进入提取。 */
-  onStart: () => void
-  /** 提取中「取消提取」。 */
-  onCancelIntake: () => void
+  /** 「核对资料」：递归校验 + 字节归档 + 元信息回显。 */
+  onConfirm: () => void
+  /** 准备核对期间真实存在的「返回修改」（作废在途请求、回到可编辑草稿）。 */
+  onBackToEdit: () => void
+  /**
+   * 主操作按钮的 ref（由外层持有）。
+   *
+   * 抽屉关闭时焦点要回到**同一个**「核对资料」按钮：这一页在抽屉打开期间只是隐藏、没有卸载，
+   * 所以把外层拿到的 ref 挂上去，`SideDrawer.returnFocusTo` 就能把焦点还回来。
+   */
+  primaryRef?: React.MutableRefObject<HTMLButtonElement | null>
 }
 
-/** 超过这个份数就先只画前几条（后面的设置不能被一堆文件推到很远）。 */
+/** 默认展开到首批最多 8 个文件行（设计稿 §8.2）。 */
 const VISIBLE_FILE_LIMIT = 8
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return ''
-  if (bytes < 1024) return `${String(bytes)} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
+/** 撤销提示的存活时间。 */
+const UNDO_WINDOW_MS = 8_000
 
 /** 目录摘要：只取最后两层，太长的话没有信息量。 */
 function shortDir(dir: string): string {
@@ -78,254 +122,634 @@ function shortDir(dir: string): string {
   return parts.slice(-2).join('/')
 }
 
-function fileStatusText(file: ValuationSelectedFileView): string {
-  if (file.status === 'scanned') return zhCN.valuationFileStatusScanned
-  if (file.status === 'skipped') return zhCN.valuationFileStatusSkipped
-  return zhCN.valuationFileStatusUnknown
+/**
+ * 资产类型下拉的选项：**集合来自共享合同**，显示文案只在这里映射。
+ *
+ * 显示名不承担路由 —— 提交给 Host 的永远是稳定业务标识（`real-estate`）。
+ */
+function assetTypeOptions(): SelectOption[] {
+  return ASSET_TYPES.map((value) => ({
+    value,
+    label: value === 'real-estate' ? zhCN.valuationAssetTypeRealEstate : value,
+  }))
 }
 
-/** 一份资料行：类型图标 + 文件名 + 大小 + 读取状态 + 移除。 */
-function FileRow(props: {
-  file: ValuationSelectedFileView
+/**
+ * 方法选项：四项**全部可选**（协议 39）。
+ *
+ * 「自动判定」是一个明确的用户选项，带一枚轻量「推荐」标记，但**不是默认值** ——
+ * 新草稿里它是未选状态（`state.method === ''`）。
+ */
+function methodOptions(): SelectOption[] {
+  return valuationMethodOptions().map((option) => ({
+    value: option.value,
+    label: option.label,
+    hint: option.hint,
+    ...(option.value === 'auto' ? { badge: zhCN.valuationMethodRecommended } : {}),
+  }))
+}
+
+/** 一份资料（真实文件行）：类型图标 + 文件名 + 元信息 + 状态 + 移除/重新纳入。 */
+function SubFileRow(props: {
+  file: ValuationFileRowView
+  scanState: ValuationPageState['scanState']
   disabled: boolean
-  onRemove: (path: string) => void
+  onExclude: (path: string) => void
+  onReinclude: (path: string) => void
+  /** 登记移除按钮：移除之后焦点要落到"下一份"（设计稿 §17.1），不能掉到 body。 */
+  registerRef: (path: string, node: HTMLButtonElement | null) => void
 }): React.ReactElement {
   const { file } = props
-  const size = formatBytes(file.sizeBytes)
-  return <li className={`crwu-valuation-file${file.status === 'skipped' ? ' crwu-valuation-file-off' : ''}`}>
-    <span className="crwu-valuation-file-icon" aria-hidden="true"><FileIcon size={14} /></span>
-    <span className="crwu-valuation-file-main">
-      {/* 主标题是**文件名**；完整路径留在 `title` 与下面的目录摘要里（用户口径：
-          显示完整绝对路径反而认不出是哪一份）。 */}
-      <span className="crwu-valuation-file-name" title={file.path}>{file.name}</span>
-      <span className="crwu-valuation-file-meta">
-        {size === '' ? null : <span>{size}</span>}
-        {file.fileCount > 1 ? <span>{zhCN.valuationFileFolderCount.replace('{count}', String(file.fileCount))}</span> : null}
-        {file.dirHint === '' ? null : <span className="crwu-valuation-file-dir">{shortDir(file.dirHint)}</span>}
-      </span>
-      {file.reason === '' ? null : <span className="crwu-valuation-file-reason">{file.reason}</span>}
+  const status = fileStatusOf(file, props.scanState)
+  const kind = file.kind === '' ? fileKindOf(file.name) : file.kind
+  return <li
+    className="crwu-valuation-subfile"
+    data-valuation-subfile={file.path}
+    data-valuation-subfile-state={status.key}
+  >
+    <span className="crwu-valuation-subfile-icon" aria-hidden="true"><FileIcon size={14} /></span>
+    <span className="crwu-valuation-subfile-main">
+      <span className="crwu-valuation-subfile-name" title={file.path}>{file.name}</span>
+      {/* 同名材料才附目录摘要：每一行都顶一长串路径，扫一眼还是认不出是哪一份。 */}
+      {file.parentPath === '' || shortDir(file.parentPath) === '' ? null
+        : <span className="crwu-valuation-subfile-meta">
+          <span>{fileKindLabel(kind)}</span>
+          <span>{sizeTextOf(file.sizeBytes)}</span>
+        </span>}
     </span>
-    <span className="crwu-valuation-file-status">{fileStatusText(file)}</span>
-    <button
-      type="button"
-      className="crwu-valuation-file-remove"
-      aria-label={`${zhCN.valuationFileRemove}：${file.name}`}
-      title={`${zhCN.valuationFileRemove}：${file.name}`}
-      disabled={props.disabled}
-      onClick={() => { props.onRemove(file.path) }}
-    ><CloseIcon size={12} /></button>
+    <span className="crwu-valuation-subfile-status">{status.text}</span>
+    <span className="crwu-valuation-subfile-actions">
+      {file.state === 'excluded'
+        ? <Button
+          variant="text"
+          size="sm"
+          className="crwu-valuation-reinclude"
+          disabled={props.disabled}
+          aria-label={`${zhCN.valuationReinclude}：${file.name}`}
+          onClick={() => { props.onReinclude(file.path) }}
+        >{zhCN.valuationReinclude}</Button>
+        : <IconButton
+          variant="text"
+          className="crwu-valuation-file-remove"
+          label={`${zhCN.valuationFileRemove}：${file.name}`}
+          buttonRef={(node) => { props.registerRef(file.path, node) }}
+          disabled={props.disabled}
+          onClick={() => { props.onExclude(file.path) }}
+        ><CloseIcon size={12} /></IconButton>}
+    </span>
   </li>
 }
 
-/** 提取进度区：必须落在**当前可视区域内**，并且带 `role="status"`（§11.1）。 */
-function IntakeStatus(props: { stage: string }): React.ReactElement {
-  const label = props.stage === '' ? zhCN.valuationIntakeStageUnknown : props.stage
-  return <div
-    className="crwu-valuation-intake-status"
-    role="status"
-    aria-live="polite"
-    data-valuation-intake-status="extracting"
-  >
-    <span className="crwu-valuation-spinner" aria-hidden="true" />
-    <span className="crwu-valuation-intake-status-label">{zhCN.valuationIntakeRunning}</span>
-    <span className="crwu-valuation-intake-status-stage">{label}</span>
-  </div>
+/**
+ * 一个选择入口：文件夹可展开到真实文件；移除入口是**独立**按钮，不触发展开。
+ *
+ * 折叠是**真的**收起：`aria-expanded=false` 时子列表**不渲染**，于是被收起的后代
+ * 也不在键盘顺序里（以前的条件是 `(isFolder && rows.length > 0) || open`，
+ * 于是有文件的目录**永远**展开 —— 那个箭头点了没有任何效果）。
+ */
+function EntryRow(props: {
+  entry: ValuationSelectedFileView
+  rows: ValuationFileRowView[]
+  scanState: ValuationPageState['scanState']
+  disabled: boolean
+  open: boolean
+  showAll: boolean
+  onToggle: (path: string) => void
+  onShowAll: () => void
+  onRemove: (path: string) => void
+  onExclude: (path: string) => void
+  onReinclude: (path: string) => void
+  registerRef: (path: string, node: HTMLButtonElement | null) => void
+}): React.ReactElement {
+  const { entry } = props
+  const isFolder = entry.kind === 'directory' || entry.fileCount > 1 || props.rows.length > 1
+  const included = props.rows.filter((row) => row.state === 'included').length
+  const visible = props.showAll ? props.rows : props.rows.slice(0, VISIBLE_FILE_LIMIT)
+  const hidden = props.rows.length - visible.length
+  const status = entryStatusText(entry.status)
+  const groupId = `crwu-valuation-group-${encodeURIComponent(entry.path).replace(/%/g, '')}`
+  const expandable = isFolder && props.rows.length > 0
+  return <li className="crwu-valuation-entry" data-valuation-entry={entry.path}
+    data-valuation-entry-kind={isFolder ? 'directory' : 'file'}>
+    <div className="crwu-valuation-entry-head">
+      {expandable
+        ? <button
+          type="button"
+          className="crwu-valuation-entry-toggle"
+          aria-expanded={props.open}
+          aria-controls={groupId}
+          aria-label={(props.open ? zhCN.valuationFolderCollapse : zhCN.valuationFolderExpand)
+            .replace('{name}', entry.name)}
+          onClick={() => { props.onToggle(entry.path) }}
+        >
+          <FolderIcon size={14} />
+          {/* 展开箭头：只做视觉（rotate 由 CSS 按 aria-expanded 驱动），语义由按钮自己承担。 */}
+          <span className="crwu-valuation-entry-chevron" aria-hidden="true">›</span>
+          <span className="crwu-valuation-entry-name" title={entry.path}>{entry.name}</span>
+        </button>
+        : <span className="crwu-valuation-entry-toggle crwu-valuation-entry-static">
+          <span className="crwu-valuation-entry-icon" aria-hidden="true"><FileIcon size={14} /></span>
+          <span className="crwu-valuation-entry-name" title={entry.path}>{entry.name}</span>
+        </span>}
+      <span className="crwu-valuation-entry-meta">
+        {isFolder
+          ? zhCN.valuationFolderIncluded.replace('{count}', String(props.rows.length))
+          : [fileKindLabel(fileKindOf(entry.name)), sizeTextOf(entry.sizeBytes)].filter((one) => one !== '').join(' · ')}
+      </span>
+      {included === 0 && props.rows.length > 0
+        ? <span className="crwu-valuation-entry-status">{zhCN.valuationFileStatusRemoved}</span>
+        : null}
+      {/* 入口状态：`scanned` 与"文件夹 · 纳入 N 份"说的是同一件事，重复显示只是噪音（UX-13）。 */}
+      {status === '' || status === zhCN.valuationFileStatusScanned
+        ? null
+        : <span className="crwu-valuation-entry-status">{status}</span>}
+      <Button
+        variant="text"
+        size="sm"
+        className="crwu-valuation-entry-remove"
+        disabled={props.disabled}
+        aria-label={`${zhCN.valuationFolderRemove}：${entry.name}`}
+        title={`${zhCN.valuationFolderRemove}：${entry.name}`}
+        onClick={() => { props.onRemove(entry.path) }}
+      >{isFolder ? zhCN.valuationFolderRemove : zhCN.valuationFileRemove}</Button>
+    </div>
+    {entry.reason === '' ? null : <p className="crwu-valuation-entry-reason">{entry.reason}</p>}
+    {expandable && props.open
+      ? <ul className="crwu-valuation-sublist" id={groupId} data-valuation-subfile-group={entry.path}>
+        {visible.map((row) => <SubFileRow
+          key={row.path}
+          file={row}
+          scanState={props.scanState}
+          disabled={props.disabled}
+          onExclude={props.onExclude}
+          onReinclude={props.onReinclude}
+          registerRef={props.registerRef}
+        />)}
+      </ul>
+      : null}
+    {expandable && props.open && (hidden > 0 || (props.showAll && props.rows.length > VISIBLE_FILE_LIMIT))
+      ? <Button variant="text" size="sm" className="crwu-valuation-more" onClick={props.onShowAll}>
+        {props.showAll
+          ? zhCN.valuationFilesShowLess
+          : zhCN.valuationFilesShowAll.replace('{count}', String(props.rows.length))}
+      </Button>
+      : null}
+  </li>
+}
+
+/** 一份"只知道路径"的回落行（旧宿主 / 未扫描完成时用；不假装知道大小）。 */
+function fallbackEntries(state: ValuationPageState): ValuationSelectedFileView[] {
+  if (state.files.length > 0) return state.files
+  return state.selection.map((path) => ({
+    path,
+    name: path.split(/[\\/]/).filter((part) => part !== '').pop() ?? path,
+    dirHint: '', kind: '', sizeBytes: 0, status: 'reading', reason: '', fileCount: 1,
+  }))
 }
 
 export function ValuationIntakePane(props: ValuationIntakePaneProps): React.ReactElement {
   const { state } = props
-  const busy = state.phase === 'extracting'
-  const count = state.selection.length
+  const instanceId = useInstanceId('crwu-valuation-intake')
+  const fieldId = (name: string): string => `${instanceId}-${name}`
+  const editable = canEditInputs(state.phase)
+  const preparing = state.phase === 'preparing-confirmation'
+  /** 每个入口的展开状态：默认展开（员工要看得到里面有什么）。 */
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
   const [showAll, setShowAll] = React.useState(false)
+  const [showSkipped, setShowSkipped] = React.useState(false)
+  /** 撤销提示的可见性（8 秒后自己收掉；有焦点时不移除可操作控件）。 */
+  const [undoVisible, setUndoVisible] = React.useState(false)
+  /** 字段级错误只在"失焦"或"清空过已填值"之后出现 —— 初次进入不是满屏红字。 */
+  const [blurred, setBlurred] = React.useState<{ assetType: boolean; method: boolean }>({
+    assetType: false, method: false,
+  })
+  /** 共享 DatePicker 上报的基准日草稿有效性（无效时门禁主操作）。 */
+  const [dateValid, setDateValid] = React.useState(true)
+  const undoRef = React.useRef<HTMLButtonElement | null>(null)
+  const localPrimaryRef = React.useRef<HTMLButtonElement | null>(null)
+  const primaryRef = props.primaryRef ?? localPrimaryRef
+  const addFilesRef = React.useRef<HTMLButtonElement | null>(null)
   /**
-   * 焦点回到「检查并确认」（§11.3）。
+   * 中文输入法合成期间不打上限错误（设计稿 §8.9）。
    *
-   * 抽屉关闭 / 「返回修改」之后，刚才那个抽屉整个卸载了 —— 焦点会掉到 `body` 上，
-   * 键盘用户得从头 Tab 一遍。所以由**仍然在的**这一侧接手：记住上一帧的阶段，
-   * 只要从"抽屉打开过"回到可编辑态，就把焦点送回主操作。
-   * 注入式渲染替身里 ref 不接 DOM，`?.` 一路兜底。
+   * composition 中间态会出现"半个合成串"，那时长度不是用户的最终输入：据此报错就是噪音。
    */
-  const primaryRef = React.useRef<HTMLButtonElement | null>(null)
-  const wasAway = React.useRef(false)
+  const composingRef = React.useRef(false)
+  /** 移除之后要把焦点交给谁（`''` = 回到「选择文件」）。 */
+  const pendingFocusRef = React.useRef<string | null>(null)
+  /** 每份文件的移除按钮（按路径登记；同一份资料在多个入口下也只登记最后一次）。 */
+  const removeRefs = React.useRef(new Map<string, HTMLButtonElement | null>())
+  /** "曾经填过又被清空"的必填项：清空是用户动作，这时给短错误不是噪音。 */
+  const clearedRef = React.useRef<{ assetType: boolean; method: boolean }>({
+    assetType: false, method: false,
+  })
+  const previousRef = React.useRef({ assetType: state.assetType, method: state.method })
+  if (previousRef.current.assetType !== '' && state.assetType === '') clearedRef.current.assetType = true
+  if (previousRef.current.method !== '' && state.method === '') clearedRef.current.method = true
+  previousRef.current = { assetType: state.assetType, method: state.method }
+
+  /**
+   * 移除之后的焦点落点（§17.1）：下一份文件 → 上一份 → 「选择文件」。
+   *
+   * 焦点掉到 `body` 上会让键盘用户从头 Tab 一遍，而"刚移除的那一行"已经不在了。
+   */
   React.useEffect(() => {
-    // 判据与状态机**同一处**（`canEditInputs`）：两套判据打架正是失败后卡死的成因。
-    const editable = canEditInputs(state.phase)
-    if (!editable) { wasAway.current = true; return }
-    if (!wasAway.current) return
-    wasAway.current = false
-    primaryRef.current?.focus?.()
-  }, [state.phase])
+    const target = pendingFocusRef.current
+    if (target === null) return
+    pendingFocusRef.current = null
+    const node = target === '' ? null : removeRefs.current.get(target)
+    if (node !== null && node !== undefined) { node.focus?.(); return }
+    addFilesRef.current?.focus?.()
+    // 依赖 data：文件集合变了才结算一次焦点（不在每次重渲染时抢焦点）。
+  }, [state.fileRows])
 
-  // 逐份事实来自扫描；扫不出来（旧宿主 / 还没扫完）时按"只知道路径"渲染，不假装知道大小。
-  const files: ValuationSelectedFileView[] = state.files.length > 0
-    ? state.files
-    : state.selection.map((path) => ({
-      path, name: path.split(/[\\/]/).filter((part) => part !== '').pop() ?? path,
-      dirHint: '', kind: '', sizeBytes: 0, status: 'unknown', reason: '', fileCount: 1,
-    }))
-  const visible = showAll ? files : files.slice(0, VISIBLE_FILE_LIMIT)
-  const hidden = files.length - visible.length
+  const handleExclude = React.useCallback((path: string): void => {
+    const included = state.fileRows.filter((row) => row.state === 'included').map((row) => row.path)
+    const index = included.indexOf(path)
+    const next = index >= 0 ? (included[index + 1] ?? included[index - 1] ?? '') : ''
+    pendingFocusRef.current = next
+    props.onExcludeFile(path)
+  }, [state.fileRows, props.onExcludeFile])
 
-  const methods = valuationMethodOptions()
-  const current = methods.find((option) => option.value === state.method) ?? methods[0]
+  // 撤销窗口：有新的一次移除就重新计时；准备确认时范围冻结，提示立即消失。
+  const removal = state.lastRemoval
+  React.useEffect(() => {
+    if (removal === null || preparing) { setUndoVisible(false); return }
+    setUndoVisible(true)
+    const handle = setTimeout(() => { setUndoVisible(false) }, UNDO_WINDOW_MS)
+    return () => { clearTimeout(handle) }
+  }, [removal, preparing])
 
-  return <div className="crwu-valuation-intake">
-    <section className="crwu-valuation-block">
+  const entries = fallbackEntries(state)
+  const rowsByEntry = (path: string): ValuationFileRowView[] =>
+    state.fileRows.filter((row) => row.parentPath === path)
+  const methods = methodOptions()
+  const assetTypes = assetTypeOptions()
+  const currentMethod = methods.find((option) => option.value === state.method)
+
+  /** 不能点「核对资料」的原因（空串 = 能点）。禁用理由必须**可见**。 */
+  const reason = preparing ? '' : (dateValid ? startDisabledReason(state) : zhCN.valuationBaseDateInvalid)
+  const disabled = preparing || reason !== ''
+
+  // 字段级错误：只在失焦 / 清空过之后出现，文案与底栏那句**同一档**（短、可执行）。
+  const assetTypeError = state.assetType === ''
+    && (blurred.assetType || clearedRef.current.assetType)
+    ? zhCN.valuationActionDisabledNoAssetType
+    : ''
+  const methodError = state.method === ''
+    && (blurred.method || clearedRef.current.method)
+    ? zhCN.valuationActionDisabledNoMethod
+    : ''
+
+  const promptLength = state.supplementalPrompt.length
+  const remaining = VALUATION_PROMPT_MAX_LENGTH - promptLength
+
+  return <div className={V.intake}>
+    {/* 正文滚动区：工作面是**确定高度的 flex 列**，只有这一层滚（§9.2 的第一方案）。
+        底部操作栏因此是真正的 footer（`flex:none`），不再用 sticky 压在内容上面。 */}
+    <div className="crwu-valuation-intake-body">
+    <section className="crwu-valuation-block" data-valuation-block="files">
       <header className="crwu-valuation-block-head">
         <h3 className="crwu-valuation-block-title">{zhCN.valuationWorkfaceFiles}</h3>
         <div className="crwu-valuation-pick">
-          <button type="button" className="crwu-valuation-btn" disabled={busy} onClick={props.onPickFiles}>
-            <FileIcon size={14} /> {zhCN.valuationAddFiles}
-          </button>
-          <button type="button" className="crwu-valuation-btn" disabled={busy} onClick={props.onPickFolder}>
-            <FolderIcon size={14} /> {zhCN.valuationAddFolder}
-          </button>
+          <Button variant="secondary" className={V.btn} buttonRef={addFilesRef} disabled={!editable} onClick={props.onPickFiles}>
+            <FileIcon size={14} /> {zhCN.valuationPickFiles}
+          </Button>
+          <Button variant="secondary" className={V.btn} disabled={!editable} onClick={props.onPickFolder}>
+            <FolderIcon size={14} /> {zhCN.valuationPickFolder}
+          </Button>
         </div>
       </header>
 
-      {/* 有文件之后收起大上传空态，只留紧凑列表（§4）。
-          空态是**引导**不是投放区：宿主没有把拖放交过来，所以这里没有 onDrop，
-          文案也不提拖拽 —— 名字同样不叫 drop（那个名字在说一件没做的事）。 */}
-      {files.length === 0
+      {/* 空态是**引导**不是投放区：宿主没有把拖放交过来，所以这里没有 onDrop，文案也不提拖拽。 */}
+      {entries.length === 0
         ? <div className="crwu-valuation-empty">
           <p className="crwu-valuation-empty-title">{zhCN.valuationFilesEmptyTitle}</p>
           <p className="crwu-valuation-empty-hint">{zhCN.valuationFilesEmptyHint}</p>
         </div>
         : <ul className="crwu-valuation-files">
-          {visible.map((file) => <FileRow
-            key={file.path}
-            file={file}
-            disabled={busy}
+          {entries.map((entry) => <EntryRow
+            key={entry.path}
+            entry={entry}
+            rows={rowsByEntry(entry.path)}
+            scanState={state.scanState}
+            disabled={!editable}
+            open={collapsed[entry.path] !== true}
+            showAll={showAll}
+            onToggle={(path) => { setCollapsed((prev) => ({ ...prev, [path]: prev[path] !== true })) }}
+            onShowAll={() => { setShowAll(!showAll) }}
             onRemove={props.onRemoveSelection}
+            onExclude={handleExclude}
+            onReinclude={props.onReincludeFile}
+            registerRef={(path, node) => { removeRefs.current.set(path, node) }}
           />)}
         </ul>}
 
-      {hidden > 0 || showAll
-        ? <button type="button" className="crwu-valuation-more" onClick={() => { setShowAll(!showAll) }}>
-          {showAll ? zhCN.valuationFilesShowLess : zhCN.valuationFilesShowAll.replace('{count}', String(files.length))}
-        </button>
-        : null}
-
+      {/* 份数明细（含跳过项）只在资料区出现；底栏只放一句可行动摘要。 */}
       <p className="crwu-valuation-count">
-        <span className="crwu-valuation-count-num">
-          {zhCN.valuationSelectedCount.replace('{count}', String(count))}
-        </span>
+        <span className="crwu-valuation-count-num">{scopeCountsText(state)}</span>
         {state.scanState === 'scanning'
-          ? <span className="crwu-valuation-count-state">{zhCN.valuationScanRunning}</span>
-          : null}
-        {state.scanState === 'failed'
-          ? <span className="crwu-valuation-count-error" role="alert">{state.scanError}</span>
+          ? <span className="crwu-valuation-count-state">{zhCN.valuationScanRescanning}</span>
           : null}
       </p>
+      {/* 一个轻 live region 宣布范围变化；不给每个文件都挂 role=status。 */}
+      <p className="crwu-valuation-live" role="status" aria-live="polite">
+        {state.scanState === 'ready' && !preparing ? scopeCountsText(state) : ''}
+      </p>
+
+      {state.scanSkipped.length > 0
+        ? <>
+          <Button
+            variant="text"
+            size="sm"
+            className="crwu-valuation-more"
+            aria-expanded={showSkipped}
+            onClick={() => { setShowSkipped(!showSkipped) }}
+          >{showSkipped
+              ? zhCN.valuationFilesHideSkipped
+              : zhCN.valuationFilesViewSkipped}</Button>
+          {showSkipped
+            ? <ul className="crwu-valuation-skipped" data-valuation-skipped="true">
+              {state.scanSkipped.map((item) => <li key={`${item.path}:${item.reason}`}>
+                <span className="crwu-valuation-skipped-name">{item.name}</span>
+                <span className="crwu-valuation-skipped-reason">{item.reason}</span>
+              </li>)}
+            </ul>
+            : null}
+        </>
+        : null}
+
+      {/* 清单被安全上限截断：**禁止确认**，不能把截断数量当全部数量。 */}
+      {state.truncated
+        ? <p className="crwu-valuation-truncated" role="alert"
+          data-valuation-truncated="true">{zhCN.valuationFilesTruncated}</p>
+        : null}
+
+      {/* 扫描失败：保留入口与条件，给一次真实的「重新读取清单」。 */}
+      {state.scanState === 'failed'
+        ? <div className="crwu-valuation-intake-error" role="alert" data-valuation-scan-error="true">
+          <strong>{zhCN.valuationScanFailed}</strong>
+          <p>{state.scanError}</p>
+          <Button variant="secondary" className={V.btn} disabled={!editable} onClick={props.onRescan}>
+            {zhCN.valuationScanRetry}
+          </Button>
+        </div>
+        : null}
+
+      {/* 移除后的撤销：只在资料区下方出现一次，保留 8 秒。 */}
+      {removal !== null && undoVisible
+        ? <div className="crwu-valuation-undobar" data-valuation-undo="true" role="status">
+          <span>
+            {(removal.kind === 'root' ? zhCN.valuationFilesRemovedFolder : zhCN.valuationFilesRemoved)
+              .replace('{name}', removal.name)}
+          </span>
+          <Button
+            variant="secondary"
+            className={V.btn}
+            buttonRef={undoRef}
+            disabled={!editable}
+            onClick={props.onUndoRemoval}
+          >{zhCN.valuationUndo}</Button>
+        </div>
+        : null}
     </section>
 
-    <section className="crwu-valuation-block">
-      <h3 className="crwu-valuation-block-title">{zhCN.valuationMethodTitle}</h3>
-      {/* 紧凑四项：宽屏一行、窄屏两行 / 纵向（容器查询，见 styles/pane.ts）。
-          原生 radio 语义 + 可见标签，键盘可用；选中由底色 + 标识 + 文字共同表达。 */}
-      <div className="crwu-valuation-methods" role="radiogroup" aria-label={zhCN.valuationMethodTitle}>
-        {methods.map((option) => <label
-          key={option.value}
-          className={`crwu-valuation-method${state.method === option.value ? ' crwu-valuation-method-on' : ''}`}
+    {/* ── 两个必填项：紧跟资料区，排在所有可选条件与辅助能力之前 ──────────────
+        容器 ≥560px 时并排等宽；更窄时纵向堆叠（容器查询按**面板实际宽度**判断）。 */}
+    <section className="crwu-valuation-block" data-valuation-block="required">
+      <div className={V.requiredRow}>
+        <FormField
+          className={V.field}
+          id={fieldId('asset-type')}
+          label={zhCN.valuationAssetTypeTitle}
+          required
+          hint={state.assetType === '' ? zhCN.valuationAssetTypeRequired : zhCN.valuationAssetTypeHint}
+          error={assetTypeError}
+          dataAttributes={{ 'data-valuation-asset-type': 'true' }}
+          errorData={{ 'data-valuation-field-error': 'asset-type' }}
         >
-          <input
-            type="radio"
-            name="crwu-valuation-method"
-            value={option.value}
-            checked={state.method === option.value}
-            disabled={busy}
-            onChange={() => { props.onMethodChange(option.value) }}
-          />
-          <span className="crwu-valuation-method-label">{option.label}</span>
-        </label>)}
+          {(field) => <Select
+            name="asset-type"
+            labelId={field.labelId}
+            id={field.id}
+            value={state.assetType}
+            placeholder={zhCN.valuationAssetTypePlaceholder}
+            options={assetTypes}
+            disabled={!editable}
+            required
+            invalid={field.invalid}
+            describedBy={field.describedBy}
+            dataAttributes={{ 'data-valuation-select': 'asset-type' }}
+            optionAttributes={(option) => ({ 'data-valuation-option': option.value })}
+            onBlur={() => { setBlurred((prev) => ({ ...prev, assetType: true })) }}
+            onChange={props.onAssetTypeChange}
+          />}
+        </FormField>
+
+        <FormField
+          className={V.field}
+          id={fieldId('method')}
+          label={zhCN.valuationMethodTitle}
+          required
+          hint={currentMethod === undefined
+            ? zhCN.valuationMethodEmptyHint
+            : zhCN.valuationMethodHintOnce
+              .replace('{label}', currentMethod.label)
+              .replace('{hint}', currentMethod.hint ?? '')}
+          error={methodError}
+          dataAttributes={{ 'data-valuation-method-field': 'true' }}
+          hintData={{ 'data-valuation-method-hint': currentMethod?.value ?? '' }}
+          errorData={{ 'data-valuation-field-error': 'method' }}
+        >
+          {(field) => <Select
+            name="method"
+            labelId={field.labelId}
+            id={field.id}
+            value={state.method}
+            placeholder={zhCN.valuationMethodPlaceholder}
+            options={methods}
+            disabled={!editable}
+            required
+            invalid={field.invalid}
+            describedBy={field.describedBy}
+            dataAttributes={{ 'data-valuation-select': 'method' }}
+            optionAttributes={(option) => ({ 'data-valuation-option': option.value })}
+            onBlur={() => { setBlurred((prev) => ({ ...prev, method: true })) }}
+            onChange={(value) => { props.onMethodChange(value as ValuationMethodChoice) }}
+          />}
+        </FormField>
       </div>
-      {/* 当前选项的说明**只在这里出现一次**（以前每张卡各带一段说明，视觉重量过高）。 */}
-      <p className="crwu-valuation-hint" data-valuation-method-hint={current.value}>
-        {zhCN.valuationMethodHintOnce.replace('{label}', current.label).replace('{hint}', current.hint)}
-      </p>
     </section>
 
-    <section className="crwu-valuation-block">
+    {/* ── 补充条件 · 可选：三列（宽）/ 两列（中）/ 一列（窄）────────────────── */}
+    <section className="crwu-valuation-block" data-valuation-block="conditions">
       <h3 className="crwu-valuation-block-title">
-        {zhCN.valuationBaseDateTitle}
-        <span className="crwu-valuation-block-optional"> · {zhCN.valuationBaseDateOptional}</span>
+        {zhCN.valuationConditionsTitle}
+        <span className={V.fieldOptional}> · {zhCN.valuationPurposeOptional}</span>
       </h3>
-      <input
-        type="date"
-        className="crwu-valuation-date"
-        value={state.baseDate}
-        disabled={busy}
-        aria-label={zhCN.valuationBaseDateTitle}
-        onChange={(event) => { props.onBaseDateChange(event.target.value) }}
-      />
-      <p className="crwu-valuation-hint">{zhCN.valuationBaseDateHint}</p>
-    </section>
+      <div className={V.conditions}>
+        <FormField
+          className={V.field}
+          id={fieldId('purpose')}
+          label={zhCN.valuationPurposeTitle}
+          hint={state.purpose === '' ? zhCN.valuationPurposeHintEmpty : zhCN.valuationPurposeHint}
+        >
+          {(field) => <TextInput
+            id={field.id}
+            value={state.purpose}
+            disabled={!editable}
+            describedBy={field.describedBy}
+            placeholder={zhCN.valuationPurposePlaceholder}
+            controlClassName="crwu-valuation-purpose"
+            data-valuation-purpose="true"
+            onChange={(value) => { props.onPurposeChange(value) }}
+          />}
+        </FormField>
 
-    <section className="crwu-valuation-block">
-      <h3 className="crwu-valuation-block-title">
-        {zhCN.valuationPromptTitle}
-        <span className="crwu-valuation-block-optional"> · {zhCN.valuationPromptOptional}</span>
-      </h3>
-      <textarea
-        className="crwu-valuation-prompt"
-        rows={4}
-        placeholder={zhCN.valuationPromptPlaceholder}
-        value={state.supplementalPrompt}
-        disabled={busy}
-        aria-label={zhCN.valuationPromptTitle}
-        onChange={(event) => { props.onPromptChange(event.target.value) }}
-      />
-      <p className="crwu-valuation-hint">{zhCN.valuationPromptHint}</p>
-    </section>
+        <FormField
+          className={V.field}
+          id={fieldId('value-type')}
+          label={zhCN.valuationValueTypeTitle}
+          hint={state.valueType === '' ? zhCN.valuationValueTypeHintEmpty : zhCN.valuationValueTypeHint}
+        >
+          {(field) => <TextInput
+            id={field.id}
+            value={state.valueType}
+            disabled={!editable}
+            describedBy={field.describedBy}
+            placeholder={zhCN.valuationValueTypePlaceholder}
+            controlClassName="crwu-valuation-value-type"
+            data-valuation-value-type="true"
+            onChange={(value) => { props.onValueTypeChange(value) }}
+          />}
+        </FormField>
 
-    {/* 进度区跟在工作面里、操作区之前：它必须在**当前可视区域内**，
-        不能被后面的大块内容推到页面最下方（§11.1）。 */}
-    {busy ? <IntakeStatus stage={state.intakeStage} /> : null}
-
-    {state.phase === 'failed' && state.error !== ''
-      ? <div className="crwu-valuation-intake-error" role="alert" data-valuation-intake-error="true">
-        <strong>{zhCN.valuationIntakeFailedTitle}</strong>
-        {/* §4：失败要给出"具体原因 + 失败阶段 + 可执行动作"。阶段是宿主报的，没拿到就不写。 */}
-        {state.failedStage === ''
-          ? null
-          : <p data-valuation-failed-stage="true">
-            {zhCN.valuationFailedAtStage.replace('{stage}', state.failedStage)}
-          </p>}
-        <p>{state.error}</p>
-        <button type="button" className="crwu-valuation-btn" onClick={props.onStart}>
-          {zhCN.valuationIntakeRetry}
-        </button>
+        <FormField
+          className={V.field}
+          id={fieldId('base-date')}
+          label={zhCN.valuationBaseDateTitle}
+          hint={state.baseDate === '' ? zhCN.valuationBaseDateHintEmpty : zhCN.valuationBaseDateHintFilled}
+          dataAttributes={{ 'data-valuation-base-date-field': 'true' }}
+        >
+          {(field) => <DatePicker
+            id={field.id}
+            value={state.baseDate}
+            disabled={!editable}
+            describedBy={field.describedBy}
+            onValidityChange={setDateValid}
+            onChange={(value) => { props.onBaseDateChange(value) }}
+          />}
+        </FormField>
       </div>
-      : null}
 
-    {/* 操作区：**面板内**粘性（不是宿主页面的全局固定底栏），所以不会盖住宿主界面。
-        始终显示当前资料数量与主操作；提取中换成「取消提取」。 */}
-    <div className="crwu-valuation-actionbar">
-      <span className="crwu-valuation-action-count">
-        {zhCN.valuationSelectedCount.replace('{count}', String(count))}
-      </span>
-      <span className="crwu-valuation-grow" />
-      {busy
-        ? <button type="button" className="crwu-valuation-btn" onClick={props.onCancelIntake}>
-          {zhCN.valuationIntakeCancel}
-        </button>
-        : null}
-      <button
-        type="button"
-        ref={primaryRef}
-        className="crwu-valuation-btn crwu-valuation-btn-primary"
-        disabled={busy || count === 0}
-        aria-describedby={count === 0 ? 'crwu-valuation-action-reason' : undefined}
-        onClick={props.onStart}
+      <FormField
+        className={V.field}
+        id={fieldId('prompt')}
+        label={zhCN.valuationPromptTitle}
+        hint={<>
+          {zhCN.valuationPromptHint}
+          <span className="crwu-valuation-prompt-count">
+            {zhCN.valuationPromptCount
+              .replace('{count}', String(promptLength))
+              .replace('{limit}', String(VALUATION_PROMPT_MAX_LENGTH))}
+          </span>
+          {remaining > 0 && remaining <= 400
+            ? <span className="crwu-valuation-prompt-count">
+              {zhCN.valuationPromptRemaining.replace('{count}', String(remaining))}
+            </span>
+            : null}
+        </>}
+        error={state.promptOverLimit
+          ? zhCN.valuationPromptOverLimit.replace('{limit}', String(VALUATION_PROMPT_MAX_LENGTH))
+          : ''}
+        errorData={{ 'data-valuation-prompt-over': 'true' }}
       >
-        {busy ? zhCN.valuationIntakeRunning : zhCN.valuationCheckAndConfirm}
-      </button>
-      {/* 禁用按钮旁边说明原因（§4）。 */}
-      {count === 0
-        ? <span className="crwu-valuation-hint" id="crwu-valuation-action-reason">
-          {zhCN.valuationActionDisabledNoFiles}
-        </span>
+        {(field) => <TextArea
+          id={field.id}
+          value={state.supplementalPrompt}
+          rows={3}
+          autoGrow
+          maxRows={8}
+          disabled={!editable}
+          describedBy={field.describedBy}
+          invalid={state.promptOverLimit}
+          placeholder={zhCN.valuationPromptPlaceholder}
+          controlClassName="crwu-valuation-prompt"
+          onChange={(value) => {
+            if (composingRef.current) return
+            props.onPromptChange(value)
+          }}
+          onCompositionStart={() => { composingRef.current = true }}
+          onCompositionEnd={(event) => {
+            composingRef.current = false
+            props.onPromptChange((event.target as { value?: string }).value ?? '')
+          }}
+        />}
+      </FormField>
+    </section>
+
+    {/* ── 信息获取辅助 · 可选 ──────────────────────────────────────────────
+        公开信息的辅助能力（当前是链家）的**真实状态**与登录 / 验证入口。它不拦页面：
+        未登录、未知或该站失败都不阻止填写与启动，原因随来源策略交给父会话。 */}
+    <section className="crwu-valuation-block" data-valuation-block="capability">
+      <h3 className="crwu-valuation-block-title">
+        {zhCN.valuationCapabilityTitle}
+        <span className={V.fieldOptional}> · {zhCN.valuationCapabilityOptional}</span>
+      </h3>
+      <ValuationCapabilityArea
+        state={state}
+        onRecheck={props.onCheckCapability}
+        onLogin={props.onLoginSite}
+        onCancelLogin={props.onCancelLogin}
+        onVerify={props.onVerifySite}
+      />
+    </section>
+
+    {state.error === '' ? null : <div className="crwu-valuation-intake-error" role="alert" data-valuation-intake-error="true">
+      <strong>{zhCN.valuationIntakeFailedTitle}</strong>
+      <p>{state.error}</p>
+    </div>}
+    </div>
+
+    {/* 操作区是**确定高度 flex 列**的 footer（`flex:none`），不属于宿主页面的 fixed 底栏：
+        它不覆盖任何内容，也不参与正文滚动。 */}
+    <div className={V.actionbar}>
+      {/*
+        左侧**只有一行**：禁用时说的是"为什么不能点"，可用时说的是"下一步做什么"。
+        以前这里是两行（摘要 + 原因），而两者在空输入等情形下是同一句话 —— 纯噪音（UX-13）。
+      */}
+      <span
+        className="crwu-valuation-action-line"
+        id={V.actionReason}
+        {...(reason === '' ? {} : { 'data-valuation-action-reason': 'true' })}
+        {...(preparing ? { 'data-valuation-prepare-note': 'true' } : {})}
+      >
+        {preparing
+          ? zhCN.valuationPrepareBusy
+          : (reason === '' ? actionSummaryOf(state) : reason)}
+      </span>
+      {/* 15 秒后的长等待说明是**新信息**（"还能做什么"），保留为第二行。 */}
+      {state.slowWait === 'prepare'
+        ? <span className="crwu-valuation-hint" data-valuation-slow-wait="prepare">{zhCN.valuationPrepareSlow}</span>
         : null}
+      {/* 右侧动作组：摘要永远在左，动作永远在右；窄面板只让这一组自己换行，不拉伸主按钮。 */}
+      <span className="crwu-valuation-action-actions">
+        {/* 准备中：**唯一**能做的真事就是"返回修改"（它真的会作废在途请求并回到草稿）。 */}
+        {preparing
+          ? <Button variant="secondary" className={V.btn} onClick={props.onBackToEdit}>
+            {zhCN.valuationDrawerBack}
+          </Button>
+          : null}
+        <Button
+          variant="primary"
+          buttonRef={primaryRef}
+          className={`${V.btn} ${V.btnPrimary}`}
+          disabled={disabled}
+          loading={preparing}
+          describedBy={reason === '' ? undefined : V.actionReason}
+          onClick={props.onConfirm}
+        >{preparing ? zhCN.valuationPreparePending : zhCN.valuationConfirm}</Button>
+      </span>
     </div>
   </div>
 }

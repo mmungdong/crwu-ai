@@ -236,8 +236,12 @@ test('C-08 · 登录类操作**只**允许面板来源：审核链路（Tool / �
   // 这是"子代理不许登录"在**策略层**的落点：不是靠提示词请求，而是操作表根本不给它这个来源。
   // 审核子代理的审批策略被钉成 `never`，任何交互式登录在它那里都会卡在一个没人回答的地方；
   // 而登录要写员工本机凭据，那不该由一条自动审核发起。
+  //
+  // `system.browser.login`（2026-10-14）是第三个成员：它会在员工屏幕上打开一个真实浏览器
+  // 窗口等下去 —— 估值/审核子会话可以**驱动**浏览器取数（`system.browser.drive`），
+  // 但永远不该替员工弹一个登录窗口。
   const logins = LOCAL_ACCESS_OPERATION_NAMES.filter((name) => name.endsWith('.login'))
-  assert.deepEqual([...logins].sort(), ['dws.auth.login', 'h3yun.session.login'])
+  assert.deepEqual([...logins].sort(), ['dws.auth.login', 'h3yun.session.login', 'system.browser.login'])
   for (const name of logins) {
     assert.deepEqual([...LOCAL_ACCESS_OPERATIONS[name].allowedSources], ['panel'], name)
     const denied = makeBroker(makeCtx().ctx, grantedConsent()).broker

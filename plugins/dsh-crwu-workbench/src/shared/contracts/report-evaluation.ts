@@ -1,20 +1,36 @@
 /**
- * 报告评估（房地产估值，协议 32）的**线协议类型**。
+ * 报告评估（房地产估值，协议 35）的**线协议类型**。
  *
- * ## 为什么这些类型必须在这里，而不是在 Host 的 domain 里
+ * ## 这一层存在的理由
  *
- * 两侧要就同一批字段达成一致：Host 的八个操作回什么、Client 的页面读什么。
+ * 两侧要就同一批字段达成一致：Host 的六个操作回什么、Client 的页面读什么。
  * 定义在 Host 的 domain 里会让 Client 反向依赖 Host（打包形态上根本不可能），
- * 定义在 Client 里则会让 Wire 层的契约检查反向依赖 Client —— 这一层存在的意义
- * 就是**两端都不依赖，只被两端依赖**。
+ * 定义在 Client 里则会让 Wire 层的契约检查反向依赖 Client —— 这一层**两端都不依赖，
+ * 只被两端依赖**。
+ *
+ * ## 协议 35 起：线协议里不再有"轮次阶段"
+ *
+ * 32 代那一版把 Host 的轮次阶段（`draft` / `extracting` / …）直接搬到了客户端页面上，
+ * 于是页面必须**跟着轮次走**才能显示对（面板还得为此持有估值专用轮询）。这一代把两件事分开：
+ *
+ * - Host 侧仍然有轮次（lifecycles，父会话执行用），但**不上线**；
+ * - 页面自己的阶段是 `ValuationPagePhase` —— 它只回答"这一页现在该画什么"。
  *
  * 字段名与取值的事实源在 Host 一侧（`domains/report-evaluation/`）与
  * `skills/biz/crwu-biz-valuation-realestate/references/09-output-contract.md`；
  * 这里只声明**线上形状**。
  */
 
-/** 页面 / 轮次的阶段。`stale-host` 只由客户端在协议代数不匹配时给出。 */
-export type ValuationPhase =
+/** 用户可选的评估方法；`auto` 是**输入**，结论里只会出现 market / income / cost。 */
+export type ValuationMethod = 'auto' | 'market' | 'income' | 'cost'
+
+/**
+ * Host 轮次的阶段（`domains/report-evaluation/lifecycle`）。
+ *
+ * ⚠️ 它**不在**这一代的线协议里：页面只认 `ValuationPagePhase`。保留这个类型是为了让两侧
+ * 继续对同一套词（Host 的轮次记录、冻结清单、Host 侧用例都从它派生），而不是各写一套。
+ */
+export type HostValuationPhase =
   | 'draft'
   | 'extracting'
   | 'confirmation'
@@ -26,173 +42,282 @@ export type ValuationPhase =
   | 'cancelled'
   | 'stale-host'
 
-/** 用户可选的评估方法；`auto` 是**输入**，结论里只会出现 market / income / cost。 */
-export type ValuationMethod = 'auto' | 'market' | 'income' | 'cost'
+/**
+ * 估值启动页自己的阶段（协议 39 · 设计稿 §3）。
+ *
+ * 它只描述"页面在干什么"：草稿、准备确认、确认、建会话、交接结果。
+ * **没有门禁阶段**：案例来源登录从协议 39 起是可选能力，未登录 / 未知 / 该站失败都不拦页面。
+ */
+export type ValuationPagePhase =
+  | 'draft'
+  | 'preparing-confirmation'
+  | 'confirmation'
+  | 'creating-session'
+  | 'handoff-failed'
+  | 'handed-off'
+  | 'stale-host'
 
-/** 交付件存在性（三件套）。 */
-export interface ValuationArtifactPresence {
-  html: boolean
-  xlsx: boolean
-  json: boolean
+/** 一个来源的登录状态三态（`unknown` 是"查不出来"，不是"没登录"）。 */
+export type SiteAuthState = 'authenticated' | 'unauthenticated' | 'unknown'
+
+/**
+ * 一次人工登录任务的状态。
+ *
+ * `waiting-user` = **登录凭据已到位，但受保护页要人机验证**：登录本身成功了，缺的是
+ * 员工在可见窗口里过掉那一次验证。它**不是** `failed`（那会告诉员工"你没登录成功"）。
+ */
+export type LoginJobState = 'running' | 'succeeded' | 'failed' | 'cancelled' | 'waiting-user'
+
+/** 逐站的权威登录结论（`valuation-browser-preflight` 的 `sites[]`）。 */
+export interface SiteStatusView {
+  siteId: string
+  label: string
+  state: SiteAuthState
+  reason: string
+  /** 受保护页的页面判定（ok / login-wall / captcha / blocked）；未读页面时为空。 */
+  verdict: string
+  /** 受保护页地址（公开配置）：需要人工过验证时打开它。 */
+  protectedUrl: string
+  /** 凭据到期时间（RFC3339）；会话 cookie 时为空。 */
+  expiresAt: string
+  /** 凭据没有自己的到期时间（关掉浏览器即失效）。 */
+  sessionCookie: boolean
 }
 
-/** 一轮估值的进度（`total <= 0` 表示宿主没给总数，界面据此不画进度条）。 */
-export interface ValuationProgressView {
-  stage: string
-  detail: string
-  completed: number
-  total: number
-}
-
-/** 一个外部来源的运行状态。 */
-export interface ValuationProviderStateView {
+/**
+ * 一个来源这一次检查里做过的挑战处置。
+ *
+ * 为什么它必须与"登录状态"分开：受保护页给人机验证时，员工**已经登录**了，
+ * 需要的是"去那个窗口完成验证"，而不是重新登录一遍。
+ */
+export interface SiteChallengeView {
+  detected: boolean
+  /** 已经做过一次有界自动尝试（预算由宿主管理，重复点击不会重置）。 */
+  attempted: boolean
+  /** 自动尝试的结论（recovered / waiting-user / unsupported / failed / unavailable…）。 */
   state: string
-  attempts: number
-  detail: string
+  reasonCode: string
+  /** 员工可以在可见窗口里完成验证的页面。 */
+  verifyUrl: string
 }
 
-/** 输入清单里的一份资料（`status` 为 `parsed` / `unparsed`）。 */
-export interface ValuationFileView {
-  fileName: string
-  relativePath: string
+/** 逐站展示行：在 `SiteStatusView` 上加"必需/可选"、人话状态与挑战处置。 */
+export interface SiteRowView extends SiteStatusView {
+  required: boolean
+  stateLabel: string
+  challenge?: SiteChallengeView
+}
+
+/**
+ * 能力（案例来源）状态结论（Host 推一次，页面只渲染）。
+ *
+ * ## 协议 39 起它不再是「门禁」
+ *
+ * 旧语义是：必需来源没全部 `authenticated` → 正文不可进入。新语义是：**它只是一次检查的
+ * 事实快照** —— 未登录 / 未知 / 该站失败都不阻止填写与启动，父会话拿到的来源策略里会带原因。
+ * `released` 保留是为了让旧宿主 / 旧用例读得到同一个字段，但**不再参与任何禁用判据**。
+ */
+export interface AuthGateView {
+  /** ⚠️ 保留字段：**不再**是"能不能进正文"的判据（协议 39 起登录是可选用能力）。 */
+  released: boolean
+  /** 已确认为可用的来源（只是事实，不是放行条件）。 */
+  required: string[]
+  /** 只展示、不阻塞的来源。 */
+  optional: string[]
+  /** 一句话说明现在这些来源是什么状态。 */
+  reason: string
+  /** 连"检查"都没做成（清单读不出来 / 浏览器不可用）→ 界面给"重新检查"。 */
+  unavailable: boolean
+  /**
+   * 这次检查的**时刻**（RFC3339）。
+   *
+   * 它是"运行初始事实"：检查过了不等于整轮始终可用，所以时间必须跟着结论一起走。
+   * 旧宿主不回它 → 空串（界面显示"检查时间未知"，不编一个）。
+   */
+  checkedAt: string
+}
+
+/** 一次人工登录任务（可查询、可取消）。 */
+export interface LoginJobView {
+  jobId: string
+  siteId: string
+  state: LoginJobState
+  /** 毫秒时间戳（`finishedAt` 为 `null` = 还在跑）。 */
+  startedAt: number
+  finishedAt: number | null
+  /** 给人看的一句话（失败原因 / 已确认状态）。 */
+  detail: string
+  /** 权威 `status` 的逐站结果；登录结束前为空数组。 */
+  sites: SiteStatusView[]
+  /** 登录命令自身的退出事实。**不代表**登录成功。 */
+  commandOk: boolean
+  /** 本次任务里跑过几次挑战恢复辅助。 */
+  recoveryAttempts: number
+}
+
+/** `valuation-browser-preflight` 的应答（**能力状态**的唯一数据源；不再阻断页面）。 */
+export interface ValuationPreflightView {
+  ok: boolean
+  error: string
+  sites: SiteStatusView[]
+  rows: SiteRowView[]
+  gate: AuthGateView
+  loginJobs: LoginJobView[]
+  opened: boolean
+  openError: string
+}
+
+/** `valuation-browser-login` 的应答（`reused: true` = 复用正在跑的那一条）。 */
+export interface ValuationLoginView {
+  ok: boolean
+  error: string
+  jobId: string
+  reused: boolean
+  job: LoginJobView | null
+}
+
+/**
+ * `valuation-browser-open-verification` 的应答（协议 37）。
+ *
+ * `opened: true` 只说明"受控窗口已经打开"，**不说明验证已经完成** —— 验证完成与否只由下一次
+ * `valuation-browser-preflight` 的逐站结论回答。界面因此不能把 `opened` 当成功。
+ */
+export interface ValuationVerificationView {
+  ok: boolean
+  error: string
+  opened: boolean
+  siteId: string
+}
+
+/**
+ * 一个选择入口展开后的**真实文件**（协议 37）。
+ *
+ * 为什么必须单独回一份：`items[]` 是"用户选中的入口"（文件夹只带一个份数），而员工要核对的
+ * 是**具体哪几份文件**，也只有在文件这一层才能逐个移除。`path` 是员工机器上的绝对路径，
+ * 只回显给面板，**不进归档摘要、不进模型输入**。
+ */
+export interface ScanFileView {
+  /** 本机绝对路径（面板本地回显；也是 `excludedPaths` 的回传口径）。 */
+  path: string
+  name: string
   kind: string
   sizeBytes: number
-  sha256?: string
-  status: string
-  fieldCount?: number
-  note: string
+  /** 它属于哪个已选入口（该入口的绝对路径）。 */
+  parentPath: string
 }
 
-/** 知识来源（`source` 只能是 `dws` 或 `local`；缺失只能出现在能力缺口里）。 */
-export interface ValuationKnowledgeSourceView {
-  route: string
-  source: string
-  updatedAt: string
-  digest: string
+/** 扫描时被跳过的条目（符号链接 / 特殊文件 / 权限不足），带原因。 */
+export interface ScanSkippedView {
+  path: string
+  name: string
+  reason: string
 }
 
-/** 知识库状态。 */
-export interface ValuationKnowledgeView {
-  space: string
-  ready: boolean
-  sources: ValuationKnowledgeSourceView[]
-  gaps: string[]
+/**
+ * `valuation-files-scan` 的应答（协议 37）。
+ *
+ * `items[]` 是入口层事实，`files[]` 是**递归去重后的真实文件**；两者必须来自同一次扫描，
+ * 否则界面上的"纳入 N 份"和真正会归档的份数会对不上。
+ */
+export interface ValuationScanView {
+  ok: boolean
+  error: string
+  errorKind: string
+  items: unknown[]
+  files: ScanFileView[]
+  skipped: ScanSkippedView[]
+  fileCount: number
+  readableCount: number
+  skippedCount: number
+  overLimit: boolean
+  /** 枚举被安全上限截断（误选巨型目录）：界面要如实说"清单未完整读取"并禁止确认。 */
+  truncated: boolean
+  limit: number
 }
 
-/** 外部来源预检的一行。 */
-export interface ValuationProviderView {
-  id: string
-  label: string
-  state: string
-  stateLabel: string
-  detail: string
-  captcha?: boolean
-  loginUrl?: string
+/**
+ * 交接的**权威创建判据**（协议 37）。
+ *
+ * `not-created` 只允许在"Host 确认本次处理已终止且没有已建/在途会话"时给出；
+ * 网络超时、回执丢失与未知异常一律 `unknown` —— Client **无权**把未知改成未创建，
+ * 否则"返回修改"会造出第二个项目目录。
+ */
+export type CreationDisposition = 'not-created' | 'created' | 'unknown'
+
+/**
+ * 一份归档资料的元信息（确认抽屉逐行显示的那一份）。
+ *
+ * `absolutePath` 是**唯一**回显给面板的绝对路径：它不进确认摘要、不进冻结输入、
+ * 不进交接指令、不进报告（设计稿 §5 / §11.1）。
+ */
+export interface ArchivedMaterialView {
+  /** 稳定标识：同一批里唯一（同名不同路径也能分辨）。 */
+  fileId: string
+  fileName: string
+  /** 源文件在员工机器上的原始绝对路径。**只回显给面板**。 */
+  absolutePath: string
+  /** 归档副本相对项目目录的路径（唯一、已去重）。 */
+  archiveRelativePath: string
+  kind: string
+  sizeBytes: number
+  /** **归档副本**的字节指纹（复制后重算）。 */
+  sha256: string
+  /** 创建时间；`birthtime` 不可靠时是 `null`（界面显示"创建时间未知"，不许拿 mtime 冒充）。 */
+  createdAt: string | null
+  modifiedAt: string | null
+  readable: boolean
+  /** 内容与本批另一份相同时填对方的 `fileId`。 */
+  duplicateOf: string | null
 }
 
-/** `valuation-intake` 的应答（确认抽屉的数据源）。 */
-export interface ValuationIntakeView {
+/** `valuation-intake` 的应答：确认抽屉的数据源（**不提取、不联网、不拉知识**）。 */
+export interface ValuationPreviewView {
   ok: boolean
   errorKind: string
   error: string
-  valuationId: string
+  requestId: string
+  previewId: string
+  projectId: string
   casePath: string
-  method: string
-  baseDate: string
+  /** 确认摘要：交接时必须**逐字**回传。 */
+  inputDigest: string
+  /**
+   * 用户选定的**资产类型**（协议 39）。
+   *
+   * 它是通用入口的第一个选择，也是装配哪个 Skill / 哪份入口 Wiki 的唯一依据；
+   * 未选时 Host 直接拒绝预览（不存在"默认房地产"这一档）。
+   */
+  assetType: string
+  methodRequest: string
+  baseDate: string | null
+  /** 评估目的；**未指定是 `null`**（协议 38）—— 界面与报告都按"未指定"呈现。 */
+  purpose: string | null
+  /** 价值类型；未指定是 `null`。可选取值清单待业务方确认，线协议不写死枚举。 */
+  valueType: string | null
   supplementalPrompt: string
-  digest: string
-  files: ValuationFileView[]
-  extractedFields: Record<string, string>
-  missingFields: string[]
-  unparsed: string[]
+  files: ArchivedMaterialView[]
+  fileCount: number
+  overLimit: boolean
+  skipped: string[]
   capabilityGaps: string[]
-  warnings: string[]
-  knowledge: ValuationKnowledgeView
-  providers: ValuationProviderView[]
+  createdAt: string
+  expiresAt: string
 }
 
-/** `valuation-status` 的应答。 */
-export interface ValuationStatusView {
+/** `valuation-start` 的应答：一次幂等的父会话交接。 */
+export interface ValuationHandoffView {
   ok: boolean
+  errorKind: string
   error: string
-  valuationId: string
-  phase: ValuationPhase
-  workspaceId: string
-  workspacePath: string
-  sessionId: string
-  progress: ValuationProgressView
-  providerStates: Record<string, ValuationProviderStateView>
-  capabilityGaps: string[]
-  /** 这一轮自己的失败原因（与信封的 `error` 不是一回事）。 */
-  recordError?: string
-  /** 宿主是否还有这一轮的记录；false = 重启过或已被更新的轮次挤掉。 */
-  known: boolean
-  method?: ValuationMethod
-  baseDate?: string
-  digest?: string
-  casePath?: string
-  artifacts?: ValuationArtifactPresence
-}
-
-/** 一条案例（字段名与 `估值结果.json` 的 snake_case 保持一致）。 */
-export interface ValuationCaseView {
-  url: string
-  title: string
-  community: string
-  transaction_type: string
-  used_as_comparable: boolean
-  unit_price: number | null
-  building_area: number | null
-  keep_reason: string
-  drop_reason: string
-  captured_at?: string
-}
-
-/** `估值结果.json` 的线上视图（缺的数字是 `null`，绝不是 0）。 */
-export interface ValuationResultView {
-  valuationId: string
-  method: string
-  methodReason: string
-  baseDate: string
-  unitPrice: number | null
-  totalValue: number | null
-  manual_confirmation_items: string[]
-  capability_gaps: string[]
-  knowledge_sources: ValuationKnowledgeSourceView[]
-  cases: ValuationCaseView[]
-  artifacts: { html: string; xlsx: string; json: string }
-}
-
-/** `valuation-result` 的应答。 */
-export interface ValuationResultEnvelopeView {
-  ok: boolean
-  error: string
-  valuationId: string
-  casePath: string
-  phase: string
-  artifacts: ValuationArtifactPresence
-  result: ValuationResultView | null
-}
-
-/** `valuation-start` 的应答。 */
-export interface ValuationStartView {
-  ok: boolean
-  error: string
-  valuationId: string
-  casePath: string
-  sessionId?: string
-  phase?: ValuationPhase
-  /** 同一 ID 已经开过 → true（界面据此不重复提示"正在启动"）。 */
-  reused?: boolean
-  digest?: string
-}
-
-/** `valuation-browser-preflight` 的应答。 */
-export interface ValuationBrowserPreflightView {
-  ok: boolean
-  error: string
-  providers: ValuationProviderView[]
-  /** 是否真的代为打开了默认浏览器登录页。 */
-  opened: boolean
-  openError: string
+  projectId: string
+  parentSessionId: string
+  /** 固定指令是否已经被受理（false = 会话已建但指令没发出去，重试要发回同一个会话）。 */
+  dispatchAccepted: boolean
+  /** 同一 requestId / previewId 已经交接成功过 → true。 */
+  reused: boolean
+  /**
+   * Host 的权威创建判据（协议 37）：只有它说 `not-created`，界面才允许「返回修改」。
+   * 缺字段按 `unknown` 处理 —— 类默认值偏向"不许回草稿"。
+   */
+  creationDisposition: CreationDisposition
 }

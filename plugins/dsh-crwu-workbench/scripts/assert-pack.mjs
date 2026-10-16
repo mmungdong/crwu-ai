@@ -68,18 +68,28 @@ const REQUIRED = [
   'skills/README.md',
   'skills/crwu/crwu-audit/SKILL.md',
   'skills/biz/crwu-biz-valuation-realestate/SKILL.md',
-  // 交付模板与结构契约随包发布：缺了模板，子会话只能自己造表（那时"公式区不许覆盖"就无从保证）。
-  'skills/biz/crwu-biz-valuation-realestate/template/valuation-workbook.xlsx',
-  'skills/biz/crwu-biz-valuation-realestate/schemas/valuation-result.schema.json',
-  'skills/biz/crwu-biz-valuation-realestate/scripts/validate_result.py',
+  // 通用填表 / 校验脚本与报告模板随包发布：模板与它自己的填写说明是唯一入口，
+  // 缺了脚本就只剩"手改单元格"（输入 / 公式区不被覆盖便无从保证）。
   'skills/biz/crwu-biz-valuation-realestate/scripts/check_workbook_contract.py',
-  // 两个构建脚本与报告模板同样随包发布：缺了它们，子会话只能手改单元格（"公式区不被覆盖"
-  // 就退回成靠自觉）。
   'skills/biz/crwu-biz-valuation-realestate/scripts/build_workbook.py',
   'skills/biz/crwu-biz-valuation-realestate/scripts/build_report.py',
   'skills/biz/crwu-biz-valuation-realestate/template/valuation-report.html',
-  'skills/biz/crwu-biz-valuation-realestate/template/valuation-result.json',
   'skills/biz/crwu-biz-valuation-realestate/assets/README.md',
+  // v2 会话工作流的**运行期必需**件（2026-10-14）。缺任何一个都不是"少个文件"，
+  // 而是对应能力整条不可用 —— 所以它们与模板、校验脚本同级钉在这里：
+  //   - 站点清单：门禁与取数都要用它，缺了浏览器来源全部不可用；
+  //   - v2 项目/报告数据 Schema：Host 与 Skill 共同的形状契约；
+  //   - 知识路由契约：Skill 侧的路由事实源（正文仍来自业务知识库）；
+  //   - `build_report_data.py`：报告数据组装（HTML 的唯一数据源由它产出）；
+  //   - `calculate_market.py`：生产计算入口（业务阈值由知识快照传入）。
+  'skills/biz/crwu-biz-valuation-realestate/assets/browser-sites.json',
+  'skills/biz/crwu-biz-valuation-realestate/schemas/valuation-project.schema.json',
+  'skills/biz/crwu-biz-valuation-realestate/schemas/valuation-report-data.schema.json',
+  'skills/biz/crwu-biz-valuation-realestate/references/knowledge-routing.md',
+  'skills/biz/crwu-biz-valuation-realestate/references/workflow.md',
+  'skills/biz/crwu-biz-valuation-realestate/references/execution-and-land-extension.md',
+  'skills/biz/crwu-biz-valuation-realestate/scripts/build_report_data.py',
+  'skills/biz/crwu-biz-valuation-realestate/scripts/calculate_market.py',
   'skills/dws/dingtalk-doc/SKILL.md',
   'skills/dws/provenance.json',
   'common/skills/crwu-dws/SKILL.md',

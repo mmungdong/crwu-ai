@@ -27,7 +27,7 @@
 |---|---|---|
 | `H3YUN_BASE_URL` | 覆盖氚云控制台地址（测试用） | `https://www.h3yun.com` |
 | `H3YUN_TOKEN` | 仅 **agent 通道**命令用（见 §6） | 无 |
-| `CRWU_BROWSER` | `crwu browser` 使用的 Chromium 系浏览器可执行文件 | 自动探测 Edge/Chrome |
+| `CRWU_BROWSER` | `crwu browser` 使用的 Chromium 系浏览器可执行文件 | 依次取：`CRWU_BROWSER` → 系统默认浏览器（仅当它是 Chromium 系，Safari/Firefox 无法用 CDP 驱动时会跳过）→ 声明的 Chromium 候选路径（Chrome/Edge/Brave/Chromium/Vivaldi/Opera 等；**不硬编码 Edge**） |
 | `CRWU_BROWSER_PROFILE` | 浏览器 profile 目录（登录态所在） | `~/.crwu/browser/profile` |
 
 ## 3. 上手：绑定员工会话（一次性，每台机器每员工一次）
@@ -146,27 +146,44 @@ crwu h3yun session bind --token-stdin   # 从管道、密钥管理器或粘贴�
 ### 浏览器抓取（`browser`）
 
 开一个**真实可见**的浏览器读页面。CLI 不内置任何站点：站点清单由 `--sites` 指向的 JSON 给出。
-登录态存在 `~/.crwu/browser/profile`（权限 0700），**下次不用重登**。
+登录态存在 `~/.crwu/browser/profile`（权限 0700），**下次不用重登**。`crwu browser status`
+默认只读该 profile 里的凭据，**不开窗口、不加载页面**。`fetch` / `shot` 默认在**自有后台窗口**
+里执行：窗口不主动抢焦点，同一 profile 的下一次调用复用同一张已渲染页面，而不是每次抓取都弹一个窗。
+它只承诺"不主动聚焦"，**不保证**操作系统层面完全不出现任何窗口/启动 UI，窗口本身仍是普通有头窗口。
 
 | 命令 | 说明 |
 |---|---|
 | `crwu browser profile` | 显示 profile 路径与是否存在（不启动浏览器） |
 | `crwu browser login --sites <文件> [--site <id>] [--timeout 5m]` | 打开**可见窗口**到各站登录页，等员工完成登录（含滑块）。全部站点登录成功才算通过 |
-| `crwu browser status --sites <文件> [--site <id>]` | 逐站报告 `authenticated` / `unauthenticated` / `unknown` |
-| `crwu browser fetch --url <地址> --out <文件> [--wait-ms 9000] [--scroll] [--dump <文件>]` | 取**渲染后**的 DOM 写文件 |
-| `crwu browser shot --url <地址> --out <文件> [--full-page] [--scroll] [--dump <文件>]` | 全页截图写文件 |
+| `crwu browser status --sites <文件> [--site <id>] [--verify-page]` | 读取 profile 里的登录凭据与到期时间（`expiresAt` / `sessionCookie`），**不开窗口、不加载页面**：逐站报告 `authenticated` / `unauthenticated` / `unknown` 与公开的 `protectedUrl`，`verdict` 为空。加 `--verify-page` 时在**自有目标**里额外读取受保护页并保留该目标，给出**页面判定** `verdict`（`ok` / `login-wall` / `captcha` / `blocked`） |
+| `crwu browser fetch --url <地址> --out <文件> [--background=true\|false] [--wait-ms 9000] [--scroll] [--dump <文件>]` | 取**渲染后**的 DOM 写文件；默认复用不加焦点的自有后台窗口，`--background=false` 显示同一个自有窗口（不新开浏览器、不附着员工标签页） |
+| `crwu browser shot --url <地址> --out <文件> [--background=true\|false] [--full-page] [--scroll] [--dump <文件>]` | 全页截图写文件；后台窗口语义同 `fetch` |
+| `crwu browser recover --sites <文件> --site <id> --url <地址> [--strategy auto\|cooldown-renavigate\|geetest-v3-canvas] [--task-id <id>]` | 对**可见**人机验证做一次有界恢复尝试，并回读页面给出状态与页面级证据 |
+| `crwu browser open --sites <文件> [--site <id>]` | 用同一个 profile 在**可见窗口**里打开所选站点的**受保护页**（`protectedUrl`），供员工人工完成人机验证；**立即返回**、不等待、不关窗口 |
+
+**后台窗口语义（`fetch` / `shot`）**：
+
+- 默认在同一个**自有后台窗口**里读页：窗口以正常状态创建、`background=true`、不主动抢焦点；
+  同一 profile 的下一次 `fetch` / `shot` 复用同一个目标，不新开窗口、也不导航员工的其它标签页。
+- 它**不等于**"绝对不出现窗口"：这是一个普通有头窗口，操作系统仍可能短暂显示启动 UI。
+- 只有显式的人工动作才把窗口带到前台（`login` / `open`），或当抓取真的落在一张人机验证页上时
+  才把那张**同一目标**的页面带到前台供人工完成；正常页面一律不抢焦点。`status --verify-page`
+  也在同一个自有目标里读页，遇到可见人机验证时才把该目标带到前台。
+- `--background=false` **不是**另起一个可见窗口：它仍用同一个自有目标，只是把该窗口带到前台供
+  这一次动作查看；运行中的浏览器不会被重开，员工的其它标签页也不会被附着。两种模式都会保留
+  这个自有目标，人工验证窗口因此在任一模式下都留在原处。
 
 站点清单 JSON 形状：
 
 ```json
 [
   {
-    "id": "ke",
-    "label": "贝壳",
-    "loginUrl": "https://clogin.ke.com/login",
-    "protectedUrl": "https://bj.ke.com/ershoufang/chaoyang/",
+    "id": "lianjia",
+    "label": "链家",
+    "loginUrl": "https://clogin.lianjia.com/login",
+    "protectedUrl": "https://bj.lianjia.com/ershoufang/chaoyang/",
     "authCookie": "lianjia_token",
-    "authDomains": [".ke.com"]
+    "authDomains": [".lianjia.com"]
   }
 ]
 ```
@@ -174,6 +191,41 @@ crwu h3yun session bind --token-stdin   # 从管道、密钥管理器或粘贴�
 **产物纪律**：页面被判为登录墙 / 验证码 / 拦截时，`--out` **不写**（避免把验证页当成房源页存证）；
 `--dump` 不受此限制，用于留下现场 DOM 排障。截图还会做真伪校验（尺寸 + 非白像素占比），
 空白页或验证页一律判失败。
+
+#### 人机验证恢复（`crwu browser recover`）
+
+遇到**看得见**的人机验证时不再直接判失败，先做一次**有界**的自动恢复尝试；仍然没通过就把断点交回员工。
+
+- **只认看得见的挑战**：判据是几何可见性 + 命中测试（覆盖层真的有尺寸、真的接收指针），
+  加上最终 URL 与业务页标识。页面源码里出现验证码字样**不**触发恢复 ——
+  实测的业务页 HTML 里就长期带着 captcha 字样，按文案判定会把每一张正常页送去做验证。
+- **策略**：`auto`（先固定脚本，再按需冷却重入）、`cooldown-renavigate`（等待后重入原 URL，
+  这是目前**唯一有执行证据**的策略）、`geetest-v3-canvas`（读挑战画布、算缺口、经 CDP 重放拖拽；
+  **候选策略，尚未通过真实页面验收**）。没有可适配的挑战形态时返回 `unsupported`，不猜、不改用别的动作。
+- **站点自己的人机验证页是"等人"，不是"做不了"**：站点把受保护页重定向到它自己的验证页时
+  （实测 2026-10-15：`bj.lianjia.com/…` → `hip.lianjia.com/captcha`，标题 `CAPTCHA`），
+  `beforeKind` 报 `site-challenge-page`，页面形态按**结构化事实**识别（最终 URL 的路径段或文档标题，
+  不匹配中文文案），`state` 是 `waiting-user`、`reasonCode` 是 `challenge-page-waiting-user`，
+  原因里写明原始 host 与验证 host。员工在那个可见窗口里过一次验证，用同一来源 + 同一
+  `retrievalTaskId` 继续即可，不必重建会话或重传资料。`unsupported` 只留给"确实没有对应策略"的
+  可见挑战族（`geetest-v3-dom`、读不出画布等）。
+- **看不见就不拖**：`challengeVisible=false` 时不调用 `geetest-v3-canvas` —— 看不见的控件没有可拖的位置；
+  只有几何可见且已适配的挑战才走固定脚本，其它挑战族一律不猜、不改用别的动作。
+- **恢复必须回读核验**：`recovered` 要求最终 URL 回到原站点（`hostMatches`）、页面可读（`readable`）、
+  且没有可见挑战（`challengeVisible=false`）；自动预算用尽后的那次回读走同一道核验，
+  只在网页上"没有可见挑战"绝不等于恢复成功。
+- **预算由程序管，不由调用方放宽**：一次调用最多 2 次尝试、总窗口最多 120 秒、单次脚本/CDP 调用最多 30 秒；
+  `--attempts` / `--window-ms` / `--script-timeout-ms` / `--cooldown-ms` 都会被**夹到**这些上限。
+  冷却放不进剩余窗口时**不等**，而是给出 `nextEligibleAt`，避免截短冷却后猛打站点。
+- **没有任意脚本能力**：没有 `--eval` / `--script` 之类的参数；运行的唯一脚本是随二进制 embed 的固定探针。
+- **退出码不是判据**：`data.state` 才是结论（`recovered` / `waiting-user` / `unsupported` / `unavailable` /
+  `cancelled` / `failed`），并带上最终 URL、是否同站、是否仍有可见挑战、遮罩选择器与原因。
+  脚本"退出成功"但挑战仍在页面上时，一律不是 `recovered`。
+- **不替代登录**：真正的退出登录返回 `waiting-user`（`login-required`），不会用验证码策略顶替员工登录；
+  也不填密码、不填短信码、不替员工勾选协议。
+- **挑战页截图不能当证据**：恢复期间读到的画布/挑战页面只作临时排障材料，
+  正式案例截图必须在恢复成功后**重新抓取**；恢复判定由 CLI 的页面检查加调用方的房源字段校验共同完成。
+- **不清理员工窗口**：取消只清掉自己可能按下的鼠标状态，不关闭员工的标签页。
 
 ### 通用
 
@@ -213,11 +265,38 @@ crwu h3yun file get      --id <FileId> --out ./附件/估值报告.pdf
 | Agent 网关 | 个人访问凭证 `h3pat_*` | ⏳ 若氚云未开通数据面，任意 `tools/call` 会返回 `h3yun.read.upstream_error`（上游响应异常）——**这是氚云平台侧问题，不是客户端故障**，重试无意义，找氚云开通即可 |
 
 已知坑：
-- `crwu browser` **只支持有头浏览器**：无头 Chromium 会被链家/贝壳的指纹识别拦下，没有无头模式。
+- `crwu browser` 读取**受保护页**时必须用有头浏览器：无头 Chromium 会被站点的指纹识别拦下。
+  例外只有 `crwu browser status` 的默认模式 —— 它只读 profile 里的凭据与到期时间、**不加载任何页面**，
+  因此用一个不显示的实例（`--headless=new`）读 cookie，既不弹窗也没有指纹面。
   为在 DSH 文件沙箱下启动，浏览器以 `--no-sandbox` 运行。
-- `crwu browser` **不做任何验证码 / 滑块绕过**：遇到验证请在那个可见窗口里人工完成。
+- `crwu browser` 只驱动 **Chromium 系**浏览器（需要 CDP）：依次取 `CRWU_BROWSER` → 系统默认
+  浏览器（仅当它是 Chromium 系）→ 声明的 Chromium 候选路径（Chrome / Edge / Brave / Chromium
+  等，**不硬编码 Edge**）。系统默认是 **Safari / Firefox** 时无法驱动，请安装 Chromium 系浏览器
+  或用 `CRWU_BROWSER` 指定。
+- `fetch` / `shot` 默认复用**自有后台窗口**：不主动聚焦、同一 profile 复用同一张渲染页，但这是
+  普通有头窗口，**不保证**操作系统层面完全不出现窗口/启动 UI；`--background=false` 只是显示同一个
+  自有窗口，不会另起浏览器。`status --verify-page` 同样在自有目标里读页。详见 §4 的「后台窗口语义」。
+- `crwu browser` **只用固定脚本做有界恢复，不做通用绕过**：遇到**看得见**的人机验证先由
+  `crwu browser recover` 按其固定策略自动尝试（最多 2 次 / 120 秒），失败就把断点交回员工，
+  在那个可见窗口里人工完成。没有 `--eval` 之类的任意脚本入口，也不改变站点的登录保护。
+  详见上一节的「人机验证恢复」。
 - `unknown` ≠ 未登录：网络不通、出口 IP 在境外、页面被人机验证时都返回 `unknown`，
-  不要据此让员工反复重登。
+  不要据此让员工反复重登。**看 `verdict` 决定处置**：`captcha` → 先走 `recover`，
+  失败则让员工在可见窗口里完成验证；`blocked` → 风控，稍后重试或换网络；`login-wall` →
+  才引导登录。调用方**不要**去匹配 `reason` 的中文文案（那是给人看的）。
+- **登录看凭据有效性，页面验证不算未登录**（2026-10-14 口径）：逐站结果多了 `expiresAt`
+  （RFC3339；会话 cookie 为空）与 `sessionCookie`。判定顺序固定：
+  ① 没有凭据或**已过期** → `unauthenticated`（这时才让员工登录；原因会写上"已过期"）；
+  ② 凭据有效但页面是**登录墙** → `unauthenticated`（会话被服务端作废的形态）；
+  ③ 凭据有效、页面要求**人机验证/风控** → `authenticated`（员工确实已登录；验证是页面访问问题，
+     由取数流程自动尝试恢复、必要时请员工在窗口里完成，**不要**在这里把整条链路挡住）；
+  ④ 凭据有效、页面可读 → `authenticated`。
+  也就是说 `state` 回答"有没有登录"，`verdict` 回答"这一页能不能读"，两者不要再混。
+- **凭据按浏览器级读取**（`Storage.getCookies`），与当前附着哪个标签页无关；
+  `Network.getCookies` 是按当前 URL 取 cookie 的，用它判"有没有登录"会把已登录看成没登录
+  （2026-10-14 实测：`about:blank` 上读到 0 条，浏览器级读到 66 条）。
+- `status` 是**权威检查**：凭据存在还不够，它会真的打开 `protectedUrl` 读一次页面；
+  连同站点清单里的 `loginUrl`，两者都必须来自站点自己发布的链接。
 - 单条"详情"务必用 `records get`（走过滤查询）；氚云 `loaddata` 接口会返回空壳，不要用。
 - 附件下载 URL 为 `www.h3yun.com/Form/Download/?AttachmentID=<FileId>`，需带会话鉴权；`file download`（整单）与 `file get`（单件，按 FileId）均已封装。
 - 记录字段输出含 `*_Original` 冗余结构属正常；人员/部门字段同时有 `*_Name` 可读名。

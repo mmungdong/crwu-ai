@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -188,5 +189,116 @@ func TestReleaseNeverKillsNonOwnedBrowser(t *testing.T) {
 	_ = response.Body.Close()
 	if atomic.LoadInt32(hits) == 0 {
 		t.Fatal("the fake browser was never hit; the test did not prove liveness")
+	}
+}
+
+// ── 发现存活浏览器：不能只靠我们自己的端口文件 ────────────────────────────────
+//
+// 2026-10-14 现场：登录窗口按设计一直开着，但每条命令结束时都会把 `debug-port` 删掉，
+// 于是**下一条命令再也发现不了那个浏览器** → 另起实例 → Chromium 把请求交给已运行的
+// 实例 → 新调试端口永不打开 → 20 秒后报"调试端口 N 没有可用的页面目标"。
+// 员工看着浏览器里"已登录"，面板却永远过不了检查。
+
+func TestPortFromCommandLine(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		want int
+		ok   bool
+	}{
+		{"edge with a port", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge --remote-debugging-port=59390 --user-data-dir=/x --no-sandbox", 59390, true},
+		{"port comes last", "chrome --user-data-dir=/x --remote-debugging-port=9222", 9222, true},
+		{"no debug flag", "Edge --user-data-dir=/x", 0, false},
+		{"garbage port", "Edge --remote-debugging-port=abc", 0, false},
+		{"out of range", "Edge --remote-debugging-port=99999", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := portFromCommandLine(tc.cmd)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("portFromCommandLine(%q) = (%d,%v), want (%d,%v)", tc.cmd, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestRunningPortFallsBackToChromiumDevToolsActivePort(t *testing.T) {
+	port, _ := fakeBrowser(t)
+	profileDir := filepath.Join(t.TempDir(), "profile")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Chromium 自己的发现文件：第一行是端口，第二行是 ws 路径。
+	if err := os.WriteFile(filepath.Join(profileDir, devToolsActivePortName),
+		[]byte(strconv.Itoa(port)+"\n/devtools/browser/abc\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, ok := RunningPort(profileDir)
+	if !ok || got != port {
+		t.Fatalf("RunningPort() = (%d,%v), want (%d,true) from DevToolsActivePort", got, ok, port)
+	}
+}
+
+func TestReleaseKeepsThePortFileWhileTheBrowserStillAnswers(t *testing.T) {
+	port, _ := fakeBrowser(t)
+	profileDir := seedPortFile(t, port)
+
+	browser := &Browser{Port: port, Owned: false, profileDir: profileDir}
+	if err := browser.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	// 释放的是**我们这条连接**，不是浏览器：端口文件是下一条命令发现它的唯一线索。
+	if _, err := os.Stat(DebugPortFile(profileDir)); err != nil {
+		t.Fatalf("Release 删掉了仍然存活的浏览器端口文件：下一条命令只能另起实例并卡死（%v）", err)
+	}
+}
+
+func TestReleaseDropsThePortFileOnceTheBrowserIsGone(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	profileDir := seedPortFile(t, port)
+
+	browser := &Browser{Port: port, Owned: false, profileDir: profileDir}
+	if err := browser.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if _, err := os.Stat(DebugPortFile(profileDir)); err == nil {
+		t.Fatal("端口已经没人应答，文件应当被清掉（否则会一直指向一个死端口）")
+	}
+}
+
+func TestLaunchTimeoutErrorNamesTheLiveProfileOwner(t *testing.T) {
+	profileDir := filepath.Join(t.TempDir(), "profile")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// 本进程自己就是一个"活着并占着这个 profile"的进程：用它当 pid 来源。
+	lock := filepath.Join(profileDir, "SingletonLock")
+	if err := os.Symlink(fmt.Sprintf("localhost-%d", os.Getpid()), lock); err != nil {
+		t.Fatalf("seed lock: %v", err)
+	}
+
+	message := launchTimeoutError(profileDir, 61234).Error()
+	if !strings.Contains(message, "在用这个 profile") {
+		t.Fatalf("message = %q, want it to say the profile is in use", message)
+	}
+	if !strings.Contains(message, strconv.Itoa(os.Getpid())) {
+		t.Fatalf("message = %q, want it to name the owning pid", message)
+	}
+}
+
+func TestLaunchTimeoutErrorStaysPlainWhenNobodyOwnsTheProfile(t *testing.T) {
+	profileDir := filepath.Join(t.TempDir(), "profile")
+	message := launchTimeoutError(profileDir, 61234).Error()
+	if !strings.Contains(message, "61234") {
+		t.Fatalf("message = %q, want the port in it", message)
+	}
+	if strings.Contains(message, "在用这个 profile") {
+		t.Fatalf("message = %q, must not claim an owner when there is none", message)
 	}
 }

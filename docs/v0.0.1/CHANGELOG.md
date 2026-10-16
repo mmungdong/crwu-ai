@@ -1,4 +1,86 @@
 # 变更纪要（CLI Changelog）
+## 2026-10-16 · feat(cli) · `crwu browser fetch/shot` 默认复用自有后台窗口
+
+- **影响**：`crwu browser fetch` 与 `crwu browser shot` 新增布尔参数 `--background`（默认 `true`）。
+  两种模式都只用一个**自有目标**：默认复用该目标并保持后台（不主动抢焦点）；`--background=false`
+  **仍用同一个自有目标**，只是把它的窗口显示出来供这次动作查看——不会另起浏览器，也不会附着到
+  员工的任意标签页。`login` / `open` 改为在自有目标上执行并把该窗口带到前台（人工动作）。
+  `recover` 同样改为在自有目标上执行；`status --verify-page` 也在自有目标里读页并保留该目标。
+  `status` 的默认凭据读取（无头、不加载页面）与 `profile` 不变。
+- **后台窗口口径**：窗口保持正常状态、以 `background=true` 创建，因此可正常渲染与截图；它**不等于**
+  "绝对不出现窗口"——仍是普通有头窗口，操作系统可能短暂显示启动 UI。同一 profile 的下一次
+  `fetch` / `shot` 复用同一张已渲染页面，不再导航员工的其它标签页。
+- **人工验证**：`fetch` / `shot` 只有真的落在一张人机验证页（`verdict=captcha`）时才把那张**同一
+  目标**的页面带到前台供人工完成；普通页面一律不抢焦点。`status --verify-page` 同理。
+  `login` / `open` 是显式人工动作，始终把自有窗口带到前台。两种 `--background` 模式都会保留
+  该自有目标，人工验证窗口因此留在原处。
+- **浏览器发现**：`CRWU_BROWSER` → 系统默认浏览器（仅当为 Chromium 系）→ 声明的 Chromium 候选
+  路径；**不硬编码 Edge**。Safari / Firefox 无法用 CDP 驱动，会走候选路径或提示设置 `CRWU_BROWSER`。
+- **Host 适配**：Workbench 的浏览器取数/截图固定传 `--background=true`，模型提交不了这个开关。
+
+## 2026-10-15 · fix(cli) · `crwu browser recover`：站点的验证页报"等人"而不是"做不了"
+
+- **影响**：`crwu browser recover` 的输出契约新增一个挑战族与一个 `reasonCode`；`state` 词表不变
+  （新增的结论用的是既有的 `waiting-user`）。参数不变。
+- **新形态（实测 2026-10-15 真机复现）**：链家把受保护页 `https://bj.lianjia.com/ershoufang/`
+  重定向到 `https://hip.lianjia.com/captcha?…`（标题 `CAPTCHA`），那一页上**没有可见的挑战控件**。
+  此前这一形态报 `unsupported` / `challenge-family-unsupported`，读起来像死路；现在报
+  `waiting-user` / `challenge-page-waiting-user`，`beforeKind=site-challenge-page`，原因里写明
+  原始 host 与验证 host，并说明"在可见窗口完成验证后用同一取数任务继续"。
+- **判据是结构化事实**：最终 URL 的路径段（`captcha` / `verify` / `verification` / `challenge`）
+  或文档标题，**不**匹配中文页面文案；业务页 HTML 里长期带着 captcha 字样，按文案判定会把正常页
+  送去解验证。同域上的验证路由（`bj.lianjia.com/captcha`）同样识别，不再因为"host 相同"被当成已恢复。
+- **停止套用 v3**：`challengeVisible=false` 时不再有任何路径会调用 `geetest-v3-canvas` 脚本
+  （只有几何可见且已适配的挑战才拖拽）；未知挑战族走 `default` 分支，不猜、不拖。
+- **恢复必须回读核验**：自动预算用尽后的那次回读与循环内走**同一道**核验 ——
+  最终 URL 回到原站点、页面可读、且没有可见挑战；此前它只看"没有可见挑战"，会把停在挑战页
+  （或读到站点外页面）的那一次记成 `recovered-after-budget`。
+
+## 2026-10-15 · refactor(cli) · `crwu browser status` 默认只读凭据，新增 `--verify-page`
+
+- **影响**：`crwu browser status` 的**默认行为变了**（不再打开窗口 / 不导航）；新增布尔参数 `--verify-page`（默认 `false`）。其余 `browser` 子命令的参数与输出不变。
+- **新默认（只读凭据）**：已在运行的浏览器直接附着（附着时**不释放**、不关窗口）；没有则**无头**启动一个实例，经 CDP `Storage.getCookies` 读 profile 里的凭据，逐站给出 `authenticated` / `unauthenticated` / `unknown`、`expiresAt`（UTC RFC3339）、`sessionCookie` 与公开的 `protectedUrl`；`verdict` 为空。原因文案为中文并带上到期时间：`已登录（到期 2026-10-15 16:54）`、`登录凭据已过期（2026-10-14 09:00）：请重新登录该来源`、`尚未检测到该来源的登录凭据`。
+- **`--verify-page`**：恢复原有行为 —— 用**可见窗口**逐个导航各站 `protectedUrl` 并读回页面，填充 `state` / `verdict` / `expiresAt` / `sessionCookie`。登录流程本来就有可见窗口，因此这一步在那里不额外付出代价。
+- **无头口径**：`--headless=new` 只在"读凭据、从不加载页面"时出现（不产生网络请求，也就没有可被指纹识别的面）；读取受保护页仍必须可见窗口，默认/可见路径不带任何无头参数。
+- **释放语义**：只回收本进程启动的实例；附着到的浏览器一律不终止。
+
+## 0.0.1 · crwu browser status 输出契约与登录判定修正
+
+- `crwu browser status` 的逐站结果新增 `verdict`（`ok` / `login-wall` / `captcha` / `blocked`）
+  与 `protectedUrl`：调用方据此决定"引导登录 / 先做有界恢复 / 稍后重试"，不必匹配中文文案。
+- 修复登录判定的**假阴性**：凭据改为浏览器级读取（`Storage.getCookies`），不再受"当前附着哪个
+  标签页"影响。`Network.getCookies` 是按当前 URL 取 cookie 的，附着在 `about:blank` 时读到 0 条，
+  于是"已登录"被报成"没有登录凭据"（2026-10-14 真实 profile 实测）。
+- cookie 域比较规范化（前导点可选、大小写不敏感、按标签边界匹配）：Chromium 会把同一个会话
+  cookie 存成 `.ke.com` 或 `ke.com` / `bj.ke.com`，逐字相等会漏判；`evil-ke.com` 不会误命中。
+- 受保护页被人机验证 / 风控拦截时，`unknown` 的 `reason` 明确说"不是未登录"，并分别给出
+  完成验证 / 稍后重试的处置。
+- **登录判定按凭据有效性**（2026-10-14 用户口径）：逐站结果新增 `expiresAt` / `sessionCookie`。
+  凭据有效但受保护页被人机验证/风控挡住时，`state` 报 `authenticated`（`verdict` 仍如实报
+  `captcha`/`blocked`）—— 员工确实已登录，验证是**页面访问**问题，交给取数流程处理；此前把它报成
+  `unknown` 会让刚登录成功的员工进不去工作面。凭据**过期**或页面是登录墙仍然是 `unauthenticated`
+  （原因里写明是过期还是被作废）。原因里的到期时间带时区，`expiresAt` 是 UTC RFC3339。
+- 修复"浏览器还开着却连不上"导致的**永久失败**：登录窗口按设计会一直开着，而每条命令结束时
+  都会删掉自己的端口文件，于是下一条命令（例如登录后的权威 `status`）再也发现不了那个浏览器，
+  只能另起实例 —— Chromium 把请求交给已运行的实例，新调试端口永不打开，20 秒后报"调试端口 N
+  没有可用的页面目标"，员工看着窗口里"已登录"却永远过不了检查（2026-10-14 实测复现）。
+  现在端口发现有三条来源（自有端口文件 → Chromium 的 `DevToolsActivePort` → `SingletonLock`
+  里的 pid 对应的 `--remote-debugging-port`），每条都要**真的应答**才算数；释放时只在端口确实
+  没人应答时才删文件；冷启动超时的报错会点名占用 profile 的 pid，而不是只丢一个端口号。
+- 修复 `crwu browser recover` 的**假成功**与目标错选：恢复现在**先导航回 `--url`**（此前
+  它直接读附着标签页，实测读到的是 Edge 的新标签页 `ntp.msn.cn`），并且**只有最终 URL 仍在原
+  站点且页面无可见挑战**才报 `recovered`；被重定向到站点的人机验证域（实测
+  `bj.ke.com/...` → `hip.ke.com/captcha`）时报 `unsupported/challenge-family-unsupported`
+  并带上该地址，而不是"没有挑战 → 已恢复"。
+
+
+## 2026-10-14 · feat(cli) · 新增 `crwu browser open` 子命令
+
+- **影响**：`crwu browser` 新增第七个子命令 `open`；`profile` / `login` / `status` / `fetch` / `shot` / `recover` 的参数与输出**不变**。
+- **行为**：用员工**同一个** profile 在**可见窗口**里打开所选站点的 `protectedUrl`（受保护页），供员工人工完成人机验证。命令**立即返回**：不等待、不轮询、不 `Release` 会话 —— 窗口按设计留在屏幕上，登录态留在 profile 里。
+- **站点来源**：地址仍只来自 `--sites` 指向的站点清单，调用方只能给 `--site <id>`，**没有 `--url`**，不能打开任意地址。
+- **输出**：成功时 stdout 是 `{ok:true,data:{siteId,opened:true,protectedUrls}}` 信封；`siteId` 只在恰好给了一个 `--site` 时是该 id，否则为空（插件只传一个）。附着到已在运行的浏览器时，为每个选中站点补开一个 `Target.createTarget` 标签页。
+- **失败**：缺 `--sites`、站点清单不可读、未知 `--site`、拿不到浏览器一律返回非零退出码，与其他 `browser` 子命令一致。
 
 > 维护纪律（见 `AGENTS.md`）：**每次 CLI 功能新增 / 变更 / 删除**（命令、参数、
 > 环境变量、输出契约、通道行为），必须在本文档**追加**一条纪要，并同步更新
@@ -6,6 +88,16 @@
 >
 > 条目格式：`日期 · 类型 · 标题`，类型沿用 Angular 词表（feat / fix / refactor /
 > docs / chore），正文写明**影响命令**与关键说明。
+
+## 2026-10-14 · feat(cli) · 新增 `crwu browser recover` 有界人机验证恢复
+
+- **影响**：`crwu browser` 新增第六个子命令 `recover`；`browser profile` / `login` / `status` / `fetch` / `shot` 的参数与输出**不变**。
+- **行为**：对**可见**人机验证做一次有界恢复尝试并回读页面。策略三种：`auto`、`cooldown-renavigate`（等待后重入原 URL）、`geetest-v3-canvas`（读挑战画布、算缺口、经 CDP 重放拖拽）。`data.state` 是唯一判据：`recovered` / `waiting-user` / `unsupported` / `unavailable` / `cancelled` / `failed`，另有 `beforeKind`、`afterKind`、`attempts`、`reasonCode`、`nextEligibleAt`、`pageValidation`（最终 URL、是否同站、是否仍有可见挑战、遮罩选择器、原因）。非 `recovered` 时退出码非零，但 stdout **仍**是完整 `{ok,data}` 信封。
+- **检测口径**：只认几何可见 + 命中测试的覆盖层，加上最终 URL 与业务页标识。页面源码里出现验证码字样**不**触发恢复 —— 实测业务页 HTML 里长期带 captcha 字样，按文案判定会把正常页送去解验证；真未登录返回 `waiting-user`（`login-required`），不用验证码策略顶替登录。
+- **预算**：一次调用最多 2 次尝试、总窗口 120 秒、单次脚本/CDP 调用 30 秒，全部在二进制内**夹定**；`--attempts` / `--window-ms` / `--script-timeout-ms` / `--cooldown-ms` 由调用方声明，但只能被夹小、不能放宽。冷却放不进剩余窗口时**不等**，返回 `nextEligibleAt`。
+- **纪律（相对 2026-10-13 的调整）**：上一版写的是「不实现任何验证码 / 滑块绕过」。现按用户 2026-10-14 的明确要求改为：**可见**挑战先调用沉淀下来的**固定**脚本做有界尝试，失败即保存断点交员工人工完成。仍然不提供 `--eval` / `--script` 等任意脚本入口，不填密码/短信码、不替员工勾选协议、不导出员工浏览器 Cookie，挑战页截图不得作为案例证据，取消不关闭员工标签页。
+- **真实证据边界**：`cooldown-renavigate` 有归档执行记录（会话归档事件 849：等待后首轮 `captcha=false` 并成功保存截图）；`geetest-v3-canvas` 只有脚本被创建的证据（事件 375），**归档中没有任何一次通过验证的执行记录**，因此该策略标记为候选、未通过真实页面验收。
+- **站点与凭据**：站点仍只从 `--sites` 读取；没有新增任何 Cookie、端口、脚本路径或任意 CDP 参数给调用方。
 
 ## 2026-10-13 · feat(cli) · 新增 `crwu browser` 通用浏览器抓取能力
 

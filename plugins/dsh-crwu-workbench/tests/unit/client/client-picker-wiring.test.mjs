@@ -26,7 +26,7 @@ const ROOT = new URL('../../../', import.meta.url)
 
 const { hostPickerCapabilities, pickFile, pickDirectory } = await import(
   new URL('src/client/modules/local-audit/pick.ts', ROOT).href)
-const { createReportEvaluationPaneController } = await import(
+const { createReportEvaluationPaneController, reportEvaluationPaneServices } = await import(
   new URL('src/client/modules/report-evaluation/index.ts', ROOT).href)
 
 /**
@@ -86,7 +86,11 @@ test('控制器端口**不许**把能力展开成快照（`{...services}` 会把
   globalThis.document = { createElement: () => element }
   try {
     const services = {}
-    const controller = createReportEvaluationPaneController(hostPickerCapabilities(() => services))
+    // 起始状态直接摆在草稿（这一条测的是"能力有没有被快照"，不是门禁阶段）。
+    const controller = createReportEvaluationPaneController(reportEvaluationPaneServices(
+      hostPickerCapabilities(() => services),
+      () => services,
+    ), { initial: { phase: 'draft' } })
     // 装配**之后**才注入路径桥：端口若是快照，此刻它记的还是 undefined。
     await withHostPaths({ pathFor: (file) => `/Users/someone/资料/${file.name}` }, async () => {
       controller.pickFiles()
@@ -105,21 +109,27 @@ test('控制器端口**不许**把能力展开成快照（`{...services}` 会把
 
 test('门禁没接时不许默认放行（`ready` 缺省 = `ok: true` 是个陷阱）', async () => {
   const calls = []
-  const controller = createReportEvaluationPaneController({
-    ...hostPickerCapabilities(() => ({})),
+  const controller = createReportEvaluationPaneController(reportEvaluationPaneServices(
+    hostPickerCapabilities(() => ({})),
+    () => ({}),
+  ))
+  // 端口是**内部**装配的（页面不自己拼 RPC），所以这里用"没有 ready 就不放行"的等价路径：
+  // 直接给一个装了 ready 的控制器，断言门禁不过时 `preparePreview` 一个请求都不发。
+  const gated = createReportEvaluationPaneController({
+    ...reportEvaluationPaneServices(hostPickerCapabilities(() => ({})), () => ({})),
     ready: () => ({ ok: false, error: '环境信息还没就绪' }),
     intake: async (input) => { calls.push(input); return { ok: true } },
     start: async () => ({ ok: true }),
-    status: async () => ({ ok: true }),
-    cancel: async () => ({ ok: true }),
-    result: async () => ({ ok: true }),
-    openArtifact: async () => ({ ok: true }),
+    openSession: async () => ({ ok: true, error: '' }),
   })
-  controller.setMethod('market')
-  controller.start()
+  gated.setAssetType('real-estate')
+  gated.setMethod('market')
+  gated.preparePreview()
   await new Promise((resolve) => setTimeout(resolve, 0))
   assert.deepEqual(calls, [], '门禁不过时一个请求都不该发')
-  assert.match(controller.getState().error, /环境信息还没就绪/)
+  assert.match(gated.getState().error, /环境信息还没就绪/)
+  // 协议 39：进页面就是草稿（不再有"正在检查门禁"那个阶段）。
+  assert.equal(controller.getState().phase, 'draft')
 })
 
 // ── 静态判据：两个装配点都必须走同一份适配器 ──────────────────────────────────
@@ -129,8 +139,10 @@ test('估值控制器的两个装配点都必须用 hostPickerCapabilities（不
     const code = readFileSync(new URL(relative, ROOT), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-    assert.match(code, /createReportEvaluationPaneController\(hostPickerCapabilities\(/,
-      `${relative} 必须用共用的选择器适配器建估值控制器`)
+    assert.match(code, /createReportEvaluationPaneController\(reportEvaluationPaneServices\(/,
+      `${relative} 必须用共用的服务适配器建估值控制器`)
+    assert.match(code, /hostPickerCapabilities\(/,
+      `${relative} 的选择器能力必须来自共用的 hostPickerCapabilities`)
     // 手拼能力的老写法（装配时快照）不许回来。
     assert.equal(/uiWorkspace\?\.pickDirectory === undefined/.test(code), false,
       `${relative} 又出现了"装配时判一次 uiWorkspace"的快照写法`)

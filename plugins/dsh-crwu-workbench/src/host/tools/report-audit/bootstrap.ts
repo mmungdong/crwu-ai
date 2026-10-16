@@ -6,7 +6,7 @@ import { joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { runCrwu } from '../../integrations/crwu/run.ts'
 import { H3YUN_FIELDS, RECORDS_STDOUT_MAX } from '../../integrations/h3yun/consts.ts'
 import { labelOf, pick } from '../../integrations/h3yun/fields.ts'
-import { attachmentsOf, type AttachmentRow } from '../../integrations/h3yun/attachments.ts'
+import { attachmentsOf } from '../../integrations/h3yun/attachments.ts'
 import { requireBundledCommand } from '../../core/platform/command.ts'
 import { resolveTarget } from '../../core/fs/paths.ts'
 import { ensureDirectory } from '../common/case-files.ts'
@@ -16,7 +16,7 @@ import { caseDirOf } from '../../../shared/utils/case-dir.ts'
 import { TOOL_NAMES } from './consts.ts'
 import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure } from '../common/outcome.ts'
 import { canonicalJson, digestOf, digestOnly } from '../common/snapshot.ts'
-import { callerSession, credentialsTrusted, toolContext, type ToolDeps } from '../common/types.ts'
+import { callerSession, toolContext, type ToolDeps } from '../common/types.ts'
 import { writeCaseText } from '../common/case-files.ts'
 import { PLUGIN_REV } from '../../consts.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -107,7 +107,7 @@ function recordOf(payload: unknown): Record<string, JsonValue> | null {
  * 只摘「子代理第一步要用到的」那几个字段，**不是**记录副本：完整记录在快照文件里，
  * 需要时由它自己读文件，而不是让模型上下文背着几百个字段。
  */
-function routingFactsOf(record: Record<string, JsonValue>, seqNo: string, formName: string): RoutingFacts {
+function routingFactsOf(record: Record<string, JsonValue>, formName: string): RoutingFacts {
   const value = (keys: string[]): string => text(pick(record, keys))
   return {
     project: value([H3YUN_FIELDS.project]),
@@ -341,7 +341,7 @@ export function bootstrapTools(deps: ToolDeps) {
         snapshotPath: joinLocalPath(snapshotDir, SNAPSHOT_RECORD_FILE),
         attachmentsPath: joinLocalPath(snapshotDir, SNAPSHOT_ATTACHMENTS_FILE),
         metadataPath: joinLocalPath(snapshotDir, SNAPSHOT_METADATA_FILE),
-        routingFacts: routingFactsOf(record, seqNo, form.name),
+        routingFacts: routingFactsOf(record, form.name),
         reused: false,
       }
       const metadata = {

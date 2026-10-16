@@ -1,0 +1,10 @@
+[
+  {
+    "id": "lianjia",
+    "label": "链家",
+    "loginUrl": "https://clogin.lianjia.com/login?service=https%3A%2F%2Fwww.lianjia.com%2Fuser%2Fchecklogin%3Fredirect%3Dhttps%253A%252F%252Fbj.lianjia.com%252Fershoufang%252Fchaoyang%252F",
+    "protectedUrl": "https://bj.lianjia.com/ershoufang/chaoyang/",
+    "authCookie": "lianjia_token",
+    "authDomains": [".lianjia.com"]
+  }
+]

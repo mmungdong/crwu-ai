@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { FileSystem, FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
+import type { FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
 import { text } from '../../../shared/utils/value.ts'
 import { joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'

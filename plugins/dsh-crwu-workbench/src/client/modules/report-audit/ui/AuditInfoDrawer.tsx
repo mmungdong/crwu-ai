@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Loading } from '../../../ui/primitives.tsx'
+import { Button as ActionButton } from '../../../ui/components/index.ts'
 import { WORKBENCH_CLASSES as C } from '../../../shell/consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
 import { formatDateTime } from '../model/time.ts'
@@ -242,11 +243,12 @@ export function AuditInfoDrawer(props: AuditInfoDrawerProps): React.ReactElement
                       <div className={C.issueDetail}>
                         <Field label={zhCN.auditIssueLocation} value={issue.locationSummary} />
                         <Field label={zhCN.auditIssueSuggestion} value={issue.handlingRequirement} />
-                        {props.onOpenReport === undefined ? null : <button
-                          type="button"
+                        {props.onOpenReport === undefined ? null : <ActionButton
+                          variant="text"
+                          size="sm"
                           className={C.issueLink}
                           onClick={props.onOpenReport}
-                        >{zhCN.auditIssueMore} →</button>}
+                        >{zhCN.auditIssueMore} →</ActionButton>}
                       </div>
                     </div>
                   </div>
@@ -382,9 +384,9 @@ export function AuditInfoDrawer(props: AuditInfoDrawerProps): React.ReactElement
               <TechRow label={zhCN.auditTechGeneratedAt} value={generatedAt} />
               <TechRow label={zhCN.auditTechSeqNo} value={props.seqNo} />
               {rawJson === '' ? null : <pre className={C.techJson}>{rawJson}</pre>}
-              {rawJson === '' ? null : <button type="button" className={C.techCopy} onClick={copyRaw}>
+              {rawJson === '' ? null : <ActionButton variant="text" size="sm" className={C.techCopy} onClick={copyRaw}>
                 {copied ? zhCN.auditTechCopied : zhCN.auditTechCopy}
-              </button>}
+              </ActionButton>}
               <div className={C.techHint}>{zhCN.auditTechHint}</div>
             </div>
           </div>

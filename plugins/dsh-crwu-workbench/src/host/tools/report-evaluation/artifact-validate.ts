@@ -12,8 +12,9 @@ import { classifyRun, clampText, failure, reasonOf, renderJson } from '../common
 import { callerSession, toolContext, type ToolDeps } from '../common/types.ts'
 import { caseScopes } from '../report-audit/case-scopes.ts'
 import { PYTHON_RUNTIME_SOURCE } from '../../core/runtime/python.ts'
-import { stagedValuationScript, VALUATION_OUTPUT_FILES } from './artifacts.ts'
-import { VALUATION_TOOL_NAMES } from './consts.ts'
+import { stagedValuationAsset, stagedValuationScript, VALUATION_OUTPUT_FILES } from './artifacts.ts'
+import { planFilePath } from '../../domains/report-evaluation/delivery/finalize-facts.ts'
+import { VALUATION_REPORT_DATA_FILE, VALUATION_REPORT_FILE, VALUATION_TOOL_NAMES, VALUATION_WORKBOOK_FILE } from './consts.ts'
 import type { LocalAccessBroker } from '../../core/access/broker.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 
@@ -24,22 +25,26 @@ import type { Session } from '@deepseek-ai/dsh-session'
  *
  * | 脚本 | 校验什么 | 为什么不能省 |
  * | --- | --- | --- |
- * | `check_workbook_contract.py` | 七张可见表、无隐藏表、无跨工作簿链接、公式链不断 | 结论数字必须能从底稿重算出来；断链或隐藏表会让"重算"变成"抄一遍" |
- * | `validate_result.py` | 结果 JSON 的结构与**口径**（方法不是 auto、基准日空则登记、挂牌不得当可比、数字不许填 0…） | 这些错读起来完全正常，只有逐条比规则才看得出来 |
+ * | `check_workbook_contract.py` | 工作簿按**自己的填写说明**声明的可见表 / 公式区 / 结果位 / 外部链接 | 结论数字必须能从底稿重算出来；断链或隐藏表会让"重算"变成"抄一遍" |
+ * | `build_report_data.py --validate` | `估值报告数据.json` 的 report-data.v2 结构与口径 | 交付口径只有一份事实源；旧结果 JSON 不再参与交付 |
  *
  * ## 为什么用**脚本**而不是在 TypeScript 里实现
  *
- * 工作簿契约与结果口径都跟着业务规范走（税率、勾稽、七张表的结构），它们属于技能而不是插件。
+ * 工作簿契约与报告数据口径都跟着业务规范走，它们属于技能而不是插件。
  * 脚本随技能发布、可以被业务侧单独审阅与修改；插件只负责**执行、取退出码、把问题原样带回来**。
  *
  * ## 边界
  *
  * 脚本先落到 `<案例目录>/scripts/`（`python.script.run` 只接受案例内的脚本路径，Host 也不开后门）；
+ * 报告数据 Schema 落到 `<案例目录>/schemas/`，因为脚本按技能目录布局解析它。
  * argv 逐个传参、不经 shell；解释器来自与审核启动同一个 DSH Python 解析器。
  */
 
 interface ValidateArgs {
   caseDir?: unknown
+  planId?: unknown
+  /** 修订版本（协议 39）：`> 1` 时校验 `修订/<n>/` 下的交付件。 */
+  revision?: unknown
 }
 
 interface CheckReport {
@@ -68,6 +73,7 @@ interface ValidateResult {
   errorKind: string
   error: string
   caseDir: string
+  planId: string
   python: { path: string; versionText: string; source: string }
   artifacts: ArtifactFile[]
   checks: CheckReport[]
@@ -77,12 +83,14 @@ interface ValidateResult {
 
 const SCRIPTS = {
   workbook: 'scripts/check_workbook_contract.py',
-  result: 'scripts/validate_result.py',
+  evidenceIndex: 'scripts/evidence_index.py',
+  reportData: 'scripts/build_report_data.py',
+  reportDataSchema: 'schemas/valuation-report-data.schema.json',
 } as const
 
 function idleResult(): ValidateResult {
   return {
-    ok: false, errorKind: '', error: '', caseDir: '',
+    ok: false, errorKind: '', error: '', caseDir: '', planId: '',
     python: { path: '', versionText: '', source: PYTHON_RUNTIME_SOURCE },
     artifacts: [], checks: [], problems: [],
   }
@@ -154,12 +162,18 @@ export function valuationArtifactValidateTools(deps: ToolDeps) {
   const validate = defineTool({
     name: VALUATION_TOOL_NAMES.artifactValidate,
     description: [
-      '交付前的最后一道门：校验本轮的**工作簿契约**（七张可见表、无隐藏表、无跨工作簿链接、公式链不断）',
-      '与**结果口径**（方法不是 auto、未指定基准日必须登记、挂牌不得直接作可比实例、数字不许填 0…）。',
-      '两份校验都必须通过；不通过时逐条把问题原样带回来。它只读不写（除了把校验脚本落到案例目录的 scripts/）。',
+      '交付前的最后一道门：校验本轮的**工作簿契约**（可见表结构由该工作簿自己的填写说明声明）',
+      `与**报告数据**（\`${VALUATION_REPORT_DATA_FILE}\` 按 report-data.v2 Schema 与口径逐条核对）。`,
+      '两份校验都必须通过；不通过时逐条把问题原样带回来。它只读不写（除了把校验脚本与它加载的 Schema 落到案例目录）。',
+      '交付件按方案隔离：读的是 方案/<planId>/ 下的那一套，不会拿别的方案的文件来验。',
     ].join(' '),
     parameters: {
       caseDir: { type: 'string', required: true, description: '本轮估值案例目录（Host 校验归属）。' },
+      planId: { type: 'string', required: true, description: '要校验的方案 id（交付件落在 方案/<planId>/ 下）。' },
+      revision: {
+        type: 'integer',
+        description: '修订版本（协议 39）：> 1 时校验 方案/<planId>/修订/<n>/ 下那一套交付件；缺省 / 1 = 方案根。',
+      },
     },
     output: {
       schema: {
@@ -170,6 +184,7 @@ export function valuationArtifactValidateTools(deps: ToolDeps) {
           errorKind: { type: 'string', required: true },
           error: { type: 'string', required: true },
           caseDir: { type: 'string', required: true },
+          planId: { type: 'string', required: true },
           python: {
             type: 'object', additionalProperties: false, required: true,
             properties: {
@@ -225,31 +240,45 @@ export function valuationArtifactValidateTools(deps: ToolDeps) {
         return { ...base, ...failure('policy', '这条会话不是本轮估值会话：交付校验只能在估值子会话里进行') }
       }
       const casePath = access.casePath
+      const planId = text(args.planId).trim()
+      if (planId === '') {
+        return { ...base, caseDir: casePath, ...failure('input', '缺少 planId：交付校验必须针对具体方案。') }
+      }
+      // 方案级落点：`方案/<planId>/`（设计稿 §11.1）。planId 不安全时 fail closed ——
+      // 退回项目根就等于"读别的方案的文件"，那种通过比失败更糟。
+      // 协议 39：`revision > 1` 时读 `修订/<n>/` 下的那一套交付件（每版各自核验）。
+      const revision = typeof args.revision === 'number' && Number.isFinite(args.revision)
+        ? Math.max(0, Math.trunc(args.revision)) : 0
+      const planFile = (name: string): string => planFilePath(planId, name, revision)
+      if (planFile('') === '') {
+        return { ...base, caseDir: casePath, planId, ...failure('input', `planId 不是单段安全标识：「${planId}」`) }
+      }
       const session = callerSession(exec)
       const signal = exec.signal
 
       // 交付件清单（存在性 + 指纹）：校验之前先如实回答"到底有哪些文件"。
       const artifacts: ArtifactFile[] = []
       for (const name of VALUATION_OUTPUT_FILES) {
-        const path = joinLocalPath(casePath, name)
+        const relative = planFile(name)
+        const path = joinLocalPath(casePath, relative)
         const exists = await isFile(ctx, path)
         const bytes = exists ? await fileSize(ctx, path) : 0
         const digest = exists && bytes > 0 ? sha256OfBytes(await readTextIfExists(ctx, path)) : ''
         artifacts.push({ name, exists, bytes, digest })
       }
-      const deliverable = artifacts.find((item) => item.name === '估值底稿.xlsx')
-      const resultFile = artifacts.find((item) => item.name === '估值结果.json')
-      const report = artifacts.find((item) => item.name === '估值报告.html')
+      const deliverable = artifacts.find((item) => item.name === VALUATION_WORKBOOK_FILE)
+      const reportData = artifacts.find((item) => item.name === VALUATION_REPORT_DATA_FILE)
+      const report = artifacts.find((item) => item.name === VALUATION_REPORT_FILE)
       const problems: string[] = []
-      if (deliverable?.exists !== true) problems.push('缺少交付件：估值底稿.xlsx')
-      if (resultFile?.exists !== true) problems.push('缺少交付件：估值结果.json')
-      if (report?.exists !== true) problems.push('缺少交付件：估值报告.html')
+      if (deliverable?.exists !== true) problems.push(`缺少交付件：${VALUATION_WORKBOOK_FILE}`)
+      if (reportData?.exists !== true) problems.push(`缺少交付件：${VALUATION_REPORT_DATA_FILE}`)
+      if (report?.exists !== true) problems.push(`缺少交付件：${VALUATION_REPORT_FILE}`)
 
       if (deps.python === undefined) {
         return {
           ...base,
           ...failure('capability-gap', 'DSH 自带 Python 解析器没有装配：无法执行交付校验脚本'),
-          caseDir: casePath, artifacts,
+          caseDir: casePath, planId, artifacts,
         }
       }
 
@@ -264,32 +293,57 @@ export function valuationArtifactValidateTools(deps: ToolDeps) {
       let pythonInfo = base.python
 
       // ① 工作簿契约：底稿存在才跑（不存在时上面已经记了缺口，再跑脚本只会多一句"找不到"）。
+      //    契约由该工作簿自己的填写说明（`<workbook>.contract.json`）声明，脚本自己发现。
       if (deliverable?.exists === true) {
         const staged = await stagedValuationScript({ ctx, casePath, relative: SCRIPTS.workbook, ...(session === undefined ? {} : { session }), ...(signal === undefined ? {} : { signal }) })
         if (!staged.ok) problems.push(staged.error)
         else {
-          const { report: workbookReport, python } = await runCheck(
-            { ...options, scriptPath: staged.scriptPath, scriptArgs: [joinLocalPath(casePath, '估值底稿.xlsx')] },
-            '工作簿契约',
-          )
-          checks.push(workbookReport)
-          pythonInfo = python
+          // The checker imports evidence_index.py, so stage that helper first.
+          const helper = await stagedValuationScript({
+            ctx, casePath, relative: SCRIPTS.evidenceIndex,
+            ...(session === undefined ? {} : { session }), ...(signal === undefined ? {} : { signal }),
+          })
+          if (!helper.ok) {
+            // Environment staging failed: do not invoke the checker without its import.
+            problems.push(helper.error)
+          } else {
+            // Base plan root (never the revision directory) is the authoritative image base.
+            const planRoot = joinLocalPath(casePath, planFilePath(planId, '', 0))
+            const workbookArgs = [
+              joinLocalPath(casePath, planFile(VALUATION_WORKBOOK_FILE)), '--case-root', planRoot,
+            ]
+            if (reportData?.exists === true) {
+              workbookArgs.push('--report-data', joinLocalPath(casePath, planFile(VALUATION_REPORT_DATA_FILE)))
+            }
+            const { report: workbookReport, python } = await runCheck(
+              { ...options, scriptPath: staged.scriptPath, scriptArgs: workbookArgs },
+              '工作簿契约',
+            )
+            checks.push(workbookReport)
+            pythonInfo = python
+          }
         }
       }
 
-      // ② 结果口径：报告与底稿一起交给脚本做一致性抽查。
-      if (resultFile?.exists === true) {
-        const staged = await stagedValuationScript({ ctx, casePath, relative: SCRIPTS.result, ...(session === undefined ? {} : { session }), ...(signal === undefined ? {} : { signal }) })
+      // ② 报告数据口径：复用 `build_report_data.py --validate`（只读、不产出），
+      //    并把脚本真正加载的 Schema 一起落到案例内，否则脚本读不到 Schema 会 fail closed。
+      if (reportData?.exists === true) {
+        const stagedSchema = await stagedValuationAsset({
+          ctx, casePath, relative: SCRIPTS.reportDataSchema,
+          ...(session === undefined ? {} : { session }), ...(signal === undefined ? {} : { signal }),
+        })
+        if (!stagedSchema.ok) problems.push(stagedSchema.error)
+        const staged = await stagedValuationScript({ ctx, casePath, relative: SCRIPTS.reportData, ...(session === undefined ? {} : { session }), ...(signal === undefined ? {} : { signal }) })
         if (!staged.ok) problems.push(staged.error)
         else {
-          const scriptArgs = [joinLocalPath(casePath, '估值结果.json')]
-          if (report?.exists === true) scriptArgs.push('--html', joinLocalPath(casePath, '估值报告.html'))
-          if (deliverable?.exists === true) scriptArgs.push('--workbook', joinLocalPath(casePath, '估值底稿.xlsx'))
-          const { report: resultReport, python } = await runCheck(
-            { ...options, scriptPath: staged.scriptPath, scriptArgs },
-            '结果口径',
+          const { report: dataReport, python } = await runCheck(
+            {
+              ...options, scriptPath: staged.scriptPath,
+              scriptArgs: ['--validate', joinLocalPath(casePath, planFile(VALUATION_REPORT_DATA_FILE))],
+            },
+            '报告数据',
           )
-          checks.push(resultReport)
+          checks.push(dataReport)
           pythonInfo = python
         }
       }
@@ -298,11 +352,10 @@ export function valuationArtifactValidateTools(deps: ToolDeps) {
         for (const problem of check.problems) problems.push(`${check.name}：${problem}`)
       }
       // **校验结论写回轮次**（§9）：完成门槛在宿主侧判，它读得到这条才知道
-      // "交付前两道校验都过了"。不写回的话，`completed` 就只能相信模型自己说"我验过了"。
-      // 两道校验都跑过才算一次有效结论：脚本没跑成（staged 失败）时 `checks` 会少，
-      // 那种情况按"没通过"记 —— 不能把"没跑成"当成"过了"。
-      const ranBoth = checks.length === 2
-      const passed = problems.length === 0 && ranBoth
+      // "交付前的校验都过了"。不写回的话，`completed` 就只能相信模型自己说"我验过了"。
+      // 报告数据校验没跑成（staged 失败 / 文件缺失）时按"没通过"记 —— 不能把"没跑成"当成"过了"。
+      const ranReportData = checks.some((item) => item.script.endsWith('build_report_data.py'))
+      const passed = problems.length === 0 && ranReportData
       // 写回**尽力而为**：失败不影响校验本身的结论 —— 那只是"完成门槛读不到结论"，
       // 结果是这一轮停在 running（用户看得见），不该把一次成功的校验说成没过。
       // 不打印、也不并进 `problems`：前者引入一条无人消费的日志，后者会让结论自相矛盾。
@@ -312,6 +365,7 @@ export function valuationArtifactValidateTools(deps: ToolDeps) {
         errorKind: problems.length === 0 ? '' : 'input',
         error: problems.length === 0 ? '' : `交付校验未通过（${problems.length} 项）`,
         caseDir: casePath,
+        planId,
         python: pythonInfo,
         artifacts,
         checks,

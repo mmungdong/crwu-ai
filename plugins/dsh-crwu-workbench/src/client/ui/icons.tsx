@@ -122,6 +122,57 @@ export function CloseIcon(props: IconProps): React.ReactElement {
   </svg>
 }
 
+/**
+ * 下拉的展开箭头（表单单选下拉的触发器右端）。
+ *
+ * 只做视觉：旋转由样式按 `[aria-expanded="true"]` 驱动，语义全在 combobox 自己身上。
+ */
+export function ChevronDownIcon(props: IconProps): React.ReactElement {
+  const box = frame(props.size, props.className)
+  return <svg {...box} {...STROKE}>
+    <path d="M6 9.5 12 15.5 18 9.5" />
+  </svg>
+}
+
+/** Single left chevron (previous month / week navigation). */
+export function ChevronLeftIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M14.5 6 8.5 12l6 6" />
+  </svg>
+}
+
+/** Single right chevron (next month / week navigation). */
+export function ChevronRightIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M9.5 6 15.5 12l-6 6" />
+  </svg>
+}
+
+/** Double left chevron (previous year navigation). */
+export function ChevronsLeftIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M12.5 6 6.5 12l6 6" />
+    <path d="M18.5 6 12.5 12l6 6" />
+  </svg>
+}
+
+/** Double right chevron (next year navigation). */
+export function ChevronsRightIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <path d="M11.5 6 17.5 12l-6 6" />
+    <path d="M5.5 6 11.5 12l-6 6" />
+  </svg>
+}
+
+/** Calendar: a month grid with a top binding, used by the shared date picker. */
+export function CalendarIcon(props: IconProps): React.ReactElement {
+  return <svg {...frame(props.size, props.className)} {...STROKE}>
+    <rect x={3.5} y={5} width={17} height={15.5} rx={3} />
+    <path d="M3.5 9.5h17" />
+    <path d="M8 3.5v3M16 3.5v3" />
+  </svg>
+}
+
 /** 单个文件：一份带折角的纸（本地审核的已选文件行）。 */
 export function FileIcon(props: IconProps): React.ReactElement {
   return <svg {...frame(props.size, props.className)} {...STROKE}>

@@ -12,7 +12,6 @@ import { subscribeAuditEvents } from './domains/report-audit/events.ts'
 import { createCoreOperations } from './operations/core.ts'
 import { createUpdateOperations } from './update/ops.ts'
 import { createWorldFacts } from './core/platform/world.ts'
-import { localAccessGranted } from './core/access/consent.ts'
 import { createWorkbenchState } from './core/state/store.ts'
 import { createLocalAccessBroker } from './core/access/broker.ts'
 import { workbenchConfigPath } from './core/state/persist.ts'
@@ -24,8 +23,10 @@ import { createPythonRuntimeResolver } from './core/runtime/python.ts'
 import { registerCrwuTools } from './tools/register.ts'
 import type { ToolDeps } from './tools/common/types.ts'
 import { createValuationOperations } from './operations/report-evaluation.ts'
+import { createValuationBrowserRuntime } from './domains/report-evaluation/browser/runtime.ts'
 import { ValuationLifecycles } from './domains/report-evaluation/lifecycle/index.ts'
 import { ValuationScopes } from './domains/report-evaluation/scope.ts'
+import { createTaskLeaseStore } from './domains/report-evaluation/execution/leases.ts'
 import { createDiscussionScopeRegistry } from './domains/report-audit/discussion-scope.ts'
 import { createLocalAuditRegistry } from './domains/local-audit/handoff.ts'
 import { createDwsDeviceLoginRegistry, createLoginHandleHolder } from './core/system/device-login.ts'
@@ -50,7 +51,10 @@ type AssembledToolDeps = ToolDeps & Required<Omit<ToolDeps, 'ctx' | InjectionOnl
  *    `screenshot_missing` 并记能力缺口，而不是伪造截图。宿主提供已验证的截图通道时在这里接上。
  * 新增的可选依赖如果不属于这三类，就必须在 `apply()` 里接上，否则上面那行类型会直接编译不过。
  */
-type InjectionOnlyToolDeps = 'ifind' | 'ifindTimeoutMs' | 'screenshot'
+// `screenshot` 从 InjectionOnly 里**移出**（2026-10-14）：方法要求页面截图留证，
+// 它必须是生产装配的一部分 —— 缺省不装会让每个候选案例都写 `screenshot_missing`，
+// 而报告只能到 partial，看起来却像"业务上不需要截图"。
+type InjectionOnlyToolDeps = 'ifind' | 'ifindTimeoutMs'
 
 /** 过期快照的兜底清理间隔（面板每次准备也会顺手清一次）。 */
 const LOCAL_AUDIT_SWEEP_INTERVAL_MS = 10 * 60_000
@@ -124,6 +128,8 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   // 两处各造一个的后果是"工具说这一轮在跑、状态页说没有这一轮"。
   const valuationLifecycles = new ValuationLifecycles()
   const valuationScopes = new ValuationScopes()
+  // 单执行租约：与 Tool 闭包共用同一份实例（两处各造一个 = 两条链路对"谁在跑"给出不同答案）。
+  const valuationLeases = createTaskLeaseStore()
   /**
    * 注册给 Tool 闭包的依赖。
    *
@@ -132,16 +138,29 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
    * 为什么不让它悄悄少一项：少一项不会崩 —— 它会退化成"某个功能默默降级"
    *（例如估值工具写不回轮次状态，界面永远停在"正在跑"），而那正是最难发现的一类问题。
    */
+  /**
+   * **房地产浏览器能力**（协议 35，计划 Task 3）。一处装配一处收尾：
+   * 它的 profile 串行队列、登录任务与挑战恢复预算都是**进程内状态**，随插件实例活着、随卸载消失。
+   * 估值 Tool 侧复用同一个 runtime 的 `toolClient` / `coordinator`（Task 8），
+   * 所以这里存下来而不是只用它的操作表。
+   */
+  const valuationBrowser = createValuationBrowserRuntime({ ctx, config, access, world })
   const toolDeps: AssembledToolDeps = {
     ctx, config, state, world, form, access, discussionScopes,
     localAudit, localAuditIo,
     valuationScopes,
+    valuationLeases,
     // 估值 Tool 也要能写轮次状态（`browser-login-required` 与来源状态是宿主的事实，
     // 面板轮询的是它）—— 所以与操作表共用**同一个**注册表实例。
     valuationLifecycles,
     // 与审核启动、环境自检共用同一个 Python 解析器（同一份缓存）：`crwu_run_python_script`
     // 绝不自己去猜解释器。
     python,
+    // 浏览器能力必须在**工具注册之前**造好：`crwu_valuation_browser_recover` 要用它的协调器，
+    // 而 `AssembledToolDeps` 是全字段必需视图 —— 漏传是编译错误（不是"某项功能默默降级"）。
+    browserRuntime: valuationBrowser,
+    // 截图能力与取数共用同一条 profile 队列（`toolClient`）。
+    screenshot: valuationBrowser.screenshot,
   }
   ctx.effect(() => registerCrwuTools(ctx, toolDeps), 'crwu-workbench: tools')
   // 自助更新（Task 4）：每个插件实例一套检查器 / 持久化 / 安装服务。
@@ -170,6 +189,9 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   ctx.effect(() => () => {
     loginHandles.dispose()
     void deviceLogin.dispose()
+    // 浏览器 runtime：中止本插件发起的登录任务、清掉恢复预算与还没开始的排队项。
+    // 正在执行的操作由调用者自己的 signal 决定，这里不杀。
+    valuationBrowser.dispose()
   }, 'crwu-workbench: dws login sessions')
   const operations = createCoreOperations(
     ctx,
@@ -182,7 +204,14 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     },
     {
       update: update.operations,
-      valuation: createValuationOperations({ ctx, state, access, world, python, lifecycles: valuationLifecycles, scopes: valuationScopes }),
+      valuation: {
+        ...createValuationOperations({
+          ctx, state, access, world, config,
+          lifecycles: valuationLifecycles, scopes: valuationScopes,
+        }),
+        // 门禁三操作（preflight / login / login-cancel）只拦房地产正文。
+        ...valuationBrowser.operations,
+      },
     },
   )
   ctx.effect(() => registerRpcRoute(ctx, operations), 'crwu-workbench: rpc route')

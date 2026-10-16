@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Button, Chip, Notice } from '../../../ui/primitives.tsx'
+import { TextInput } from '../../../ui/components/index.ts'
 import { WORKBENCH_CLASSES as C } from '../../../shell/consts.ts'
 import { zhCN } from '../../../locales/zh-CN.ts'
 import { environmentApi, type EnvResult, type IfindProbeResult, type IfindStatusResult } from '../api.ts'
@@ -281,8 +282,7 @@ export function IfindAuthCard(props: IfindAuthCardProps): React.ReactElement {
 
       {showInput
         ? <div className={C.row}>
-            <input
-              className={C.input}
+            <TextInput
               type="password"
               name="crwu-ifind-apikey"
               autoComplete="off"
@@ -291,8 +291,10 @@ export function IfindAuthCard(props: IfindAuthCardProps): React.ReactElement {
               placeholder={zhCN.envIfindSecretPlaceholder}
               value={apiKey}
               disabled={busy}
-              onChange={(event) => { setApiKey(event.target.value) }}
-              onKeyDown={(event) => { if (event.key === 'Enter' && apiKey !== '' && !busy) save() }}
+              onChange={(value) => { setApiKey(value) }}
+              onKeyDown={(event) => {
+                if ((event as unknown as { key?: string }).key === 'Enter' && apiKey !== '' && !busy) save()
+              }}
             />
             <Button
               label={busy ? zhCN.envIfindSubmitting : zhCN.envIfindSubmit}

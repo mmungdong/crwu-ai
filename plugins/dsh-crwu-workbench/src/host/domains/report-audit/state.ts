@@ -63,7 +63,6 @@ function rootCandidates(context: AssessContext, record: AuditRecord): string[] {
 
 /** 看这一次审核的子会话是否还活着，并扫出磁盘上的交付件。 */
 export async function assessAudit(context: AssessContext, record: AuditRecord): Promise<AssessResult> {
-  const { state } = context
   const listed = record.childId !== '' && context.listed[record.childId] === true
 
   // 刚起的子会话可能还没被驱动翻成 running：给 20 秒宽限。

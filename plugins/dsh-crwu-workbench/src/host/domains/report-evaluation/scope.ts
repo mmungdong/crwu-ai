@@ -29,6 +29,20 @@ export interface ValuationScope {
    */
   snapshot: ValuationSnapshot
   openedAt: number
+  /**
+   * v2 的**项目归属**（计划 Task 2）。
+   *
+   * `projectId` 与 `valuationId` 同值（都是 Host 铸出来的那一段目录名），另存一份是为了让
+   * "项目 → 方案 → 对象"这条 v2 链路的代码只读 `projectId`，而不必知道 v1 曾把它叫 valuationId。
+   * 可选字段：v1 的夹具（`valuationScopes.open({...})`）不传它也成立。
+   */
+  projectId?: string
+  /** v2 的**父会话归属**：父估值会话 id（与 `sessionId` 同值）。 */
+  parentSessionId?: string
+  /** v2 的**方案归属**：已登记到这一轮的方案 id（Task 6 之后非空）。 */
+  planIds?: string[]
+  /** 产生这一轮的预览（用于把交接记录与归档输入对起来）。 */
+  previewId?: string
 }
 
 /** 冻结的估值输入（确认抽屉按下"确认并开始估值"那一刻的事实）。 */
@@ -37,6 +51,14 @@ export interface ValuationSnapshot {
   method: ValuationMethod
   /** 用户选择的基准日；未选择时是**空串**（绝不从资料里补一个）。 */
   baseDate: string
+  /**
+   * 用户确认的评估目的 / 价值类型（P16）；未指定时是**空串**（与 `baseDate` 同一口径）。
+   *
+   * 可选：旧夹具与 v1 形态的 scope 没有它们，缺省即"未指定"，绝不在这一层默认成
+   * 转让 / 抵押这类正式结论。
+   */
+  purpose?: string
+  valueType?: string
   supplementalPrompt: string
   /** 输入清单指纹（`buildIntakeManifest().digest`）。 */
   digest: string
@@ -71,11 +93,36 @@ export function isValuationMethod(value: unknown): value is ValuationMethod {
 
 /**
  * 案例 scope 的只读查询面（门禁只依赖它）。
+ *
+ * v2 新增的两条（`parentOf` / `planOf`）回答的是**归属**而不是"目录形状"：
+ * 父会话问"我这一轮是哪一份案例"，方案级子会话问"这个方案是不是确实属于我这一轮"。
+ * 归属只按会话 id 逐字相等来判 —— 提交方（模型）改不了它。
  */
 export interface ValuationScopeRegistry {
   scopeOf(sessionId: string): ValuationScope | undefined
   get(valuationId: string): ValuationScope | undefined
+  /** v2：父估值会话的那一份归属（与 `scopeOf` 同源，按语义命名）。 */
+  parentOf(parentSessionId: string): ValuationScope | undefined
+  /** v2：某个方案是否已经登记在这条会话的那一轮里（未登记一律 `false`）。 */
+  planOf(sessionId: string, planId: string): boolean
 }
+
+/**
+ * 窄**写**接口：只有方案登记需要它。
+ *
+ * 门禁（`caseScopes` / `requireCaseAccess`）只拿只读的 `ValuationScopeRegistry`；
+ * 写权限通过这个独立接口交给 `project_prepare`，而不是把读接口也变成可写的。
+ *
+ * 语义是**替换**这一轮的方案集合，不是追加：重新准备（对象/方案变了）必须让旧方案
+ * 立刻失去执行权。轮次已关闭 / 未知时返回 `false`，绝不复活。
+ */
+export interface ValuationScopeMutations {
+  /** 用 `planIds` 替换该轮已登记的方案集合；轮次不存在时返回 `false`。 */
+  replacePlans(valuationId: string, planIds: readonly string[]): boolean
+}
+
+/** 生产装配把同一个 `ValuationScopes` 实例同时当只读注册表与窄写接口用。 */
+export type ValuationScopeService = ValuationScopeRegistry & ValuationScopeMutations
 
 /**
  * 进程内注册表。
@@ -87,7 +134,7 @@ export interface ValuationScopeRegistry {
  *     `openedAt` 淘汰最旧的 —— 淘汰掉的是"还没结束的估值会话"的访问权（它会当场失败，
  *     不会拿到错的案例目录），比无界增长到把进程拖垮安全。
  */
-export class ValuationScopes implements ValuationScopeRegistry {
+export class ValuationScopes implements ValuationScopeRegistry, ValuationScopeMutations {
   private readonly bySession = new Map<string, ValuationScope>()
   private readonly byId = new Map<string, ValuationScope>()
   private readonly maxEntries: number
@@ -112,6 +159,51 @@ export class ValuationScopes implements ValuationScopeRegistry {
 
   get(valuationId: string): ValuationScope | undefined {
     return valuationId === '' ? undefined : this.byId.get(valuationId)
+  }
+
+  /** v2：父估值会话的归属（会话 id 逐字相等）。 */
+  parentOf(parentSessionId: string): ValuationScope | undefined {
+    return this.scopeOf(parentSessionId)
+  }
+
+  /** v2：方案归属。尚未登记这个方案时一律 `false`（fail closed，不做"形状对就放行"）。 */
+  planOf(sessionId: string, planId: string): boolean {
+    const plan = text(planId)
+    if (plan === '') return false
+    return (this.scopeOf(sessionId)?.planIds ?? []).includes(plan)
+  }
+
+  /** v2：把方案登记到某一轮（Task 6 起由 project 域调用）。 */
+  addPlan(valuationId: string, planId: string): boolean {
+    const scope = this.get(valuationId)
+    const plan = text(planId)
+    if (scope === undefined || plan === '') return false
+    const planIds = [...(scope.planIds ?? [])]
+    if (planIds.includes(plan)) return true
+    planIds.push(plan)
+    const next = { ...scope, planIds }
+    this.open(next)
+    return true
+  }
+
+  /**
+   * 用 `planIds` **替换**该轮已登记的方案集合（`project_prepare` 重跑时旧方案立刻失效）。
+   *
+   * 轮次已关闭 / 未知 → `false`，绝不复活一条已释放的归属；写入是原地的（键已存在，不触发淘汰）。
+   */
+  replacePlans(valuationId: string, planIds: readonly string[]): boolean {
+    const scope = this.get(valuationId)
+    if (scope === undefined) return false
+    const normalized: string[] = []
+    for (const raw of planIds) {
+      const plan = text(raw).trim()
+      if (plan === '' || normalized.includes(plan)) continue
+      normalized.push(plan)
+    }
+    const next = { ...scope, planIds: normalized }
+    this.bySession.set(next.sessionId, next)
+    this.byId.set(next.valuationId, next)
+    return true
   }
 
   /** 结束一轮估值：释放它的案例访问权（下一个案例内调用立刻 fail closed）。 */
@@ -144,7 +236,7 @@ export class ValuationScopes implements ValuationScopeRegistry {
 }
 
 /**
- * 估值 id 的形状：`估值-<yyyymmdd>-<hhmmss>-<4 位十六进制>`。
+ * 估值 / 项目的 id 形状：`估值-<yyyymmdd>-<hhmmss>-<4 位十六进制>`。
  *
  * 为什么不用纯 uuid：它是**目录名**，员工要在工作区里一眼认出"这是哪一轮"。
  * 为什么仍要随机后缀：同一秒内连开两轮不能撞目录（撞了会写到同一个案例里）。
@@ -155,6 +247,16 @@ export function mintValuationId(now: Date, random: () => number = Math.random): 
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   const suffix = pad(Math.floor(random() * 0xffff), 4).replace(/[^0-9a-f]/gi, '0')
   return `估值-${date}-${time}-${suffix.slice(0, 4).toLowerCase()}`
+}
+
+/**
+ * v2 的口径：这个 id 就是**项目 id**（同一段目录名）。
+ *
+ * 单独一个名字而不是让调用方读 `mintValuationId`：v2 的代码不该知道 v1 曾把这东西叫"估值 id"。
+ * 值域与安全判据完全一致（同一个实现），所以两种叫法不会漂成两套规则。
+ */
+export function mintProjectId(now: Date, random: () => number = Math.random): string {
+  return mintValuationId(now, random)
 }
 
 /**

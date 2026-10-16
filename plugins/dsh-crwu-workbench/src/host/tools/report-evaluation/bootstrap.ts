@@ -11,6 +11,7 @@ import { failure, renderJson } from '../common/outcome.ts'
 import { callerSession, toolContext, type ToolDeps } from '../common/types.ts'
 import { caseScopes } from '../report-audit/case-scopes.ts'
 import type { ValuationScope } from '../../domains/report-evaluation/scope.ts'
+import { readTextIfExists } from '../../core/fs/paths.ts'
 import {
   VALUATION_EVIDENCE_DIR,
   VALUATION_INPUT_FILE,
@@ -190,9 +191,18 @@ export function valuationBootstrapTools(deps: ToolDeps) {
       }
 
       // ④ 冻结输入落盘。顺序（方法 / 基准日 / 补充要求 / 清单 / 指纹）固定，便于人读与 diff。
+      //
+      // ⚠️ **已经存在就不重写**（2026-10-15 真机复现）：交接时 Host 写的是**规范 v2 冻结输入**
+      // （`buildFrozenInput`：schemaVersion / projectId / purpose / valueType / inputDigest），
+      // 而这里手上只有更旧的 `ValuationSnapshot` 形状。无脑重写会把规范文件**降级**
+      // （丢掉评估目的与价值类型、把 `null` 基准日写成空串），于是重启后的 `resume` 以冲突拒绝、
+      // 报告链报"未指定评估目的"。子会话本来就只是**消费**这份输入，不该覆盖它。
       const snapshot = scope.snapshot
       const inputPath = joinLocalPath(scope.casePath, VALUATION_INPUT_FILE)
-      const written = await writeJson(ctx, inputPath, {
+      const existingInput = await readTextIfExists(ctx, inputPath)
+      const written = existingInput.trim() !== ''
+        ? { ok: true, error: '' }
+        : await writeJson(ctx, inputPath, {
         valuationId: snapshot.valuationId,
         method: snapshot.method,
         baseDate: snapshot.baseDate,

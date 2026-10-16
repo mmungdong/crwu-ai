@@ -1,17 +1,12 @@
 import { rpc } from '../../core/rpc.ts'
 import { createUpdateApi, UPDATE_METHOD_OPERATION, type UpdateApi } from '../update/api.ts'
 import type {
-  AuditView, CloudItem, CredentialPermission, LocalAuditScanView, LocalAuditStartView, TaskRow, OssBatchIndexResult,
+  AuditView, CloudItem, LocalAuditScanView, LocalAuditStartView, TaskRow, OssBatchIndexResult,
 } from '../../../shared/types.ts'
 import type { Gating } from './types.ts'
 import type {
   AccessDiagnosticsView, AuditRootView, DwsDeviceLoginView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
 } from '../../../shared/types.ts'
-import type { LocalAccessConsentView } from '../../../shared/access/types.ts'
-import {
-  blockerMessages, degradedMessages, primaryUserIssue, requiredTallyOf, statusProceedable,
-  type EnvironmentIssueView, type EnvironmentTally, type EnvironmentStateView,
-} from '../../../shared/environment/model.ts'
 
 /**
  * 工作台的同源 RPC 门面。
@@ -47,28 +42,18 @@ export interface BootResult extends EnvironmentBootView {
    *
    * 可选：老版本 Host 不带这个字段，界面按「尚未创建」显示即可，不该因此崩掉。
    */
-  /**
-   * 审核子代理的挂载点（建在工作空间里的顶层会话）。
-   *
-   * 可选：老版本 Host 不带这个字段，界面按「尚未创建」显示即可，不该因此崩掉。
-   */
   auditRoot?: AuditRootView
   active: { key: string; childId: string; since: number }
   ported: { done: string[]; todo: string[] }
 }
 
 /**
- * `env` 的应答：**直接就是线协议类型**（`shared/types.ts` 的 `EnvResultView`）。
+ * `EnvResult`：**直接就是线协议类型**（`shared/types.ts` 的 `EnvResultView`），也是环境派生值的**迁移期转出**。
  *
  * 以前这里手写一份形状，于是「Host 加了字段、客户端没跟上」只能靠人对着改；现在两处是同一个声明，
  * Host 侧的类型由 `shared/wire/report-audit.ts` 在 typecheck 阶段强制可赋值过来。
- */
-/**
- * `EnvResult` 与环境派生值的**迁移期转出**。
- *
- * 真实定义已经搬到 `modules/environment`：报告审核门面只是**历史上**放它们的地方。
- * 旧导入路径（`modules/report-audit/api.ts`）继续可用，但新代码应当直接从环境模块拿 ——
- * 那样"环境模块不再依赖报告审核门面"这条方向才是真的。
+ * 真实定义已经搬到 `modules/environment`：旧导入路径（`modules/report-audit/api.ts`）继续可用，
+ * 但新代码应当直接从环境模块拿 —— 那样"环境模块不再依赖报告审核门面"这条方向才是真的。
  */
 export type EnvResult = EnvResultView
 import { environmentStateOf } from '../environment/api.ts'
@@ -76,15 +61,6 @@ import type { EnvironmentBootView } from '../environment/model/types.ts'
 export { environmentStateOf, headlineOf } from '../environment/api.ts'
 export type { EnvironmentHeadline } from '../environment/api.ts'
 
-/**
- * 报告页需要的门禁。
- *
- * **判据来自统一环境模型**（`env.state.capabilities.auditCore`），不再由客户端自己拼
- * 「氚云 ok && 钉钉 ok」—— 那样漏掉工作空间 / 授权 / 包 / 运行时 / Tool 中的任何一条，
- * 界面就会放行一个 Host 必然拒绝的操作（用户看到的是"点了没反应"）。
- *
- * 旧宿主没有 `state`：退回「两个服务都 ok」这条较弱的判据（它至少不会比原来更松）。
- */
 /**
  * 报告页需要的门禁。
  *
@@ -261,33 +237,8 @@ export interface WorkbenchApi extends UpdateApi {
   localAuditStart: (args: { selection: string[]; excluded?: string[]; prompt?: string }) => Promise<LocalAuditStartView>
   /** 把 handoff 绑到客户端刚创建的那条会话（Tool 侧走 `crwu_audit_local_claim`）。 */
   localAuditClaim: (args: { handoffId: string; sessionId: string }) => Promise<Record<string, unknown>>
-  /**
-   * 报告评估（房地产估值，协议 32）：八个操作。
-   *
-   * 返回值形状由 Host 决定，这里先按 `Record<string, unknown>` 收（客户端的消费点在
-   * `modules/report-evaluation`）；放在门面里的意义是**操作清单两侧对账** ——
-   * 少一个的表现是点下去 404，而不是一句能看懂的提示。
-   */
-  valuationFilesScan: (args: { paths: string[] }) => Promise<Record<string, unknown>>
-  valuationIntake: (args: {
-    valuationId: string
-    method: 'auto' | 'market' | 'income' | 'cost'
-    supplementalPrompt?: string
-    paths: string[]
-  }) => Promise<Record<string, unknown>>
-  valuationBrowserPreflight: (args: { openLogin?: string }) => Promise<Record<string, unknown>>
-  valuationStart: (args: {
-    valuationId: string
-    method: 'auto' | 'market' | 'income' | 'cost'
-    /** 未指定基准日时传空字符串 —— Host **不会**从资料里补一个。 */
-    baseDate: string
-    supplementalPrompt: string
-    confirmedSnapshotDigest: string
-  }) => Promise<Record<string, unknown>>
-  valuationStatus: (args: { valuationId: string }) => Promise<Record<string, unknown>>
-  valuationCancel: (args: { valuationId: string }) => Promise<Record<string, unknown>>
-  valuationResult: (args: { valuationId: string }) => Promise<Record<string, unknown>>
-  valuationOpenArtifact: (args: { valuationId: string; name: string }) => Promise<Record<string, unknown>>
+  // 报告评估（房地产估值）的操作**不在这里**：它们的业务 API 与操作名清单的唯一事实源是
+  // `modules/report-evaluation/api.ts`（`valuationApi` + `VALUATION_OPERATION_OF`）。
   ossIndex: (args?: { seqNo?: string }) => Promise<OssIndexResult>
   ossBatchIndex: (args: { seqNos: string[] }, options?: { signal?: AbortSignal }) => Promise<OssBatchIndexResult>
   ossResult: (args: { key: string }) => Promise<OssResultResult>
@@ -391,14 +342,6 @@ export const workbenchApi: WorkbenchApi = {
   localAuditStatus: (args) => call('local-audit-status', args),
   localAuditStart: (args) => call('local-audit-start', args),
   localAuditClaim: (args) => call('local-audit-claim', args),
-  valuationFilesScan: (args) => call('valuation-files-scan', args),
-  valuationIntake: (args) => call('valuation-intake', args),
-  valuationBrowserPreflight: (args) => call('valuation-browser-preflight', args),
-  valuationStart: (args) => call('valuation-start', args),
-  valuationStatus: (args) => call('valuation-status', args),
-  valuationCancel: (args) => call('valuation-cancel', args),
-  valuationResult: (args) => call('valuation-result', args),
-  valuationOpenArtifact: (args) => call('valuation-open-artifact', args),
   ossIndex: (args) => call('oss-index', args ?? {}),
   ossBatchIndex: (args, options) => call('oss-index', args, options),
   ossResult: (args) => call('oss-result', args),
@@ -451,14 +394,6 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   localAuditStatus: 'local-audit-status',
   localAuditStart: 'local-audit-start',
   localAuditClaim: 'local-audit-claim',
-  valuationFilesScan: 'valuation-files-scan',
-  valuationIntake: 'valuation-intake',
-  valuationBrowserPreflight: 'valuation-browser-preflight',
-  valuationStart: 'valuation-start',
-  valuationStatus: 'valuation-status',
-  valuationCancel: 'valuation-cancel',
-  valuationResult: 'valuation-result',
-  valuationOpenArtifact: 'valuation-open-artifact',
   ossIndex: 'oss-index',
   ossBatchIndex: 'oss-index',
   ossResult: 'oss-result',

@@ -22,6 +22,15 @@ type LaunchSpec struct {
 	// URLs are opened as tabs. For a login run these are the login pages, so the
 	// employee can see where they are signing in.
 	URLs []string
+	// Headless suppresses the window. It is only legitimate for a credential read
+	// that never loads a page; see LaunchArgs.
+	Headless bool
+	// Background launches a headed browser with no startup window, so a reusable
+	// owned target can be created over CDP afterwards. The owned window keeps a
+	// normal state (a minimized window stops rendering frames), and it is created
+	// in the background so focus is not stolen. It is never headless: the sites this
+	// feature reads fingerprint headless Chromium.
+	Background bool
 }
 
 // debuggerPollEvery is how often the debugger endpoint is retried.
@@ -40,8 +49,12 @@ const debuggerPollEvery = 200 * time.Millisecond
 //     the debugger ever opens. The cost is a renderer without its sandbox; the
 //     mitigations are the dedicated profile and the fact that only caller-declared
 //     sites are opened.
-//   - there is deliberately no `--headless`: headless Chromium is fingerprinted
-//     and refused by the sites this exists to read.
+//   - `--headless=new` is added only when the spec asks for it, and the only
+//     legitimate caller is a **credential read** that never loads a page: it makes
+//     no network request and exposes no fingerprint surface, so being headless
+//     cannot be detected. Reading a protected page is the opposite case — those
+//     sites fingerprint and refuse headless Chromium — so the visible window stays
+//     the default and carries no headless flag.
 func LaunchArgs(spec LaunchSpec) []string {
 	args := []string{
 		"--remote-debugging-port=" + strconv.Itoa(spec.Port),
@@ -54,6 +67,12 @@ func LaunchArgs(spec LaunchSpec) []string {
 		"--no-default-browser-check",
 		"--disable-crashpad",
 		"--window-size=1440,1000",
+	}
+	if spec.Headless {
+		args = append(args, "--headless=new")
+	}
+	if spec.Background && !spec.Headless {
+		args = append(args, "--no-startup-window")
 	}
 	return append(args, spec.URLs...)
 }

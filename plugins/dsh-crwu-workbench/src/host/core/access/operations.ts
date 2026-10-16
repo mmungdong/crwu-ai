@@ -73,6 +73,9 @@ export type LocalAccessOperation =
   | 'oss.remote.read'
   | 'oss.remote.write'
   | 'system.browser.open'
+  | 'system.browser.drive'
+  | 'system.browser.login'
+  | 'system.browser.verify-window'
   | 'system.clipboard.write'
   | 'system.case-file.open'
   | 'system.case-directory.write'
@@ -83,6 +86,7 @@ export type LocalAccessOperation =
   | 'system.valuation-material.copy'
   | 'system.valuation-case.directory.write'
   | 'system.valuation-case.file.write'
+  | 'system.valuation-recalculation.run'
   | 'python.script.run'
 
 export interface LocalAccessDescriptor {
@@ -154,6 +158,9 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'oss.remote.read',
   'oss.remote.write',
   'system.browser.open',
+  'system.browser.drive',
+  'system.browser.login',
+  'system.browser.verify-window',
   'system.clipboard.write',
   'system.case-file.open',
   'system.case-directory.write',
@@ -164,6 +171,7 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'system.valuation-material.copy',
   'system.valuation-case.directory.write',
   'system.valuation-case.file.write',
+  'system.valuation-recalculation.run',
   'python.script.run',
 ] as const satisfies readonly LocalAccessOperation[]
 
@@ -284,6 +292,23 @@ export const LOCAL_ACCESS_OPERATIONS = {
   'system.browser.open': {
     capability: 'system-integration', transport: 'shell', privileged: true, allowedSources: PANEL,
   },
+  // 驱动 CLI 自己的持久 profile（`~/.crwu/browser/profile`），路径在工作区之外 → 提权。
+  // 估值/审核子会话与宿主后台都要取数，所以都给；登录窗口**不**在这里（见下一条）。
+  'system.browser.drive': {
+    capability: 'system-integration', transport: 'shell', privileged: true,
+    allowedSources: ['panel', 'audit-tool', 'host-background'],
+  },
+  // 登录会在员工屏幕上开一个真实窗口并等下去：只允许面板发起（审核/估值子会话永远不该
+  // 替员工弹登录窗口），而且仍然提权 —— 它写的是同一份工作区之外的 profile。
+  'system.browser.login': {
+    capability: 'system-integration', transport: 'shell', privileged: true, allowedSources: PANEL,
+  },
+  // 「打开验证窗口」：员工已登录、受保护页要人机验证时，在**同一个 profile** 里重开那一页
+  // 让他自己过掉验证。与登录同类（会在员工屏幕上开一个真实可见窗口），所以同样只给面板；
+  // 它比登录更窄 —— 不写凭据、不接受 URL，只能导航到站点清单里登记过的受保护页。
+  'system.browser.verify-window': {
+    capability: 'system-integration', transport: 'shell', privileged: true, allowedSources: PANEL,
+  },
   'system.clipboard.write': {
     capability: 'system-integration', transport: 'shell', privileged: true, allowedSources: PANEL,
   },
@@ -391,6 +416,19 @@ export const LOCAL_ACCESS_OPERATIONS = {
   // 来源只给 `audit-tool`：审核子会话的脚本，面板与宿主后台都不该借这条跑任意脚本。
   'python.script.run': {
     capability: 'system-integration', transport: 'shell', privileged: false,
+    allowedSources: ['audit-tool'],
+  },
+  // 估值子代理用**部署配置指定的**表格计算程序重算底稿（协议 39）。
+  //
+  // 为什么必须提权：Excel / LibreOffice **不随本仓发布**，它的可执行文件在工作空间之外
+  //（`valuation.recalculation.enginePath` 是部署配置里的绝对路径）—— 受限沙箱里根本起不来。
+  // 为什么不能复用别的 shell 操作：这条的地面事实与它们都不同（外部程序 + 只读地打开工作簿），
+  // 借用的后果是运行期被 Broker 拒掉，而错误只会显示成"重算失败"，看不出是授权问题。
+  //
+  // 边界仍由**命令形状**决定：命令由 `engineCommandOf()` 拼（引擎路径 + 固定参数 + 两个
+  // 由 Host 推出的绝对路径），模型提交不了引擎路径、也提交不了任意命令。
+  'system.valuation-recalculation.run': {
+    capability: 'system-integration', transport: 'shell', privileged: true,
     allowedSources: ['audit-tool'],
   },
 } as const satisfies Record<LocalAccessOperation, LocalAccessDescriptor>

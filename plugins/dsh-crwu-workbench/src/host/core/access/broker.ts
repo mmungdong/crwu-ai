@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { ShellBackgroundHandle, ShellResult, ShellStartResult } from '../shell/run.ts'
+import type { ShellResult, ShellStartResult } from '../shell/run.ts'
 import { runShell, startShell } from '../shell/run.ts'
 import { text } from '../../../shared/utils/value.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'

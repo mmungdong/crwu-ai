@@ -195,8 +195,129 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *    必须 +1 的理由：①会让**业务结果**变错（基准日丢了但界面不报错），这正是协议号该喊出来的。
  * 34：合并钉钉设备流登录与估值提取协议，新增设备流 start / status / cancel 与 loopback cancel。
  *    main 的协议 32 和开发分支的协议 33 均缺少合并后的完整能力，必须重启到同一代。
+ * 35：**房地产改成"启动页 + 父会话跳转"**（2026-10-14，计划 Task 4）。这一代必须由协议号
+ *    自己喊出来，因为**操作清单与跨进程字段都变了**，而且旧组合会安静地做错事：
+ *    ① **删除**四条运行期操作：`valuation-status` / `valuation-result` /
+ *       `valuation-open-artifact` / 运行期 `valuation-cancel`（面板完成度轮询整体下线）。
+ *       旧界面仍会调它们 —— 新宿主不认就会 404，而 404 在页面上只是一句"请求失败"，
+ *       用户看到的是"估值卡住了"；反过来新界面不轮询、旧宿主把状态留在旧轮次里，
+ *       两边谁都不会报错，只是**再也没有人推进页面**。
+ *    ② **新增**门禁登录两条：`valuation-browser-login` / `valuation-browser-login-cancel`
+ *       （点登录立刻拉起可见浏览器，可查、可取消）。旧宿主没有它们，新界面点「登录来源」
+ *       只会 404 —— 而"能不能登录"正是这一代的第一道门。
+ *    ③ `valuation-intake` 的入参 / 应答整组换掉：入参从"估值 ID + 方法 + 基准日"换成
+ *       `requestId`（幂等与交接追溯）；应答从 v1 的提取结果（`valuationId` / `digest` /
+ *       `extractedFields` / `missingFields` / `knowledge` / `providers` / `prompt` …）换成
+ *       **归档预览**（`previewId` / `projectId` / `inputDigest` / `methodRequest` /
+ *       `baseDate: string|null` / `files[]`，每份带 fileId、原始绝对路径、归档相对路径、
+ *       sha256、`createdAt: string|null`、`duplicateOf`）。旧客户端读新应答会拿到一片
+ *       `undefined`（确认抽屉只剩一个空壳），**而它照样能点"开始估值"** —— 这正是
+ *       协议号该替他挡住的那类"界面新、宿主旧 / 反之"。
+ *    ④ `valuation-start` 的入参换成 `{previewId, confirmedInputDigest, requestId}`、
+ *       应答换成 `{projectId, parentSessionId, dispatchAccepted, reused}`：条件由 Host
+ *       从预览读，客户端**不再**提交第二套方法 / 基准日 / 补充要求。
+ *    跨进程行为也换了：交接成功后页面立刻 `uiWorkspace.openSession(parentSessionId)`
+ *    跳进**顶层父会话**，不再有进度页、结果页，也不再追踪会话完成度。
+ *    操作清单 54 → 52（`tests/helpers/frozen-inventory.mjs` 盯着）。
+ *
+ * 协议 36（2026-10-14）：门禁的逐站结论多了 `verdict` / `protectedUrl` / `challenge`。
+ *    原因是受保护页可能回**人机验证**（员工其实已经登录），门禁必须据此走"先做一次有界恢复、
+ *    再请员工在可见窗口完成验证"，而不是把员工按回登录页；同时修复了凭据按 URL 读取造成的
+ *    "已登录却报没有凭据"的假阴性。
+ *
+ * 协议 37（2026-10-14）：房地产启动页的**流程恢复与资料范围闭环**。三处跨进程事实变了，
+ *    旧组合都会安静地做错事，所以必须 +1：
+ *    ① `valuation-start` 的应答新增**权威创建判据** `creationDisposition`
+ *       （`not-created` / `created` / `unknown`）。旧宿主不回它，新界面只能按 `unknown` 处理
+ *       （不放行「返回修改」）——这是安全的一侧；反过来旧界面读新宿主，会继续拿
+ *       "没有 sessionId"当"没建会话"，于是**再造一个项目目录**。这正是协议号该挡住的那类错。
+ *    ② `valuation-files-scan` 的应答从"只有入口 `items[]`"扩成"入口 + **真实文件** `files[]`
+ *       + `skipped[]` + `truncated`"，两条资料操作都新增可选入参 `excluded[]`（逐个移除的文件，
+ *       重扫 / 预览 / 归档共用同一份排除范围）。旧宿主没有这两样：新界面的文件夹展不开、
+ *       单个文件移不掉，而"移除"会退化成只过滤 UI 列表 —— 也就是**假排除**。
+ *    ③ 新增门禁操作 `valuation-browser-open-verification`：Host 按 `siteId` 复用同一个浏览器
+ *       profile 打开受保护页（Client 不能提交 URL / profile / 命令）。旧宿主没有它，
+ *       新界面点「打开验证窗口」只会 404，而"能不能完成验证"正是员工唯一的出路。
+ *    操作清单 52 → 53（`tests/helpers/frozen-inventory.mjs` 盯着）。
+ *
+ * 协议 38（2026-10-15）：**业务前提与业务分类**进跨进程契约。三处字段变了，旧组合都会安静地
+ *    把前提丢掉，所以必须 +1：
+ *    ① `valuation-intake` 的入参与应答新增 `purpose`（评估目的）/ `valueType`（价值类型）：
+ *       入参未填是空串、应答未指定是 `null`。旧宿主**不认这两个入参**（预览里永远没有它们，
+ *       确认抽屉只能显示"未指定"），而旧界面读新宿主会**完全看不到这两个前提** —— 于是
+ *       报告里的评估目的 / 价值类型凭空消失，却没有任何地方报错。这正是协议号该挡的错。
+ *    ② 它们同时进 `估值输入.json`（冻结输入）与交接固定指令：改了前提，输入摘要就必须变，
+ *       否则"条件变了还按旧摘要启动"拦不住。
+ *    ③ 对象侧新增 `registeredUse`（原始权证登记用途）与 `classificationBasis`（业务分类依据）：
+ *       两者分开存，依据缺失的对象**挂起**而不是默认套住宅口径。
+ *    ④ 新增 Host 操作 `valuation-project-resume`（P18）：插件实例重建（进程重启）之后，用
+ *       `projectId` 把**同一条父会话**的案例归属与冻结输入重新绑回来。旧宿主没有它，
+ *       新界面/会话调用只会 404 —— 而"重启后能不能接着做"正是这一代要解决的断点。
+ *    操作清单 53 → 54（`tests/helpers/frozen-inventory.mjs` 盯着）。
+ *
+ * 协议 39（2026-10-15）：**通用估值入口 + 登录从门禁改为可选能力**。四组跨进程事实变了，
+ *    旧组合都会安静地做错事，所以必须 +1：
+ *    ① `valuation-intake` 的入参与应答、`估值输入.json`、项目记录新增 `assetType`（资产类型）。
+ *       它是**通用入口的第一个选择**，也是装配哪个 Skill / 哪份入口 Wiki 的唯一依据；
+ *       未选由 Host 直接拒绝预览（不存在"默认房地产"这一档）。旧宿主不认这个入参，
+ *       旧界面读新宿主也看不到这个字段 —— 两边都会以为"资产类型本来就有默认值"。
+ *       冻结输入 Schema 因此升到 `crwu.valuation.input.v3`（旧 v2 记录按版本不兼容拒绝）。
+ *    ② 页面的 **门禁阶段被删除**：`ValuationPagePhase` 去掉 `checking-auth` / `auth-blocked`，
+ *       进页面直接是草稿、**不自动探测来源**；能力状态改在能力区与确认抽屉里各自更新。
+ *       旧界面读新宿主会停在"正在检查"（那个阶段再也不会到达），新界面读旧宿主则会把
+ *       "未登录"当成可以照常开始 —— 两边都该由协议号挡住。
+ *    ③ `AuthGateView` 新增 `checkedAt`（检查时刻）：一次检查成功不等于整轮始终可用，
+ *       时刻缺失时必须显示"尚未检查"而不是假装刚查过。旧宿主不回它。
+ *    ④ 业务口径改判：登录**不再阻断**整轮（`decidePhase.canProceed` 恒为 true），
+ *       `sites.ts` 删除"空必需集 = 全部必需"的回退，配置里链家改为可选。
+ *       旧宿主会把未登录判成"暂停等人"，而新流程会继续用替代来源 —— 两者的**业务结果不同**。
+ *    操作清单不变（54）：本次没有增删操作，改的是入参 / 应答字段与页面阶段语义。
+ *
+ * 协议 40（2026-10-16）：**v2 交付口径 + 规则参数 + 项目收口**。Tool 的输出/入参形状变了，
+ *    旧组合会安静地按旧契约判完成，所以必须 +1：
+ *    ① `crwu_valuation_artifact_validate` 校验 `估值报告数据.json`（`build_report_data.py --validate`）
+ *       并落报告数据 Schema，不再要求 / 调用旧 `估值结果.json` 与 `validate_result.py`；
+ *    ② `crwu_valuation_knowledge_materialize` 新增可选 `stage=parameters` 与 `ruleParameters` 输出：
+ *       Host 把规则段绑定到已落盘正文的 routeId / snapshotDigest；
+ *    ③ `crwu_valuation_finalize` 新增 `target=plan|project` 与 `projectSummary` 判别输出：
+ *       `target=project` 由登记的父会话对权威项目索引收口并落盘完成回执。
+ *    操作清单不变（54）：本次改的是 Tool 输出/入参字段，没有增删门禁操作。
+ *
+ * 协议 41（2026-10-16）：**知识评估采用 + URL 身份 + 列表快照**。`selection` 与案例身份语义变了，
+ *    旧组合会按旧契约把"排序通过"当成"可以采用"，所以必须 +1：
+ *    ① `selection` 新增 `assessments`（url / status=qualified|near-miss|excluded / reason /
+ *       knowledgeRef）：没有评估即 unreviewed，不再自动采用；result 与 cases 视图带回评估；
+ *    ② 候选身份以 canonical URL 为准：弱事实（小区+面积+价格）只标疑似重复，不再自动合并；
+ *    ③ `market_search` 成功列表页落快照并可复用（同请求不再重复导航），累计台账按
+ *       项目/方案/分组/轮次；合格候选预算只计知识合格且事实合格的记录。
+ *    操作清单不变（54）：本次改的是 Tool 输出/入参字段与案例身份语义，没有增删门禁操作。
+ *
+ * Protocol 42 (2026-10-16): **detail evidence + case-evidence delivery**. `market_capture` and the
+ *    deliverables changed output semantics; an old Host would take a list-page image as the case's
+ *    detail evidence, so the number must move:
+ *    ① `crwu_valuation_market_capture` receives the selected stable `caseId`, persists the actual
+ *       detail URL plus the immutable PNG, and records the entry in
+ *       `推理结果/图片/图片清单.json` (`crwu.valuation.screenshot-manifest.v1`, plan-scoped,
+ *       read-back verified); list-page images stay page-level evidence only;
+ *    ② `values.caseEvidence` emits the visible `案例证据` sheet (caseId / display name / provider /
+ *       detail URL / relative image path / digest / capturedAt / evidence type) with the full URL +
+ *       native hyperlink and a relative image path; the HTML report links local images;
+ *    ③ knowledge reading is documented as `wikiPaths` primary (`stage` only accepts `parameters`),
+ *       the entry is declared once in `knowledge-routing.md`, and the template index is currently
+ *       a structural reference only (no auto-pricing).
+ *    Operation inventory unchanged (54): Tool output semantics and deliverable shape only.
  */
-export const WORKBENCH_PROTOCOL = 34
+export const WORKBENCH_PROTOCOL = 42
+
+/**
+ * 补充要求（用户原样输入）的**长度上限**：Client 与 Host 同一把尺子。
+ *
+ * 为什么放共享常量：Host 侧（`domains/report-evaluation/project/contracts.ts` 的
+ * `SUPPLEMENTAL_PROMPT_MAX_LENGTH`）拿它做**拒绝**判据，Client 拿它做即时禁用与计数。
+ * 两边各写一个 4000 迟早漂移 —— 而漂移的表现是"界面允许输入、Host 拒绝"，
+ * 用户对着一个能打字的框反复提交失败。
+ */
+export const VALUATION_PROMPT_MAX_LENGTH = 4000
 
 /**
  * 报告流水号（SeqNo）的形状：`2026-301705-LX10170-BG8746`。

@@ -8,7 +8,6 @@ import { shellInvoke, clipboardCommand, openExternalCommand } from '../platform/
 import { describeLoginAdvice, loginFailureAdvice } from './login-failure.ts'
 import type { LocalAccessBroker } from '../access/broker.ts'
 import { resolveBundledCommand } from '../platform/command.ts'
-import { runDws } from '../../integrations/dws/run.ts'
 import { parseDwsDeviceAuthorization, type LoginHandleHolder } from './device-login.ts'
 import { defaultCaseRoot } from '../../domains/report-audit/state.ts'
 import type { WorkbenchState } from '../state/types.ts'
@@ -197,7 +196,7 @@ export interface DwsLoginOptions {
 export async function dwsLogin(
   deps: SystemDeps,
   _args: Record<string, unknown>,
-  home: string,
+  _home: string,
   options: DwsLoginOptions = {},
 ): Promise<DwsLoginResult> {
   const pollMs = options.pollMs ?? DWS_LOGIN_POLL_MS
@@ -311,7 +310,7 @@ export interface ReloginResult extends LoginResult {
 }
 
 /** 氚云重新登录（`crwu h3yun session login` 在提权白名单里）。 */
-export async function relogin(deps: SystemDeps, home: string): Promise<ReloginResult> {
+export async function relogin(deps: SystemDeps, _home: string): Promise<ReloginResult> {
   const run = await runCrwu(deps.ctx, ['crwu', 'h3yun', 'session', 'login'], {
     workdir: await deps.workdir(),
     timeoutMs: 300_000,

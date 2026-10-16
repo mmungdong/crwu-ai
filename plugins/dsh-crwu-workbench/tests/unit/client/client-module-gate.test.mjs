@@ -62,7 +62,7 @@ test('导航按模块分离：评估树只有估值，一级标签不出现审�
   }
   assert.deepEqual(moduleOfParent('valuation'), 'eval')
   assert.deepEqual(moduleOfParent('audit'), 'audit')
-  assert.equal(moduleOfParent('valuation.real-estate'), null, '二级目录不属于这条判据')
+  assert.equal(moduleOfParent('audit.report'), null, '二级目录不属于这条判据')
   assert.equal(moduleOfParent('不存在'), null)
   // 报告评估：一级只有「估值」。**不许出现「审核」**。
   assert.deepEqual(parentNodes('eval').map((node) => node.label), ['估值'])
@@ -80,48 +80,51 @@ test('没有已配置业务项的一级目录不画（不展示空占位入口�
   assert.deepEqual(childNodes('other'), [])
   assert.equal(PARENT_IDS_BY_MODULE.eval.includes('other'), true, '元数据还在（业务项配好就会自己出现）')
   assert.equal(parentNodes('eval').some((node) => node.id === 'other'), false)
-  // 已经配了业务项（含「开发中」）的一级目录照样显示：那是业务目录的全貌。
+  // 「估值」自己就是页面 → 照常显示（出现的两条判据：有子项，或自己带 page）。
   assert.equal(parentNodes('eval').some((node) => node.id === 'valuation'), true)
-  // 一级目录自己没有页面（它只是业务大类）。
-  for (const module of ['eval', 'audit']) {
-    for (const parent of parentNodes(module)) {
-      assert.equal(parent.parentId, null, parent.id)
-      assert.equal(parent.page, null, parent.id)
-    }
-  }
+  // 纯目录（底下挂二级页面）自己没有页面。
+  assert.equal(nodeById('audit').page, null, 'audit 只是业务大类')
+  assert.equal(nodeById('audit').parentId, null)
+  for (const parent of parentNodes('audit')) assert.equal(parent.parentId, null, parent.id)
 })
 
-test('二级目录：估值三项（土地 / 机器设备还没做）、审核两项', () => {
-  assert.deepEqual(childNodes('valuation').map((node) => node.label), ['房地产', '土地', '机器设备'])
-  assert.deepEqual(childNodes('valuation').map((node) => node.enabled), [true, false, false])
+test('估值是一级页：没有二级目录，审核仍有二级目录', () => {
+  // 2026-10-15 口径：取消房地产二级导航 —— 资产类型改在页面里的下拉选。
+  assert.deepEqual(childNodes('valuation'), [])
   assert.deepEqual(childNodes('audit').map((node) => node.label), ['报告审核', '本地审核'])
   assert.deepEqual(childNodes('audit').map((node) => node.enabled), [true, true])
   assert.equal(zhCN.navParentEmpty, '该业务目录暂未开放')
   // 每个二级目录都声明了它画哪一页、属于哪一个一级目录。
-  for (const parentId of ['valuation', 'audit']) {
-    for (const child of childNodes(parentId)) {
-      assert.equal(child.parentId, parentId, child.id)
-      assert.notEqual(child.page, null, child.id)
-      assert.equal(parentOf(child.id).id, parentId)
-    }
+  for (const child of childNodes('audit')) {
+    assert.equal(child.parentId, 'audit', child.id)
+    assert.notEqual(child.page, null, child.id)
+    assert.equal(parentOf(child.id).id, 'audit')
+  }
+  // 一级页：自己带 page、enabled，且它不是任何人的子项。
+  const valuation = nodeById('valuation')
+  assert.equal(valuation.parentId, null)
+  assert.equal(valuation.page, 'valuation')
+  assert.equal(valuation.enabled, true)
+  // 未实现的资产类型不再占目录位（土地 / 机器设备的节点整体删除）。
+  for (const gone of ['valuation.real-estate', 'valuation.land', 'valuation.equipment']) {
+    assert.equal(nodeById(gone), null, `${gone} 不该再出现在导航元数据里`)
   }
 })
 
-test('默认页面 = 该一级目录下第一个**可用**页面；不认识的 id 返回 null', () => {
-  assert.equal(firstEnabledChild('valuation').id, 'valuation.real-estate')
+test('默认页面 = 该一级目录下第一个**可用**页面（一级页时就是它自己）', () => {
+  assert.equal(firstEnabledChild('valuation').id, 'valuation')
   assert.equal(firstEnabledChild('audit').id, 'audit.report')
   assert.equal(firstEnabledChild('other'), null)
-  assert.equal(nodeById('valuation.land').enabled, false)
   assert.equal(nodeById('不存在'), null)
   assert.equal(nodeById(null), null)
   // 侧栏那张分组卡的模块入口 → 默认页面（既有习惯不变：报告审核 → 审核 / 报告审核）。
   assert.equal(defaultNodeOfModule('audit').id, 'audit.report')
-  assert.equal(defaultNodeOfModule('eval').id, 'valuation.real-estate')
+  assert.equal(defaultNodeOfModule('eval').id, 'valuation')
   assert.equal(defaultNodeOfModule('env'), null, '环境信息不在目录树里')
 })
 
 test('页面 → 模块；门禁判据从模块元数据派生（不在这张表里再抄一份）', () => {
-  assert.equal(moduleOfPage('real-estate-valuation'), 'eval')
+  assert.equal(moduleOfPage('valuation'), 'eval')
   assert.equal(moduleOfPage('report-audit'), 'audit')
   assert.equal(moduleOfPage('local-audit'), 'audit')
   assert.equal(moduleOfPage(null), null)
@@ -133,14 +136,14 @@ test('页面 → 模块；门禁判据从模块元数据派生（不在这张表
   assert.equal(isModuleId('eval'), true)
   assert.equal(moduleLabel('audit'), zhCN.moduleAudit)
   // 估值页要基础环境；审核页要 audit 那一档。
-  assert.equal(requiresEnvironmentOf(nodeById('valuation.real-estate')), true)
-  assert.equal(requirementOfNode(nodeById('valuation.real-estate')), 'global')
+  assert.equal(requiresEnvironmentOf(nodeById('valuation')), true)
+  assert.equal(requirementOfNode(nodeById('valuation')), 'global')
   assert.equal(requirementOfNode(nodeById('audit.report')), 'audit')
   assert.equal(requirementOf('audit'), 'audit')
 })
 
 test('键盘循环：左右键在给定序列里绕圈，Home / End 直达两端，别的键不动', () => {
-  assert.deepEqual(enabledChildIds('valuation'), ['valuation.real-estate'], '「开发中」的子项不参与循环')
+  assert.deepEqual(enabledChildIds('valuation'), [], '一级页没有二级页签可循环')
   assert.deepEqual(enabledChildIds('audit'), ['audit.report', 'audit.local'])
   assert.deepEqual(enabledChildIds('other'), [])
   // 键盘循环在**当前模块**的目录条里走：评估树只有一项，所以左右键不动。
@@ -168,23 +171,23 @@ test('页签 id 稳定且可区分两级（aria-controls / aria-labelledby 都�
   assert.notEqual(tabIdOf('audit.report'), tabIdOf('audit.local'))
 })
 
-test('页面身份：二级目录 / 环境页各是一个身份，一级目录不算', () => {
+test('页面身份：页面 / 环境页各是一个身份', () => {
   // 内容区外壳不重建，所以"什么算换了一页"必须是纯函数、可断定（组件那侧只剩归零这一句）。
-  assert.equal(pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation.real-estate' }), 'node:valuation.real-estate')
+  assert.equal(pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation' }), 'node:valuation')
   assert.notEqual(
-    pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation.real-estate' }),
-    pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation.land' }),
-    '换二级目录 = 换身份（要把滚动位置归零）',
-  )
-  assert.notEqual(
-    pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation.real-estate' }),
+    pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation' }),
     pageIdentityOf({ kind: 'node', parent: 'audit', node: 'audit.report' }),
     '跨模块也是换身份',
+  )
+  assert.notEqual(
+    pageIdentityOf({ kind: 'node', parent: 'audit', node: 'audit.report' }),
+    pageIdentityOf({ kind: 'node', parent: 'audit', node: 'audit.local' }),
+    '换二级目录 = 换身份（要把滚动位置归零）',
   )
   // 环境页 / 空目录也是身份：从环境页回到业务页不能被上一页的滚动位置带走。
   assert.notEqual(
     pageIdentityOf({ kind: 'env', parent: 'valuation', node: null }),
-    pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation.real-estate' }),
+    pageIdentityOf({ kind: 'node', parent: 'valuation', node: 'valuation' }),
   )
   assert.notEqual(
     pageIdentityOf({ kind: 'empty', parent: 'other', node: null }),
@@ -220,20 +223,25 @@ test('环境不通过：停在环境信息（不在目录树里，active=env）'
   assert.equal(store.get().kind, 'env')
 })
 
-test('点一级目录：二级目录、正文、一级目录在**同一次通知**里一起变', () => {
+test('点一级目录：落点、正文、一级目录在**同一次通知**里一起变', () => {
   const store = createModuleStore()
   store.envChanged({ state: state() })
   let notifications = 0
   store.subscribe(() => { notifications += 1 })
+  // 「估值」是一级页：点它直接落到它自己（没有二级目录要选）。
   const verdict = store.navigateParent('valuation', { state: state() })
   assert.equal(verdict.blocked, false)
-  assert.equal(verdict.node, 'valuation.real-estate')
+  assert.equal(verdict.node, 'valuation')
   const snap = store.get()
   assert.equal(snap.kind, 'node')
-  assert.equal(snap.parent, 'valuation')
-  assert.equal(snap.node, 'valuation.real-estate')
+  assert.equal(snap.parent, 'valuation', '一级页的 parent 就是它自己 —— 不能留在上一个一级目录')
+  assert.equal(snap.node, 'valuation')
   assert.equal(snap.active, 'eval')
   assert.equal(notifications, 1, '一次更新改完一整组 —— 不允许先改一级、再改二级')
+  // 真有两级目录的「审核」照旧：点一级目录默认落到第一个可用页面。
+  store.navigateParent('audit', { state: state() })
+  assert.equal(store.get().node, 'audit.report')
+  assert.equal(store.get().parent, 'audit')
 })
 
 test('每次切一级目录都默认选中第一个可用页面（不记忆上一次的二级页面）', () => {
@@ -244,7 +252,7 @@ test('每次切一级目录都默认选中第一个可用页面（不记忆上�
   assert.equal(store.get().node, 'audit.local')
   // 切走再切回来：回到审核的**第一个可用页面**，不是刚才那个「本地审核」。
   store.navigateParent('valuation', { state: state() })
-  assert.equal(store.get().node, 'valuation.real-estate')
+  assert.equal(store.get().node, 'valuation')
   store.navigateParent('audit', { state: state() })
   assert.equal(store.get().node, 'audit.report', '不记忆：默认选第一个可用页面')
 })
@@ -262,15 +270,17 @@ test('一级目录下一个可用页面都没有：落到 empty（正文说「�
   assert.equal(snap.active, null, '空目录没有对应模块，侧栏不假装高亮某一项')
 })
 
-test('「开发中」的二级目录不可进入（enabled=false 是硬判据，不是样式）', () => {
+test('不可进入的节点改不动落点（enabled=false 是硬判据，不是样式）', () => {
   const store = createModuleStore()
   store.envChanged({ state: state() })
   store.navigateParent('valuation', { state: state() })
   const before = store.get()
+  // 土地 / 机器设备已经从导航元数据里删除（资产类型改在页面里选）：
+  // 拿一个不存在的 id 去点，落点必须一动不动。
   const verdict = store.navigateNode('valuation.land', { state: state() })
   assert.equal(verdict.empty, false)
   assert.equal(verdict.node, null)
-  assert.deepEqual(store.get(), before, '点「土地」不改变落点')
+  assert.deepEqual(store.get(), before, '点不存在的目录项不改变落点')
 })
 
 test('环境不通过时点二级目录：落到环境页、记 pending、带出目标页名', () => {
@@ -333,10 +343,10 @@ test('用户中途主动改去环境信息：不自动恢复旧目标（绝不�
 test('成功进入目标页之后清掉 pending（不会过一会儿又跳一次）', () => {
   const store = createModuleStore()
   store.envChanged({ state: state() })
-  store.navigateNode('valuation.real-estate', { state: state() })
+  store.navigateNode('valuation', { state: state() })
   assert.equal(store.get().pendingNode, null)
   store.envChanged({ state: state() })
-  assert.equal(store.get().node, 'valuation.real-estate')
+  assert.equal(store.get().node, 'valuation')
 })
 
 test('环境信息永远进得去（它就是修复入口）：不判门禁、也不留下 pending', () => {
@@ -355,7 +365,7 @@ test('环境信息永远进得去（它就是修复入口）：不判门禁、�
 test('侧栏那张分组卡的模块入口仍然可用：eval / audit / env 各去自己的默认页', () => {
   const store = createModuleStore()
   store.envChanged({ state: state() })
-  assert.equal(store.navigate('eval', { state: state() }).node, 'valuation.real-estate')
+  assert.equal(store.navigate('eval', { state: state() }).node, 'valuation')
   assert.equal(store.get().active, 'eval')
   assert.equal(store.navigate('audit', { state: state() }).node, 'audit.report')
   assert.equal(store.get().active, 'audit')
@@ -381,7 +391,7 @@ test('外部数据源（iFinD）未就绪**不拦**任何导航：基础环境�
   store.envChanged({ state: degraded })
   assert.equal(store.get().node, 'audit.report', '基础环境已就绪 → 默认进报告审核')
   assert.equal(store.navigateParent('valuation', { state: degraded }).blocked, false)
-  assert.equal(store.get().node, 'valuation.real-estate')
+  assert.equal(store.get().node, 'valuation')
   // 「外部数据核查」不是独立模块：它是环境信息页里的一个区块（用户口径 2026-09-30）。
   assert.equal(MODULE_IDS.includes('external'), false, '不许再有 external 这个模块')
   assert.equal(store.navigateEnv({ state: degraded }).blocked, false)
@@ -426,8 +436,8 @@ test('订阅在状态不变时不通知（避免无意义重渲染）；selectEp
   // 再点一次**当前页** = 「重新进入它」（既有口径，侧栏那张卡也靠它重置拦截态）：
   // 落点没变，但 selectEpoch 推进，面板据此清掉上一次的「自检没过」拦截屏。
   const after = store.get().selectEpoch
-  store.navigateNode('valuation.real-estate', { state: state() })
+  store.navigateNode('valuation', { state: state() })
   assert.equal(store.get().selectEpoch, after + 1)
-  assert.equal(store.get().node, 'valuation.real-estate')
+  assert.equal(store.get().node, 'valuation')
   assert.equal(notifications, 2)
 })

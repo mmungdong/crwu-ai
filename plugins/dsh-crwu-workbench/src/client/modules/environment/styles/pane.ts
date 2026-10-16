@@ -48,21 +48,29 @@ export const ENVIRONMENT_STYLE_TEXT = `
      右侧当前步骤；窄屏（<=860px）改成顶部横向步骤条 + 下方详情，绝不横向溢出；
    - 分层只靠 1px 发丝线、留白与最轻一档阴影；状态色只出现在小图标 / 状态点 / 短标签上。
    ──────────────────────────────────────────────────────────────────── */
+/* The environment page owns an inline-size container: the configuration workspace adapts to the
+   panel width, not the browser window (a 500px panel inside a 1440px window must still stack). */
+.crwu-environment-page {
+  container-type: inline-size;
+  container-name: crwu-environment;
+}
 .crwu-audit-status {
   display: flex; align-items: flex-start; gap: 12px;
-  padding: 14px 16px; margin-bottom: 14px;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 14px;
-  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv1);
+  padding: 18px 20px; margin-bottom: 20px;
+  border: 1px solid var(--crwu-border); border-radius: 14px;
+  background: var(--crwu-surface); box-shadow: none;
 }
-.crwu-audit-status-ok { border-left: 3px solid var(--dsw-alias-state-success-primary); }
+/* Ready keeps a neutral edge (no green stripe); bad states keep the warning accent. */
+.crwu-audit-status-ok { border-left: 1px solid var(--crwu-border); }
 .crwu-audit-status-bad { border-left: 3px solid var(--dsw-alias-state-warn-primary); }
 .crwu-audit-status-mark {
   flex: none; width: 32px; height: 32px; border-radius: 10px;
   display: inline-flex; align-items: center; justify-content: center;
 }
+/* Ready uses the soft blue action token, not the success green. */
 .crwu-audit-status-mark-ok {
-  color: var(--dsw-alias-state-success-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+  color: var(--crwu-interactive);
+  background: var(--crwu-interactive-soft);
 }
 .crwu-audit-status-mark-bad {
   color: var(--dsw-alias-state-warn-primary);
@@ -79,19 +87,19 @@ export const ENVIRONMENT_STYLE_TEXT = `
 }
 .crwu-audit-status-meta {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-  margin-top: 8px; font-size: 12px; line-height: 18px; color: var(--crwu-text-tertiary);
+  margin-top: 8px; font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 .crwu-audit-status-dot {
   width: 3px; height: 3px; border-radius: 50%; flex: none;
-  background: var(--crwu-text-tertiary);
+  background: var(--crwu-border-strong);
 }
 .crwu-audit-status-action { flex: none; display: flex; align-items: flex-start; padding-top: 2px; }
 
 .crwu-audit-workspace {
-  display: grid; grid-template-columns: 260px minmax(0, 1fr);
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 14px;
-  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv1);
+  display: grid; grid-template-columns: 220px minmax(0, 1fr);
+  border: 1px solid var(--crwu-border); border-radius: 14px;
+  background: var(--crwu-surface); box-shadow: none;
   overflow: hidden;
 }
 .crwu-audit-steps { min-width: 0; border-right: 1px solid var(--crwu-border); background: var(--crwu-surface-subtle); }
@@ -104,33 +112,39 @@ export const ENVIRONMENT_STYLE_TEXT = `
   transition: background 140ms var(--crwu-ease), color 140ms var(--crwu-ease);
 }
 .crwu-audit-step:hover { background: var(--crwu-hover); color: var(--crwu-text-primary); }
-.crwu-audit-step:focus-visible { outline: 2px solid var(--crwu-brand); outline-offset: -2px; }
+.crwu-audit-step:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: -2px; }
+/* Selected: soft blue fill + blue accent, no shadow. The label uses the brighter interactive
+   tone (readable on the soft fill in both themes); the index keeps the white-on-primary chip. */
 .crwu-audit-step-on, .crwu-audit-step-on:hover {
-  background: var(--crwu-surface); color: var(--crwu-text-primary); font-weight: 600;
-  box-shadow: var(--crwu-shadow-tab);
+  background: var(--crwu-interactive-soft); color: var(--crwu-interactive); font-weight: 600;
+  box-shadow: none;
 }
 .crwu-audit-step-index {
   flex: none; width: 22px; height: 22px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
-  color: var(--crwu-text-tertiary);
+  color: var(--crwu-text-secondary);
   border: 1px solid var(--crwu-border-strong); background: var(--crwu-surface);
 }
-/* 已完成：实心绿点（状态色只出现在这枚小图标上，不铺底）。 */
+/* Done: neutral / delicate blue, never the bright success green. */
 .crwu-audit-step-index-done {
-  color: var(--dsw-alias-state-success-primary);
-  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent);
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+  color: var(--crwu-interactive);
+  border-color: var(--crwu-interactive-border);
+  background: var(--crwu-surface);
+}
+/* The active step's index is a solid blue chip with a readable foreground. */
+.crwu-audit-step-on .crwu-audit-step-index {
+  color: var(--crwu-primary-text); background: var(--crwu-primary-bg); border-color: transparent;
 }
 .crwu-audit-step-text { min-width: 0; display: flex; flex-direction: column; }
 .crwu-audit-step-title { font-size: 13px; line-height: 18px; }
-/* 基础必检项的红色星号：颜色用主题的错误语义色，不用硬编码红色。 */
+/* Required-items asterisk: theme error token, never a hard-coded red. */
 .crwu-audit-step-required { margin-left: 3px; color: var(--dsw-alias-state-error-primary); font-weight: 600; }
 .crwu-audit-step-legend {
-  padding: 8px 10px 2px; font-size: 11px; line-height: 16px; color: var(--crwu-text-tertiary);
+  padding: 8px 10px 2px; font-size: 11px; line-height: 16px; color: var(--crwu-text-secondary);
   border-top: 1px solid var(--crwu-border);
 }
-.crwu-audit-step-state { font-size: 11px; line-height: 16px; color: var(--crwu-text-tertiary); font-weight: 400; }
+.crwu-audit-step-state { font-size: 11px; line-height: 16px; color: var(--crwu-text-secondary); font-weight: 400; }
 .crwu-audit-step-panel { min-width: 0; padding: 16px 18px; }
 .crwu-audit-step-panel-head {
   display: flex; align-items: center; gap: 10px;
@@ -138,28 +152,52 @@ export const ENVIRONMENT_STYLE_TEXT = `
 }
 .crwu-audit-step-panel-title { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 600; }
 .crwu-audit-step-lead { margin: 0 0 12px; font-size: 13px; line-height: 20px; color: var(--crwu-text-secondary); }
-/* 步骤内的表单块：与「一行配置项」同一套语言，但自带一段引导文案。 */
+/* In-step form blocks: same language as a config row, with its own lead sentence. */
 .crwu-audit-step-card { display: block; }
 .crwu-audit-step-card-head { display: flex; align-items: center; gap: 10px; }
 .crwu-audit-fields { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
 .crwu-audit-field { display: flex; flex-direction: column; gap: 4px; }
 .crwu-audit-field-label { font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary); }
-/* 窄屏：左侧导航变成顶部横向步骤条，绝不横向溢出。 */
-@media (max-width: 860px) {
+/* Flatten config cards inside the step panel: one paper, no nested raised frames. */
+.crwu-environment-page .crwu-audit-step-panel .crwu-audit-card {
+  border: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
+.crwu-environment-page .crwu-audit-step-panel .crwu-audit-card-title,
+.crwu-environment-page .crwu-audit-step-panel .crwu-audit-card-body {
+  padding-left: 0; padding-right: 0;
+}
+/* Scope "ok" chips / badges / dots to soft blue inside the environment page only;
+   the shared global green tone (audit pass) stays untouched. */
+.crwu-environment-page .crwu-audit-badge-ok,
+.crwu-environment-page .crwu-audit-chip-ok {
+  color: var(--crwu-interactive); border-color: var(--crwu-interactive-border);
+}
+.crwu-environment-page .crwu-audit-dot-ok {
+  background: var(--crwu-interactive);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--crwu-interactive) 18%, transparent);
+}
+/* Responsive: follow the panel's own width. */
+@container crwu-environment (max-width: 860px) {
   .crwu-audit-workspace { grid-template-columns: minmax(0, 1fr); }
   .crwu-audit-steps { border-right: none; border-bottom: 1px solid var(--crwu-border); }
   .crwu-audit-steps-list { flex-direction: row; overflow-x: auto; }
   .crwu-audit-step { width: auto; flex: none; }
+}
+@container crwu-environment (max-width: 559px) {
+  /* 2x2 step grid; the legend stays visible and nothing overflows sideways. */
+  .crwu-audit-steps-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; overflow-x: visible; }
+  .crwu-audit-step { width: 100%; min-width: 0; }
+  .crwu-audit-step-title { overflow-wrap: anywhere; }
 }
 @media (prefers-reduced-motion: reduce) {
   .crwu-audit-step, .crwu-audit-step:hover { transition: none; }
 }
 
 .crwu-audit-meter {
-  height: 6px; border-radius: 999px; overflow: hidden; margin-top: 12px;
-  background: var(--dsw-alias-interactive-bg-hover);
+  height: 4px; border-radius: 999px; overflow: hidden; margin-top: 12px;
+  background: var(--crwu-border);
 }
-.crwu-audit-meter-fill { height: 100%; border-radius: 999px; background: var(--dsw-alias-state-success-primary); }
+.crwu-audit-meter-fill { height: 100%; border-radius: 999px; background: var(--crwu-interactive); }
 .crwu-audit-meter-fill-bad { background: var(--dsw-alias-state-warn-primary); }
 
 .crwu-audit-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(116px, 1fr)); gap: 10px; margin-top: 14px; }
@@ -214,19 +252,20 @@ export const ENVIRONMENT_STYLE_TEXT = `
    ──────────────────────────────────────────────────────────────────── */
 .crwu-audit-details {
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
-  margin-top: 4px;
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--crwu-border);
 }
 .crwu-audit-details-head {
-  display: flex; align-items: center; gap: 8px; width: auto; min-height: 34px;
-  padding: 6px 9px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--dsw-alias-label-tertiary);
+  display: flex; align-items: center; gap: 8px; width: auto; min-height: 32px;
+  padding: 5px 9px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--crwu-text-secondary);
   font-family: inherit; font-size: 12px; text-align: left; cursor: pointer;
   transition: background 0.14s ease, color 0.14s ease;
 }
 .crwu-audit-details-head:hover {
   background: var(--crwu-hover);
-  color: var(--dsw-alias-label-secondary);
+  color: var(--crwu-text-primary);
 }
+.crwu-audit-details-head:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; }
 .crwu-audit-details-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .crwu-audit-details-title svg { flex: 0 0 auto; color: currentColor; }
 .crwu-audit-details-toggle { margin-left: auto; color: currentColor; font-size: 11.5px; white-space: nowrap; }
@@ -235,7 +274,7 @@ export const ENVIRONMENT_STYLE_TEXT = `
   text-decoration: none; text-underline-offset: 3px;
 }
 .crwu-audit-details-contact:hover { color: var(--dsw-alias-link); text-decoration: underline; }
-.crwu-audit-details-contact:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; border-radius: 4px; }
+.crwu-audit-details-contact:focus-visible { outline: 2px solid var(--crwu-interactive); outline-offset: 2px; border-radius: 4px; }
 .crwu-audit-details-body {
   align-self: stretch; order: -1; width: 100%; box-sizing: border-box;
   padding: 16px 18px 18px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px;

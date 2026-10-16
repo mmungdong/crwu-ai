@@ -12,6 +12,7 @@
  *    交付前两道校验 —— 少写一项，子会话就会按自己的理解收尾（审核链路的原话教训）。
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const ROOT = new URL('../../../', import.meta.url)
@@ -232,6 +233,7 @@ function facts(patch = {}) {
   return {
     valuationId: VAL_ID,
     casePath: CASE,
+    assetType: 'real-estate',
     method: 'market',
     baseDate: '2026-06-30',
     supplementalPrompt: '',
@@ -239,48 +241,68 @@ function facts(patch = {}) {
     files: [{ fileName: '估值报告.pdf', relativePath: '材料-源/估值报告.pdf', kind: 'pdf', sizeBytes: 1024 }],
     extraction: [{ fileName: '估值报告.pdf', parsed: true, fieldCount: 0, note: '' }],
     knowledge: [{ route: '估值与测算/房地产/02-市场法', source: 'dws', digest: 'sha256:k' }],
-    knowledgeReady: true,
-    providers: [{ label: '房天下', state: 'authenticated', failedPages: 0 }],
+    // 来源策略（协议 39）：交接那一刻已知的**能力事实**，不是检索结果。
+    sources: [
+      { id: 'lianjia', label: '链家', tier: 'optional', state: 'unknown', evidence: 'archived-capture', reason: '交接时尚未检查该来源的登录状态' },
+      { id: 'fang', label: '房天下', tier: 'optional', state: 'unknown', evidence: 'public-pattern', reason: '可补充来源' },
+      { id: 'wuba', label: '58同城', tier: 'optional', state: 'unknown', evidence: 'public-pattern', reason: '可补充来源' },
+    ],
     validateScripts: [
       { name: '工作簿契约', script: `${CASE}/scripts/check_workbook_contract.py`, args: ['估值底稿.xlsx'] },
-      { name: '结果口径', script: `${CASE}/scripts/validate_result.py`, args: ['估值结果.json'] },
+      { name: '报告数据', script: `${CASE}/scripts/build_report_data.py`, args: ['--validate', '估值报告数据.json'] },
     ],
     ...patch,
   }
 }
 
-test('指令把每一项交付与口径都写出来（少一项子会话就会自己收尾）', () => {
+test('指令把每一项交付与技术边界都写出来（少一项子会话就会自己收尾）', () => {
   const prompt = valuationPrompt(facts())
   for (const required of [
-    VAL_ID, CASE, '市场法', '2026-06-30', '材料-源/估值报告.pdf',
-    '估值结果.json', '估值报告.html', '估值底稿.xlsx',
-    'template/valuation-workbook.xlsx', '只填输入区', '公式区保持模板公式',
-    'crwu_valuation_artifact_validate', 'check_workbook_contract.py', 'validate_result.py',
-    '所有数字结论以重算后的底稿为准',
-    '估值与测算/房地产/02-市场法',
+    VAL_ID, CASE, 'real-estate', '市场法', '2026-06-30', '材料-源/估值报告.pdf',
+    '估值报告数据.json', '估值报告.html', '估值底稿.xlsx',
+    'crwu_valuation_artifact_validate', 'check_workbook_contract.py', 'build_report_data.py',
+    'stage=parameters', '真实重算', 'capability_gaps',
   ]) {
     assert.equal(prompt.includes(required), true, `指令里缺少「${required}」`)
   }
-  assert.equal(prompt.includes('capability_gaps'), true)
+  assert.equal(prompt.includes('估值与测算/房地产/02-市场法'), true, '知识来源要出现')
 })
 
-test('指令里有案例筛选规则与压缩包口径（§12 的清单项，缺一项子会话就自己定）', () => {
+test('业务判据搬进 Wiki：指令只留"读哪一份"，不再复制方法阈值与来源顺序', () => {
   const prompt = valuationPrompt(facts())
-  for (const required of [
-    '## 案例筛选规则',
+  // 旧指令把选法顺序、可比性三条件、挂牌/成交口径、来源优先级与页数上限都抄了一份。
+  // 抄一份的后果是**改知识库不再生效**（Agent 照着更旧的副本执行，两边都不报错）。
+  for (const gone of [
     '可比性三条件同时满足',
     '挂牌 ≠ 成交',
-    '不许**当成交价用',
-    '剔除不等于删除',
-    '每条案例都要有 URL 与抓取时间',
     '数量不足照实说',
-    '不得**伪造案例',
-    'references/04-case-selection.md',
-    '## 压缩包',
-    '不自动展开',
+    '## 案例筛选规则',
+    '不少于 3 个',
+    '优先收益法',
   ]) {
-    assert.equal(prompt.includes(required), true, `指令里缺少「${required}」`)
+    assert.equal(prompt.includes(gone), false, `业务判据「${gone}」只能留在知识正文里`)
   }
+  // 取而代之：唯一的业务入口是资产 Skill 声明的**入口 Wiki**，按它的条件逐篇读。
+  assert.match(prompt, /入口 Wiki/)
+  assert.match(prompt, /按 Wiki 的/)
+  assert.match(prompt, /_manifest\.json/, '要明说：不许读旧 manifest')
+  assert.match(prompt, /crwu_valuation_knowledge_materialize/)
+  assert.match(prompt, /stage=parameters/)
+  assert.match(prompt, /wikiPaths/, '结构化参数仍按本轮 Wiki 路径取用')
+  assert.equal(prompt.includes('`routeIds`'), false, '知识取用不再走 manifest 槽位')
+  assert.equal(prompt.includes('availableRouteIds'), false)
+})
+
+test('来源策略随交接交给父会话：逐来源分档与原因，且说明登录不阻断', () => {
+  const prompt = valuationPrompt(facts())
+  assert.equal(prompt.includes('链家'), true)
+  assert.equal(prompt.includes('房天下'), true)
+  assert.equal(prompt.includes('58同城'), true, '协议 39 的来源阶梯要包含 58 同城')
+  assert.match(prompt, /适配器依据 archived-capture/, '有归档字节的来源要说清依据')
+  assert.match(prompt, /适配器依据 public-pattern/, '没验收的来源也要说清依据（不许含糊成"可用"）')
+  assert.match(prompt, /登录是可选用能力/)
+  assert.match(prompt, /渠道与降级策略/)
+  assert.match(prompt, /区分"来源不覆盖 \/ 成功但无合格数据 \/ 未登录 \/ 访问失败 \/ 解析能力缺口"/)
 })
 
 test('未指定基准日时：指令明确禁止按基准日筛选与做日期修正，并要求登记', () => {
@@ -310,10 +332,38 @@ test('方法口径：auto 要求输出采用与排除理由；指定方法要求
   }
 })
 
-test('必需知识缺失时：指令要求**停止测算**（不许照样给结论）', () => {
-  const prompt = valuationPrompt(facts({ knowledgeReady: false }))
-  assert.match(prompt, /必需知识缺失/)
-  assert.match(prompt, /不要输出估值结论/)
+test('知识不是"必需项"：没有「必需知识缺失即停止测算」这一档，也不再有 realestate.* 口径', () => {
+  const prompt = valuationPrompt(facts())
+  // 旧形态是 `knowledgeReady=false → 不要输出估值结论`。那一条的判据来自一个**硬编码的常量**，
+  // 本身就是死分支；而"缺一份通用正文就整轮停"更是要删的东西。
+  assert.equal(prompt.includes('必需知识'), false)
+  assert.equal(prompt.includes('不要输出估值结论'), false)
+  assert.equal(prompt.includes('realestate.'), false)
+  // 缺失只影响相关计算，其余有依据的工作继续。
+  assert.match(prompt, /入口不可读 \/ 空正文 \/ 同名歧义 \/ 无权限/)
+  assert.match(prompt, /capability_gaps/)
+})
+
+test('指令事实里不再有 knowledgeReady 字段（硬编码 true 的死分支连字段一起删）', () => {
+  const source = readFileSync(new URL('../../../src/host/domains/report-evaluation/prompt.ts', import.meta.url), 'utf8')
+  assert.equal(source.includes('knowledgeReady'), false)
+  const handoff = readFileSync(new URL('../../../src/host/operations/report-evaluation/handoff.ts', import.meta.url), 'utf8')
+  assert.equal(handoff.includes('knowledgeReady'), false, '交接侧不许再硬编码"知识已就绪"')
+})
+
+test('少案例与用户复算：指令写明按编号选例、建新版本、旧版保留', () => {
+  const prompt = valuationPrompt(facts())
+  for (const needle of [
+    '## 少案例与用户复算',
+    '## 重算与回读（真实计算）', 'crwu_valuation_recalculate', '由 **Host 写**「重算结论.json」',
+    '## 候选的批量筛选与优选', 'maxAdopted', '全部照抄本轮知识正文的取值', '硬性排除',
+    '1～2 条可核案例', '不要**因为数量少就把所有金额清空',
+    'crwu_valuation_revision', 'op=candidates', 'op=recompute', 'op=promote',
+    '稳定编号', '不自动重搜', '旧版本、旧报告与旧底稿一律保留',
+    '通过核对之前，当前版本指针不动',
+  ]) {
+    assert.equal(prompt.includes(needle), true, `指令里缺少「${needle}」`)
+  }
 })
 
 test('用户补充要求单独成段，并明确不得覆盖安全规则与公式契约', () => {

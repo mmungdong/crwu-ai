@@ -118,7 +118,7 @@ export function normalizeProgress(value: Partial<ValuationProgress> | undefined)
   }
 }
 
-/** 外部来源的运行状态（写进 `valuation-status`，界面据此显示"即将访问的数据源"）。 */
+/** 外部来源的运行状态（写进轮次注册表；能力门禁据此判断来源是否真的可用）。 */
 export interface ProviderState {
   state: string
   attempts: number

@@ -44,6 +44,25 @@ export interface CrwuRun {
   escalateAvailable: boolean
 }
 
+/**
+ * `browser` 子命令 → 本机访问操作。
+ *
+ * 分成两条而不是一条，是因为它们**该由谁发起**不同：`login` 会在员工屏幕上打开一个真实窗口
+ * 并等下去，只允许面板（员工自己点的那个按钮）发起；审核/估值子会话与宿主后台能驱动浏览器，
+ * 但永远不该替员工弹出一个登录窗口。
+ */
+const CRWU_BROWSER_OPERATION_BY_SUBCOMMAND: Record<string, LocalAccessOperation> = {
+  login: 'system.browser.login',
+  // `open` 也是在员工屏幕上开一个可见窗口（只是不等登录、不等验证），所以与 login 同类：
+  // 只允许面板发起，并且仍然提权 —— 它写的是同一份工作区之外的 profile。
+  open: 'system.browser.verify-window',
+  status: 'system.browser.drive',
+  fetch: 'system.browser.drive',
+  shot: 'system.browser.drive',
+  recover: 'system.browser.drive',
+  profile: 'system.browser.drive',
+}
+
 /** `h3yun` 子命令 → 本机访问操作（**固定映射**，不是调用方参数）。 */
 const CRWU_OPERATION_BY_SUBCOMMAND: Record<string, LocalAccessOperation> = {
   forms: 'h3yun.forms.read',
@@ -62,6 +81,9 @@ const CRWU_OPERATION_BY_SUBCOMMAND: Record<string, LocalAccessOperation> = {
 export function crwuOperationOf(argv: readonly string[]): LocalAccessOperation | null {
   if (text(argv[0]) !== 'crwu') return null
   const domain = text(argv[1])
+  if (domain === 'browser') {
+    return CRWU_BROWSER_OPERATION_BY_SUBCOMMAND[text(argv[2])] ?? null
+  }
   if (domain !== 'h3yun') return null
   const sub = text(argv[2])
   if (sub === 'session') {
