@@ -11,9 +11,11 @@ import { canonicalJson } from '../../tools/common/snapshot.ts'
 import {
   VALUATION_MATERIAL_DIR,
   VALUATION_REPORT_DATA_FILE,
+  VALUATION_TOOL_NAMES,
   VALUATION_WORKBOOK_FILE,
 } from '../../tools/report-evaluation/consts.ts'
 import { missingValuationTools, valuationToolsMissingText } from '../../tools/report-evaluation/visibility.ts'
+import { missingAuditTools } from '../../tools/register.ts'
 import {
   buildFrozenInput,
   type FrozenInput,
@@ -31,6 +33,7 @@ import {
   HANDOFF_RECORD_FILE,
   HandoffStore,
   type HandoffOutcome,
+  type HandoffRecord,
 } from '../../domains/report-evaluation/execution/handoff-store.ts'
 import type { ValuationLifecycles } from '../../domains/report-evaluation/lifecycle/index.ts'
 import {
@@ -41,6 +44,7 @@ import {
 } from '../../domains/report-evaluation/lifecycle/project-record.ts'
 import type { ValuationScope } from '../../domains/report-evaluation/scope.ts'
 import type { ValuationScopes } from '../../domains/report-evaluation/scope.ts'
+import { samePathText } from '../../domains/report-audit/scope.ts'
 import type { OperationMap } from '../types.ts'
 
 /**
@@ -70,6 +74,39 @@ export interface HandoffRequest {
   requestId: string
 }
 
+/**
+ * 交接完成后、发固定指令之前的**工作流图登记钩子**（协议 43）。
+ *
+ * 返回成功时给出的 `prompt` 是**唯一**要发给父会话的指令（不透明、只含 commandId）；
+ * 失败时不得发任何指令 —— 父会话已经建好，重试会复用同一条会话。
+ */
+export type WorkflowPrepareHandoffHook = (input: {
+  receipt: HandoffReceipt
+  frozen: FrozenInput
+}) => Promise<{ ok: boolean; error?: string; prompt: string }>
+
+/** `bindScope` 的结构化结果；`void` 仍被接受，旧夹具不需要改。 */
+export interface HandoffBindScopeResult {
+  ok: boolean
+  error?: string
+}
+
+/**
+ * A retry must keep the live scope generation verbatim: `openedAt` is part of the Graph
+ * runtime scope key and registered `planIds` belong to the running round. Only the exact
+ * same-round identity keeps the original scope; a foreign binding must fail closed.
+ */
+function sameScopeIdentity(existing: ValuationScope, next: ValuationScope): boolean {
+  return existing.valuationId === next.valuationId
+    && text(existing.projectId) === text(next.projectId)
+    && existing.sessionId === next.sessionId
+    && text(existing.parentSessionId) === text(next.parentSessionId)
+    && existing.workspaceId === next.workspaceId
+    && samePathText(existing.workspacePath, next.workspacePath)
+    && samePathText(existing.casePath, next.casePath)
+    && text(existing.snapshot?.digest) === text(next.snapshot?.digest)
+}
+
 /** 交接需要的外部能力（全部注入：事务本身可以直接单测）。 */
 export interface HandoffDeps {
   previews: PreviewRegistry
@@ -92,10 +129,20 @@ export interface HandoffDeps {
   readArchiveBytes(path: string): Promise<Uint8Array>
   /** 发固定指令。**可重试**：同一个 `messageId` 不会被应用两次。 */
   dispatch(input: { sessionId: string; messageId: string; prompt: string }): Promise<{ accepted: boolean; error: string }>
-  /** 登记父会话的案例 scope（归属按会话 id 逐字钉死）。 */
-  bindScope(scope: ValuationScope): void
+  /**
+   * 登记父会话的案例 scope（归属按会话 id 逐字钉死）。
+   *
+   * 返回 `{ ok:false, error }` 表示这一轮已经被另一份归属占用（foreign / mismatched）：调用方
+   * 必须 fail closed，不能覆盖正在运行的 scope。返回 `void` 是旧夹具的兼容形态。
+   */
+  bindScope(scope: ValuationScope): void | HandoffBindScopeResult
   /** 交接成功后的宿主记账（轮次记录等，尽力而为）。 */
   onHandoff?(receipt: HandoffReceipt, frozen: FrozenInput): Promise<void> | void
+  /**
+   * 可选的工作流图登记钩子。给了它就在写完冻结输入/项目记录、绑定 scope 之后、发指令之前调用；
+   * 成功只用它给的指令，失败**不发任何指令**（父会话已建好，重试复用同一条）。
+   */
+  prepareHandoff?: WorkflowPrepareHandoffHook
   /** 工具可见性预检：返回缺失的工具名（空数组 = 齐备）。 */
   missingTools?(): string[]
   projectDirOf(projectId: string): string
@@ -120,7 +167,12 @@ function failure(
   errorKind: FailureEnvelope['errorKind'],
   error: string,
   creationDisposition: CreationDisposition,
-  patch: { projectId?: string; parentSessionId?: string; reused?: boolean } = {},
+  patch: {
+    projectId?: string
+    parentSessionId?: string
+    reused?: boolean
+    recoveryAction?: 'refresh-preview' | 'retry-handoff'
+  } = {},
 ): HandoffOutcome {
   return {
     ok: false,
@@ -131,6 +183,7 @@ function failure(
     dispatchAccepted: false,
     reused: patch.reused ?? false,
     creationDisposition,
+    ...(patch.recoveryAction === undefined ? {} : { recoveryAction: patch.recoveryAction }),
   }
 }
 
@@ -168,46 +221,121 @@ export async function handoffProject(input: HandoffRequest, deps: HandoffDeps): 
       'not-created', { projectId: previewId })
   }
 
-  const preview = deps.previews.get(previewId)
-  if (preview === undefined) {
-    return failure('not-found',
-      '这次预览已经不在宿主里（或从未准备过）：请返回修改并重新确认。',
-      'not-created', { projectId: previewId })
+  // The durable handoff record is consulted BEFORE the ephemeral preview TTL: a created
+  // parent must never be relabeled "not created", and a dispatched handoff replays.
+  const existing = deps.store.get(requestId)
+  const holder = deps.store.requestOfPreview(previewId)
+  if (existing !== undefined) {
+    if (existing.previewId !== previewId) {
+      return failure('conflict',
+        '同一个 requestId 已经用在了另一个预览上：请返回修改并重新确认（不会按旧预览启动）。',
+        'unknown', { projectId: previewId })
+    }
+  } else if (holder !== undefined && holder !== requestId) {
+    return failure('conflict',
+      '这个预览已经（或正在）被交接：同一份预览只能成功交接一次，请返回修改并重新确认。',
+      'unknown', { projectId: previewId })
   }
+
   const now = deps.now()
-  if (now.getTime() > Date.parse(preview.expiresAt)) {
-    deps.previews.drop(previewId)
-    return failure('not-found', '这次预览已经过期：请返回修改并重新确认（归档副本可能已经变了）。',
-      'not-created', { projectId: previewId })
+
+  // A durable record already exists: claim it now (never a new record) so an inflight
+  // first creation is awaited instead of being TTL-dropped or relabeled not-created.
+  let ownClaim: { record: HandoffRecord; settle: (outcome: HandoffOutcome) => void } | null = null
+  if (existing !== undefined) {
+    const claimed = await deps.store.claim(requestId, previewId)
+    if (!claimed.ok) return failure(claimed.errorKind, claimed.error, 'unknown', { projectId: previewId })
+    if (!claimed.own) {
+      const settled = await claimed.settled
+      return settled.ok ? { ...settled, reused: true } : settled
+    }
+    ownClaim = { record: claimed.record, settle: claimed.settle }
+  }
+
+  const preview = deps.previews.get(previewId)
+  const boundParent = ownClaim?.record.parentSessionId ?? ''
+  const hasExistingParent = boundParent !== ''
+  const createdPatch = hasExistingParent
+    ? { parentSessionId: boundParent, reused: true, recoveryAction: 'retry-handoff' as const }
+    : {}
+  const settleOwn = (outcome: HandoffOutcome): void => {
+    if (ownClaim !== null) ownClaim.settle(outcome)
+  }
+
+  // Only a genuinely new handoff (no created parent yet) depends on a live preview TTL.
+  if (!hasExistingParent) {
+    const expired = preview !== undefined && now.getTime() > Date.parse(preview.expiresAt)
+    if (preview === undefined || expired) {
+      if (expired) deps.previews.drop(previewId)
+      const outcome = failure('not-found',
+        preview === undefined
+          ? '这次预览已经不在宿主里（或从未准备过）：请返回修改并重新确认。'
+          : '这次预览已经过期：请返回修改并重新确认（归档副本可能已经变了）。',
+        'not-created', { projectId: previewId, recoveryAction: 'refresh-preview' })
+      settleOwn(outcome)
+      return outcome
+    }
   }
 
   const missing = deps.missingTools?.() ?? []
   if (missing.length > 0) {
-    return failure('capability-gap', valuationToolsMissingText(missing), 'not-created', { projectId: previewId })
+    const outcome = failure('capability-gap', valuationToolsMissingText(missing),
+      hasExistingParent ? 'created' : 'not-created', { projectId: previewId, ...createdPatch })
+    settleOwn(outcome)
+    return outcome
   }
 
   const selected = await deps.workspace()
-  if (!selected.ok) return failure('policy', selected.error, 'not-created', { projectId: previewId })
+  if (!selected.ok) {
+    const outcome = failure('policy', selected.error,
+      hasExistingParent ? 'created' : 'not-created', { projectId: previewId, ...createdPatch })
+    settleOwn(outcome)
+    return outcome
+  }
 
-  const claimed = await deps.store.claim(requestId, previewId)
-  // 认领被拒（同一个 requestId 用在别的预览、或这个预览已经交接给别的 requestId）：
-  // 上一次尝试**可能已经建出会话**，所以既不能说"没建"，也不能直接放行返回修改。
-  if (!claimed.ok) return failure(claimed.errorKind, claimed.error, 'unknown', { projectId: previewId })
-  if (!claimed.own) {
-    // 同一 requestId 已经有一次交接在跑（双击的第二次、或超时后的重试）：
-    // **等它的结果**，绝不自己再建一条会话。
-    const settled = await claimed.settled
-    return settled.ok ? { ...settled, reused: true } : settled
+  if (ownClaim === null) {
+    // A genuinely new request is claimed only after a valid, fresh preview passed.
+    const claimed = await deps.store.claim(requestId, previewId)
+    if (!claimed.ok) return failure(claimed.errorKind, claimed.error, 'unknown', { projectId: previewId })
+    if (!claimed.own) {
+      // 同一 requestId 已经有一次交接在跑：**等它的结果**，绝不自己再建一条会话。
+      const settled = await claimed.settled
+      return settled.ok ? { ...settled, reused: true } : settled
+    }
+    ownClaim = { record: claimed.record, settle: claimed.settle }
+  }
+
+  const activeClaim = ownClaim
+  if (activeClaim === null) {
+    return failure('infrastructure', '交接认领状态丢失：没有发出固定指令', 'unknown', { projectId: previewId })
+  }
+
+  if (preview === undefined) {
+    // A created parent whose preview was lost keeps its identity: retry the SAME session.
+    // The claim is settled exactly once here so the next retry never waits forever.
+    const parentSessionId = activeClaim.record.parentSessionId
+    const created = parentSessionId !== ''
+    const outcome = failure('infrastructure',
+      '这次预览已经失效：父会话已经建好，重试会复用同一条会话（不会新建）。',
+      created ? 'created' : 'not-created',
+      {
+        projectId: activeClaim.record.projectId,
+        parentSessionId,
+        reused: created,
+        recoveryAction: created ? 'retry-handoff' : 'refresh-preview',
+      })
+    activeClaim.settle(outcome)
+    return outcome
   }
 
   // 事务体抛错时**没有**权威结论：默认必须落在 `unknown`（宁可让员工恢复同一轮，
   // 也不能让界面以为"没建过"而再建一个）。
   let outcome: HandoffOutcome = failure('infrastructure', '交接没有完成', 'unknown', { projectId: previewId })
   try {
-    outcome = await runHandoff(claimed.record.parentSessionId, preview, confirmed, deps, selected, now)
+    outcome = await runHandoff(activeClaim.record.parentSessionId, preview, confirmed, deps, selected, now)
     return outcome
   } finally {
-    claimed.settle(outcome)
+    activeClaim.settle(outcome)
   }
 }
 
@@ -242,6 +370,8 @@ async function runHandoff(
     baseDate: preview.baseDate,
     purpose: preview.purpose,
     valueType: preview.valueType,
+    // The template role is part of the recomputed identity.
+    templateFileId: preview.templateFileId,
     supplementalPrompt: preview.supplementalPrompt,
     files: current,
   })
@@ -295,11 +425,13 @@ async function runHandoff(
     // 评估目的 / 价值类型（P16）：未指定就是 `null`，绝不在交接这一层替用户默认一个正式结论。
     purpose: preview.purpose,
     valueType: preview.valueType,
+    // Store only the archived fileId; never the original absolute path.
+    templateFileId: preview.templateFileId,
     supplementalPrompt: preview.supplementalPrompt,
     files: materials,
     inputDigest: preview.inputDigest,
   })
-  deps.bindScope({
+  const bindOutcome = deps.bindScope({
     valuationId: projectId,
     projectId,
     previewId: preview.previewId,
@@ -312,6 +444,10 @@ async function runHandoff(
       valuationId: projectId,
       method: preview.methodRequest,
       baseDate: preview.baseDate ?? '',
+      purpose: preview.purpose ?? '',
+      valueType: preview.valueType ?? '',
+      assetType: preview.assetType,
+      templateFileId: preview.templateFileId,
       supplementalPrompt: preview.supplementalPrompt,
       digest: preview.inputDigest,
       files: materials.map((file) => ({
@@ -326,6 +462,13 @@ async function runHandoff(
     planIds: [],
     openedAt: now.getTime(),
   })
+  if (typeof bindOutcome === 'object' && bindOutcome !== null && bindOutcome.ok !== true) {
+    // The parent session exists, but this round is already bound to a foreign identity:
+    // fail closed with the actual parent instead of overwriting a live Graph runtime scope.
+    return failure('conflict',
+      text(bindOutcome.error) || '这一轮估值的案例归属已经被占用：本次交接已停止，不会覆盖正在运行的归属。',
+      'created', { projectId, parentSessionId, reused, recoveryAction: 'retry-handoff' })
+  }
 
   const inputWritten = await deps.writeProjectFile(
     deps.projectPath(projectId, '估值输入.json'), canonicalJson(frozen))
@@ -347,6 +490,8 @@ async function runHandoff(
       // 评估目的与价值类型同样进交接清单：它是"这一轮到底在做什么"的一部分，要能事后核对。
       purpose: preview.purpose,
       valueType: preview.valueType,
+      // Template role, for later audit of which workbook was used.
+      templateFileId: preview.templateFileId,
       materialDir: VALUATION_MATERIAL_DIR,
       files: materials.map((file) => ({
         fileId: file.fileId,
@@ -387,6 +532,7 @@ async function runHandoff(
       baseDate: preview.baseDate,
       purpose: preview.purpose,
       valueType: preview.valueType,
+      templateFileId: preview.templateFileId,
       supplementalPrompt: preview.supplementalPrompt,
       inputDigest: preview.inputDigest,
       files: projectRecordFiles(materials),
@@ -403,46 +549,63 @@ async function runHandoff(
 
   // ④ 固定指令。`messageId` **稳定**（同一个项目永远同一个 id）：发送已受理但 RPC 超时时，
   //    重试复用同一条会话、同一个 messageId，接收侧不会把同一条指令应用两次。
-  const prompt = valuationPrompt({
-    valuationId: projectId,
-    casePath: projectDir,
-    assetType: preview.assetType,
-    method: preview.methodRequest,
-    baseDate: preview.baseDate ?? '',
-    purpose: preview.purpose ?? '',
-    valueType: preview.valueType ?? '',
-    supplementalPrompt: preview.supplementalPrompt,
-    digest: preview.inputDigest,
-    files: materials.map((file) => ({
-      fileName: file.fileName, relativePath: file.archiveRelativePath, kind: file.kind, sizeBytes: file.sizeBytes,
-    })),
-    // 提取由**父会话**在本轮内做一次（Host 不在确认前提取，也不在交接时假装提取过）。
-    extraction: materials.map((file) => ({
-      fileName: file.fileName, parsed: false, fieldCount: 0,
-      note: '尚未提取：请在父会话里调用一次 crwu_valuation_file_extract',
-    })),
-    knowledge: [],
-    // 知识的取用在会话内按**库侧入口 Wiki** 进行：交接这一刻不去取（还没定方法，也没必要让
-    // 一次知识库抖动挡住建会话），也**不声称任何"知识已就绪"**。
-    //
-    // 来源策略**不是空数组**：登录是可选用能力，父会话必须先知道配置里有哪些来源、各自
-    // 必需还是可选、以及"现在还没有状态"这个事实，才能按知识库的渠道与降级策略往下走。
-    sources: deps.sources.map((source) => ({ ...source })),
-    validateScripts: [
-      { name: '工作簿契约', script: joinLocalPath(projectDir, 'scripts/check_workbook_contract.py'), args: [joinLocalPath(projectDir, VALUATION_WORKBOOK_FILE)] },
-      { name: '报告数据', script: joinLocalPath(projectDir, 'scripts/build_report_data.py'), args: ['--validate', joinLocalPath(projectDir, VALUATION_REPORT_DATA_FILE)] },
-    ],
-  })
+  //
+  // 装配了工作流图时，唯一要发的是 Host 铸造的不透明命令（只含 commandId）；
+  // 旧的整套 SOP 指令只保留给**没有**工作流钩子的兼容路径。
+  let prompt: string
+  const prepareHandoff = deps.prepareHandoff
+  if (prepareHandoff !== undefined) {
+    const prepared = await prepareHandoff({ receipt, frozen })
+    if (!prepared.ok) {
+      // The parent session already exists: never dispatch a legacy SOP and never claim
+      // it was not created. Retrying reuses this exact session.
+      return failure('infrastructure',
+        prepared.error === undefined || prepared.error === '' ? '工作流图登记失败：未发出固定指令' : prepared.error,
+        'created', { projectId, parentSessionId, reused, recoveryAction: 'retry-handoff' })
+    }
+    prompt = prepared.prompt
+  } else {
+    prompt = valuationPrompt({
+      valuationId: projectId,
+      casePath: projectDir,
+      assetType: preview.assetType,
+      method: preview.methodRequest,
+      baseDate: preview.baseDate ?? '',
+      purpose: preview.purpose ?? '',
+      valueType: preview.valueType ?? '',
+      supplementalPrompt: preview.supplementalPrompt,
+      digest: preview.inputDigest,
+      files: materials.map((file) => ({
+        fileName: file.fileName, relativePath: file.archiveRelativePath, kind: file.kind, sizeBytes: file.sizeBytes,
+      })),
+      // 提取由**父会话**在本轮内做一次（Host 不在确认前提取，也不在交接时假装提取过）。
+      extraction: materials.map((file) => ({
+        fileName: file.fileName, parsed: false, fieldCount: 0,
+        note: '尚未提取：请在父会话里调用一次 crwu_valuation_file_extract',
+      })),
+      knowledge: [],
+      // 知识的取用在会话内按**库侧入口 Wiki** 进行：交接这一刻不去取（还没定方法，也没必要让
+      // 一次知识库抖动挡住建会话），也**不声称任何"知识已就绪"**。
+      //
+      // 来源策略**不是空数组**：登录是可选用能力，父会话必须先知道配置里有哪些来源、各自
+      // 必需还是可选、以及"现在还没有状态"这个事实，才能按知识库的渠道与降级策略往下走。
+      sources: deps.sources.map((source) => ({ ...source })),
+      validateScripts: [
+        { name: '工作簿契约', script: joinLocalPath(projectDir, 'scripts/check_workbook_contract.py'), args: [joinLocalPath(projectDir, VALUATION_WORKBOOK_FILE)] },
+        { name: '报告数据', script: joinLocalPath(projectDir, 'scripts/build_report_data.py'), args: ['--validate', joinLocalPath(projectDir, VALUATION_REPORT_DATA_FILE)] },
+      ],
+    })
+  }
   const sent = await deps.dispatch({ sessionId: parentSessionId, messageId: `msg-valuation-${projectId}`, prompt })
   if (!sent.accepted) {
     return failure('infrastructure',
       `估值指令没有被受理（父会话已经建好，重试会复用同一条会话）：${sent.error}`,
-      'created', { projectId, parentSessionId, reused })
+      'created', { projectId, parentSessionId, reused, recoveryAction: 'retry-handoff' })
   }
   const accepted = await deps.store.acceptDispatch(projectId, receipt)
   if (!accepted.ok) {
     return failure('infrastructure', `交接回执落盘失败：${accepted.error}`,
-      'created', { projectId, parentSessionId, reused })
+      'created', { projectId, parentSessionId, reused, recoveryAction: 'retry-handoff' })
   }
   return { ok: true, errorKind: '', error: '', creationDisposition: 'created', ...receipt }
 }
@@ -465,6 +628,11 @@ export interface HandoffOperationDeps {
    * 父会话必须拿到来源与原因，才能按知识库的降级策略选替代来源。
    */
   sources: readonly ValuationSourceFact[]
+  /**
+   * 可选的工作流图登记钩子（由 Host 工厂提供）。装配了它就在交接后发不透明命令，
+   * 并把 `crwu_valuation_workflow_run` 纳入本轮工具可见性预检。
+   */
+  prepareHandoff?: WorkflowPrepareHandoffHook
 }
 
 export function createHandoffOperations(deps: HandoffOperationDeps): OperationMap {
@@ -486,6 +654,8 @@ export function createHandoffOperations(deps: HandoffOperationDeps): OperationMa
     previews: deps.previews,
     store: deps.store,
     sources: deps.sources,
+    // Host 铸造的不透明命令由工作流工厂在冻结输入/项目记录落盘之后给出。
+    ...(deps.prepareHandoff === undefined ? {} : { prepareHandoff: deps.prepareHandoff }),
     workspace: requireWorkspace,
     createSession: async (input) => {
       const created = await service().createSession({ title: input.title, source: input.source })
@@ -541,7 +711,22 @@ export function createHandoffOperations(deps: HandoffOperationDeps): OperationMa
         return { accepted: false, error: messageOf(error) }
       }
     },
-    bindScope: (scope) => { deps.scopes.open(scope) },
+    bindScope: (scope) => {
+      const existing = deps.scopes.get(scope.valuationId)
+      if (existing === undefined) {
+        // First bind for this round: open exactly once.
+        deps.scopes.open(scope)
+        return { ok: true as const }
+      }
+      // A retry with the exact same round identity keeps the original scope verbatim
+      // (including `openedAt` and every registered `planId`); a foreign binding fails
+      // closed instead of overwriting a live Graph runtime scope.
+      if (sameScopeIdentity(existing, scope)) return { ok: true as const }
+      return {
+        ok: false as const,
+        error: '这一轮估值的案例归属已经绑定了另一条会话 / 工作空间：为避免覆盖正在运行的归属，本次交接已停止。',
+      }
+    },
     onHandoff: async (receipt, frozen) => {
       const selected = await service().requireSelectedWorkspace()
       if (!selected.ok) return
@@ -573,7 +758,17 @@ export function createHandoffOperations(deps: HandoffOperationDeps): OperationMa
         deps.lifecycles.update(receipt.projectId, step, {})
       }
     },
-    missingTools: () => missingValuationTools(ctx),
+    missingTools: () => {
+      const missing = [...missingValuationTools(ctx)]
+      // The parent session can only enter the graph through the control tool: when the
+      // workflow hook is wired, that registered tool is part of this round's required set.
+      if (deps.prepareHandoff !== undefined) {
+        for (const name of missingAuditTools(ctx, undefined, [VALUATION_TOOL_NAMES.workflowRun])) {
+          if (!missing.includes(name)) missing.push(name)
+        }
+      }
+      return missing
+    },
     projectDirOf: (projectId) => joinLocalPath(state.workspacePath, projectId),
     projectPath: (projectId, relative) => joinLocalPath(joinLocalPath(state.workspacePath, projectId), relative),
     now: () => new Date(),

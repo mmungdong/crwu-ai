@@ -420,6 +420,14 @@ export interface KnowledgeMaterializeInput {
    * 不再是把整轮业务卡死的唯一真停。
    */
   wikiPaths?: readonly string[]
+  /**
+   * Whether the legacy manifest slot list is actually requested.
+   *
+   * Defaults to `true` (legacy callers). An explicit primary-Wiki caller may set
+   * `false`: the loader is then never invoked and the result must not describe the
+   * unrequested manifest as missing/failed.
+   */
+  manifestRequested?: boolean
 }
 
 export interface KnowledgeMaterializeDeps {
@@ -595,15 +603,28 @@ export async function materializeKnowledge(
     .filter((item, index, list) => item !== '' && list.indexOf(item) === index)
   const usesWikiPaths = requestedWikiPaths.length > 0
 
-  // manifest 是**遗留通道**的槽位表，也是"本库声明了哪些槽位"的唯一来源。
+  // manifest 是**遗留通道**的槽位表：它是**被请求时**才读的输入，不是无条件真停。
   // ⚠️ 协议 39 起它**不是**真停：走 Wiki 路径通道时不要求它可读，读不到只是没有槽位清单可回报。
-  const loaded = await deps.loadManifest()
+  // 显式声明"不请求"时**不调用加载器**，也不把未请求写成"读不到/失败"。
+  const manifestRequested = input.manifestRequested !== false
+  const loaded = manifestRequested
+    ? await deps.loadManifest()
+    : { ok: false, document: '', error: '' }
   const warnings: string[] = []
   const parsed = loaded.ok ? parseValuationManifest(text(loaded.document)) : null
   const specs: KnowledgeRoute[] = parsed !== null && parsed.ok
     ? parsed.routes.map((route) => toKnowledgeRoute(deps.manifestDir, route))
     : []
-  if (!loaded.ok || parsed === null || !parsed.ok) {
+  if (!manifestRequested) {
+    if (usesWikiPaths) {
+      warnings.push(`本轮显式声明不读取遗留 manifest；按 Wiki 路径读取（${String(requestedWikiPaths.length)} 条），`
+        + '槽位清单不回报。')
+    } else {
+      return emptyManifest(input, deps,
+        '调用方显式声明不读取遗留 manifest，且没有给出 Wiki 路径：没有可用的知识入口',
+        'capability-gap')
+    }
+  } else if (!loaded.ok || parsed === null || !parsed.ok) {
     const why = parsed === null || !loaded.ok
       ? `知识目录 manifest 读不到：${text(loaded.error)}`
       : `知识目录 manifest 不可用：${parsed.error}`

@@ -31,6 +31,7 @@ import { makeTestAccess } from '../../helpers/local-access-broker-fixture.mjs'
 import { grantedConsent, missingConsent } from '../../helpers/local-access-fixture.mjs'
 
 const ROOT = new URL('../../../', import.meta.url)
+const { VALUATION_INPUT_SCHEMA_VERSION } = await import(new URL('src/shared/contracts/valuation-project.ts', ROOT).href)
 
 const { createValuationOperations } = await import(new URL('src/host/operations/report-evaluation.ts', ROOT).href)
 const { ValuationLifecycles } = await import(new URL('src/host/domains/report-evaluation/lifecycle/index.ts', ROOT).href)
@@ -607,12 +608,12 @@ test('项目记录：指纹口径稳定，被改一个字段就核不过', () =>
   const payload = {
     schemaVersion: PROJECT_RECORD_SCHEMA_VERSION,
     protocolVersion: WORKBENCH_PROTOCOL,
-    inputSchemaVersion: 'crwu.valuation.input.v3',
+    inputSchemaVersion: VALUATION_INPUT_SCHEMA_VERSION,
     valuationId: '估值-1', projectId: '估值-1', previewId: '估值-1',
     casePath: '/ws/估值-1', workspaceId: 'w1', workspacePath: '/ws',
     sessionId: 'session-1', planIds: ['plan-1'], phase: 'running',
     assetType: 'real-estate',
-    methodRequest: 'market', baseDate: null, purpose: null, valueType: null,
+    methodRequest: 'market', baseDate: null, purpose: null, valueType: null, templateFileId: null,
     supplementalPrompt: '',
     inputDigest: 'sha256:x',
     files: [{

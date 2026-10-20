@@ -7,6 +7,7 @@ import {
   type MethodRequest,
 } from '../../../../shared/contracts/valuation-project.ts'
 import { canonicalJson, digestOf } from '../../../tools/common/snapshot.ts'
+import { extensionOf } from '../intake/classify.ts'
 import type { MaterialMetadata } from '../intake/metadata.ts'
 import { TERMINAL_PHASES, type ValuationPhase } from './state.ts'
 
@@ -86,6 +87,8 @@ export interface ProjectRecordPayload {
   purpose: string | null
   /** 价值类型（P16）；未指定是 `null`。 */
   valueType: string | null
+  /** Archived calculation-template material id; null when none. */
+  templateFileId: string | null
   supplementalPrompt: string
   /** 冻结输入摘要（`估值输入.json` 的 `inputDigest`）。 */
   inputDigest: string
@@ -153,6 +156,8 @@ export function buildProjectRecord(payload: ProjectRecordPayload): ProjectRecord
     baseDate: payload.baseDate === null ? null : text(payload.baseDate),
     purpose: payload.purpose === null || payload.purpose === undefined ? null : text(payload.purpose),
     valueType: payload.valueType === null || payload.valueType === undefined ? null : text(payload.valueType),
+    templateFileId: payload.templateFileId === null || payload.templateFileId === undefined
+      ? null : text(payload.templateFileId),
     supplementalPrompt: text(payload.supplementalPrompt),
     inputDigest: text(payload.inputDigest),
     files: projectRecordFiles(payload.files),
@@ -165,7 +170,7 @@ const PHASES: readonly string[] = [
   'draft', 'extracting', 'confirmation', 'queued', 'running',
   'browser-login-required', 'completed', 'failed', 'cancelled', 'stale-host',
 ]
-const METHODS: readonly string[] = ['auto', 'market', 'income', 'cost']
+const METHODS: readonly string[] = ['market', 'income', 'cost']
 
 export type ProjectRecordRead =
   | { ok: true; record: ProjectRecord }
@@ -208,13 +213,18 @@ export function projectRecordOf(raw: unknown): ProjectRecordRead {
   }
   const baseDate = raw.baseDate
   if (baseDate !== null && typeof baseDate !== 'string') return { ok: false, error: '项目记录里的基准日既不是字符串也不是 null' }
-  for (const [label, value] of [['评估目的', raw.purpose], ['价值类型', raw.valueType]] as const) {
+  for (const [label, value] of [
+    ['评估目的', raw.purpose],
+    ['价值类型', raw.valueType],
+    ['计算模板', raw.templateFileId],
+  ] as const) {
     if (value !== null && value !== undefined && typeof value !== 'string') {
       return { ok: false, error: `项目记录里的${label}既不是字符串也不是 null` }
     }
   }
-  if (!Array.isArray(raw.files) || raw.files.length === 0) {
-    return { ok: false, error: '项目记录里没有任何材料条目' }
+  // An intentional zero-material run is valid; a non-array or bad entry is not.
+  if (!Array.isArray(raw.files)) {
+    return { ok: false, error: '项目记录里的材料清单不是数组' }
   }
   const files: ProjectRecordFileEntry[] = []
   for (const [index, item] of raw.files.entries()) {
@@ -233,6 +243,18 @@ export function projectRecordOf(raw: unknown): ProjectRecordRead {
       return { ok: false, error: `项目记录第 ${String(index + 1)} 份材料缺少 fileId / 相对路径 / 指纹 / 字节数` }
     }
     files.push(entry)
+  }
+  // The template role must reference an archived .xlsx entry, not a dangling id.
+  const templateFileId = raw.templateFileId === null || raw.templateFileId === undefined
+    ? null : text(raw.templateFileId)
+  if (templateFileId !== null && templateFileId !== '') {
+    const referenced = files.find((entry) => entry.fileId === templateFileId)
+    if (referenced === undefined) {
+      return { ok: false, error: `项目记录里的计算模板（${templateFileId}）不是本批归档材料里的任何一份：拒绝恢复。` }
+    }
+    if (extensionOf(referenced.fileName) !== '.xlsx') {
+      return { ok: false, error: `项目记录里的计算模板（${referenced.fileName}）不是 .xlsx 文件：拒绝恢复。` }
+    }
   }
   const planIds = Array.isArray(raw.planIds) ? raw.planIds.map((item) => text(item)).filter((item) => item !== '') : []
   // 上面已经校验过它是有限数；这里再收窄一次（`Record<string, unknown>` 的属性不会跨语句收窄）。
@@ -256,6 +278,7 @@ export function projectRecordOf(raw: unknown): ProjectRecordRead {
     baseDate: baseDate === null ? null : text(baseDate),
     purpose: raw.purpose === null || raw.purpose === undefined ? null : text(raw.purpose),
     valueType: raw.valueType === null || raw.valueType === undefined ? null : text(raw.valueType),
+    templateFileId: templateFileId === '' ? null : templateFileId,
     supplementalPrompt: text(raw.supplementalPrompt),
     inputDigest: text(raw.inputDigest),
     files,

@@ -110,11 +110,19 @@ async function mountShell(page, evaluation) {
     envStatus: envStoreOf(READY_ENV),
     build: buildStoreOf(),
     modules,
+    workflow: { getState: () => ({ current: { ok: true, empty: true, projectId: '', parentSessionId: '', error: '' }, detail: null, loading: false, busy: false, error: '' }), subscribe: () => () => {}, activate: async () => {}, deactivate() {} },
     ...(evaluation === undefined ? {} : { evaluation }),
   }
   const rendered = render(WorkbenchPanel, props)
   await flushEffects(rendered.instance)
-  return { tree: rerender(WorkbenchPanel, props), instance: rendered.instance, props, modules }
+  let tree = rerender(WorkbenchPanel, props)
+  if (page === 'valuation') {
+    findAll(tree, (node) => node.props?.['data-business-step'] === 'valuation')[0].props.onClick()
+    tree = rerender(WorkbenchPanel, props)
+    await flushEffects(rendered.instance)
+    tree = rerender(WorkbenchPanel, props)
+  }
+  return { tree, instance: rendered.instance, props, modules }
 }
 
 const classesOf = (node) => String(node?.props?.className ?? '').split(/\s+/).filter(Boolean)
@@ -211,7 +219,7 @@ function disclosureButtons(tree) {
 
 // ── Shell: duplicated valuation heading ──────────────────────────────────────
 
-test('shell: valuation page no longer paints navPageHead / navPageTitle, tab stays', async () => {
+test('shell: valuation step owns page identity without the old tab', async () => {
   const controller = controllerOf(fakePort())
   const { tree } = await mountShell('valuation', controller)
 
@@ -227,7 +235,8 @@ test('shell: valuation page no longer paints navPageHead / navPageTitle, tab sta
     && node.props?.role === 'tab'
     && node.props?.['aria-controls'] === TAB_PANEL_ID
     && textOf(node) === zhCN.navParentValuation)
-  assert.equal(valuationTab.length, 1, 'the top "估值" tab must stay visible')
+  assert.equal(valuationTab.length, 0, 'business steps replace the old valuation tab')
+  assert.ok(findAll(tree, (node) => node.props?.['data-workflow-step'] === 'valuation').length)
   assert.equal(hasClassDeep(tree, C.pagePaper), true, 'valuation still uses the shared work paper')
   assert.equal(findAll(tree, (node) => hasClass(node, 'crwu-valuation')).length, 1,
     'the real valuation pane must render inside the shell')

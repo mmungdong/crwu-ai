@@ -603,7 +603,7 @@ test('检索：页面有结构化房源 → 标准化 + 证据落进案例目录
   assert.equal(written.phase, 'completed')
 })
 
-test('检索：页面取到但既没有 JSON-LD 也不是结果页 → no-results（绝不按标题猜）', async () => {
+test('检索：未识别的页面保留解析缺口，不推断为无房源', async () => {
   const { deps } = makeDeps()
   const sessionId = openValuation(deps)
   const transport = async (url) => okResult(url, '<html><body>阳光小区 3室 200万 100平米</body></html>')
@@ -613,8 +613,8 @@ test('检索：页面取到但既没有 JSON-LD 也不是结果页 → no-result
   assert.deepEqual(result.cases, [])
   assert.equal(result.counts.total, 0)
   // 正文里明明写着"200万 100平米"，但页面没有声明结构 —— **不许**按标题猜。
-  assert.match(result.capabilityGaps.join('；'), /no-results/)
-  assert.match(result.capabilityGaps.join('；'), /候选不足/)
+  assert.match(result.capabilityGaps.join('；'), /没有可用的结构化房源数据/)
+  assert.doesNotMatch(result.capabilityGaps.join('；'), /站点明确回答了|候选不足/)
 })
 
 /** 脱敏列表页（结构与实测一致：`ul.sellListContent > li.clear`）：**没有** JSON-LD。 */

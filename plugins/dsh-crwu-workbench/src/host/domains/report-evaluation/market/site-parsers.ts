@@ -21,14 +21,14 @@ import { dedupeListings, listingsFromJsonLd } from './jsonld.ts'
  * 详情链接 `a[href*="/ershoufang/"]`，小区在 `.positionInfo a`，
  * 价格 / 面积 / 户型写在列表项正文里；详情页字段锚点是 `.introContent` / `.baseAttribute`。
  *
- * ## 0 命中 = `template-stale`，不是"没有案例"
+ * ## Zero records: explicit empty wording, stale template, or unreadable
  *
- * 这是本文件最重要的一条：一个**看起来是结果页**的页面里一条房源都解析不出来，只可能是
- * 模板过期（站点改版）。报成"这个小区没有房源"会让结论建立在一个错误的"无案例"事实上。
+ * A page that yields no records must not be reported as "this community has no listings"
+ * unless its visible text explicitly says so.
  *
- * - 页面像结果页却 0 条 → `template-stale`；
- * - 页面压根不像结果页（空态 / 导航页）→ `no-results`，那是**站点在回答**；
- * - 登录墙 / 挑战由调用方的页面分类负责，不在这里判。
+ * - Visible empty-result wording → `no-results` (the site answered).
+ * - Result-list layout but zero parsed rows → `template-stale` (selectors likely changed).
+ * - Unknown / navigation / challenge / app shell → `unreadable` (cannot determine listings).
  *
  * ⚠️ **真实验收边界**：本文件的 fixture 是按上面实测选择器**构造**的脱敏 DOM，不是对
  * 线上页面的字节复制。因此它只证明"选择器与字段口径能被解析"，**不证明**站点当前可用；
@@ -85,6 +85,26 @@ export function textOf(html: string): string {
     .replace(/&quot;/gi, '"')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/**
+ * Visible-text phrases that explicitly announce an empty listing result.
+ *
+ * Deliberately narrow: only wording the site renders as an empty state may become
+ * `no-results`. Navigation shells, app roots, and script literals never count, because
+ * an unrecognized page cannot prove that a community has no listings.
+ */
+const EXPLICIT_EMPTY_RESULT_PATTERNS = [
+  /暂无(?:符合[^。；\n]{0,12}?的?)?(?:相关)?房源/,
+  /(?:没有|未)(?:找到|有)?(?:符合[^。；\n]{0,12}?的?)?(?:相关)?房源/,
+  /暂无(?:相关)?结果/,
+] as const
+
+/** Whether the visible page text carries an explicit empty-result message. */
+function hasExplicitEmptyResult(body: string): boolean {
+  // Tag boundaries become spaces; compact them so split text such as 暂无<span>房源</span> still matches.
+  const visible = textOf(body).replace(/\s+/g, '')
+  return EXPLICIT_EMPTY_RESULT_PATTERNS.some((pattern) => pattern.test(visible))
 }
 
 /** 第一个 `<a>` 的某个属性值（找不到返回空串）。 */
@@ -216,9 +236,10 @@ export function listItemBlocks(body: string): string[] {
 /**
  * 解析一页。
  *
- * 顺序固定：**JSON-LD 优先**（权威结构化声明），没有可用记录时再用固定 DOM 选择器兜底。
- * 两条通道都空时按"页面像不像结果页"给出 `template-stale`（模板过期）或 `no-results`
- * （站点确实回答了"没有"）。
+ * Order is fixed: JSON-LD first (authoritative structured claim), then the pinned DOM
+ * selectors as a fallback. When both channels are empty, only explicit visible empty-result
+ * wording yields `no-results`; an existing list layout yields `template-stale`; everything
+ * else is `unreadable`, because an unrecognized page cannot prove the absence of listings.
  */
 export function parseSitePage(input: SitePageInput): SitePageResult {
   const body = text(input.body)
@@ -249,13 +270,18 @@ export function parseSitePage(input: SitePageInput): SitePageResult {
     return { listings: deduped, failureKind: '', notes, channel: 'dom' }
   }
 
+  if (hasExplicitEmptyResult(body)) {
+    notes.push('页面可见文本给出了明确的空结果提示（no-results）：站点表示没有匹配房源')
+    return { listings: [], failureKind: 'no-results', notes, channel: 'none' }
+  }
   if (looksLikeListPage(body)) {
-    // 结果页结构在、却一条房源都没解析出来：**模板过期**，绝不是"这个小区没有房源"。
+    // A list layout with zero parsed rows means the selectors are stale, never that the
+    // community has no listings.
     notes.push('页面有结果页结构，但固定选择器 0 命中：站点模板可能已改版（template-stale）')
     return { listings: [], failureKind: 'template-stale', notes, channel: 'dom' }
   }
-  notes.push('页面不像结果页（可能是空态或导航页）：站点确实回答了"没有结果"')
-  return { listings: [], failureKind: 'no-results', notes, channel: 'none' }
+  notes.push('页面未识别（可能是导航页、应用外壳或挑战页）：无法确定房源列表，不能判定站点没有房源（unreadable）')
+  return { listings: [], failureKind: 'unreadable', notes, channel: 'none' }
 }
 
 /**

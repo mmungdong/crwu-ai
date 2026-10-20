@@ -141,58 +141,53 @@ export function validateMethodAssessment(
   const executable = assessments.filter((item) => item.applicable && item.implemented)
 
   /**
-   * 采用哪些方法。
+   * 采用哪个方法。
    *
-   * - 用户指定：**只**采纳它（不静默增补其它方法）；
-   * - 自动判断：采纳**全部**"知识判定适用且当前能跑"的方法 —— 单一或组合，
-   *   由知识与真实能力决定，不由"取数组第一项"决定。
+   * 用户必须明确指定一个方法：**只**采纳它，不静默增补其它方法，也不替他改法。
+   * 指定的方法不可执行时按冲突登记，不退回别的方法。
    */
-  const selectedList: MethodAssessment[] = requested === 'auto'
-    ? executable
-    : executable.filter((item) => item.method === requested)
+  const selectedList: MethodAssessment[] = executable.filter((item) => item.method === requested)
   for (const item of selectedList) item.selected = true
   const selected: MethodAssessment | undefined = selectedList[0]
 
   const blockers: Blocker[] = []
   let methodConflict: MethodOutcome['methodConflict'] = null
 
-  if (requested !== 'auto') {
-    const requestedAssessment = assessments.find((item) => item.method === requested)
-    if (selected === undefined) {
-      const reason = requestedAssessment === undefined
-        ? `方案 ${plan.planId} 的方法判定里没有出现用户指定的「${requested}」`
-        : requestedAssessment.applicable
-          ? `用户指定「${requested}」，但当前实现尚无该方法可执行的正文与计算表模板`
-          : `用户指定「${requested}」，而知识选择方案判定它不适用于本方案：${requestedAssessment.reason}`
-      methodConflict = { requested, adopted: null, reason }
-      blockers.push(blockerOf(
-        plan,
-        'method-unsupported',
-        requested,
-        'valuation.method.requested-unavailable',
-        [
-          requestedAssessment?.applicable === true
-            ? `方法「${requested}」的可执行正文与模板`
-            : `方法「${requested}」对本方案的适用性依据`,
-        ],
-        reason,
-        '请在会话内向员工说明冲突：要么补齐该方法的知识与模板后重跑本方案，要么由员工明确改为已实现的方法（会记入 methodConflict）。'
-          + '**不得**因为未实现就直接改用市场法。',
-        requestedAssessment?.ruleRefs ?? [],
-      ))
-    } else if (selected.method !== requested) {
-      methodConflict = {
-        requested,
-        adopted: selected.method,
-        reason: `用户指定「${requested}」，实际采纳「${selected.method}」`,
-      }
-      blockers.push(blockerOf(
-        plan, 'method-unsupported', selected.method, 'valuation.method.requested-not-honored',
-        [`按用户指定的「${requested}」出具结论的依据`],
-        methodConflict.reason,
-        '用户指定的方法是约束：请在会话内请员工确认是否可以改用其它方法，确认之前不要出具结论。',
-      ))
+  const requestedAssessment = assessments.find((item) => item.method === requested)
+  if (selected === undefined) {
+    const reason = requestedAssessment === undefined
+      ? `方案 ${plan.planId} 的方法判定里没有出现用户指定的「${requested}」`
+      : requestedAssessment.applicable
+        ? `用户指定「${requested}」，但当前实现尚无该方法可执行的正文与计算表模板`
+        : `用户指定「${requested}」，而知识选择方案判定它不适用于本方案：${requestedAssessment.reason}`
+    methodConflict = { requested, adopted: null, reason }
+    blockers.push(blockerOf(
+      plan,
+      'method-unsupported',
+      requested,
+      'valuation.method.requested-unavailable',
+      [
+        requestedAssessment?.applicable === true
+          ? `方法「${requested}」的可执行正文与模板`
+          : `方法「${requested}」对本方案的适用性依据`,
+      ],
+      reason,
+      '请在会话内向员工说明冲突：要么补齐该方法的知识与模板后重跑本方案，要么由员工明确改为已实现的方法（会记入 methodConflict）。'
+        + '**不得**因为未实现就直接改用市场法。',
+      requestedAssessment?.ruleRefs ?? [],
+    ))
+  } else if (selected.method !== requested) {
+    methodConflict = {
+      requested,
+      adopted: selected.method,
+      reason: `用户指定「${requested}」，实际采纳「${selected.method}」`,
     }
+    blockers.push(blockerOf(
+      plan, 'method-unsupported', selected.method, 'valuation.method.requested-not-honored',
+      [`按用户指定的「${requested}」出具结论的依据`],
+      methodConflict.reason,
+      '用户指定的方法是约束：请在会话内请员工确认是否可以改用其它方法，确认之前不要出具结论。',
+    ))
   }
 
   // 业务适用但当前跑不了：这是**能力缺口**，不是"业务不适用"，也不是整体阻断 ——
@@ -205,20 +200,9 @@ export function validateMethodAssessment(
     item.conflicts.push(reason)
     capabilityGaps.push({ method: item.method, reason })
   }
-  // 一个能跑的方法都没有才阻断整方案（否则"缺一个方法"会把别的方法一起拖死）。
-  if (selectedList.length === 0 && requested === 'auto') {
-    blockers.push(blockerOf(
-      plan, 'method-unsupported', 'market', 'valuation.method.none-executable',
-      ['至少一个可执行的方法正文与计算表模板'],
-      '知识选择方案给出的方法里，当前部署一个都跑不了：没有可执行的正文 / 参数 / 模板 / 计算能力。',
-      '请业务负责人补齐至少一个方法的正文、参数与模板并验收计算能力后重跑本方案；'
-        + '本期只交付说明原因的中断报告，不给出金额。',
-    ))
-  }
-
   const selectedMethods = assessments.filter((item) => item.selected).map((item) => item.method)
   const primary = selected?.method ?? null
-  const coverage = coverageOf(requested === 'auto' ? (primary ?? 'auto') : requested)
+  const coverage = coverageOf(requested)
   // 覆盖矩阵里的路径/物业类型阻断同样属于方法判定阶段的结果。
   for (const blocker of coverage.blockers) blockers.push(blocker)
 
@@ -228,7 +212,7 @@ export function validateMethodAssessment(
     primaryMethod: primary,
     selectedMethods,
     assessments,
-    requestedMethodHonored: requested === 'auto' || (selected !== undefined && selected.method === requested),
+    requestedMethodHonored: selected !== undefined && selected.method === requested,
     notes: [
       ...(facts.length === 0 ? ['知识选择方案没有给出任何方法判定：无法确定方法'] : []),
       ...capabilityGaps.map((item) => item.reason),

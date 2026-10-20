@@ -306,8 +306,52 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
  *       the entry is declared once in `knowledge-routing.md`, and the template index is currently
  *       a structural reference only (no auto-pricing).
  *    Operation inventory unchanged (54): Tool output semantics and deliverable shape only.
+ *
+ * Protocol 43 (2026-10-18): **the shipped evaluation tab becomes the asset-assessment workflow**.
+ *    The Client now mounts one graph-backed workflow controller for the actual 估值 page and
+ *    reuses the intake as its first step; the old tablist wiring and the automatic
+ *    parent-session jump are gone. Cross-process changes that must move the number:
+ *    ① ten `valuation-workflow-*` operations (current / node / action / preview / cancel /
+ *       export / load / clear / reconcile / open-artifact) carry the graph panel state and
+ *       employee decisions; an old Host has none of them, so a new Client would silently show
+ *       an empty "not started" page;
+ *    ② `valuation-intake` accepts an optional `templatePath` and returns the Host-bound
+ *       `templateFileId`, and the draft defaults asset type / method to `auto`;
+ *    ③ the handoff keeps the employee inside the workflow (`onHandoff`) instead of jumping to
+ *       the parent session, so the page state an old Client expects no longer matches.
+ *    Operation inventory still grows in the Host task; metadata versions are unchanged.
+ *
+ * Protocol 44 (2026-10-19): **explicit reconciliation can retry a stopped intent-only run**.
+ *    Host reconcile may now queue one internal `retry-intent` command under the same project
+ *    and native parent, reusing the frozen inputs instead of re-reading materials or creating
+ *    a new session. The Client operation shapes are unchanged; the number moves because an old
+ *    Host cannot dispatch that retry and would leave the stopped task restored but not resumed.
+ *    The protected project record stays readable at the previous graph generation (43) while
+ *    the input schema is unchanged; generation 42 and unknown future generations stay refused.
+ *
+ * Protocol 45 (2026-10-19): **the canonical first-submitted input snapshot travels with node receipts**.
+ *    Every stage and selector fact now carries an immutable `initialInput` clone (the original asset /
+ *    method / purpose / baseDate / valueType / template / supplement / frozen file identities) beside the
+ *    current corrected facts, and the durable run image persists it (a legacy image without it restores
+ *    `null` rather than inferring historical choices from later state). The number moves because an old
+ *    Host cannot project that snapshot, so a new Client would silently show current state as the original.
+ *    The protected project record keeps reading the exact graph generations 43 and 44 while the input
+ *    schema is unchanged; generation 42 and unknown future generations stay refused.
+ *
+ * Protocol 46 (2026-10-19): current global inputs and structured questions/answers.
+ *    The snapshot exposes current (not initial) editable conditions, questions carry native
+ *    controls/options, and clear stops preparation before removing the current pointer.
+ *    Project records from generations 43, 44 and 45 stay readable while the input schema is
+ *    unchanged; 42 and 47+ stay refused.
+ *
+ * Protocol 47 (2026-10-20): durable typed node questions, independent optimistic
+ *    drafts and complete answer submissions; previous graph records 43–46 remain
+ *    readable. Older Hosts must not discard the new questionnaire wire contract.
  */
-export const WORKBENCH_PROTOCOL = 42
+// Protocol 48: concrete node failure reasons, requirements and recovery actions.
+// Protocol 49: workspace cleanup (plan + apply) and the `workspace-cleanup` consent
+// capability. The new operations are unusable from an older Host, so the number moves.
+export const WORKBENCH_PROTOCOL = 49
 
 /**
  * 补充要求（用户原样输入）的**长度上限**：Client 与 Host 同一把尺子。

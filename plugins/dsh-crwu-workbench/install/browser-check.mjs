@@ -306,13 +306,12 @@ async function main() {
             /报告评估[\s\S]*报告审核[\s\S]*环境信息/.test(cardText),
             cardText.replace(/\s+/g, ' '),
           )
-          // 协议 32（2026-10-12）：报告评估（房地产估值）**已经实现**，三行子项都不再挂
-          // 「开发中」小标签。这条断言的含义从"占位页挂着标签"反过来了 ——
-          // 而**反过来这件事本身必须被断言**：旧断言会一直绿到有人真跑一遍浏览器验收为止。
           const devTags = entry().locator('.crwu-audit-module-tag')
           checks.that(
-            '三个子项都不再挂「开发中」标签（协议 32 起报告评估已可用）',
-            await devTags.count() === 0,
+            '仅报告评估旁显示开发中标签，入口保持可用',
+            await devTags.count() === 1
+              && await rows.nth(0).locator('.crwu-audit-module-tag').innerText() === '开发中'
+              && await rows.nth(0).isEnabled(),
             `找到 ${String(await devTags.count())} 枚`,
           )
           // 「看起来是一个模块」的可观察判据：三行子项都落在**同一张卡**的几何范围内，

@@ -10,12 +10,15 @@ import {
   beginPrepare,
   beginCreate,
   beginScan,
+  canEditInputs,
+  canRefreshExpiredPreview,
   chosenMethod,
   excludeFile,
   fileRowsOf,
   handoffDone,
   handoffFailed,
   initialValuationState,
+  inputLockedReason,
   isCurrentPrepare,
   loginCancelled,
   loginStarted,
@@ -38,6 +41,7 @@ import {
   setPurpose,
   setSelection,
   setSupplementalPrompt,
+  setTemplate,
   setValueType,
   undoRemoval,
   verificationOpened,
@@ -102,6 +106,8 @@ export interface ValuationPort extends DirectoryPicker, FilePicker {
     /** 价值类型（空串 = 未指定）。 */
     valueType?: string
     supplementalPrompt?: string
+    /** Optional calculation template; a native absolute `.xlsx` path, or '' for none. */
+    templatePath?: string
   }, options?: { signal?: AbortSignal }) => Promise<Record<string, unknown>>
   /** 门禁预检（三态 + 登录任务）。 */
   preflight?: (input?: { openLogin?: string }, options?: { signal?: AbortSignal }) => Promise<Record<string, unknown>>
@@ -169,6 +175,10 @@ export interface ReportEvaluationController {
   setValueType: (value: string) => void
   setBaseDate: (value: string) => void
   setPrompt: (value: string) => void
+  /** Pick one native `.xlsx` calculation template (optional; absolute path only). */
+  pickTemplate: () => void
+  /** Remove the selected template; the material scope is untouched. */
+  clearTemplate: () => void
 
   /** 「确认」：递归校验 + 字节归档 + 元信息回显（pending 文案「正在准备确认信息…」）。 */
   preparePreview: () => void
@@ -187,6 +197,13 @@ export interface ReportEvaluationController {
    * 交接（`creating-session`）不清理：会话是 Host 的事务，切走不能中断它。
    */
   invalidate: () => void
+  /**
+   * Reset this page to a brand-new local draft after the workflow confirmed a clear.
+   *
+   * It only clears local timers, in-flight page reads and the intake form (back to the
+   * production defaults); it never deletes Host state, navigates sessions or creates a task.
+   */
+  resetDraft: () => void
   /** 协议代数不匹配时由外层调用。 */
   markStale: () => void
 }
@@ -375,6 +392,9 @@ export function previewViewOf(payload: Record<string, unknown>): ValuationPrevie
       ? payload.purpose as string : null,
     valueType: typeof payload?.valueType === 'string' && (payload.valueType as string).trim() !== ''
       ? payload.valueType as string : null,
+    // Template role: Host binds the archived candidate by canonical path; missing means none.
+    templateFileId: typeof payload?.templateFileId === 'string' && (payload.templateFileId as string).trim() !== ''
+      ? payload.templateFileId as string : null,
     supplementalPrompt: text(payload?.supplementalPrompt),
     files,
     fileCount: typeof payload?.fileCount === 'number' ? payload.fileCount as number : files.length,
@@ -404,6 +424,11 @@ export function handoffViewOf(payload: Record<string, unknown>): ValuationHandof
   const creationDisposition: CreationDisposition = raw === 'not-created' || raw === 'created' || raw === 'unknown'
     ? raw
     : (parentSessionId !== '' ? 'created' : 'unknown')
+  const rawRecovery = text(payload?.recoveryAction)
+  const recoveryAction: 'refresh-preview' | 'retry-handoff' | undefined =
+    rawRecovery === 'refresh-preview'
+      ? 'refresh-preview'
+      : rawRecovery === 'retry-handoff' ? 'retry-handoff' : undefined
   return {
     ok: payload?.ok === true,
     errorKind: text(payload?.errorKind),
@@ -413,6 +438,7 @@ export function handoffViewOf(payload: Record<string, unknown>): ValuationHandof
     dispatchAccepted: payload?.dispatchAccepted === true,
     reused: payload?.reused === true,
     creationDisposition,
+    ...(recoveryAction === undefined ? {} : { recoveryAction }),
   }
 }
 
@@ -433,9 +459,17 @@ export function verificationViewOf(payload: Record<string, unknown>): {
 
 export function createReportEvaluationController(
   port: ValuationPort,
-  options: { initial?: Partial<ValuationPageState> } = {},
+  options: {
+    initial?: Partial<ValuationPageState>
+    /**
+     * Accepted handoff callback. When present, stay in the workflow and refresh the same
+     * workflow controller; without it the legacy auto-open behavior is preserved.
+     */
+    onHandoff?: (receipt: ValuationHandoffView) => void | Promise<void>
+  } = {},
 ): ReportEvaluationController {
   let state = initialValuationState(options.initial)
+  const onHandoff = options.onHandoff
   const scheduleTimeout = port.scheduleTimeout ?? ((handler, ms) => setTimeout(handler, ms))
   const clearScheduledTimeout = port.clearScheduledTimeout
     ?? ((handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>) })
@@ -664,6 +698,70 @@ export function createReportEvaluationController(
     })
   }
 
+  /**
+   * 「确认」：先做递归校验（份数 / 可读性 / 上限），再让 Host 按字节归档并回元信息。
+   *
+   * 顺序是刻意的：先发号 + 进入 `preparing-confirmation`（同一批 `write` 里发生，
+   * 所以首帧就能看到「正在准备确认信息…」），最后才发 RPC。它同时是过期预览恢复的落点：
+   * 刷新预览就是拿**同一份**资料 / 条件 / 模板 / 基准日再做一次准备。
+   */
+  const startPrepare = (): void => {
+    const ready = gate()
+    if (!ready.ok) {
+      write({ ...state, error: ready.error })
+      return
+    }
+    prepareSeq += 1
+    const requestId = prepareSeq
+    const round = beginPage()
+    const begun = apply(beginPrepare(state, requestId))
+    if (begun.phase !== 'preparing-confirmation') return
+    const asked = [...state.selection]
+    const askedExcluded = [...state.excluded]
+    const assetType = state.assetType
+    // 提交给 Host 的必须是**收窄后的正式方法**：`beginPrepare` 已经保证了这一点，
+    // 这里再收一次是为了让"提交空方法"在这条路径上根本写不出来。
+    const method = chosenMethod(state.method)
+    if (method === null) return
+    const baseDate = state.baseDate
+    const purpose = state.purpose
+    const valueType = state.valueType
+    const supplementalPrompt = state.supplementalPrompt
+    const templatePath = state.templatePath
+
+    clearTimer()
+    // ≥15 秒：说明"仍在准备 + 可以返回修改，原输入会保留"。
+    after(slowWaitMs, () => { apply(markSlowWait(state, 'prepare')) })
+    after(intakeTimeoutMs, () => {
+      apply(prepareFailed(state, requestId, zhCN.valuationIntakeTimeout))
+    })
+
+    void Promise.resolve(port.intake({
+      requestId: `valuation-${String(requestId)}`,
+      paths: asked,
+      // 排除范围与选择范围一起提交：扫描 / 预览 / 归档共用同一份（不假排除）。
+      excluded: askedExcluded,
+      assetType,
+      method,
+      // 基准日**逐字**提交：未选择就是空串，客户端不许拿资料里识别到的日期补一个。
+      baseDate,
+      // 评估目的 / 价值类型同理：未填就是空串（Host 归一化成"未指定"），不预置任何正式结论。
+      purpose,
+      valueType,
+      supplementalPrompt,
+      templatePath,
+    }, { signal: round.signal })).then((payload) => {
+      // 迟到的响应：用户已经返回修改 / 换了输入 —— 丢掉，不许改现在的状态。
+      if (round.generation !== generation || !isCurrentPrepare(state, requestId)) return
+      clearTimer()
+      apply(prepareReady(state, requestId, previewViewOf(payload ?? {})))
+    }).catch((cause: unknown) => {
+      if (round.generation !== generation || !isCurrentPrepare(state, requestId)) return
+      clearTimer()
+      apply(prepareFailed(state, requestId, `${zhCN.valuationIntakeFailed}：${describe(cause)}`))
+    })
+  }
+
   return {
     getState: () => state,
     subscribe: (next) => {
@@ -769,6 +867,36 @@ export function createReportEvaluationController(
     setPurpose: (value) => { apply(setPurpose(state, value)) },
     setValueType: (value) => { apply(setValueType(state, value)) },
     setPrompt: (value) => { apply(setSupplementalPrompt(state, value)) },
+    /**
+     * Pick a calculation template through the native picker: exactly one `.xlsx`, and only a
+     * real absolute path (a bare HTML file name is never treated as a path).
+     */
+    pickTemplate: () => {
+      if (!canEditInputs(state.phase)) {
+        write({ ...state, error: inputLockedReason(state.phase) })
+        return
+      }
+      void pickFile(port).then((picked) => {
+        if (!picked.ok) {
+          write({
+            ...state,
+            error: picked.unsupported
+              ? zhCN.localAuditPickFilesUnsupported
+              : (picked.error || '选择计算表模板失败：请重试。'),
+          })
+          return
+        }
+        if (picked.paths.length === 0) return
+        if (picked.paths.length !== 1) {
+          write({ ...state, error: '计算表模板只能选择一份 .xlsx 文件：请重新选择。' })
+          return
+        }
+        apply(setTemplate(state, picked.paths[0]))
+      }).catch((cause: unknown) => {
+        write({ ...state, error: `选择计算表模板失败：${describe(cause)}` })
+      })
+    },
+    clearTemplate: () => { apply(setTemplate(state, '')) },
 
     /**
      * 「确认」：先做**递归校验**（份数 / 可读性 / 上限），再让 Host 按字节归档并回元信息。
@@ -776,60 +904,7 @@ export function createReportEvaluationController(
      * 顺序是刻意的：先发号 + 进入 `preparing-confirmation`（同一批 `write` 里发生，
      * 所以首帧就能看到「正在准备确认信息…」），最后才发 RPC。
      */
-    preparePreview: () => {
-      const ready = gate()
-      if (!ready.ok) {
-        write({ ...state, error: ready.error })
-        return
-      }
-      prepareSeq += 1
-      const requestId = prepareSeq
-      const round = beginPage()
-      const begun = apply(beginPrepare(state, requestId))
-      if (begun.phase !== 'preparing-confirmation') return
-      const asked = [...state.selection]
-      const askedExcluded = [...state.excluded]
-      const assetType = state.assetType
-      // 提交给 Host 的必须是**收窄后的正式方法**：`beginPrepare` 已经保证了这一点，
-      // 这里再收一次是为了让"提交空方法"在这条路径上根本写不出来。
-      const method = chosenMethod(state.method)
-      if (method === null) return
-      const baseDate = state.baseDate
-      const purpose = state.purpose
-      const valueType = state.valueType
-      const supplementalPrompt = state.supplementalPrompt
-
-      clearTimer()
-      // ≥15 秒：说明"仍在准备 + 可以返回修改，原输入会保留"。
-      after(slowWaitMs, () => { apply(markSlowWait(state, 'prepare')) })
-      after(intakeTimeoutMs, () => {
-        apply(prepareFailed(state, requestId, zhCN.valuationIntakeTimeout))
-      })
-
-      void Promise.resolve(port.intake({
-        requestId: `valuation-${String(requestId)}`,
-        paths: asked,
-        // 排除范围与选择范围一起提交：扫描 / 预览 / 归档共用同一份（不假排除）。
-        excluded: askedExcluded,
-        assetType,
-        method,
-        // 基准日**逐字**提交：未选择就是空串，客户端不许拿资料里识别到的日期补一个。
-        baseDate,
-        // 评估目的 / 价值类型同理：未填就是空串（Host 归一化成"未指定"），不预置任何正式结论。
-        purpose,
-        valueType,
-        supplementalPrompt,
-      }, { signal: round.signal })).then((payload) => {
-        // 迟到的响应：用户已经返回修改 / 换了输入 —— 丢掉，不许改现在的状态。
-        if (round.generation !== generation || !isCurrentPrepare(state, requestId)) return
-        clearTimer()
-        apply(prepareReady(state, requestId, previewViewOf(payload ?? {})))
-      }).catch((cause: unknown) => {
-        if (round.generation !== generation || !isCurrentPrepare(state, requestId)) return
-        clearTimer()
-        apply(prepareFailed(state, requestId, `${zhCN.valuationIntakeFailed}：${describe(cause)}`))
-      })
-    },
+    preparePreview: startPrepare,
 
     backToEdit: () => {
       // 返回修改 = 作废这一次预览：在途请求的响应回来时必须被丢掉。
@@ -841,6 +916,18 @@ export function createReportEvaluationController(
     confirm: () => {
       // 双击去重：第二次点进来时阶段已经不是 `confirmation` 了。
       if (state.phase === 'creating-session') return
+      /**
+       * Expired preview with no parent session: the Host asked for a fresh preparation.
+       * Never resubmit the expired handoff; return to the same inputs and prepare a new
+       * confirmation, which the employee must confirm explicitly again.
+       */
+      if (canRefreshExpiredPreview(state)) {
+        clearTimer()
+        abortPage()
+        apply(backToEdit(state))
+        startPrepare()
+        return
+      }
       const preview = state.preview
       if (preview === null) {
         write({ ...state, error: zhCN.valuationNotInConfirmation })
@@ -881,6 +968,16 @@ export function createReportEvaluationController(
           return
         }
         apply(handoffDone(state, view))
+        // With a workflow callback, stay in the workflow and refresh the same controller.
+        // A callback failure does not change the accepted handoff; the next refresh self-heals.
+        if (onHandoff !== undefined) {
+          try {
+            void Promise.resolve(onHandoff(view)).catch((error: unknown) => { void error })
+          } catch (error) {
+            void error
+          }
+          return
+        }
         // 提示与跳转在**同一批**里发生：不给员工一个"盯着成功页"的等待。
         openCreatedSession()
       }).catch((cause: unknown) => {
@@ -900,6 +997,12 @@ export function createReportEvaluationController(
       // 交接的 `creating-session` 不动（会话是 Host 的事务，切走不能中断它）。
       const pruned = pruneTransientState(state)
       if (pruned !== state) write(pruned)
+    },
+    resetDraft: () => {
+      // 清空本页的在途请求与定时器，再把本地表单恢复成新一轮草稿（保留最近会话入口）。
+      clearTimer()
+      abortPage()
+      apply(resetAfterHandoff(state))
     },
     markStale: () => { write(markHostStale(state)) },
   }

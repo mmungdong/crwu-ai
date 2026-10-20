@@ -320,11 +320,7 @@ test('指定基准日时按它处理（不再出现"未指定"那段）', () => 
   assert.equal(prompt.includes('本次未指定评估基准日'), false)
 })
 
-test('方法口径：auto 要求输出采用与排除理由；指定方法要求"不许伪造结论"', () => {
-  const auto = valuationPrompt(facts({ method: 'auto' }))
-  assert.match(auto, /自动判定/)
-  assert.match(auto, /采用的方法、备选方法与排除理由/)
-  assert.match(auto, /不许.*把 `auto` 当成结论/)
+test('三种指定方法分别保留请求且要求不伪造结论', () => {
   for (const [method, label] of [['market', '市场法'], ['income', '收益法'], ['cost', '成本法']]) {
     const prompt = valuationPrompt(facts({ method }))
     assert.equal(prompt.includes(label), true, method)

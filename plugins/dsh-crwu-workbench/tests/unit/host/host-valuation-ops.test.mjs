@@ -25,6 +25,7 @@ import { makeTestAccess } from '../../helpers/local-access-broker-fixture.mjs'
 import { grantedConsent, missingConsent } from '../../helpers/local-access-fixture.mjs'
 
 const ROOT = new URL('../../../', import.meta.url)
+const { VALUATION_INPUT_SCHEMA_VERSION } = await import(new URL('src/shared/contracts/valuation-project.ts', ROOT).href)
 
 const { createValuationOperations } = await import(new URL('src/host/operations/report-evaluation.ts', ROOT).href)
 const { createValuationBrowserRuntime } = await import(
@@ -35,6 +36,8 @@ const { ValuationScopes } = await import(new URL('src/host/domains/report-evalua
 const { createWorkbenchState } = await import(new URL('src/host/core/state/store.ts', ROOT).href)
 const { VALUATION_CHILD_TOOLS } = await import(new URL('src/host/tools/report-evaluation/consts.ts', ROOT).href)
 const { VALUATION_FIELD_KEYS } = await import(new URL('src/host/operations/report-evaluation.ts', ROOT).href)
+const { MAX_MATERIAL_FILES } = await import(
+  new URL('src/host/domains/report-evaluation/project/contracts.ts', ROOT).href)
 
 const CONFIG = {
   caseRoot: '/cases', formName: '报告审核', preferWorkspaceTitle: '',
@@ -308,15 +311,16 @@ test('valuation-intake：材料目录与项目目录的命令必须**提权**（
   }
 })
 
-test('valuation-intake：31 份整批拒绝（不悄悄截取前 30 份）', async () => {
+test('valuation-intake：超过上限一份时整批拒绝（不悄悄截取前若干份）', async () => {
   const workspace = tempDir('crwu-ops-ws-')
   const ctx = makeCtx({ workspace })
   const { ops, ctx: theCtx } = makeDeps({ ctx })
-  const dir = sourceDir(Array.from({ length: 31 }, (_, index) => [`f${index}.pdf`, `bytes-${index}`]))
+  const over = MAX_MATERIAL_FILES + 1
+  const dir = sourceDir(Array.from({ length: over }, (_, index) => [`f${index}.pdf`, `bytes-${index}`]))
   const preview = await prepare({ ops, ctx: theCtx }, [dir])
   assert.equal(preview.ok, false)
   assert.equal(preview.errorKind, 'input-invalid')
-  assert.match(preview.error, /31/)
+  assert.match(preview.error, new RegExp(String(over)))
   assert.equal(theCtx.controllerRequests.length, 0)
 })
 
@@ -444,7 +448,7 @@ test('valuation-start：只发 workspaceId（没有 cwd 兜底）、落 v3 冻�
   // ② 冻结输入（v3）：没有原始绝对路径，摘要与预览一致，资产类型必填。
   const casePath = join(workspace, preview.projectId)
   const frozen = JSON.parse(theCtx.files.get(join(casePath, '估值输入.json')))
-  assert.equal(frozen.schemaVersion, 'crwu.valuation.input.v3')
+  assert.equal(frozen.schemaVersion, VALUATION_INPUT_SCHEMA_VERSION)
   assert.equal(frozen.assetType, 'real-estate', '资产类型是冻结输入的一部分')
   assert.equal(frozen.inputDigest, preview.inputDigest)
   assert.equal(frozen.baseDate, null, '未指定基准日是 null')
@@ -620,4 +624,44 @@ test('协议 35：v1 的面板完成度四条操作不再注册；门禁三操�
   for (const name of ['valuation-browser-preflight', 'valuation-browser-login', 'valuation-browser-login-cancel']) {
     assert.equal(typeof h.ops[name], 'function', `${name} 必须已注册（由浏览器 runtime 提供）`)
   }
+})
+
+
+test('retrying a created handoff preserves its original scope generation and registered graph plans', async () => {
+  const ctx = makeCtx({ workspace: tempDir('crwu-ops-ws-') })
+  const originalGet = ctx.get.bind(ctx)
+  let refused = false
+  ctx.get = (name) => {
+    const service = originalGet(name)
+    if (name !== 'sessionController') return service
+    return { ...service, create: async (request) => {
+      const created = await service.create(request)
+      const agent = originalGet('agents').get(created.sessionId)
+      const followup = agent.followup.bind(agent)
+      agent.followup = (message) => {
+        if (!refused) { refused = true; throw new Error('synthetic dispatch acknowledgement lost') }
+        followup(message)
+      }
+      return created
+    } }
+  }
+  const deps = makeDeps({ ctx })
+  const dir = sourceDir([['报告.pdf', 'synthetic scope identity']])
+  const preview = await prepare(deps, [dir])
+  assert.equal(preview.ok, true, preview.error)
+  const input = { requestId: 'req-1', previewId: preview.previewId, confirmedInputDigest: preview.inputDigest }
+  const first = await deps.ops['valuation-start'](input)
+  assert.equal(first.ok, false)
+  assert.equal(first.creationDisposition, 'created')
+  const originalScope = deps.scopes.get(preview.projectId)
+  assert.ok(originalScope)
+  deps.scopes.addPlan(preview.projectId, 'registered-before-retry')
+  await new Promise((resolve) => setTimeout(resolve, 3))
+  const second = await deps.ops['valuation-start'](input)
+  assert.equal(second.ok, true, second.error)
+  const retained = deps.scopes.get(preview.projectId)
+  assert.equal(retained.openedAt, originalScope.openedAt, 'a retry must not invalidate the live Graph runtime scope key')
+  assert.ok(retained.planIds.includes('registered-before-retry'))
+  assert.equal(second.parentSessionId, first.parentSessionId)
+  assert.equal(ctx.controllerRequests.length, 1)
 })

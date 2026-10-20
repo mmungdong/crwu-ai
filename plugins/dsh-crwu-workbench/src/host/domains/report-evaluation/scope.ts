@@ -1,4 +1,5 @@
 import { text } from '../../../shared/utils/value.ts'
+import type { AssetType } from '../../../shared/contracts/valuation-project.ts'
 
 /**
  * 报告评估（房地产估值）的**案例 scope**（协议 32）。
@@ -60,6 +61,10 @@ export interface ValuationSnapshot {
   purpose?: string
   valueType?: string
   supplementalPrompt: string
+  /** Selected asset type; optional for legacy callers. */
+  assetType?: AssetType
+  /** Archived calculation-template material id; null/absent when none. */
+  templateFileId?: string | null
   /** 输入清单指纹（`buildIntakeManifest().digest`）。 */
   digest: string
   files: ReadonlyArray<{
@@ -72,14 +77,13 @@ export interface ValuationSnapshot {
   frozenAt: string
 }
 
-export type ValuationMethod = 'auto' | 'market' | 'income' | 'cost'
+export type ValuationMethod = 'market' | 'income' | 'cost'
 
-export const VALUATION_METHODS: readonly ValuationMethod[] = ['auto', 'market', 'income', 'cost']
+export const VALUATION_METHODS: readonly ValuationMethod[] = ['market', 'income', 'cost']
 
 /** 方法在界面与结果里的名字。 */
 export function valuationMethodLabel(method: ValuationMethod): string {
   switch (method) {
-    case 'auto': return '自动判定'
     case 'market': return '市场法'
     case 'income': return '收益法'
     case 'cost': return '成本法'

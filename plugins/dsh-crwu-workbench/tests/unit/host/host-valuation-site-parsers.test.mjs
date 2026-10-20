@@ -182,7 +182,30 @@ test('挑战页（合成的最小形状）解析出 0 条，且不编造案例',
   const parsed = parseSitePage({ providerId: 'lianjia', body, finalUrl: 'https://hip.lianjia.com/captcha' })
   assert.equal(parsed.listings.length, 0)
   assert.equal(parsed.channel, 'none')
-  assert.equal(parsed.failureKind, 'no-results')
+  assert.equal(parsed.failureKind, 'unreadable')
+})
+
+test('unrecognized navigation and script shells do not prove that a community has no listings', () => {
+  for (const body of [
+    '<html><body><nav>首页 登录 二手房</nav><div id="app"></div></body></html>',
+    '<html><body><div id="app"></div><script>const emptyState = "暂无相关房源";</script></body></html>',
+  ]) {
+    const result = parseSitePage({ providerId: 'wuba', body, finalUrl: 'https://bj.58.com/ershoufang/' })
+    assert.equal(result.failureKind, 'unreadable')
+    assert.deepEqual(result.listings, [])
+    assert.doesNotMatch(result.notes.join(' '), /确实回答了|明确回答了/)
+  }
+})
+
+test('a visible explicit empty result is distinct from an unrecognized page layout', () => {
+  for (const body of [
+    '<html><body><div>暂无符合条件的房源</div></body></html>',
+    '<html><body><ul class="sellListContent"></ul><div>没有找到相关房源</div></body></html>',
+  ]) {
+    const result = parseSitePage({ providerId: 'wuba', body, finalUrl: 'https://bj.58.com/ershoufang/' })
+    assert.equal(result.failureKind, 'no-results')
+    assert.deepEqual(result.listings, [])
+  }
 })
 
 // ── 部署清单的登录判据页 ─────────────────────────────────────────────────────

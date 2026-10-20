@@ -8,6 +8,12 @@ import {
 } from './controller.ts'
 import type { ValuationPageState } from './model/valuation-state.ts'
 import type { ClientServices } from '../../shell/services.ts'
+import {
+  createValuationWorkflowController,
+  type ValuationWorkflowController,
+  type ValuationWorkflowPort,
+} from './workflow-controller.ts'
+import type { ValuationHandoffView } from '../../../shared/contracts/report-evaluation.ts'
 
 /**
  * 报告评估模块的**组装入口**：把 RPC、本机选择器、会话跳转与控制器接起来。
@@ -51,8 +57,16 @@ export function reportEvaluationPaneServices(
 
 export function createReportEvaluationPaneController(
   services: ReportEvaluationServices,
-  /** 起始状态（只在用例 / 特殊装配里给；页面正常从"正在检查门禁"开始）。 */
-  options: { initial?: Partial<ValuationPageState> } = {},
+  /**
+   * 起始状态（只在用例 / 特殊装配里给；页面正常从"正在检查门禁"开始）。
+   *
+   * `onHandoff`：交接被 Host 接受后**留在工作流里**。生产装配把它接到同一个
+   * workflow controller 的 `refresh()`；没有这个回调的旧调用方保持"立刻打开父会话"的旧行为。
+   */
+  options: {
+    initial?: Partial<ValuationPageState>
+    onHandoff?: (receipt: ValuationHandoffView) => void | Promise<void>
+  } = {},
 ): ReportEvaluationController {
   const port: ValuationPort = {
     get hostPaths() { return services.hostPaths },
@@ -75,8 +89,36 @@ export function createReportEvaluationPaneController(
   return createReportEvaluationController(port, options)
 }
 
+/**
+ * 图工作流的客户端端口：每个方法对应一个同源 `valuation-workflow-*` 操作。
+ *
+ * 只有 `rpc` 一条网络出口；端口本身不持有状态，状态由 controller 管。
+ */
+export function valuationWorkflowPort(): ValuationWorkflowPort {
+  return {
+    current: (input, options) => valuationApi.workflowCurrent(input, options),
+    node: (input, options) => valuationApi.workflowNode(input, options),
+    action: (input, options) => valuationApi.workflowAction(input, options),
+    preview: (input, options) => valuationApi.workflowPreview(input, options),
+    cancel: (input, options) => valuationApi.workflowCancel(input, options),
+    export: (input, options) => valuationApi.workflowExport(input, options),
+    load: (input, options) => valuationApi.workflowLoad(input, options),
+    clear: (input, options) => valuationApi.workflowClear(input, options),
+    reconcile: (input, options) => valuationApi.workflowReconcile(input, options),
+    openArtifact: (input, options) => valuationApi.workflowOpenArtifact(input, options),
+  }
+}
+
+export { createValuationWorkflowController }
+export type {
+  ValuationWorkflowController,
+  ValuationWorkflowControllerState,
+  ValuationWorkflowPort,
+} from './workflow-controller.ts'
 export { pickFilesFromInput }
 export type { ReportEvaluationController, ValuationPort }
 export { ReportEvaluationPane } from './ui/ReportEvaluationPane.tsx'
 export type { ReportEvaluationPaneProps } from './ui/ReportEvaluationPane.tsx'
+export { AssetAssessmentWorkflow } from './ui/AssetAssessmentWorkflow.tsx'
+export type { AssetAssessmentWorkflowProps, AssetWorkflowStep } from './ui/AssetAssessmentWorkflow.tsx'
 export * from './model/valuation-state.ts'

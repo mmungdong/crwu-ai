@@ -68,16 +68,62 @@ export interface PythonRuntimeView {
   source: string
 }
 
+/**
+ * Narrow read-only view of a genuine controlled execution (`ToolRunContext`).
+ *
+ * `runtime.guard` requires every nested call to carry the current execution's
+ * opaque registry token (as `parent`), root call id and the exact same agent
+ * object. Callers pass the real `exec` through; this module never mints a token
+ * or rebuilds the object. `agent` stays optional to match `ToolRunContext`.
+ */
+export interface PythonRuntimeExecution {
+  token: unknown
+  rootCallId: unknown
+  agent?: unknown
+  signal?: AbortSignal
+}
+
 export interface PythonRuntimeResolver {
   /**
    * 解析（或读缓存）DSH Python。
    *
    * `agent` 用于把这次工具调用放进调用者的 scope（审核启动传审核根 Agent，
    * 环境自检没有 Agent 时省略），从而走完整 policy pipeline。
+   *
+   * `execution` is only supplied inside a controlled graph execution: the lookup
+   * then inherits its parent token, root call id and agent, and joins its
+   * cancellation to the caller's signal.
    */
-  check(options?: { refresh?: boolean; agent?: unknown }): Promise<PythonRuntimeView>
+  check(options?: {
+    refresh?: boolean
+    agent?: unknown
+    execution?: PythonRuntimeExecution
+  }): Promise<PythonRuntimeView>
   /** 已缓存的值（测试与诊断用）。 */
   cached(): PythonRuntimeView | null
+}
+
+/**
+ * Fuse caller cancellation into this lookup's own controller and detach the
+ * listener once it settles. The controller is kept separate because the timeout
+ * branch aborts this lookup alone and must not touch the long-lived parent signal.
+ */
+function fuseAbort(source: AbortSignal | undefined): {
+  signal: AbortSignal
+  abort(reason: unknown): void
+  dispose(): void
+} {
+  const controller = new AbortController()
+  if (source === undefined) {
+    return { signal: controller.signal, abort: (reason) => controller.abort(reason), dispose: () => {} }
+  }
+  const forward = (): void => { controller.abort(source.reason) }
+  source.addEventListener('abort', forward, { once: true })
+  return {
+    signal: controller.signal,
+    abort: (reason) => controller.abort(reason),
+    dispose: () => source.removeEventListener('abort', forward),
+  }
 }
 
 export const PYTHON_RUNTIME_SOURCE = 'DSH 自带运行时（load_workspace_dependencies）'
@@ -142,7 +188,15 @@ interface ToolOutcome {
 }
 
 interface ToolsRuntimeLike {
-  execute(input: { callId: unknown; name: string; arguments: unknown; agent?: unknown; signal: AbortSignal }): Promise<ToolOutcome>
+  execute(input: {
+    callId: unknown
+    name: string
+    arguments: unknown
+    parent?: unknown
+    rootCallId?: unknown
+    agent?: unknown
+    signal: AbortSignal
+  }): Promise<ToolOutcome>
 }
 
 const RESOLVE_TIMEOUT_MS = 60_000
@@ -187,25 +241,41 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
         return failed('capability-gap', 'Host tools 服务不可用，无法解析 DSH 自带 Python', true)
       }
 
+      const execution = options.execution
+      // A cancelled controlled execution must not start a detached lookup: the
+      // guard would reject it and leave an unclaimed nested request behind.
+      if (execution !== undefined && execution.signal?.aborted === true) {
+        return failed('capability-gap', '解析 DSH 自带 Python 已被取消（调用方执行已结束）', true)
+      }
+
       // ① 问 DSH：运行时在哪、装了什么。超时与抛错都要如实区分。
-      const controller = new AbortController()
+      const fused = fuseAbort(execution?.signal)
       const timer = ctx.get('timer') as { timeout?: (ms: number) => Promise<void> } | undefined
+      const callAgent = execution === undefined ? options.agent : execution.agent
       const pending = registry.execute({
         callId: `crwu-python-${Date.now().toString(36)}`,
         name: 'load_workspace_dependencies',
         arguments: {},
-        ...(options.agent === undefined ? {} : { agent: options.agent }),
-        signal: controller.signal,
+        ...(callAgent === undefined ? {} : { agent: callAgent }),
+        // Inside a controlled execution the enclosing opaque token and root call
+        // id must be inherited, otherwise runtime.guard rejects the nested call.
+        ...(execution === undefined ? {} : { parent: execution.token, rootCallId: execution.rootCallId }),
+        signal: fused.signal,
       }).then(
         (result) => ({ kind: 'settled' as const, result }),
         (error: unknown) => ({ kind: 'threw' as const, error }),
       )
-      const raced = timer === undefined || typeof timer.timeout !== 'function'
-        ? await pending
-        : await Promise.race([pending, timer.timeout(RESOLVE_TIMEOUT_MS).then(() => ({ kind: 'timeout' as const }))])
+      const raced = await (timer === undefined || typeof timer.timeout !== 'function'
+        ? pending
+        : Promise.race([pending, timer.timeout(RESOLVE_TIMEOUT_MS).then(() => ({ kind: 'timeout' as const }))])
+      ).finally(() => { fused.dispose() })
       if (raced.kind === 'timeout') {
-        controller.abort(new Error('解析 DSH Python 超时'))
+        fused.abort(new Error('解析 DSH Python 超时'))
         return failed('capability-gap', `解析 DSH 自带 Python 超时（${Math.round(RESOLVE_TIMEOUT_MS / 1000)} 秒内没有返回）`, true)
+      }
+      // Cancelled while waiting: a late success must not yield a usable runtime.
+      if (execution !== undefined && (execution.signal?.aborted === true || fused.signal.aborted)) {
+        return failed('capability-gap', '解析 DSH 自带 Python 已被取消（调用方执行已结束）', true)
       }
       if (raced.kind === 'threw') {
         return failed('capability-gap', `调用 load_workspace_dependencies 失败：${raced.error instanceof Error ? raced.error.message : String(raced.error)}`, true)
@@ -287,6 +357,10 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
           ? ''
           : `DSH 自带 Python 缺少审核脚本必需的包：${missingPackages.join('、')}（本插件不自动 pip 安装，请让部署方补进 DSH 运行时）`,
         source: PYTHON_RUNTIME_SOURCE,
+      }
+      // Cancelled during probing: never hand back or cache a stale runtime.
+      if (execution !== undefined && execution.signal?.aborted === true) {
+        return failed('capability-gap', '解析 DSH 自带 Python 已被取消（调用方执行已结束）', true)
       }
       // 只缓存成功结果：失败可能来自一次瞬时故障，下一次显式刷新要能重试。
       if (view.ok) cache = view

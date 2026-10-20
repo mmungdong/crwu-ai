@@ -170,7 +170,7 @@ export function valuationTemplateTools(deps: ToolDeps) {
 
       // ① 参数收窄：任何 I/O 之前。
       const method = text(args.method).trim()
-      if (!isValuationMethodKey(method) || method === 'auto') {
+      if (!isValuationMethodKey(method)) {
         return { ...base, method, ...failure('input', `模板只能按**已确定**的方法选取，收到「${method || '(空)'}」`) }
       }
       const requestedSpace = text(args.spaceName).trim()

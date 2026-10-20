@@ -6,7 +6,7 @@ import type { EnvironmentRequirement } from '../../shared/environment/model.ts'
  * 工作台的三个模块（纯数据 + 纯判断，可单测）。
  *
  * 顺序就是侧栏那张分组卡上从上到下的顺序，**不要按条件重排**：那张卡是常驻控件，
- * 位置一变用户就得重新找。三个模块现在都是可用的正式模块。
+ * 位置一变用户就得重新找。开发中标记不影响模块入口。
  *
  * ⚠️ 外部数据源（iFinD）**不是**第四个模块（用户口径 2026-09-30）：它是环境信息页**配置列表里的一步**
  * （见 `features/environment/steps.ts`，必检与否用红色星号区分）。外部数据源是可选的，单开一页会读成
@@ -34,14 +34,12 @@ export interface ModuleMeta {
   requiresEnvironment: boolean
   /** 需要多严：`global` 覆盖一切，`audit` 只覆盖报告审核。 */
   requirement: EnvironmentRequirement
-  /** 还没开发完（侧栏画小标签、正文画占位页）。 */
+  /** Development status shown beside the module entry. */
   underDevelopment: boolean
 }
 
 export const MODULE_META: Record<ModuleId, ModuleMeta> = {
-  // 协议 32（2026-10-12）：报告评估（房地产估值）已经可用 —— 资料入口、方法/基准日、只读确认抽屉、
-  // 自动运行与结果页都在 `modules/report-evaluation` 里。侧栏不再画「开发中」。
-  eval: { id: 'eval', requiresEnvironment: true, requirement: 'global', underDevelopment: false },
+  eval: { id: 'eval', requiresEnvironment: true, requirement: 'global', underDevelopment: true },
   audit: { id: 'audit', requiresEnvironment: true, requirement: 'audit', underDevelopment: false },
   env: { id: 'env', requiresEnvironment: false, requirement: 'global', underDevelopment: false },
 }
@@ -68,12 +66,7 @@ export function moduleLabel(id: ModuleId): string {
   return zhCN.moduleEnv
 }
 
-/**
- * 这个子项是不是还没开发 —— 侧栏要在它旁边画一枚「开发中」小图标（沙漏）。
- *
- * 用户 2026-09-22 的口径：这一处**只给图标、不给文字**（文字版角标看着像功能标签），
- * 结论靠图标的 title / aria-label 说；「开发中」三个字只出现在占位页正文里。
- */
+/** Whether the sidebar entry displays the development tag. */
 export function isUnderDevelopment(id: ModuleId): boolean {
   return MODULE_META[id].underDevelopment === true
 }

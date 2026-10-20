@@ -462,7 +462,7 @@ test('抽屉里的方法改成只读键值摘要（UX-15）：范围说明仍在
 
 // ── 4. 资料数量：1–30、整数批阻止、重叠不重复计数 ────────────────────────────
 
-test('递归整理后的文件数才是依据（不是选中的目录数）；>30 整批阻止；0 份不能启动', async () => {
+test('递归整理后的文件数才是依据（不是选中的目录数）；>30 整批阻止；未选资料可启动', async () => {
   const port = makePort()
   const controller = draftController(port, {
     // 用户选了两个目录：里面一共 2 份文件（目录数不作数）。
@@ -492,8 +492,8 @@ test('递归整理后的文件数才是依据（不是选中的目录数）；>3
   const emptyTree = (await mountPane(empty)).tree
   const emptyPrimary = findAll(emptyTree, (n) => n.type === 'button'
     && String(n.props?.className ?? '').includes('crwu-valuation-btn-primary'))[0]
-  assert.equal(emptyPrimary.props.disabled, true, '0 份不能启动')
-  assert.equal(String(emptyPrimary.props['aria-describedby']).includes('crwu-valuation-action-reason'), true)
+  assert.notEqual(emptyPrimary.props.disabled, true, '材料选填，两项必选完成即可启动')
+  assert.equal(textOf(emptyTree).includes(zhCN.valuationActionSummaryOptional), true)
 
   const unreadable = draftController(makePort(), { fileCount: 2, readableCount: 0 })
   const unreadableTree = (await mountPane(unreadable)).tree
@@ -636,6 +636,46 @@ test('指令发送失败：保留已创建的 sessionId，重试发到同一个�
   assert.equal(port.calls.start.length, 2)
   assert.equal(port.calls.start[0].requestId, port.calls.start[1].requestId)
   assert.equal(controller.getState().phase, 'draft', '续发成功并跳转之后同样不留成功页')
+})
+
+test('an expired preview offers fresh confirmation and never resubmits the expired handoff', async () => {
+  const port = makePort({
+    intake: async (input) => { port.calls.intake.push(input); return { ...PREVIEW_PAYLOAD,
+      previewId: `fresh-preview-${port.calls.intake.length}`, projectId: `fresh-preview-${port.calls.intake.length}` } },
+    start: async (input) => { port.calls.start.push(input); return { ok: false, errorKind: 'not-found',
+      error: '这次预览已经过期', projectId: input.previewId, parentSessionId: '', dispatchAccepted: false,
+      creationDisposition: 'not-created', recoveryAction: 'refresh-preview' } },
+  })
+  const { controller } = await confirmationTree(port)
+  controller.confirm()
+  await tick()
+  const tree = (await mountPane(controller)).tree
+  assert.doesNotMatch(textOf(tree), /可以直接重试创建|重试创建/)
+  assert.match(textOf(tree), /重新准备确认/)
+  controller.confirm()
+  await tick()
+  assert.equal(port.calls.start.length, 1)
+  assert.equal(port.calls.intake.length, 2)
+  assert.equal(controller.getState().phase, 'confirmation')
+  assert.equal(controller.getState().preview.previewId, 'fresh-preview-2')
+  assert.deepEqual(port.calls.intake[1].paths, DRAFT_PATCH.selection)
+  assert.equal(port.calls.open.length, 0)
+})
+
+test('the workflow handoff callback stays on the graph page and retains the actual parent identity', async () => {
+  const port = makePort()
+  const receipts = []
+  const controller = createReportEvaluationController(port, { initial: DRAFT_PATCH,
+    onHandoff: async (receipt) => { receipts.push(receipt) } })
+  controller.preparePreview()
+  await tick()
+  controller.confirm()
+  await tick()
+  assert.equal(receipts.length, 1)
+  assert.equal(receipts[0].parentSessionId, HANDOFF_RECEIPT.parentSessionId)
+  assert.equal(port.calls.open.length, 0, 'native sessions are available by explicit action, without leaving the workflow')
+  assert.equal(controller.getState().parentSessionId, HANDOFF_RECEIPT.parentSessionId)
+  assert.notEqual(controller.getState().phase, 'draft')
 })
 
 test('导航失败：显示「会话已创建，自动打开失败」+「打开估值会话」；重试只重新导航', async () => {
@@ -786,8 +826,8 @@ test('WorkbenchPanel 不再持有估值轮询；报告审核的轮询不动', ()
   assert.match(code, /POLL_INTERVAL_MS = 10_000/, '报告审核的 10 秒轮询不许动')
 })
 
-test('协议号升到 42，且只在 shared/consts.ts 一处声明', () => {
-  assert.equal(WORKBENCH_PROTOCOL, 42)
+test('协议号升到 49，且只在 shared/consts.ts 一处声明', () => {
+  assert.equal(WORKBENCH_PROTOCOL, 49)
   const source = readFileSync(new URL('src/shared/consts.ts', ROOT), 'utf8')
   assert.equal((source.match(/WORKBENCH_PROTOCOL =/g) ?? []).length, 1)
 })
@@ -1040,4 +1080,21 @@ test('门禁：会话 cookie 的提示文案与"到期时间"区分开', async (
   await tick()
   const { tree } = await mountPane(controller)
   assert.match(textOf(tree), /会话 cookie，关掉浏览器即失效/)
+})
+
+test('a confirmed workflow clear can reset local intake without navigating or changing the archived task', async () => {
+  const port = makePort()
+  const controller = createReportEvaluationController(port, { initial: DRAFT_PATCH, onHandoff() {} })
+  controller.preparePreview()
+  await tick()
+  controller.confirm()
+  await tick()
+  assert.ok(controller.getState().parentSessionId)
+  assert.equal(typeof controller.resetDraft, 'function')
+  controller.resetDraft()
+  assert.equal(controller.getState().phase, 'draft')
+  assert.equal(controller.getState().parentSessionId, '')
+  assert.deepEqual(controller.getState().selection, [])
+  assert.equal(port.calls.start.length, 1)
+  assert.equal(port.calls.open.length, 0)
 })

@@ -270,9 +270,9 @@
         "provisionalResults": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/objectResult"
+            "$ref": "#/definitions/provisionalObjectResult"
           },
-          "description": "暂算金额，不得作为最终结论展示"
+          "description": "暂算金额，不得作为最终结论展示；未确认的价值范围必须保持 null，不得默认房地合一"
         },
         "conclusion": {
           "const": null
@@ -687,6 +687,51 @@
         }
       }
     },
+    "workflowKnowledgeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "已验证工作流快照引用（crwu.valuation.knowledge-ref.v1）：只有真实的 sourceId / 路径 / 指纹 / 正文；未知的库/更新时间/快照文件一律缺席，不得编造。",
+      "required": [
+        "format",
+        "sourceId",
+        "path",
+        "digest",
+        "body"
+      ],
+      "properties": {
+        "format": {
+          "const": "crwu.valuation.knowledge-ref.v1"
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spaceName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "section": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "retrievalAttempt": {
       "type": "object",
       "additionalProperties": false,
@@ -912,6 +957,64 @@
             "land-only",
             "building-only",
             "land-and-building"
+          ]
+        },
+        "method": {
+          "enum": [
+            "market",
+            "income",
+            "cost",
+            null
+          ]
+        },
+        "unitPrice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalValue": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calculationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "provisionalObjectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "partial 分支专用：与 objectResult 相同的金额/结果口径，但价值范围允许为 null（未确认时不得默认房地合一）。",
+      "required": [
+        "objectId",
+        "displayName",
+        "valueScope",
+        "currency"
+      ],
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "valueScope": {
+          "enum": [
+            "land-only",
+            "building-only",
+            "land-and-building",
+            null
           ]
         },
         "method": {
@@ -1678,7 +1781,14 @@
         "knowledgeSources": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/knowledgeSource"
+            "oneOf": [
+              {
+                "$ref": "#/definitions/knowledgeSource"
+              },
+              {
+                "$ref": "#/definitions/workflowKnowledgeRef"
+              }
+            ]
           }
         },
         "retrievalAttempts": {

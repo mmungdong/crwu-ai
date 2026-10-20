@@ -30,7 +30,11 @@ function makeHarness(options = {}) {
       if (name === 'tools') {
         return {
           async execute(input) {
-            toolCalls.push({ name: input.name, agent: input.agent })
+            toolCalls.push({ name: input.name, agent: input.agent, parent: input.parent, rootCallId: input.rootCallId, signal: input.signal })
+            if (options.guard !== undefined) {
+              const denied = options.guard(input)
+              if (denied) return { isError: true, error: { code: "POLICY_DENIED", message: denied } }
+            }
             if (input.name !== 'load_workspace_dependencies') {
               return { isError: true, error: { code: 'unexpected', message: `不应调用 ${input.name}` } }
             }
@@ -265,4 +269,29 @@ test('工具报错 = 没问到答案（unresolved），不等于运行时缺失'
   const ok = await makeHarness().resolver.check()
   assert.equal(ok.ok, true)
   assert.equal(ok.unresolved, false)
+})
+
+
+test('controlled Python discovery inherits the actual outer execution correlation', async () => {
+  const agent = { id: 'parent-workflow' }
+  const execution = { agent, token: Symbol('outer-registry'), rootCallId: 'root-workflow', signal: new AbortController().signal }
+  const f = makeHarness({ guard: (input) => input.parent === execution.token && input.rootCallId === execution.rootCallId && input.agent === agent ? undefined : 'requires current controlled execution' })
+  const result = await f.resolver.check({ agent, execution })
+  assert.equal(result.ok, true, result.error)
+  assert.equal(f.toolCalls[0].parent, execution.token)
+  assert.equal(f.toolCalls[0].rootCallId, execution.rootCallId)
+  assert.equal(f.toolCalls[0].agent, agent)
+  assert.equal(f.toolCalls[0].signal.aborted, false)
+})
+
+
+test('aborted controlled discovery never starts a detached dependency lookup', async () => {
+  const abort = new AbortController()
+  abort.abort()
+  const agent = { id: 'parent-workflow' }
+  const execution = { agent, token: Symbol('outer-registry'), rootCallId: 'root-workflow', signal: abort.signal }
+  const f = makeHarness()
+  const result = await f.resolver.check({ agent, execution })
+  assert.equal(result.ok, false)
+  assert.equal(f.toolCalls.length, 0)
 })

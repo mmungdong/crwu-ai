@@ -321,6 +321,8 @@ export async function resumeProject(input: ResumeRequest, deps: ResumeDeps): Pro
     baseDate: record.baseDate,
     purpose: record.purpose,
     valueType: record.valueType,
+    // Resume must recompute the same identity, template role included.
+    templateFileId: record.templateFileId,
     supplementalPrompt: record.supplementalPrompt,
     files: record.files.map(materialOfEntry),
   })
@@ -384,6 +386,13 @@ function frozenInputProblem(record: ProjectRecord, frozen: Record<string, unknow
   }
   if (text(frozen.supplementalPrompt) !== record.supplementalPrompt) {
     return `${VALUATION_INPUT_FILE} 的补充要求与项目记录不一致：拒绝恢复。`
+  }
+  // The template role is part of the frozen identity.
+  const templateFileId = frozen.templateFileId === null || frozen.templateFileId === undefined
+    ? '' : text(frozen.templateFileId)
+  if (templateFileId !== (record.templateFileId ?? '')) {
+    return `${VALUATION_INPUT_FILE} 的计算表模板（${templateFileId || '空'}）`
+      + `与项目记录（${record.templateFileId ?? '空'}）不一致：拒绝恢复。`
   }
   const files = Array.isArray(frozen.files) ? frozen.files : []
   if (files.length !== record.files.length) {
@@ -468,6 +477,8 @@ function restoreBindings(record: ProjectRecord, deps: ResumeDeps): { ok: boolean
       baseDate: record.baseDate ?? '',
       purpose: record.purpose ?? '',
       valueType: record.valueType ?? '',
+      assetType: record.assetType,
+      templateFileId: record.templateFileId,
       supplementalPrompt: record.supplementalPrompt,
       digest: record.inputDigest,
       files: record.files.map((file) => ({

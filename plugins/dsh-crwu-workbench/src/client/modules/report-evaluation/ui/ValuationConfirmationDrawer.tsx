@@ -206,6 +206,10 @@ export function ValuationConfirmationDrawer(props: ValuationConfirmationDrawerPr
   const methodLabel = valuationMethodLabel(preview.methodRequest)
   const methodHint = valuationMethodHintOf(preview.methodRequest)
   const assetLabel = assetTypeLabelOf(preview.assetType)
+  /** Host 按 canonical 路径绑定的模板归档件；有 fileId 但找不到行时如实显示 fileId。 */
+  const templateFile = preview.templateFileId === null
+    ? null
+    : (preview.files.find((file) => file.fileId === preview.templateFileId) ?? null)
   const prompt = preview.supplementalPrompt
   const [openFiles, setOpenFiles] = React.useState<Record<string, boolean>>({})
   const [promptExpanded, setPromptExpanded] = React.useState(false)
@@ -274,6 +278,13 @@ export function ValuationConfirmationDrawer(props: ValuationConfirmationDrawerPr
             {preview.baseDate === null || preview.baseDate === ''
               ? zhCN.valuationDrawerNoBaseDate
               : preview.baseDate}
+          </span>
+        </Kv>
+        <Kv term="计算表模板">
+          <span data-valuation-readonly="template">
+            {preview.templateFileId === null
+              ? '未指定'
+              : (templateFile === null ? preview.templateFileId : templateFile.fileName)}
           </span>
         </Kv>
       </dl>

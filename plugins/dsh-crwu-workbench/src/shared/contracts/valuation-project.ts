@@ -27,7 +27,7 @@
 // ---------------------------------------------------------------------------
 
 /** 冻结输入（`估值输入.json`）。 */
-export const VALUATION_INPUT_SCHEMA_VERSION = 'crwu.valuation.input.v3'
+export const VALUATION_INPUT_SCHEMA_VERSION = 'crwu.valuation.input.v4'
 /** 项目索引（`项目估值方案索引.json`）。 */
 export const VALUATION_PROJECT_SCHEMA_VERSION = 'crwu.valuation.project.v2'
 /** 报告数据（`估值报告数据.json`，约束 HTML 的唯一数据源）。 */
@@ -37,11 +37,11 @@ export const VALUATION_REPORT_DATA_SCHEMA_VERSION = 'crwu.valuation.report-data.
 // 取值集合
 // ---------------------------------------------------------------------------
 
-/** 用户提交的方法请求。`auto` 是**输入**，不是任何一种结论。 */
-export type MethodRequest = 'auto' | 'market' | 'income' | 'cost'
+/** 用户提交的方法请求：必须是一个**指定**方法，没有「自动判定」这一档。 */
+export type MethodRequest = 'market' | 'income' | 'cost'
 
-/** 结论侧真的被采用的方法。 */
-export type AdoptedMethod = Exclude<MethodRequest, 'auto'>
+/** 结论侧真的被采用的方法（与用户请求同一集合：请求即指定）。 */
+export type AdoptedMethod = MethodRequest
 
 /** 房地路径：合一 / 分别 / 权益边界未解。 */
 export type ValuationPath = 'combined' | 'separate' | 'unresolved'
@@ -67,6 +67,8 @@ export type PropertyType = 'residential' | 'commercial' | 'office' | 'industrial
  * 它决定装配哪一个资产 Skill（`real-estate` → `crwu-biz-valuation-realestate`），
  * 而不是决定"页面长什么样" —— 所以**初始必须是未选择**，由用户主动选；
  * 界面不允许替用户默认成房地产（那会把一个未确认的资产口径写进冻结输入）。
+ *
+ * 没有 `auto`：资产类型必须是一个**已登记的业务类型**，不许由资料反推后直接冻结。
  *
  * 首期只有房地产：其它资产类型要连同 Skill、知识入口与能力一起加，
  * 不能只在下拉里加一个选项。
@@ -106,7 +108,7 @@ export type ValuationStage =
   | 'calculation'
   | 'delivery'
 
-export const VALUATION_METHODS: readonly MethodRequest[] = ['auto', 'market', 'income', 'cost']
+export const VALUATION_METHODS: readonly MethodRequest[] = ['market', 'income', 'cost']
 /** 首期可选的资产类型。**用户没选之前不在这个集合里做任何默认**。 */
 export const ASSET_TYPES: readonly AssetType[] = ['real-estate']
 export const VALUATION_PATHS: readonly ValuationPath[] = ['combined', 'separate', 'unresolved']
@@ -170,6 +172,8 @@ export interface FrozenInput {
   purpose: string | null
   /** 价值类型（用户在启动页确认）；未指定时 `null`。可选值清单由业务方确认，不在合同里写死。 */
   valueType: string | null
+  /** Archived material id of the calculation template; null when none. Part of `inputDigest`. */
+  templateFileId: string | null
   supplementalPrompt: string
   files: ArchivedMaterial[]
   /** 覆盖有序文件清单、方法、基准日、补充要求与 Schema 版本的规范化摘要。 */

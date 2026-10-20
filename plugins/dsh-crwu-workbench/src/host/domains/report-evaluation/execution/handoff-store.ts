@@ -84,6 +84,11 @@ export interface HandoffFailure {
    * 回执丢失、异常与"可能已经建了"一律 `unknown` —— 界面据此决定能不能「返回修改」。
    */
   creationDisposition: CreationDisposition
+  /**
+   * 失败后的**可执行恢复动作**（可选、封闭取值）。`refresh-preview` 只允许在没有已建父会话时给出；
+   * 已建父会话但指令未受理时给 `retry-handoff`，界面据此复用同一条原生会话而不是新建。
+   */
+  recoveryAction?: 'refresh-preview' | 'retry-handoff'
 }
 
 export type HandoffOutcome = HandoffSuccess | HandoffFailure

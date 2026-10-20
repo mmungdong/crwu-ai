@@ -2,11 +2,13 @@ import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { text } from '../../../shared/utils/value.ts'
 import { isAbsoluteLocalPath, joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { requireCaseAccess } from '../../domains/report-audit/case-access.ts'
+import { isOcrSkillScript, ocrCaseArgumentProblem, stageOcrSkill } from '../../domains/report-audit/ocr-skill.ts'
 import { shellInvoke } from '../../core/platform/shell.ts'
 import { PYTHON_RUNTIME_SOURCE } from '../../core/runtime/python.ts'
 import { TOOL_NAMES, type ToolErrorKind } from '../report-audit/consts.ts'
 import { clampText, classifyRun, failure, reasonOf, renderJson } from './outcome.ts'
 import { callerSession, toolContext, type ToolDeps } from './types.ts'
+import { ensureDirectory, writeCaseText } from './case-files.ts'
 import { caseScopes } from '../report-audit/case-scopes.ts'
 
 /**
@@ -175,6 +177,35 @@ export function pythonScriptTools(deps: ToolDeps) {
         }
       }
 
+      const session = callerSession(exec)
+      const platform = await deps.world.platform()
+      const scriptArgs = (Array.isArray(args.scriptArgs) ? args.scriptArgs : []).map((item) => text(item))
+
+      // ② 技能运行时：`crwu-ocr` 的脚本不在案例里，首次调用时由 Host 暂存。
+      //    只认这三个确定的脚本名；其它路径照旧按"案例内已有脚本"处理。
+      //    `--case` 必须等于 Host 已核定的本轮案例目录，不接受模型换到别的案例。
+      if (isOcrSkillScript(raw)) {
+        const problem = ocrCaseArgumentProblem(scriptArgs, caseCheck.casePath, platform)
+        if (problem !== '') return { ...base, ...failure('input', problem) }
+        const staged = await stageOcrSkill({
+          casePath: caseCheck.casePath,
+          writeText: (path, content) => writeCaseText(ctx, path, content, {
+            ...(session === undefined ? {} : { session }),
+            ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+          }),
+          ensureDir: async (path) => {
+            const made = await ensureDirectory(deps.access, path, {
+              workdir: caseCheck.casePath,
+              platform,
+              ...(session === undefined ? {} : { session }),
+              ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+            })
+            return { ok: made.ok, error: made.error }
+          },
+        })
+        if (!staged.ok) return { ...base, ...failure('capability-gap', staged.error) }
+      }
+
       // ③ 解释器：与审核启动、环境自检**同一个解析器**（同一份缓存）。拿不到就如实报能力缺口，
       //    绝不静默换系统解释器 —— 那会让审核脚本在缺包的运行时上跑出不可信的结果。
       if (deps.python === undefined) {
@@ -190,10 +221,7 @@ export function pythonScriptTools(deps: ToolDeps) {
       }
 
       // ④ 执行：经 Broker 的 `python.script.run`（不提权）走到与其它命令同一条 seam。
-      const scriptArgs = (Array.isArray(args.scriptArgs) ? args.scriptArgs : []).map((item) => text(item))
-      const platform = await deps.world.platform()
       const argv = [scriptPath, ...scriptArgs]
-      const session = callerSession(exec)
       const run = await deps.access.runShell(
         { operation: 'python.script.run', source: 'audit-tool', workdir: caseCheck.casePath },
         shellInvoke(runtime.path, argv, platform),

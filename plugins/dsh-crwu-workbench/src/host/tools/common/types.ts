@@ -17,6 +17,7 @@ import type { ValuationLifecycles } from '../../domains/report-evaluation/lifecy
 import type { TaskLeaseStore } from '../../domains/report-evaluation/execution/leases.ts'
 import type { SnapshotIo } from '../../domains/local-audit/snapshot.ts'
 import type { PythonRuntimeResolver } from '../../core/runtime/python.ts'
+import type { ValuationWorkflowRuntime } from '../../integrations/valuation-workflow/runtime.ts'
 
 /**
  * 所有 CRWU Tool 的共享依赖。
@@ -116,6 +117,14 @@ export interface ToolDeps {
    * 绝不允许因此改去用系统解释器。
    */
   python?: PythonRuntimeResolver
+  /**
+   * **受控估值工作流运行时**（协议 43）。
+   *
+   * 与 `apply.ts` 的 Host 工厂、操作表共用**同一个**实例：`crwu_valuation_workflow_run`
+   * 只转发 Host 铸造的不透明 commandId，运行时自己再核对真实执行上下文与父会话归属。
+   * 缺省 = 本部署没有装配工作流（工具如实回 `capability-gap`），绝不另造一个运行时。
+   */
+  workflowRuntime?: ValuationWorkflowRuntime
 }
 
 /**

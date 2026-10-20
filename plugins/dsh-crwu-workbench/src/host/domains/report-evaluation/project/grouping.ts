@@ -8,6 +8,7 @@ import type {
   ValuationPlan,
 } from '../../../../shared/contracts/valuation-project.ts'
 import { safeIdSegment } from './contracts.ts'
+import { isMethodRequest } from './coverage.ts'
 
 /**
  * 项目 → 方案的**分组校验**（设计稿 §7.1，计划 Task 6）。
@@ -67,6 +68,7 @@ export type GroupingConflictKind =
   | 'unknown-object'
   | 'duplicate-membership'
   | 'empty-plan'
+  | 'missing-method'
   | 'unclassified-object'
   | 'incompatible-field'
 
@@ -165,6 +167,21 @@ export function validateGrouping(
   }
 
   for (const proposal of proposals) {
+    // 方法必须由用户明确选择：提案不带方法（或带已移除的 auto）时**不建方案**，
+    // 让它的对象落回"没有归属"并由冲突如实登记，而不是替用户默认一个方法。
+    if (!isMethodRequest(proposal.methodRequest)) {
+      conflicts.push({
+        kind: 'missing-method',
+        field: 'methodRequest',
+        label: '评估方法',
+        objectIds: (proposal.objectIds ?? []).map((item) => text(item)).filter((id) => id !== ''),
+        values: [],
+        reason: `方案 ${text(proposal.planId) || '(未铸号)'} 没有指定评估方法：`
+          + `收到「${text(proposal.methodRequest) || '空'}」，而方法必须由用户在选择页明确指定。`,
+        resolution: '请在会话内请员工明确选择市场法 / 收益法 / 成本法之一，再重新提交分组。',
+      })
+      continue
+    }
     const seen = new Set<string>()
     for (const raw of proposal.objectIds ?? []) {
       const objectId = text(raw)
@@ -231,6 +248,8 @@ export function validateGrouping(
 
   const plans: ValuationPlan[] = []
   proposals.forEach((proposal, index) => {
+    // 方法缺失的提案已在上面登记冲突，这里不再为它建方案。
+    if (!isMethodRequest(proposal.methodRequest)) return
     const objectIds = [...new Set((proposal.objectIds ?? []).map((item) => text(item))
       .filter((id) => byId.has(id) && !suspendedObjectIds.includes(id)))]
     const planId = text(proposal.planId) || `${prefix}-${String(index + 1).padStart(3, '0')}`
@@ -273,7 +292,7 @@ export function validateGrouping(
       title: text(proposal.title) || `方案 ${String(index + 1)}`,
       propertyType: (text(proposal.propertyType) || text(planObjects[0]?.propertyType) || 'other') as PropertyType,
       objectIds,
-      methodRequest: (text(proposal.methodRequest) || 'auto') as MethodRequest,
+      methodRequest: proposal.methodRequest as MethodRequest,
       methodAssessment: null,
       baseDate: text(proposal.baseDate) === '' ? null : text(proposal.baseDate),
       valuationPath: (text(proposal.valuationPath) || 'combined') as ValuationPath,
@@ -312,6 +331,7 @@ export function blockerFromGroupingConflict(conflict: GroupingConflict): Blocker
   const structural = conflict.kind === 'unknown-object'
     || conflict.kind === 'unassigned-object'
     || conflict.kind === 'unclassified-object'
+    || conflict.kind === 'missing-method'
   return {
     kind: structural ? 'input-invalid' : 'valuation-path-unresolved',
     stage: 'grouping',

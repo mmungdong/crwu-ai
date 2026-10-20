@@ -237,6 +237,26 @@ test('后端：脚本报 ok:false → 抛错（绝不返回半截字段）', asy
   )
 })
 
+test('a missing PDF reader is a structured format capability failure', async () => {
+  const fs = makeFs({ files: { [PDF]: 'PDF' } })
+  const body = payload({
+    ok: false, text: '', extractedFields: {}, capabilityGaps: ['合成：PDF 文本库未配置'],
+    capabilities: { pdfText: false, pdfRender: false, imageOcr: false },
+    capabilityProbe: { pdfTextLibrary: '', rasterizer: '' },
+  })
+  const { deps } = makeDeps({ fs, shell: shellWritingPayload(fs, body) })
+  const extractor = pythonFileExtractor({
+    ctx: deps.ctx, access: deps.access, python: deps.python,
+    world: { platform: () => deps.world.platform() },
+    casePath: CASE_DIR, sourceScriptPath: SCRIPT_SRC, readSource: async () => SCRIPT_BODY,
+  })
+  await assert.rejects(
+    () => extractor.extract({ path: PDF, fileName: '估值报告.pdf', kind: 'pdf' }),
+    (error) => error.kind === 'environment' && error.scope === 'format'
+      && error.format === '.pdf' && error.state === 'missing',
+  )
+})
+
 test('后端：结果文件缺失 / 不是合法 JSON → 抛错（不是"读到了空内容"）', async () => {
   for (const [body, pattern] of [[null, /boom|结果文件/], ['{ 不是 json', /合法 JSON/]]) {
     const fs = makeFs({ files: { [PDF]: 'PDF' } })

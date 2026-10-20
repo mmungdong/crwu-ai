@@ -202,6 +202,7 @@ export function valuationFileExtractTools(deps: ToolDeps) {
           world: { platform: () => deps.world.platform() },
           casePath,
           ...(session === undefined ? {} : { session }),
+          ...(exec.agent === undefined ? {} : { agent: exec.agent }),
           ...(signal === undefined ? {} : { signal }),
         })],
       })

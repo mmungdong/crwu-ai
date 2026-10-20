@@ -65,6 +65,36 @@ export const valuationApi = {
   /** 交接父会话：条件全部由 Host 从预览读，客户端只回确认摘要。 */
   start: (args: { previewId: string; confirmedInputDigest: string; requestId: string }) =>
     rpc('valuation-start', args),
+  // ── 图工作流（协议 43）──────────────────────────────────────────────────
+  // 进入面板只做一次被动读取；任何“开始执行”都由 Host 的图命令决定，客户端没有启动接口。
+  workflowCurrent: (args: { projectId?: string } = {}, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-current', args, options),
+  workflowNode: (args: { nodeId: string; projectId?: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-node', args, options),
+  workflowAction: (args: {
+    action: 'answer' | 'revise' | 'approve-plan' | 'questions-draft' | 'questions-submit'
+    projectId: string
+    payload: Record<string, unknown>
+  }, options: RpcOptions = {}) => rpc('valuation-workflow-action', args, options),
+  workflowPreview: (args: {
+    projectId?: string
+    nodeId: string
+    expectedRevision: number
+    changes: Array<{ field: string; value: string }>
+  }, options: RpcOptions = {}) => rpc('valuation-workflow-preview', args, options),
+  workflowCancel: (args: { projectId: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-cancel', args, options),
+  workflowExport: (args: { projectId: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-export', args, options),
+  workflowLoad: (args: { serialized: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-load', args, options),
+  workflowClear: (args: { projectId?: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-clear', args, options),
+  workflowReconcile: (args: { projectId: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-reconcile', args, options),
+  /** 交付件只提交 kind：路径与打开方式由 Host 决定，Client 不接触本机文件系统。 */
+  workflowOpenArtifact: (args: { kind: string }, options: RpcOptions = {}) =>
+    rpc('valuation-workflow-open-artifact', args, options),
 }
 
 /**
@@ -83,4 +113,14 @@ export const VALUATION_OPERATION_OF = {
   browserOpenVerification: 'valuation-browser-open-verification',
   projectResume: 'valuation-project-resume',
   start: 'valuation-start',
+  workflowCurrent: 'valuation-workflow-current',
+  workflowNode: 'valuation-workflow-node',
+  workflowAction: 'valuation-workflow-action',
+  workflowPreview: 'valuation-workflow-preview',
+  workflowCancel: 'valuation-workflow-cancel',
+  workflowExport: 'valuation-workflow-export',
+  workflowLoad: 'valuation-workflow-load',
+  workflowClear: 'valuation-workflow-clear',
+  workflowReconcile: 'valuation-workflow-reconcile',
+  workflowOpenArtifact: 'valuation-workflow-open-artifact',
 } as const satisfies Record<keyof typeof valuationApi, string>

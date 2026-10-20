@@ -5,6 +5,7 @@ import { text } from '../../../shared/utils/value.ts'
 import { fileSystem } from '../../core/fs/paths.ts'
 import { requireCaseAccess } from '../../domains/report-audit/case-access.ts'
 import { isSafeIdSegment } from '../../domains/report-evaluation/project/contracts.ts'
+import { isMethodRequest } from '../../domains/report-evaluation/project/coverage.ts'
 import {
   PROJECT_RECORD_FILE,
   buildProjectRecord,
@@ -130,6 +131,14 @@ function proposalsOf(raw: unknown): { proposals: PlanProposal[]; problem: string
     if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
     const record = item as Record<string, unknown>
     if (!Array.isArray(record.objectIds)) return { proposals: [], problem: '每个 proposal 都要有 objectIds 数组' }
+    // 方法必须由用户明确选择：缺方法、或带已移除的 auto，都不能建方案。
+    if (!isMethodRequest(record.methodRequest)) {
+      return {
+        proposals: [],
+        problem: `proposal ${text(record.planId) || '(未铸号)'} 的 methodRequest 不合法：`
+          + `只允许 market / income / cost（收到「${text(record.methodRequest) || '空'}」）`,
+      }
+    }
     proposals.push({
       planId: text(record.planId),
       title: text(record.title),
@@ -141,7 +150,7 @@ function proposalsOf(raw: unknown): { proposals: PlanProposal[]; problem: string
       rightsBasis: text(record.rightsBasis),
       marketScope: text(record.marketScope),
       valuationPath: (text(record.valuationPath) || 'combined') as ValuationPath,
-      methodRequest: (text(record.methodRequest) || 'auto') as MethodRequest,
+      methodRequest: record.methodRequest as MethodRequest,
       groupReason: text(record.groupReason),
       groupEvidenceRefs: Array.isArray(record.groupEvidenceRefs)
         ? record.groupEvidenceRefs.map((ref) => text(ref)).filter((ref) => ref !== '')

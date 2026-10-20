@@ -56,7 +56,7 @@ function draftState(patch = {}) {
     phase: 'draft',
     assetType: 'real-estate',
     // 本轮起**方法没有默认值**：关心其它行为的用例显式选一项（空态另有专门用例）。
-    method: 'auto',
+    method: 'market',
     selection: ['/Users/someone/资料'],
     files: [{
       path: '/Users/someone/资料', name: '资料', dirHint: '', kind: 'directory',
@@ -715,7 +715,7 @@ test('底栏底色要铺到工作纸上：估值页的工作纸不许自己留�
 })
 
 test('UX-13 底栏左侧只有一行：可用时是行动摘要，禁用时是原因（不重复同一句话）', () => {
-  const s = draftState({ selection: [], files: [], fileRows: [], fileCount: 0, readableCount: 0, scanState: 'idle' })
+  const s = draftState({ assetType: '', method: '', selection: [], files: [], fileRows: [], fileCount: 0, readableCount: 0, scanState: 'idle' })
   const tree = render(ValuationIntakePane, {
     state: s, onPickFiles: () => {}, onPickFolder: () => {}, onRemoveSelection: () => {},
     onExcludeFile: () => {}, onReincludeFile: () => {}, onUndoRemoval: () => {}, onRescan: () => {},
@@ -725,7 +725,7 @@ test('UX-13 底栏左侧只有一行：可用时是行动摘要，禁用时是�
   const bar = find(tree, (node) => String(node.props?.className ?? '') === VALUATION_CLASSES.actionbar)
   const lines = findAll(bar, (node) => String(node.props?.className ?? '') === 'crwu-valuation-action-line')
   assert.equal(lines.length, 1, '底栏左侧只有一行文字')
-  assert.match(textOf(lines[0]), /还没有选择资料|先添加至少一份/)
+  assert.match(textOf(lines[0]), /请选择资产类型/)
   assert.equal(findAll(bar, (node) => String(node.props?.className ?? '').includes('crwu-valuation-hint')).length, 0,
     '禁用原因不再另起一行重复同一件事')
   const primary = findAll(bar, (node) => node.type === 'button'
@@ -789,7 +789,7 @@ test('UX-12 必要说明与输入边界用可读的语义 token（不再拿 tert
 
 test('UX-15 抽屉用只读键值摘要，不再画一排 disabled radio；方法说明与本次选择相符', () => {
   const preview = previewViewOf({
-    ok: true, previewId: 'p1', projectId: 'p1', inputDigest: 'd', methodRequest: 'auto',
+    ok: true, previewId: 'p1', projectId: 'p1', inputDigest: 'd', methodRequest: 'market',
     assetType: 'real-estate', baseDate: null, supplementalPrompt: '第一行\n第二行',
     files: [], fileCount: 0,
   })
@@ -802,7 +802,7 @@ test('UX-15 抽屉用只读键值摘要，不再画一排 disabled radio；方�
     '抽屉里不许再出现 disabled radio')
   const method = find(tree, (node) => node.props?.['data-valuation-readonly'] === 'method')
   assert.ok(method, '方法要用只读摘要')
-  assert.equal(textOf(method), zhCN.valuationMethodAuto)
+  assert.equal(textOf(method), zhCN.valuationMethodMarket)
   // 资产类型从 Host 回包取（调用方不再传草稿方法 / 资产类型）。
   const asset = find(tree, (node) => node.props?.['data-valuation-readonly'] === 'assetType')
   assert.equal(textOf(asset), zhCN.valuationAssetTypeRealEstate)
@@ -810,7 +810,7 @@ test('UX-15 抽屉用只读键值摘要，不再画一排 disabled radio；方�
   const hint = findAll(tree, (node) => node.props?.['data-valuation-drawer-method-hint'] !== undefined)[0]
   assert.ok(hint, '方法要有一句与本次选择相符的说明')
   assert.equal(textOf(hint), zhCN.valuationMethodHintOnce
-    .replace('{label}', zhCN.valuationMethodAuto).replace('{hint}', zhCN.valuationMethodAutoHint))
+    .replace('{label}', zhCN.valuationMethodMarket).replace('{hint}', zhCN.valuationMethodMarketHint))
   assert.equal(textOf(hint).includes('尚未提供'), false, '旧的能力限制文案不许回来')
   const prompt = find(tree, (node) => node.props?.['data-valuation-readonly'] === 'prompt')
   assert.equal(textOf(prompt), '第一行\n第二行', '用户原文的换行必须保留')
@@ -944,10 +944,11 @@ test('SideDrawer：报告审核那张抽屉的渲染路径没有任何新参数'
 
 // ══ 交付形状：操作清单与协议号同步 ═════════════════════════════════════════
 
-test('协议 42 与冻结清单同步：受控的验证窗口操作仍在，操作清单未增删', async () => {
+test('协议 49 与冻结清单同步：验证窗口、Graph 与清理操作均有登记', async () => {
   const { WORKBENCH_PROTOCOL } = await import(new URL('src/shared/consts.ts', ROOT).href)
-  assert.equal(WORKBENCH_PROTOCOL, 42)
+  assert.equal(WORKBENCH_PROTOCOL, 49)
   const { FROZEN_OPERATIONS } = await import(new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
+  assert.equal(FROZEN_OPERATIONS.includes('workspace-cleanup-plan'), true)
   assert.equal(FROZEN_OPERATIONS.includes('valuation-browser-open-verification'), true)
   const api = readFileSync(new URL('src/client/modules/report-evaluation/api.ts', ROOT), 'utf8')
   assert.match(api, /valuation-browser-open-verification/)

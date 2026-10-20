@@ -78,6 +78,8 @@ export interface PythonExtractorDeps {
   /** 本轮估值的案例目录（已由门禁核对过归属）。 */
   casePath: string
   session?: Session
+  /** Genuine caller agent so `python.check` runs in the real policy scope. */
+  agent?: unknown
   /** 包内脚本路径；缺省由 `packagedExtractScriptPath()` 解析。测试注入替身。 */
   sourceScriptPath?: string
   /**
@@ -89,6 +91,42 @@ export interface PythonExtractorDeps {
    */
   readSource?: (path: string) => Promise<string>
   signal?: AbortSignal
+}
+
+/**
+ * Which layer a single-file extraction failure belongs to.
+ *
+ * `environment` means the shared parser/runtime/staging is broken: a caller running a
+ * batch must stop instead of retrying every file. `material` means this one payload
+ * cannot be read (format/capability gap): the batch may keep going.
+ */
+export type ExtractionFailureKind = 'environment' | 'material'
+
+export type ExtractionFailureScope = 'global' | 'format'
+export type ExtractionFailureState = 'missing' | 'execution-failed' | 'probe-failed'
+
+/** Safe structured facts for a batch caller; never derived from free error text. */
+export interface ExtractionFailureDetails {
+  scope?: ExtractionFailureScope
+  /** Lowercase extension such as `.pdf`; only meaningful with `scope: 'format'`. */
+  format?: string
+  state?: ExtractionFailureState
+}
+
+export class ExtractionFailure extends Error {
+  readonly kind: ExtractionFailureKind
+  readonly scope?: ExtractionFailureScope
+  readonly format?: string
+  readonly state?: ExtractionFailureState
+
+  constructor(kind: ExtractionFailureKind, message: string, details: ExtractionFailureDetails = {}) {
+    super(message)
+    this.name = 'ExtractionFailure'
+    this.kind = kind
+    this.scope = details.scope
+    this.format = details.format
+    this.state = details.state
+  }
 }
 
 /** 脚本输出的 JSON 形状（只声明我们读取的字段；多出来的字段不理会）。 */
@@ -234,25 +272,25 @@ export function pythonFileExtractor(deps: PythonExtractorDeps): FileExtractor {
     async extract(input: { path: string; fileName: string; kind: ValuationFileKind }): Promise<ExtractedFile> {
       const empty = emptyExtractedFile(input.fileName, input.kind)
       if (deps.python === undefined) {
-        throw new Error('DSH 自带 Python 解析器没有装配：无法执行技能提取脚本')
+        throw new ExtractionFailure('environment', 'DSH 自带 Python 解析器没有装配：无法执行技能提取脚本')
       }
-      const runtime = await deps.python.check({})
+      const runtime = await deps.python.check(deps.agent === undefined ? {} : { agent: deps.agent })
       if (!runtime.ok) {
-        throw new Error(`DSH 自带 Python 不可用（${runtime.state}）：${runtime.error}`)
+        throw new ExtractionFailure('environment', `DSH 自带 Python 不可用（${runtime.state}）：${runtime.error}`)
       }
 
       // ① 脚本落盘（先读包内正文，再写进案例目录）。
       const source = deps.sourceScriptPath ?? packagedExtractScriptPath()
-      if (source === '') throw new Error('包内找不到技能脚本 extract_files.py：插件包可能不完整')
+      if (source === '') throw new ExtractionFailure('environment', '包内找不到技能脚本 extract_files.py：插件包可能不完整')
       const read = deps.readSource ?? (async (path: string) => await readFile(path, 'utf8').catch(() => ''))
       const body = await read(source)
-      if (body === '') throw new Error('技能脚本 extract_files.py 读不出内容：插件包可能不完整')
+      if (body === '') throw new ExtractionFailure('environment', '技能脚本 extract_files.py 读不出内容：插件包可能不完整')
       const scriptPath = joinLocalPath(deps.casePath, EXTRACT_SCRIPT_DIR, EXTRACT_SCRIPT_NAME)
       const staged = await writeCaseText(deps.ctx, scriptPath, body, {
         ...(deps.session === undefined ? {} : { session: deps.session }),
         ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       })
-      if (!staged.ok) throw new Error(`技能脚本落盘失败：${staged.error}`)
+      if (!staged.ok) throw new ExtractionFailure('environment', `技能脚本落盘失败：${staged.error}`)
 
       // ② 逐个文件调用。输出写成案例目录里的一个 JSON，再读回来 —— 不走 stdout：
       //    表格可能很大，而命令输出有上限，被截断的 JSON 会变成"解析失败"这种误导性结论。
@@ -273,14 +311,17 @@ export function pythonFileExtractor(deps: PythonExtractorDeps): FileExtractor {
       const raw = await readTextIfExists(deps.ctx, outPath)
       if (raw === '') {
         const detail = errorKind === '' ? '脚本没有写出结果文件' : reasonOf(run)
-        throw new Error(clampText(detail, 400))
+        throw new ExtractionFailure('environment', clampText(detail, 400))
       }
 
       let payload: ScriptPayload
       try {
         payload = JSON.parse(raw) as ScriptPayload
       } catch (error) {
-        throw new Error(`提取结果不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
+        throw new ExtractionFailure(
+          'environment',
+          `提取结果不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
+        )
       }
 
       const gaps = stringsOf(payload.capabilityGaps)
@@ -288,7 +329,22 @@ export function pythonFileExtractor(deps: PythonExtractorDeps): FileExtractor {
       // `ok: false` 一律按"这一份没解析"处理 —— 包括"缺 PDF 库""无文本层""旧版 .doc"。
       // 关键点：**不返回半截 extractedFields**（读不出来就不该有字段）。
       if (payload.ok !== true) {
-        throw new Error([fileError, ...gaps].filter((item) => item !== '').join('；') || '提取脚本报告读取失败')
+        const message = [fileError, ...gaps].filter((item) => item !== '').join('；') || '提取脚本报告读取失败'
+        // A structured probe that says "no PDF text library" is an absent format
+        // capability, not a corrupted file: the batch may skip the whole format.
+        const capabilities = capabilitiesOf(payload.capabilities)
+        const probe = evidenceOf(payload.capabilityProbe)
+        const missingPdfTextLibrary = (kindOf(input.fileName) === 'pdf' || input.kind === 'pdf')
+          && capabilities?.pdfText === false
+          && probe?.pdfTextLibrary === ''
+        if (missingPdfTextLibrary) {
+          throw new ExtractionFailure('environment', message, {
+            scope: 'format',
+            format: '.pdf',
+            state: 'missing',
+          })
+        }
+        throw new ExtractionFailure(payload.ok === false ? 'material' : 'environment', message)
       }
 
       const kind: ValuationFileKind = (text(payload.fileType) || input.kind) as ValuationFileKind

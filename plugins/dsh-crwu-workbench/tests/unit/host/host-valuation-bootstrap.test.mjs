@@ -193,10 +193,10 @@ test('估值 id 是可读的单段目录名；`..` / 分隔符 / 绝对路径一
   }
 })
 
-test('方法名是人话；四条方法一个不少', () => {
+test('方法名覆盖三种明确指定的方法', () => {
   assert.deepEqual(
-    ['auto', 'market', 'income', 'cost'].map(valuationMethodLabel),
-    ['自动判定', '市场法', '收益法', '成本法'],
+    ['market', 'income', 'cost'].map(valuationMethodLabel),
+    ['市场法', '收益法', '成本法'],
   )
 })
 

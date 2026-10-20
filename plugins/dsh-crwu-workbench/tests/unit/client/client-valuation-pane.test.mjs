@@ -60,7 +60,7 @@ function draftState(patch = {}) {
     assetType: 'real-estate',
     // 本轮起**方法没有默认值**（空态 = 还没选）：关心其它行为的用例统一显式选一项，
     // 空态与校验由「必填两项」那组专门用例覆盖。
-    method: 'auto',
+    method: 'market',
     selection: ['/Users/someone/资料/估值报告.pdf'],
     files: [{
       path: '/Users/someone/资料/估值报告.pdf', name: '估值报告.pdf', dirHint: '',
@@ -114,16 +114,18 @@ test('阶段与显示判据：只有输入工作面 / 确认抽屉两段，没�
   assert.equal(state.initialValuationState().login.check, 'idle')
 })
 
-test('资产类型：初始为空、未选不能确认、只认已登记取值', () => {
+test('资产类型：默认未选择、显式清空需补选、未知值与 auto 被拒', () => {
   const base = state.initialValuationState({ phase: 'draft' })
-  assert.equal(base.assetType, '', '通用入口的资产类型初始必须是空（不替用户默认房地产）')
+  assert.equal(base.assetType, '', '通用入口不给默认值，必须由用户选')
+  assert.equal(state.setAssetType(base, 'auto').ok, false, 'auto 已不是资产类型')
   const scanned = state.scanReady(
-    { ...base, selection: ['/a'] },
+    { ...base, selection: ['/a'], assetType: 'real-estate', method: 'market' },
     [{ path: '/a', name: 'a', dirHint: '', kind: 'directory', sizeBytes: 0, status: 'scanned', reason: '', fileCount: 1 }],
     [{ path: '/a/a.pdf', name: 'a.pdf', kind: 'pdf', sizeBytes: 1, parentPath: '/a', state: 'included' }],
     { fileCount: 1, readableCount: 1, overLimit: false, limit: 30, truncated: false },
   ).state
-  assert.match(state.startDisabledReason(scanned), /资产类型/)
+  assert.match(state.startDisabledReason({ ...scanned, assetType: '' }), /资产类型/)
+  assert.equal(state.startDisabledReason(scanned), '')
   const picked = state.setAssetType(base, 'real-estate')
   assert.equal(picked.ok, true)
   assert.equal(picked.state.assetType, 'real-estate')
@@ -134,14 +136,15 @@ test('资产类型：初始为空、未选不能确认、只认已登记取值',
   assert.equal(state.setAssetType(picked.state, '').state.assetType, '')
 })
 
-test('方法：四项全部可选（适用性由本轮业务规范判断，界面不预先禁用）', () => {
+test('方法：三项指定方法全部可选，auto 不在选项里（适用性由本轮业务规范判断）', () => {
   const base = state.initialValuationState({ phase: 'draft' })
-  for (const method of ['auto', 'market', 'income', 'cost']) {
+  for (const method of ['market', 'income', 'cost']) {
     assert.equal(state.setMethod(base, method).ok, true, method)
   }
+  assert.equal(state.setMethod(base, 'auto').ok, false, 'auto 已被移除')
   const options = state.valuationMethodOptions()
-  assert.deepEqual(options.map((option) => option.value), ['auto', 'market', 'income', 'cost'])
-  assert.deepEqual(options.map((option) => option.disabled), [false, false, false, false])
+  assert.deepEqual(options.map((option) => option.value), ['market', 'income', 'cost'])
+  assert.deepEqual(options.map((option) => option.disabled), [false, false, false])
 })
 
 test('基准日：空串合法，非 YYYY-MM-DD 一律拒绝（不做"尽量解析"）', () => {
@@ -166,10 +169,10 @@ test('补充要求：上限 4000 与 Host 同步（超限直接拒绝并注明�
 
 // ── 启动条件：份数 / 可读 / 上限 ────────────────────────────────────────────
 
-test('启动条件逐条给出可见原因：0 份 / 扫描中 / >30 整批阻止 / 全不可读', () => {
+test('启动条件逐条给出可见原因：缺少必选 / 扫描中 / >30 整批阻止 / 全不可读', () => {
   const empty = state.initialValuationState({ phase: 'draft' })
   assert.equal(state.canStart(empty), false)
-  assert.match(state.startDisabledReason(empty), /先添加至少一份/)
+  assert.match(state.startDisabledReason(empty), /请选择资产类型/)
 
   const scanning = state.initialValuationState({ phase: 'draft', selection: ['/a'], scanState: 'scanning' })
   assert.match(state.startDisabledReason(scanning), /正在读取资料清单/)
@@ -190,10 +193,10 @@ test('启动条件逐条给出可见原因：0 份 / 扫描中 / >30 整批阻�
   assert.equal(state.startDisabledReason(draftState()), '')
 })
 
-test('「确认」在没有任何资料时被拒，并把原因写进 error（不静默）', () => {
+test('「确认」在缺少必选项时被拒，并把原因写进 error（不静默）', () => {
   const controller = createReportEvaluationController(fakePort(), { initial: { phase: 'draft' } })
   controller.preparePreview()
-  assert.match(controller.getState().error, /先添加至少一份/)
+  assert.match(controller.getState().error, /请选择资产类型/)
   assert.equal(controller.getState().phase, 'draft', '状态不动，只把原因写进 error')
 })
 
@@ -392,14 +395,14 @@ test('输入页：前 8 条 + 「查看全部 N 份」；主操作逐字「确�
 })
 
 test('输入页：禁用时原因可见并与按钮关联；准备中也用同一颗按钮说「正在准备…」', () => {
-  const empty = intakeTree({ selection: [], files: [], fileCount: 0, readableCount: 0, scanState: 'idle' })
+  const empty = intakeTree({ assetType: '', method: '', selection: [], files: [], fileCount: 0, readableCount: 0, scanState: 'idle' })
   const primary = findAll(empty.tree, (node) => node.type === 'button'
     && String(node.props?.className ?? '').includes(VALUATION_CLASSES.btnPrimary))[0]
   assert.equal(primary.props.disabled, true)
   assert.equal(primary.props['aria-describedby'], VALUATION_CLASSES.actionReason)
   const reason = find(empty.tree, (node) => node.props?.id === VALUATION_CLASSES.actionReason)
   assert.ok(reason, '禁用原因必须可见')
-  assert.match(textOf(reason), /先添加至少一份/)
+  assert.match(textOf(reason), /请选择资产类型/)
 
   const preparing = intakeTree({ phase: 'preparing-confirmation' })
   const pending = findAll(preparing.tree, (node) => node.type === 'button'
@@ -408,15 +411,15 @@ test('输入页：禁用时原因可见并与按钮关联；准备中也用同�
   assert.equal(pending.props.disabled, true)
 })
 
-test('输入页：两个必填项紧跟资料区，用同一种单选下拉（四项可选 + 轻量推荐 + 必填标记）', () => {
+test('输入页：两个必填项先于可选资料，用同一种单选下拉（四项可选 + 轻量推荐 + 必填标记）', () => {
   // 这条用例专门看**未选**的初始态，所以显式清掉夹具里的填充。
   const { tree } = intakeTree({ assetType: '', method: '' })
 
-  // ① 分区顺序就是任务顺序：资料 → 两个必填项 → 补充条件 → 信息获取辅助。
+  // Required choices precede optional materials and assistance.
   const order = findAll(tree, (node) => node.props?.['data-valuation-block'] !== undefined)
     .map((node) => node.props['data-valuation-block'])
-  assert.deepEqual(order, ['files', 'required', 'conditions', 'capability'],
-    '必填两项必须紧接资料区、排在所有可选条件与辅助能力之前')
+  assert.deepEqual(order, ['required', 'files', 'conditions', 'capability'],
+    '必填两项必须排在可选资料、条件与辅助能力之前')
 
   // ② 两个必填项是**同一种**单选下拉（select-only combobox），不是原生 select、不是一排 radio。
   assert.equal(findAll(tree, (node) => node.type === 'select').length, 0, '不再用原生 select')
@@ -445,7 +448,7 @@ test('输入页：两个必填项紧跟资料区，用同一种单选下拉（�
       assert.ok(find(tree, (node) => node.props?.id === id), `aria-labelledby 指向的 #${id} 必须存在`)
     }
   }
-  // 方法选项来自状态机的同一份清单（四项全可选 + 自动判定带轻量「推荐」）。
+  // 方法选项来自状态机的同一份清单（三项指定方法，不再有自动判定）。
   const methodOptions = state.valuationMethodOptions()
   const opened = render(Select, {
     name: 'method', labelId: 'crwu-valuation-method-label', value: '', placeholder: '请选择评估方法',
@@ -465,8 +468,8 @@ test('输入页：两个必填项紧跟资料区，用同一种单选下拉（�
   })
   const options = findAll(openedList, (node) => node.props?.role === 'option')
   assert.deepEqual(options.map((node) => node.props['data-valuation-option']),
-    ['auto', 'market', 'income', 'cost'])
-  for (const option of options) assert.notEqual(option.props['aria-disabled'], true, '四项都不禁用')
+    ['market', 'income', 'cost'])
+  for (const option of options) assert.notEqual(option.props['aria-disabled'], true, '三项都不禁用')
 
   // ③ 辅助区在页面上（不是整页门禁屏），摘要行与检查时刻都在。
   assert.ok(find(tree, (node) => node.props?.['data-valuation-capability'] !== undefined), '页面下方要有辅助区')
@@ -494,15 +497,15 @@ test('输入页：初次进入不显示字段红字；失焦或清空已填值�
   assert.equal(textOf(errors[0]), zhCN.valuationActionDisabledNoAssetType)
 
   // 清空一个**已经填过**的必填项：同样给出短错误（清空是用户动作，不是初次进入）。
-  const filled = intakeTree({ assetType: 'real-estate', method: 'auto' }, {})
-  const filledProps = { ...filled.props, state: draftState({ assetType: '', method: 'auto' }) }
+  const filled = intakeTree({ assetType: 'real-estate', method: 'market' }, {})
+  const filledProps = { ...filled.props, state: draftState({ assetType: '', method: 'market' }) }
   const cleared = rerender(ValuationIntakePane, filledProps)
   const clearedErrors = findAll(cleared, (node) => node.props?.['data-valuation-field-error'] !== undefined)
   assert.deepEqual(clearedErrors.map((node) => node.props['data-valuation-field-error']), ['asset-type'])
 })
 
 test('输入页：底栏显示的必填原因与字段顺序一致（先资产类型，再评估方法）', () => {
-  const base = draftState({ assetType: 'real-estate', method: 'auto' })
+  const base = draftState({ assetType: 'real-estate', method: 'market' })
   assert.equal(state.startDisabledReason(base), '')
   assert.equal(state.startDisabledReason({ ...base, method: '' }), zhCN.valuationActionDisabledNoMethod)
   assert.equal(state.startDisabledReason({ ...base, assetType: '' }), zhCN.valuationActionDisabledNoAssetType)

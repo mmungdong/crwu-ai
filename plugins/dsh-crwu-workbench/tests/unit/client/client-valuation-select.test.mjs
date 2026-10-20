@@ -32,7 +32,7 @@ const { render, rerender, find, findAll, textOf } = await import(
   new URL('tests/helpers/render.mjs', ROOT).href)
 
 const OPTIONS = [
-  { value: 'auto', label: zhCN.valuationMethodAuto, hint: zhCN.valuationMethodAutoHint, badge: zhCN.valuationMethodRecommended },
+  { value: 'synthetic-extra', label: '合成附加项', hint: 'Synthetic option hint', badge: 'Synthetic badge' },
   { value: 'market', label: zhCN.valuationMethodMarket, hint: zhCN.valuationMethodMarketHint },
   { value: 'income', label: zhCN.valuationMethodIncome, hint: zhCN.valuationMethodIncomeHint },
   { value: 'cost', label: zhCN.valuationMethodCost, hint: zhCN.valuationMethodCostHint },
@@ -186,7 +186,7 @@ test('字符快速定位：按标签前缀找，找不到返回 -1', () => {
   const labels = OPTIONS.map((option) => option.label)
   assert.equal(typeaheadIndexOf(labels, '市'), 1)
   assert.equal(typeaheadIndexOf(labels, '收'), 2)
-  assert.equal(typeaheadIndexOf(labels, '自'), 0)
+  assert.equal(typeaheadIndexOf(labels, '合'), 0)
   assert.equal(typeaheadIndexOf(labels, '无此方法'), -1)
   assert.equal(typeaheadIndexOf(labels, ''), -1)
 })
@@ -237,16 +237,16 @@ test('展开后：listbox + option 语义、当前选中用 aria-selected、活�
   assert.equal(trigger.props['aria-controls'], list.props.id)
   const options = optionsOf(tree)
   assert.deepEqual(options.map((node) => node.props['data-crwu-option']),
-    ['auto', 'market', 'income', 'cost'])
+    ['synthetic-extra', 'market', 'income', 'cost'])
   assert.deepEqual(options.map((node) => node.props['aria-selected']),
     [false, false, true, false], '只有当前值 aria-selected')
   // 活动项默认就是当前选中那一项；活动项不与选中混淆（选中靠勾 + aria-selected）。
   assert.equal(trigger.props['aria-activedescendant'], options[2].props.id)
   // 选项说明是辅助文本，不是选项名的一部分。
   assert.equal(optionsOf(tree)[0].props['aria-label'], undefined)
-  assert.equal(textOf(options[0]).includes(zhCN.valuationMethodAutoHint), true)
-  // 「推荐」只是一枚轻标记，且**不是**默认选中。
-  assert.equal(textOf(options[0]).includes(zhCN.valuationMethodRecommended), true)
+  assert.equal(textOf(options[0]).includes(OPTIONS[0].hint), true)
+  // Badges annotate an option without selecting it by default.
+  assert.equal(textOf(options[0]).includes(OPTIONS[0].badge), true)
   assert.equal(options[0].props['aria-selected'], false)
 })
 

@@ -15,10 +15,10 @@
  *    （`verified-mirror`）。技能自带的 `references/` 只留技术合同。
  */
 
-/** 方法口径（`auto` = 由会话判定）。 */
-export type ValuationMethodKey = 'auto' | 'market' | 'income' | 'cost'
+/** 方法口径（必须是一个指定方法，没有「自动判定」这一档）。 */
+export type ValuationMethodKey = 'market' | 'income' | 'cost'
 
-export const VALUATION_METHODS: readonly ValuationMethodKey[] = ['auto', 'market', 'income', 'cost']
+export const VALUATION_METHODS: readonly ValuationMethodKey[] = ['market', 'income', 'cost']
 
 /** 路由命中判断的结论。写进报告时与 `schemas/valuation-report-data.schema.json` 的 outcome 同集合。 */
 export type RouteState = 'found' | 'missing' | 'empty' | 'ambiguous' | 'unreadable'

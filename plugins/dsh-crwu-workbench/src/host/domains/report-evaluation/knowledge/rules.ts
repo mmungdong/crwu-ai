@@ -92,8 +92,8 @@ export type RuleParameterSet = {
 
 const RULE_SET_VERSION = 'crwu.valuation.rule-parameters.v1'
 
-/** 缺结构化参数时的固定说明（脚本据此形成知识缺口报告，而不是补默认值）。 */
-export const NON_NEGOTIABLE_MISSING = '正文里没有受 Schema 限制的结构化规则段：运行数值规则前必须先由业务维护者补齐'
+/** 缺结构化参数时的固定说明（程序侧适配缺口，不是知识缺失，也不补默认值）。 */
+export const NON_NEGOTIABLE_MISSING = '正文是普通业务文字，尚未适配成受控规则参数：这是程序侧适配缺口，不代表知识缺失'
 
 const VALUE_KINDS: readonly string[] = ['threshold', 'rate', 'ratio', 'range', 'count', 'date-window', 'rounding', 'enum']
 const COMPARISONS: readonly string[] = ['gte', 'gt', 'lte', 'lt', 'eq', 'between', 'in', 'not-in', 'none']
@@ -322,7 +322,7 @@ function gap(error: string, input: RuleSnapshotInput): RuleParameterSet {
     effectiveFrom: null,
     effectiveTo: null,
     parameters: [],
-    gaps: [`未找到受 Schema 限制的结构化规则段（${RULE_SET_VERSION}）：${error}`],
+    gaps: [`暂无可用的受控规则参数（${RULE_SET_VERSION}）：程序侧适配缺口：${error}`],
   }
 }
 

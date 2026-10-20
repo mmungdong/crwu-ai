@@ -20,6 +20,7 @@ import { valuationMarketSearchTools } from './report-evaluation/market-search.ts
 import { valuationBrowserRecoverTools } from './report-evaluation/browser-recover.ts'
 import { valuationFinalizeTools } from './report-evaluation/finalize.ts'
 import { valuationProjectPrepareTools } from './report-evaluation/project.ts'
+import { valuationWorkflowTools } from './report-evaluation/workflow.ts'
 import { valuationArtifactValidateTools } from './report-evaluation/artifact-validate.ts'
 import { valuationRevisionTools } from './report-evaluation/revision.ts'
 import { valuationRecalculateTools } from './report-evaluation/recalculate.ts'
@@ -72,6 +73,8 @@ export function registerCrwuTools(ctx: Context, deps: ToolDeps): () => void {
     ...valuationListingReferenceTools(deps),
     ...valuationProjectPrepareTools(deps),
     ...valuationArtifactValidateTools(deps),
+    // 受控图控制工具：父会话凭 Host 铸造的 commandId 进入本轮工作流（协议 43）。
+    ...valuationWorkflowTools(deps),
   ]
 
   const disposers = definitions.map((definition) => registry.register(definition))

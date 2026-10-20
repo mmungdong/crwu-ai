@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const ROOT = new URL('../../../', import.meta.url)
+const { VALUATION_INPUT_SCHEMA_VERSION } = await import(new URL('src/shared/contracts/valuation-project.ts', ROOT).href)
 
 const { preparePreview, PreviewRegistry, VALUATION_PREVIEW_TTL_MS } = await import(
   new URL('src/host/domains/report-evaluation/intake/preview.ts', ROOT).href)
@@ -29,6 +30,8 @@ const { handoffProject } = await import(
   new URL('src/host/operations/report-evaluation/handoff.ts', ROOT).href)
 const { scanSelection, nodeLocalAuditFs } = await import(
   new URL('src/host/domains/local-audit/scan.ts', ROOT).href)
+const { MAX_MATERIAL_FILES } = await import(
+  new URL('src/host/domains/report-evaluation/project/contracts.ts', ROOT).href)
 const { canonicalJson, digestOf } = await import(
   new URL('src/host/tools/common/snapshot.ts', ROOT).href)
 
@@ -84,6 +87,7 @@ function makeHarness() {
   const previewDeps = {
     previews,
     scan: (selection) => scanSelection(selection, nodeLocalAuditFs()),
+    canonicalPath: (path) => nodeLocalAuditFs().canonical(path),
     readSourceBytes: async (path) => new Uint8Array(readFileSync(path)),
     statSource: async (path) => {
       const info = statSync(path)
@@ -184,6 +188,78 @@ function handoffRequest(preview, patch = {}) {
   }
 }
 
+test('removed automatic choices cannot prepare a frozen handoff', async () => {
+  const h = makeHarness()
+  const directory = sourceDir([['产权证.pdf', 'synthetic-property-material']])
+  let frozen
+  h.handoffDeps.onHandoff = (_receipt, input) => { frozen = input }
+  for (const choices of [{ assetType: 'auto', method: 'market' }, { assetType: 'real-estate', method: 'auto' }]) {
+    const preview = await preparePreview(previewRequest({ paths: [directory], ...choices }), h.previewDeps)
+    assert.equal(preview.ok, false)
+  }
+  assert.equal(frozen, undefined)
+})
+
+test('an uploaded calculation template is archived once and its role changes the confirmed input digest', async () => {
+  const h = makeHarness()
+  const directory = sourceDir([['产权证.pdf', 'synthetic-property-material'], ['自定义计算表.xlsx', 'synthetic-template-bytes']])
+  const templatePath = join(directory, '自定义计算表.xlsx')
+  const preview = await preparePreview(previewRequest({ paths: [directory], templatePath }), h.previewDeps)
+  assert.equal(preview.ok, true, preview.error)
+  assert.equal(preview.files.length, 2, 'the same selected file must not be archived twice')
+  assert.ok(preview.templateFileId)
+  const template = preview.files.find((file) => file.fileId === preview.templateFileId)
+  assert.equal(template.fileName, '自定义计算表.xlsx')
+  let frozen
+  h.handoffDeps.onHandoff = (_receipt, input) => { frozen = input }
+  assert.equal((await handoffProject(handoffRequest(preview), h.handoffDeps)).ok, true)
+  assert.equal(frozen.templateFileId, template.fileId)
+  assert.doesNotMatch(JSON.stringify(frozen), new RegExp(directory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  const asMaterial = await preparePreview(previewRequest({ requestId: 'req-2', paths: [directory] }), h.previewDeps)
+  assert.notEqual(preview.inputDigest, asMaterial.inputDigest, 'the approved template role belongs to the immutable input identity')
+})
+
+test('the uploaded template role matches the realpath deduplicated candidate', async () => {
+  const h = makeHarness()
+  const directory = sourceDir([['产权证.pdf', 'synthetic-property-material'], ['计算表.xlsx', 'synthetic-template-bytes']])
+  const preview = await preparePreview(previewRequest({ paths: [directory], templatePath: `${directory}/./计算表.xlsx` }), h.previewDeps)
+  assert.equal(preview.ok, true, preview.error)
+  assert.equal(preview.files.length, 2)
+  assert.equal(preview.files.find((file) => file.fileId === preview.templateFileId)?.fileName, '计算表.xlsx')
+})
+
+test('a failed template canonicalization stops before archival without echoing its raw cause', async () => {
+  const h = makeHarness()
+  const directory = sourceDir([['计算表.xlsx', 'synthetic-template-bytes']])
+  h.previewDeps.canonicalPath = async () => { throw new Error('Authorization: Bearer synthetic-secret') }
+  const preview = await preparePreview(previewRequest({ paths: [directory], templatePath: join(directory, '计算表.xlsx') }), h.previewDeps)
+  assert.equal(preview.ok, false)
+  assert.equal(h.dirs.size, 0)
+  assert.doesNotMatch(preview.error, /synthetic-secret|Authorization|Bearer/)
+})
+
+test('graph handoff dispatches the Host-minted command and stops before dispatch on registration failure', async () => {
+  const h = makeHarness()
+  const directory = sourceDir([['产权证.pdf', 'synthetic-property-material']])
+  const preview = await preparePreview(previewRequest({ paths: [directory] }), h.previewDeps)
+  h.handoffDeps.prepareHandoff = async ({ receipt, frozen }) => {
+    assert.equal(receipt.projectId, preview.projectId)
+    assert.equal(frozen.inputDigest, preview.inputDigest)
+    assert.ok(h.written.size > 0)
+    return { ok: true, prompt: '调用 crwu_valuation_workflow_run，commandId=opaque-command-only' }
+  }
+  const result = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  assert.equal(result.ok, true, result.error)
+  assert.equal(h.dispatchedPrompts[0].prompt, '调用 crwu_valuation_workflow_run，commandId=opaque-command-only')
+  const other = makeHarness()
+  const next = await preparePreview(previewRequest({ paths: [directory] }), other.previewDeps)
+  other.handoffDeps.prepareHandoff = async () => ({ ok: false, error: '合成图登记失败', prompt: '' })
+  const refused = await handoffProject(handoffRequest(next), other.handoffDeps)
+  assert.equal(refused.ok, false)
+  assert.equal(other.dispatchedPrompts.length, 0)
+  assert.equal(other.createdSessions.length, 1)
+})
+
 // ── 元信息与归档改名 ────────────────────────────────────────────────────────
 
 test('归档改名与 fileId：同名不同路径得到两条可分辨的记录', () => {
@@ -203,28 +279,30 @@ test('归档改名与 fileId：同名不同路径得到两条可分辨的记录'
 
 // ── 份数与扫描边界 ──────────────────────────────────────────────────────────
 
-test('资料份数：30 份通过；31 份**整批阻止**且一份都不复制', async () => {
+test('资料份数：达到上限通过；上限 +1 **整批阻止**且一份都不复制', async () => {
   const h = makeHarness()
-  const thirty = sourceDir(Array.from({ length: 30 }, (_, index) => [`f${index}.pdf`, `bytes-${index}`]))
-  const ok = await preparePreview(previewRequest({ paths: [thirty] }), h.previewDeps)
+  const pass = MAX_MATERIAL_FILES
+  const full = sourceDir(Array.from({ length: pass }, (_, index) => [`f${index}.pdf`, `bytes-${index}`]))
+  const ok = await preparePreview(previewRequest({ paths: [full] }), h.previewDeps)
   assert.equal(ok.ok, true, ok.error)
-  assert.equal(ok.files.length, 30)
-  assert.equal(ok.fileCount, 30)
+  assert.equal(ok.files.length, pass)
+  assert.equal(ok.fileCount, pass)
   assert.equal(ok.overLimit, false)
-  assert.equal(h.archive.size, 30, '通过的那一批要真的归档')
+  assert.equal(h.archive.size, pass, '通过的那一批要真的归档')
 
   const h2 = makeHarness()
-  const thirtyOne = sourceDir(Array.from({ length: 31 }, (_, index) => [`f${index}.pdf`, `bytes-${index}`]))
-  const over = await preparePreview(previewRequest({ requestId: 'req-31', paths: [thirtyOne] }), h2.previewDeps)
-  assert.equal(over.ok, false)
-  assert.equal(over.errorKind, 'input-invalid')
-  assert.match(over.error, /31/)
-  assert.match(over.error, /30/)
-  assert.equal(h2.archive.size, 0, '超过上限不许悄悄复制前 30 份')
+  const over = pass + 1
+  const overflow = sourceDir(Array.from({ length: over }, (_, index) => [`f${index}.pdf`, `bytes-${index}`]))
+  const blocked = await preparePreview(previewRequest({ requestId: 'req-over', paths: [overflow] }), h2.previewDeps)
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.errorKind, 'input-invalid')
+  assert.match(blocked.error, new RegExp(String(over)))
+  assert.match(blocked.error, new RegExp(String(pass)))
+  assert.equal(h2.archive.size, 0, '超过上限不许悄悄复制前若干份')
   assert.equal(h2.createdSessions.length, 0)
 })
 
-test('空目录 / 没有选择 / 全是空文件 —— 一律拒绝启动', async () => {
+test('explicit empty directories and zero-byte files fail; intentional no-material intake succeeds', async () => {
   const h = makeHarness()
   const empty = sourceDir([])
   const noFiles = await preparePreview(previewRequest({ paths: [empty] }), h.previewDeps)
@@ -233,8 +311,9 @@ test('空目录 / 没有选择 / 全是空文件 —— 一律拒绝启动', asy
   assert.match(noFiles.error, /没有可读取的普通文件/)
 
   const noSelection = await preparePreview(previewRequest({ paths: [], requestId: 'req-none' }), h.previewDeps)
-  assert.equal(noSelection.ok, false)
-  assert.match(noSelection.error, /还没有选择/)
+  assert.equal(noSelection.ok, true, noSelection.error)
+  assert.deepEqual(noSelection.files, [])
+  assert.equal(noSelection.fileCount, 0)
 
   const allEmpty = sourceDir([['a.pdf', ''], ['b.pdf', '']])
   const blank = await preparePreview(previewRequest({ requestId: 'req-blank', paths: [allEmpty] }), h.previewDeps)
@@ -343,13 +422,14 @@ test('输入摘要只覆盖资产类型 + 有序清单 + 方法 + 基准日 + �
 
   // 独立重算一次：把摘要公式钉死在测试里（加进 absolutePath 就会立刻红）。
   const expected = digestOf([canonicalJson({
-    schemaVersion: 'crwu.valuation.input.v3',
+    schemaVersion: VALUATION_INPUT_SCHEMA_VERSION,
     assetType: 'real-estate',
     methodRequest: 'market',
     baseDate: '2026-06-30',
     // P16：评估目的与价值类型也进摘要（未指定是 `null`）。
     purpose: null,
     valueType: null,
+    templateFileId: null,
     supplementalPrompt: '请多考虑地铁因素',
     files: one.files.map((file) => ({
       fileId: file.fileId,
@@ -518,8 +598,59 @@ test('预览不存在 / 已过期 —— 都要重新确认，且不建会话', 
   const expired = await handoffProject(handoffRequest(preview), h.handoffDeps)
   assert.equal(expired.ok, false)
   assert.equal(expired.errorKind, 'not-found')
+  assert.equal(expired.recoveryAction, 'refresh-preview')
   assert.match(expired.error, /过期/)
   assert.equal(h.createdSessions.length, 0)
+})
+
+test('an expired preview cannot relabel a created parent as not created or create another parent', async () => {
+  const h = makeHarness()
+  const dir = sourceDir([['报告.pdf', 'pdf-bytes']])
+  const preview = await preparePreview(previewRequest({ paths: [dir] }), h.previewDeps)
+  h.hooks.failFirstDispatch = true
+  const first = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  assert.equal(first.creationDisposition, 'created')
+  h.advance(VALUATION_PREVIEW_TTL_MS + 1)
+  const recovered = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  assert.equal(recovered.ok, true, recovered.error)
+  assert.equal(recovered.parentSessionId, first.parentSessionId)
+  assert.equal(recovered.reused, true)
+  assert.equal(h.createdSessions.length, 1)
+})
+
+test('losing a preview after parent creation keeps the actual parent identity occupied', async () => {
+  const h = makeHarness()
+  const dir = sourceDir([['报告.pdf', 'pdf-bytes']])
+  const preview = await preparePreview(previewRequest({ paths: [dir] }), h.previewDeps)
+  h.hooks.failFirstDispatch = true
+  const first = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  h.previews.drop(preview.previewId)
+  const retry = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  assert.equal(retry.ok, false)
+  assert.equal(retry.creationDisposition, 'created')
+  assert.equal(retry.parentSessionId, first.parentSessionId)
+  assert.notEqual(retry.recoveryAction, 'refresh-preview')
+  assert.equal(h.createdSessions.length, 1)
+  const later = await Promise.race([
+    handoffProject(handoffRequest(preview), h.handoffDeps),
+    new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 40)),
+  ])
+  assert.notEqual(later.timedOut, true, 'a missing preview must settle its claimed request instead of hanging the next retry')
+  assert.equal(later.parentSessionId, first.parentSessionId)
+})
+
+test('an already dispatched handoff remains idempotent after preview expiry', async () => {
+  const h = makeHarness()
+  const dir = sourceDir([['报告.pdf', 'pdf-bytes']])
+  const preview = await preparePreview(previewRequest({ paths: [dir] }), h.previewDeps)
+  const first = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  assert.equal(first.ok, true, first.error)
+  h.advance(VALUATION_PREVIEW_TTL_MS + 1)
+  const repeated = await handoffProject(handoffRequest(preview), h.handoffDeps)
+  assert.equal(repeated.ok, true, repeated.error)
+  assert.equal(repeated.parentSessionId, first.parentSessionId)
+  assert.equal(h.createdSessions.length, 1)
+  assert.equal(h.dispatchedPrompts.length, 1)
 })
 
 test('归档副本被篡改 → 强制重新确认（绝不按旧摘要启动）', async () => {
@@ -556,7 +687,7 @@ test('预览之后源文件被改动**不影响**已归档输入（归档副本�
   const frozen = JSON.parse(h.written.get(h.handoffDeps.projectPath(result.projectId, '估值输入.json')))
   assert.equal(frozen.inputDigest, preview.inputDigest)
   assert.equal(frozen.files[0].sha256, preview.files[0].sha256)
-  assert.equal(frozen.schemaVersion, 'crwu.valuation.input.v3')
+  assert.equal(frozen.schemaVersion, VALUATION_INPUT_SCHEMA_VERSION)
 })
 
 test('发送已受理但 RPC 超时：重试复用同一个 parentSessionId（reused:true），只建 1 个会话', async () => {
@@ -598,7 +729,7 @@ test('交接成功后：冻结输入与交接清单落盘、scope 绑定、状�
 
   // ② 冻结输入（v2）：没有原始绝对路径，摘要与预览一致。
   const frozen = JSON.parse(h.written.get(h.handoffDeps.projectPath(result.projectId, '估值输入.json')))
-  assert.equal(frozen.schemaVersion, 'crwu.valuation.input.v3')
+  assert.equal(frozen.schemaVersion, VALUATION_INPUT_SCHEMA_VERSION)
   assert.equal(frozen.projectId, result.projectId)
   assert.equal(frozen.methodRequest, 'market')
   assert.equal(frozen.baseDate, null)
@@ -768,4 +899,50 @@ test('预览 / 交接层没有网络、提取、知识库或模型调用（结�
       }
     }
   }
+})
+
+
+test('the template role changes the frozen digest even when the archived material bytes are identical', async () => {
+  const directory = sourceDir([['报告.pdf', 'synthetic-pdf'], ['计算表.xlsx', 'synthetic-xlsx']])
+  const first = makeHarness()
+  const second = makeHarness()
+  const plain = await preparePreview(previewRequest({ paths: [directory] }), first.previewDeps)
+  const chosen = await preparePreview(previewRequest({ paths: [directory], templatePath: join(directory, '计算表.xlsx') }), second.previewDeps)
+  assert.equal(plain.ok, true, plain.error)
+  assert.equal(chosen.ok, true, chosen.error)
+  assert.equal(plain.files.length, 2)
+  assert.equal(chosen.files.length, 2, 'a template already in the folder is archived only once')
+  assert.notEqual(plain.inputDigest, chosen.inputDigest, 'file identity alone does not bind its template role')
+  assert.equal(chosen.templateFileId, chosen.files.find((file) => file.fileName === '计算表.xlsx').fileId)
+})
+
+test('a file selected as calculation template must be an actual XLSX file', async () => {
+  const h = makeHarness()
+  const directory = sourceDir([['报告.pdf', 'synthetic-pdf']])
+  const preview = await preparePreview(previewRequest({ paths: [directory], templatePath: join(directory, '报告.pdf') }), h.previewDeps)
+  assert.equal(preview.ok, false)
+  assert.match(preview.error, /xlsx|计算表|模板/i)
+})
+
+
+test('an in-flight native parent creation still owns its handoff after preview expiry', async () => {
+  const h = makeHarness()
+  const dir = sourceDir([['报告.pdf', 'synthetic-bytes']])
+  const preview = await preparePreview(previewRequest({ paths: [dir] }), h.previewDeps)
+  const original = h.handoffDeps.createSession
+  let release
+  let entered
+  const started = new Promise((resolve) => { entered = resolve })
+  const barrier = new Promise((resolve) => { release = resolve })
+  h.handoffDeps.createSession = async (input) => { entered(); await barrier; return original(input) }
+  const first = handoffProject(handoffRequest(preview), h.handoffDeps)
+  await started
+  h.advance(VALUATION_PREVIEW_TTL_MS + 1)
+  const second = handoffProject(handoffRequest(preview), h.handoffDeps)
+  release()
+  const [a, b] = await Promise.all([first, second])
+  assert.equal(a.ok, true, a.error)
+  assert.equal(b.ok, true, b.error)
+  assert.equal(a.parentSessionId, b.parentSessionId)
+  assert.equal(h.createdSessions.length, 1)
 })

@@ -188,6 +188,8 @@ export interface FrozenInputParts {
   baseDate: string | null
   purpose: string | null
   valueType: string | null
+  /** Archived template material id; defaults to null when omitted. */
+  templateFileId?: string | null
   supplementalPrompt: string
   files: ArchivedMaterial[]
   inputDigest: string
@@ -203,6 +205,8 @@ export function buildFrozenInput(parts: FrozenInputParts): FrozenInput {
     baseDate: parts.baseDate,
     purpose: parts.purpose,
     valueType: parts.valueType,
+    // Normalize "no template" to null, never an empty string.
+    templateFileId: parts.templateFileId === null || parts.templateFileId === undefined ? null : text(parts.templateFileId),
     supplementalPrompt: parts.supplementalPrompt,
     files: parts.files,
     inputDigest: parts.inputDigest,
@@ -213,4 +217,4 @@ export function buildFrozenInput(parts: FrozenInputParts): FrozenInput {
 export const SUPPLEMENTAL_PROMPT_MAX_LENGTH = 4000
 
 /** 一次可提交的资料份数上限（递归去重后的文件数）。 */
-export const MAX_MATERIAL_FILES = 30
+export const MAX_MATERIAL_FILES = 200

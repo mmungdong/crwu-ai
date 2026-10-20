@@ -49,7 +49,7 @@ function objectOf(objectId, propertyType = 'residential', fields = {}) {
 function planOf(overrides = {}) {
   return {
     planId: 'plan-001', title: '同小区住宅', propertyType: 'residential', objectIds: ['object-001', 'object-002', 'object-003'],
-    methodRequest: 'auto', methodAssessment: null, baseDate: null, valuationPath: 'combined',
+    methodRequest: 'market', methodAssessment: null, baseDate: null, valuationPath: 'combined',
     groupReason: '同一小区、同口径', groupEvidenceRefs: ['material-001#page-2'], conflicts: [],
     status: 'ready-for-method-selection', ...overrides,
   }
@@ -61,7 +61,7 @@ test('同小区同口径三套住宅可以同方案，但仍是三个对象', ()
   const objects = [objectOf('object-001'), objectOf('object-002'), objectOf('object-003')]
   const outcome = validateGrouping(objects, [
     {
-      planId: 'plan-001', objectIds: ['object-001', 'object-002', 'object-003'], propertyType: 'residential',
+      planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001', 'object-002', 'object-003'], propertyType: 'residential',
       purpose: '转让', valueType: '市场价值', baseDate: '2026-09-30', rightsBasis: '完全产权、卖方税费正常负担',
       groupReason: '同一小区、同口径', groupEvidenceRefs: ['material-001#page-2'],
     },
@@ -77,7 +77,7 @@ test('同小区同口径三套住宅可以同方案，但仍是三个对象', ()
 test('住宅 + 商业必须拆方案：合在一个方案里就是 incompatib​le-field 冲突', () => {
   const objects = [objectOf('object-001', 'residential'), objectOf('object-002', 'commercial')]
   const merged = validateGrouping(objects, [
-    { planId: 'plan-001', objectIds: ['object-001', 'object-002'], propertyType: 'residential' },
+    { planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001', 'object-002'], propertyType: 'residential' },
   ])
   assert.equal(merged.ok, false)
   const conflict = merged.conflicts.find((row) => row.kind === 'incompatible-field')
@@ -86,8 +86,8 @@ test('住宅 + 商业必须拆方案：合在一个方案里就是 incompatib​
   assert.match(conflict.resolution, /拆成多个方案/)
 
   const split = validateGrouping(objects, [
-    { planId: 'plan-001', objectIds: ['object-001'], propertyType: 'residential' },
-    { planId: 'plan-002', objectIds: ['object-002'], propertyType: 'commercial' },
+    { planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001'], propertyType: 'residential' },
+    { planId: 'plan-002', methodRequest: 'market', objectIds: ['object-002'], propertyType: 'commercial' },
   ])
   assert.equal(split.ok, true)
   assert.equal(split.plans.length, 2)
@@ -97,10 +97,10 @@ test('同小区但权益/基准日不同就是冲突，不自动合并', () => {
   const objects = [objectOf('object-001'), objectOf('object-002')]
   const outcome = validateGrouping(objects, [
     {
-      planId: 'plan-001', objectIds: ['object-001', 'object-002'], propertyType: 'residential',
+      planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001', 'object-002'], propertyType: 'residential',
       purpose: '转让', valueType: '市场价值', baseDate: '2026-09-30', rightsBasis: '完全产权',
     },
-    { planId: 'plan-002', objectIds: [], propertyType: 'residential', baseDate: '2026-06-30' },
+    { planId: 'plan-002', methodRequest: 'market', objectIds: [], propertyType: 'residential', baseDate: '2026-06-30' },
   ])
   // 第二个空方案有自己的冲突；第一个方案本身没有字段冲突。
   assert.equal(outcome.plans[0].conflicts.length, 0)
@@ -111,8 +111,8 @@ test('同小区但权益/基准日不同就是冲突，不自动合并', () => {
 test('对象漏归属 / 未知 id / 被两个方案认领都是冲突', () => {
   const objects = [objectOf('object-001'), objectOf('object-002')]
   const outcome = validateGrouping(objects, [
-    { planId: 'plan-001', objectIds: ['object-001', 'object-002'] },
-    { planId: 'plan-002', objectIds: ['object-002', 'object-999'] },
+    { planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001', 'object-002'] },
+    { planId: 'plan-002', methodRequest: 'market', objectIds: ['object-002', 'object-999'] },
   ])
   assert.equal(outcome.ok, false)
   const kinds = outcome.conflicts.map((row) => row.kind)
@@ -142,7 +142,7 @@ test('P15：业务分类依据缺失的对象**挂起**，其余对象继续（�
     classificationBasis: '不动产权证：城镇住宅用地/成套住宅（material-001#page-2）',
   }
   const outcome = validateGrouping([named, grounded], [
-    { planId: 'plan-001', objectIds: ['object-001', 'object-002'], propertyType: 'residential' },
+    { planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001', 'object-002'], propertyType: 'residential' },
   ])
   // 依据缺失的那一个对象被挂起，不进任何方案；另一个照常继续。
   assert.deepEqual(outcome.suspendedObjectIds, ['object-001'])
@@ -164,7 +164,7 @@ test('P15：业务分类依据缺失的对象**挂起**，其余对象继续（�
 
 test('没有对象被认领时如实报 unassigned，不静默丢掉', () => {
   const objects = [objectOf('object-001'), objectOf('object-002')]
-  const outcome = validateGrouping(objects, [{ planId: 'plan-001', objectIds: ['object-001'] }])
+  const outcome = validateGrouping(objects, [{ planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001'] }])
   assert.deepEqual(outcome.unassignedObjectIds, ['object-002'])
   assert.equal(outcome.ok, false)
 })
@@ -184,7 +184,7 @@ test('规划用途为公寓且依据齐备：不挂起、不产生待确认冲�
     classificationBasis: '建设工程规划许可证：公寓 / 商品房（material-001#page-1）',
   }
   const outcome = validateGrouping([apartment], [
-    { planId: 'plan-001', objectIds: ['object-001'], propertyType: 'apartment' },
+    { planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001'], propertyType: 'apartment' },
   ])
   assert.deepEqual(outcome.suspendedObjectIds, [], '依据齐备的公寓不得被挂起')
   assert.deepEqual(outcome.conflicts, [], '公寓不得再触发"按住宅确认"这类冲突')
@@ -195,21 +195,21 @@ test('规划用途为公寓且依据齐备：不挂起、不产生待确认冲�
   // 住宅 + 商业仍必须拆：公寓不改变原有兼容字段口径。
   const mixed = validateGrouping(
     [objectOf('object-001', 'residential'), objectOf('object-002', 'commercial')],
-    [{ planId: 'plan-001', objectIds: ['object-001', 'object-002'], propertyType: 'residential' }],
+    [{ planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001', 'object-002'], propertyType: 'residential' }],
   )
   assert.equal(mixed.ok, false)
   assert.equal(mixed.conflicts.some((row) => row.kind === 'incompatible-field' && row.field === 'propertyType'), true)
 
   // 依据缺失仍然挂起（公寓不是免检牌）。
   const ungrounded = validateGrouping([{ ...apartment, classificationBasis: '' }], [
-    { planId: 'plan-001', objectIds: ['object-001'], propertyType: 'apartment' },
+    { planId: 'plan-001', methodRequest: 'market', objectIds: ['object-001'], propertyType: 'apartment' },
   ])
   assert.deepEqual(ungrounded.suspendedObjectIds, ['object-001'])
 })
 
 test('方案目录名以 id 为身份、中文标题只做标签', () => {
-  assert.equal(planDirectoryName({ planId: 'plan-001', title: '同小区住宅' }), 'plan-001-同小区住宅')
-  assert.equal(planDirectoryName({ planId: 'plan-001', title: '' }), 'plan-001')
+  assert.equal(planDirectoryName({ planId: 'plan-001', methodRequest: 'market', title: '同小区住宅' }), 'plan-001-同小区住宅')
+  assert.equal(planDirectoryName({ planId: 'plan-001', methodRequest: 'market', title: '' }), 'plan-001')
 })
 
 // ── 方法判定 ───────────────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ test('业务适用但未实现：能力缺口 ≠ 业务不适用', () => {
 })
 
 test('知识要求两种方法而只实现一种：跑得了的照跑，跑不了的记能力缺口（不误伤、不称业务不适用）', () => {
-  const outcome = validateMethodAssessment(planOf({ methodRequest: 'auto' }), [
+  const outcome = validateMethodAssessment(planOf({ methodRequest: 'market' }), [
     { method: 'market', applicable: true },
     { method: 'income', applicable: true, reason: '知识要求收益法作为必要校核方法' },
   ])
@@ -259,9 +259,9 @@ test('知识要求两种方法而只实现一种：跑得了的照跑，跑不�
   assert.equal(outcome.assessment.notes.some((note) => note.includes('income')), true, '缺口要能读出来')
 })
 
-test('自动判断可采用**组合**方法：适用且能跑的方法全部被采纳，不再只取第一个', () => {
+test('指定 income 时采纳该方法，不按候选顺序改选或增补 market', () => {
   const outcome = validateMethodAssessment(
-    planOf({ methodRequest: 'auto' }),
+    planOf({ methodRequest: 'income' }),
     [
       { method: 'market', applicable: true },
       { method: 'income', applicable: true, reason: '知识要求收益法与市场法互相校核' },
@@ -270,8 +270,8 @@ test('自动判断可采用**组合**方法：适用且能跑的方法全部被�
     { implementedOf: (method) => method === 'market' || method === 'income' },
   )
   assert.equal(outcome.ok, true)
-  assert.deepEqual(outcome.assessment.selectedMethods, ['market', 'income'])
-  assert.equal(outcome.assessment.primaryMethod, 'market', '第一个采用方法即 primary（列表顺序）')
+  assert.deepEqual(outcome.assessment.selectedMethods, ['income'])
+  assert.equal(outcome.assessment.primaryMethod, 'income')
   assert.equal(outcome.capabilityGaps.length, 0)
   // 业务不适用的那一个仍然只是"不适用"，不进采用列表也不做能力缺口。
   const cost = outcome.assessment.assessments.find((row) => row.method === 'cost')
@@ -279,15 +279,16 @@ test('自动判断可采用**组合**方法：适用且能跑的方法全部被�
   assert.equal(cost.implemented, false)
 })
 
-test('自动判断一个方法都跑不了：整体阻断并说清"一个都跑不了"', () => {
+test('指定方法没有执行能力时阻断，并保留用户请求', () => {
   const outcome = validateMethodAssessment(
-    planOf({ methodRequest: 'auto' }),
+    planOf({ methodRequest: 'market' }),
     [{ method: 'market', applicable: true }, { method: 'income', applicable: true }],
     { implementedOf: () => false },
   )
   assert.equal(outcome.ok, false)
   assert.deepEqual(outcome.assessment.selectedMethods, [])
-  assert.equal(outcome.blockers.some((row) => row.code === 'valuation.method.none-executable'), true)
+  assert.equal(outcome.blockers.some((row) => row.code === 'valuation.method.requested-unavailable'), true)
+  assert.equal(outcome.methodConflict.requested, 'market')
 })
 
 test('用户指定方法时**不静默增补**其它方法（即使它们也能跑）', () => {
@@ -301,9 +302,9 @@ test('用户指定方法时**不静默增补**其它方法（即使它们也能�
 })
 
 test('组合方法各建一个任务（不再只按 primaryMethod 建）', () => {
-  const plan = planOf({ methodRequest: 'auto' })
+  const plan = planOf({ methodRequest: 'market' })
   const assessment = {
-    planId: 'plan-001', methodRequest: 'auto', primaryMethod: 'market',
+    planId: 'plan-001', methodRequest: 'market', primaryMethod: 'market',
     selectedMethods: ['market', 'income'], assessments: [], requestedMethodHonored: true, notes: [], decidedAt: 'x',
   }
   const graph = buildTaskGraph(plan, assessment)
@@ -328,7 +329,7 @@ test('用户指定 market 且适用可执行：采纳它并记 requestedMethodHo
 
 test('separate 生成土地/建筑物/汇总任务与依赖，土地能力不存在 → 阻断该方案', () => {
   const plan = planOf({ valuationPath: 'separate' })
-  const assessment = { planId: 'plan-001', methodRequest: 'auto', primaryMethod: 'market', selectedMethods: ['market'], assessments: [], requestedMethodHonored: true, notes: [], decidedAt: 'x' }
+  const assessment = { planId: 'plan-001', methodRequest: 'market', primaryMethod: 'market', selectedMethods: ['market'], assessments: [], requestedMethodHonored: true, notes: [], decidedAt: 'x' }
   const graph = buildTaskGraph(plan, assessment)
   assert.equal(graph.nodes.some((node) => node.assetClass === 'land'), true)
   assert.equal(graph.nodes.some((node) => node.assetClass === 'building'), true)

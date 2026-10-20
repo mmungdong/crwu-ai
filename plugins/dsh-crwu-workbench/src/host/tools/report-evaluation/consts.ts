@@ -5,6 +5,8 @@
  * 能力门禁与测试都逐字引用），所以只在这里写一份。
  */
 
+import { VALUATION_WORKFLOW_CONTROL_TOOL } from './workflow.ts'
+
 /** 估值案例目录内的固定子目录与文件名（提示词与校验脚本都引用它们）。 */
 export const VALUATION_MATERIAL_DIR = '材料-源'
 export const VALUATION_EVIDENCE_DIR = '来源证据'
@@ -69,4 +71,6 @@ export const VALUATION_TOOL_NAMES = {
   artifactValidate: 'crwu_valuation_artifact_validate',
   /** 挂牌参考一次性交付：固定输入 + 打包脚本 + 四件产物（只可能 partial）。 */
   listingReference: 'crwu_valuation_listing_reference',
+  /** 受控图控制工具：父会话凭 Host 铸造的不透明 commandId 推进同一轮工作流。 */
+  workflowRun: VALUATION_WORKFLOW_CONTROL_TOOL,
 } as const

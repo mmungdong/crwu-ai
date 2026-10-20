@@ -7,6 +7,7 @@ import type { WorldFacts } from '../core/platform/world.ts'
 import { writePanelCaseFile } from '../tools/common/case-files.ts'
 import { workspaceSessionService } from '../core/workspace-session/index.ts'
 import type { WorkbenchConfig } from '../config/config.ts'
+import type { ValuationWorkflowHost } from '../integrations/valuation-workflow/host.ts'
 import { browserSourceFacts, loadBrowserSites, type ValuationSourceFact } from '../domains/report-evaluation/browser/sites.ts'
 import type { ValuationLifecycles } from '../domains/report-evaluation/lifecycle/index.ts'
 import type { ValuationScopes } from '../domains/report-evaluation/scope.ts'
@@ -72,6 +73,13 @@ export interface ValuationOpsDeps {
    * （`apply.ts`）一定会传它，缺省只为让既有单测不必逐个补参数。
    */
   config?: WorkbenchConfig
+  /**
+   * 可选的受控估值工作流 Host（`createValuationWorkflowHost` 的实例）。
+   *
+   * 装配了它：不透明图命令随交接下发，`valuation-workflow-*` 面板操作并入本操作表。
+   * 缺省 = 本部署没有工作流（保持旧交接与旧操作集合），绝不另造一个运行时。
+   */
+  workflow?: ValuationWorkflowHost
 }
 
 export function createValuationOperations(deps: ValuationOpsDeps): OperationMap {
@@ -107,11 +115,15 @@ export function createValuationOperations(deps: ValuationOpsDeps): OperationMap 
       // 来源策略在**交接那一刻**就交给父会话：登录是可选用能力，父会话必须先知道
       // 配置里有哪些来源、各自是必需还是可选，才能按知识库的降级策略往下走。
       sources: sourceFactsOf(deps.config),
+      // 有工作流工厂时，交接后只发它给出的不透明命令。
+      ...(deps.workflow === undefined ? {} : { prepareHandoff: deps.workflow.prepareHandoff }),
     }),
     // P18：登记表的**显式恢复**（`valuation-project-resume`）。它与上面两块共用同一份
     // `lifecycles` / `scopes` 实例 —— 恢复写进去的绑定，Tool 闭包必须立刻看得到。
     ...createResumeOperations({
       ctx, state, lifecycles: deps.lifecycles, scopes: deps.scopes,
     }),
+    // 受控图面板操作（current / node / export / load / clear …）与 Tool 闭包共用同一个运行时。
+    ...(deps.workflow === undefined ? {} : deps.workflow.operations),
   }
 }

@@ -45,6 +45,8 @@ SKILL_DIR = os.path.dirname(HERE)
 DEFAULT_TEMPLATE = os.path.join(SKILL_DIR, "template", "valuation-report.html")
 
 UNKNOWN = "—"
+# Closed verified-workflow snapshot ref format; only real identity/path/library/digest exist.
+WORKFLOW_KNOWLEDGE_REF_FORMAT = "crwu.valuation.knowledge-ref.v1"
 IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
               "webp": "image/webp", "gif": "image/gif"}
 
@@ -411,9 +413,30 @@ def _assessment_rows(data: dict) -> str:
     return "".join(rows)
 
 
+def _workflow_knowledge_row(item: dict) -> str:
+    """Verified-workflow snapshot ref: real sourceId / path / library / digest only.
+
+    The legacy table headers describe a full materialized manifest, so this ref is shown
+    as one labelled row that names the actual fields instead of mislabelling them.
+    """
+    parts = [f'来源 {mono(item.get("sourceId"))}', f'路径 {text_of(item.get("path"))}']
+    if str(item.get("spaceName") or "").strip() != "":
+        parts.append(f'知识库 {text_of(item.get("spaceName"))}')
+    parts.append(f'正文指纹 {mono(item.get("digest"))}')
+    for label, key in (("节", "section"), ("原文", "quote")):
+        if str(item.get(key) or "").strip() != "":
+            parts.append(f'{label} {text_of(item.get(key))}')
+    return ('<tr><td colspan="10" class="muted">workflow 核验快照：'
+            + "｜".join(parts) + "</td></tr>")
+
+
 def _knowledge_rows(data: dict) -> str:
     rows = []
     for item in data.get("knowledgeSources") or []:
+        if isinstance(item, dict) and \
+                str(item.get("format") or "") == WORKFLOW_KNOWLEDGE_REF_FORMAT:
+            rows.append(_workflow_knowledge_row(item))
+            continue
         rows.append(row([
             mono(item.get("routeId")),
             text_of(item.get("nodeName")),

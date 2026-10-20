@@ -13,6 +13,7 @@ import {
   type FinalizeReaders,
 } from '../../domains/report-evaluation/delivery/finalize-facts.ts'
 import { isSafeIdSegment } from '../../domains/report-evaluation/project/contracts.ts'
+import { isMethodRequest } from '../../domains/report-evaluation/project/coverage.ts'
 import { writeCaseText } from '../common/case-files.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Blocker, ReportStatus, ValuationPath } from '../../../shared/contracts/valuation-project.ts'
@@ -453,14 +454,20 @@ export function finalizeReadersOf(ctx: Context, casePath: string): FinalizeReade
           readable: item.readable !== false,
           duplicateOf: item.duplicateOf === null || item.duplicateOf === undefined ? null : text(item.duplicateOf),
         }))
+      const methodRequest = text(frozen.methodRequest)
+      // 方法缺失或不是指定方法（例如旧版本写进去的 auto）时**不猜一个**：
+      // 摘要重算不出来就返回空串，让 finalize 如实判成缺口而不是拿默认值蒙混过去。
+      if (!isMethodRequest(methodRequest)) return ''
       return valuationInputDigest({
         // 资产类型也进摘要：v3 冻结输入必填，缺它说明记录不是这一代的形状。
         assetType: (text(frozen.assetType) || 'real-estate') as 'real-estate',
-        methodRequest: (text(frozen.methodRequest) || 'auto') as 'auto' | 'market' | 'income' | 'cost',
+        methodRequest,
         baseDate: text(frozen.baseDate) === '' ? null : text(frozen.baseDate),
         // 评估目的 / 价值类型也进摘要：遗漏它们会让"改了前提还按旧摘要通过 finalize"成立。
         purpose: text(frozen.purpose) === '' ? null : text(frozen.purpose),
         valueType: text(frozen.valueType) === '' ? null : text(frozen.valueType),
+        // 计算表模板角色同样按文件自身字段复算：换了一行底稿，finalize 的摘要就该对不上。
+        templateFileId: text(frozen.templateFileId) === '' ? null : text(frozen.templateFileId),
         supplementalPrompt: text(frozen.supplementalPrompt),
         files: materials,
       })

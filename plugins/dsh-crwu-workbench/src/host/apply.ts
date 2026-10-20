@@ -3,6 +3,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 // 只为类型增强：`@deepseek-ai/dsh-tools` 声明了 `Context.tools`。运行时它由 base bundle
 // 以稳定 id `tools` 挂载（`dsh-base/cordis.patch.yml`），所以这里**不重复插入第二个实例**。
 import type {} from '@deepseek-ai/dsh-tools'
+import type { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { WORKBENCH_ROUTE } from '../shared/consts.ts'
 import { HOST_BUILD_KIND } from './build-info.ts'
 import { PLUGIN_VERSION } from './consts.ts'
@@ -32,6 +33,7 @@ import { createLocalAuditRegistry } from './domains/local-audit/handoff.ts'
 import { createDwsDeviceLoginRegistry, createLoginHandleHolder } from './core/system/device-login.ts'
 import { nodeSnapshotIo } from './domains/local-audit/snapshot.ts'
 import { nodeLocalAuditFs } from './domains/local-audit/scan.ts'
+import { createValuationWorkflowHost } from './integrations/valuation-workflow/host.ts'
 
 /**
  * `ToolDeps` 的**装配视图**：所有可选依赖在这里都是必需的。
@@ -131,6 +133,14 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
   // 单执行租约：与 Tool 闭包共用同一份实例（两处各造一个 = 两条链路对"谁在跑"给出不同答案）。
   const valuationLeases = createTaskLeaseStore()
   /**
+   * **受控估值工作流 Host**（协议 43）。构造是**惰性**的：不在 `apply()` 里 `ctx.get`、
+   * 不读任何文件、也不开数据库。交接时它铸一次不透明图命令；面板操作与图控制工具共用
+   * **同一个**运行时实例 —— 两处各造一个的后果是"工具说这一轮在跑、面板说没有"。
+   */
+  const workflow = createValuationWorkflowHost({
+    ctx, state, access, world, config, python, valuationScopes,
+  })
+  /**
    * 注册给 Tool 闭包的依赖。
    *
    * 类型是**全字段必需**的视图（`AssembledToolDeps`）：`ToolDeps` 里的可选字段是给
@@ -161,7 +171,16 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     browserRuntime: valuationBrowser,
     // 截图能力与取数共用同一条 profile 队列（`toolClient`）。
     screenshot: valuationBrowser.screenshot,
+    // 受控图运行时：控制工具、面板操作表与交接钩子必须是**同一个**实例。
+    workflowRuntime: workflow.runtime,
   }
+  // 真实 SDK guard：图拥有的父会话只能经保留通道进入受控图，业务工具必须携带当前执行。
+  // `ctx.get('tools')` 只在 effect 内惰性读取（装配时不快照可选服务）；disposer 由 effect 持有。
+  ctx.effect(() => {
+    const tools = ctx.get('tools') as ToolRuntime | undefined
+    if (tools === undefined || typeof tools.guard !== 'function') return () => {}
+    return tools.guard(workflow.runtime.guard)
+  }, 'crwu-workbench: valuation workflow guard')
   ctx.effect(() => registerCrwuTools(ctx, toolDeps), 'crwu-workbench: tools')
   // 自助更新（Task 4）：每个插件实例一套检查器 / 持久化 / 安装服务。
   // 这里只装配 —— 恢复与后台自动检查都在它内部启动，**不 await**（registry 故障、
@@ -193,6 +212,10 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     // 正在执行的操作由调用者自己的 signal 决定，这里不杀。
     valuationBrowser.dispose()
   }, 'crwu-workbench: dws login sessions')
+  // 工作流 Host 自有运行时与 SQLite 存储：卸载时异步收尾，失败不得卡住其余 disposer。
+  ctx.effect(() => () => {
+    void workflow.dispose().catch(() => undefined)
+  }, 'crwu-workbench: valuation workflow host')
   const operations = createCoreOperations(
     ctx,
     config,
@@ -204,10 +227,12 @@ export function apply(ctx: Context, pluginConfig: PluginConfig): void {
     },
     {
       update: update.operations,
+      closeWorkspaceStores: (workspacePath) => workflow.closeWorkspaceStores(workspacePath),
       valuation: {
         ...createValuationOperations({
           ctx, state, access, world, config,
           lifecycles: valuationLifecycles, scopes: valuationScopes,
+          workflow,
         }),
         // 门禁三操作（preflight / login / login-cancel）只拦房地产正文。
         ...valuationBrowser.operations,

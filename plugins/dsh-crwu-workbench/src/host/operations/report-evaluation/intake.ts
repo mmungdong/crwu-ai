@@ -126,10 +126,13 @@ export function createIntakeOperations(deps: IntakeOperationDeps): OperationMap 
       const platform = await world.platform()
       const workdir = await world.workdir()
 
+      const localFs = nodeLocalAuditFs()
       const previewDeps: PreviewDeps = {
         previews: deps.previews,
         // 排除范围在这里**逐字**传下去：员工移除掉的文件既不进清单、也不进归档副本。
-        scan: (selection, excluded) => scanSelection(selection, nodeLocalAuditFs(), { excluded }),
+        scan: (selection, excluded) => scanSelection(selection, localFs, { excluded }),
+        // Canonical (realpath) identity for binding the template role to a scanned candidate.
+        canonicalPath: async (path) => await localFs.canonical(path),
         readSourceBytes: async (path) => new Uint8Array(await readFile(path)),
         statSource: async (path) => {
           const info = await stat(path)
@@ -179,6 +182,8 @@ export function createIntakeOperations(deps: IntakeOperationDeps): OperationMap 
         requestId: text(args.requestId),
         paths,
         excluded,
+        // Optional template path; the preview layer binds its role to an archived fileId.
+        templatePath: text(args.templatePath),
         // 资产类型**逐字**传下去：未选由预览层直接拒绝（不存在默认房地产这一档）。
         assetType: text(args.assetType),
         method: text(args.method),

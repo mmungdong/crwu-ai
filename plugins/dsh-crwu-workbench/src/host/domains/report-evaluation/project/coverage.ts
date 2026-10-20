@@ -126,9 +126,9 @@ export function isPropertyType(value: unknown): value is PropertyType {
   return (['residential', 'commercial', 'office', 'industrial', 'apartment', 'other'] as readonly string[]).includes(raw)
 }
 
-/** 取值是否是一个合法方法请求。 */
-export function isMethodRequest(value: unknown): value is 'auto' | 'market' | 'income' | 'cost' {
-  return (['auto', 'market', 'income', 'cost'] as readonly string[]).includes(text(value))
+/** 取值是否是一个合法方法请求（必须是一个指定方法）。 */
+export function isMethodRequest(value: unknown): value is 'market' | 'income' | 'cost' {
+  return (['market', 'income', 'cost'] as readonly string[]).includes(text(value))
 }
 
 function separatePathBlocker(): Blocker {

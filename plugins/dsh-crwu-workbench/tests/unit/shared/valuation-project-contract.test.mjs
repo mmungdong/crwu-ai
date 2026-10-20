@@ -79,7 +79,7 @@ test('房地分别评估：土地能力未实现 → 阻断该方案，不重复
 })
 
 test('收益法 / 成本法：能力事实如实报"跑不了"，但**不当场阻断整方案**', () => {
-  const coverage = assessCoverage({ propertyType: 'residential', method: 'auto', valuationPath: 'combined' })
+  const coverage = assessCoverage({ propertyType: 'residential', method: 'market', valuationPath: 'combined' })
   assert.equal(coverage.supported, true, '结构性上没有问题')
   const facts = new Map(coverage.methodCapabilities.map((item) => [item.method, item]))
   assert.equal(facts.get('market').executable, true)
@@ -99,7 +99,7 @@ test('收益法 / 成本法：能力事实如实报"跑不了"，但**不当场�
 
 test('实测的能力清单可以覆盖部署默认（知识补齐后不必改业务口径代码）', () => {
   const coverage = assessCoverage({
-    propertyType: 'residential', method: 'auto', valuationPath: 'combined',
+    propertyType: 'residential', method: 'market', valuationPath: 'combined',
     implementedMethods: ['market', 'income'],
   })
   const facts = new Map(coverage.methodCapabilities.map((item) => [item.method, item]))
@@ -108,8 +108,8 @@ test('实测的能力清单可以覆盖部署默认（知识补齐后不必改�
   assert.equal(coverage.requiredCapabilities.includes('valuation.income.calculate'), true)
 })
 
-test('自动判定是输入而非方法：本身可执行，方法冲突留到方法判定阶段', () => {
-  const coverage = assessCoverage({ propertyType: 'residential', method: 'auto', valuationPath: 'combined' })
+test('指定方法的结构能力检查保留知识选择能力登记', () => {
+  const coverage = assessCoverage({ propertyType: 'residential', method: 'market', valuationPath: 'combined' })
   assert.equal(coverage.supported, true)
   assert.equal(coverage.requiredCapabilities.includes('knowledge.realestate.method-selection'), true)
 })
@@ -179,7 +179,7 @@ test('项目索引 Schema 只认 v2，并要求对象/方案/任务三层', () =
 
 test('Schema 版本常量集中在合同里（不在各处硬编码字符串）', () => {
   // 协议 39：资产类型进冻结输入 → v3（旧 v2 记录按版本不兼容拒绝，不静默按旧形状读）。
-  assert.equal(contracts.VALUATION_INPUT_SCHEMA_VERSION, 'crwu.valuation.input.v3')
+  assert.equal(contracts.VALUATION_INPUT_SCHEMA_VERSION, 'crwu.valuation.input.v4')
   assert.equal(contracts.VALUATION_PROJECT_SCHEMA_VERSION, 'crwu.valuation.project.v2')
   assert.equal(contracts.VALUATION_REPORT_DATA_SCHEMA_VERSION, 'crwu.valuation.report-data.v2')
 })

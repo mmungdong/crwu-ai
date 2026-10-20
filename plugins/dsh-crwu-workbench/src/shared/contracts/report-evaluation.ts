@@ -21,8 +21,8 @@
  * 这里只声明**线上形状**。
  */
 
-/** 用户可选的评估方法；`auto` 是**输入**，结论里只会出现 market / income / cost。 */
-export type ValuationMethod = 'auto' | 'market' | 'income' | 'cost'
+/** 用户可选的评估方法：必须是一个**指定**方法，没有「自动判定」这一档。 */
+export type ValuationMethod = 'market' | 'income' | 'cost'
 
 /**
  * Host 轮次的阶段（`domains/report-evaluation/lifecycle`）。
@@ -294,6 +294,13 @@ export interface ValuationPreviewView {
   purpose: string | null
   /** 价值类型；未指定是 `null`。可选取值清单待业务方确认，线协议不写死枚举。 */
   valueType: string | null
+  /**
+   * `valuation-intake` 提交的**计算表模板**归档后的 fileId（协议 43）。
+   *
+   * 未选模板是 `null`。它由 Host 按 canonical 路径与本次扫描候选绑定，客户端只回显
+   * `files[]` 里那一份；不拿草稿里的路径冒充已归档事实。
+   */
+  templateFileId: string | null
   supplementalPrompt: string
   files: ArchivedMaterialView[]
   fileCount: number
@@ -320,4 +327,11 @@ export interface ValuationHandoffView {
    * 缺字段按 `unknown` 处理 —— 类默认值偏向"不许回草稿"。
    */
   creationDisposition: CreationDisposition
+  /**
+   * 失败后的**可执行恢复动作**（可选、封闭取值）：
+   * - `refresh-preview`：预览过期/丢失且**没有**已建父会话 —— 返回修改并重新准备确认；
+   * - `retry-handoff`：父会话已建、指令未受理 —— 对同一条会话重试交接。
+   * 缺省表示界面按 `creationDisposition` 的通用分支处理。
+   */
+  recoveryAction?: 'refresh-preview' | 'retry-handoff'
 }

@@ -1,5 +1,5 @@
 import { text } from '../../../../shared/utils/value.ts'
-import { joinLocalPath } from '../../../../shared/utils/local-path.ts'
+import { basenameLocalPath, joinLocalPath, trimTrailingSeparators } from '../../../../shared/utils/local-path.ts'
 import {
   VALUATION_INPUT_SCHEMA_VERSION,
   type AssetType,
@@ -19,7 +19,7 @@ import {
   normalizeValueType,
 } from '../project/contracts.ts'
 import { isValuationMethod } from '../scope.ts'
-import { kindOf } from './classify.ts'
+import { extensionOf, kindOf } from './classify.ts'
 import { sha256OfBytes } from './manifest.ts'
 import {
   archiveNameOf,
@@ -39,7 +39,7 @@ import {
  * 要么在**还没确认**的时候就把资料内容送进了模型可见的路径。现在这里只做：
  *
  * 1. 递归扫描本机选择（复用本地审核的扫描算法：realpath 去重、符号链接不跟随、深度/数量保护）；
- * 2. 1–30 份的硬边界（**超过就整批阻止**，不悄悄截取前 30 份）；
+ * 2. 1–上限份的硬边界（**超过就整批阻止**，不悄悄截取前若干份）；
  * 3. 按字节复制进案例目录，**对归档副本重算 sha256 并校验**；
  * 4. 生成规范化输入摘要（**有序**文件清单 + 方法 + 基准日 + 评估目的 + 价值类型 + 补充要求 + Schema 版本）。
  *
@@ -61,6 +61,8 @@ export interface PreviewRequest {
   requestId: string
   /** 用户选中的入口（绝对路径；文件或文件夹）。 */
   paths: readonly string[]
+  /** Optional absolute path to the uploaded `.xlsx` calculation template. */
+  templatePath?: string
   /**
    * 员工在界面上**逐个移除**掉的文件（绝对路径）。
    *
@@ -87,6 +89,11 @@ export interface PreviewDeps {
   previews: PreviewRegistry
   /** 递归展开本机选择（生产实现复用 `scanSelection`；`excluded` = 员工逐个移除掉的文件）。 */
   scan(selection: readonly string[], excluded: readonly string[]): Promise<LocalAuditScan>
+  /**
+   * Canonical identity (realpath) used to bind the template role to a scanned candidate.
+   * Optional so old injected fixtures fall back to identity; production always supplies it.
+   */
+  canonicalPath?(path: string): Promise<string>
   readSourceBytes(path: string): Promise<Uint8Array>
   /** 源文件的元信息；`createdAt` 取 `birthtime`，拿不到就是 `null`。 */
   statSource(path: string): Promise<{ createdAt: string | null; modifiedAt: string | null; readable: boolean }>
@@ -129,6 +136,8 @@ export interface PreviewResult {
   purpose: string | null
   /** 价值类型；未指定是 `null`。 */
   valueType: string | null
+  /** Archived material id of the calculation template; null when none. */
+  templateFileId: string | null
   supplementalPrompt: string
   /** 每份资料的元信息（含 `absolutePath`，**只回显给面板**）。 */
   files: MaterialMetadata[]
@@ -153,6 +162,7 @@ export interface PreviewRecord {
   baseDate: string | null
   purpose: string | null
   valueType: string | null
+  templateFileId: string | null
   supplementalPrompt: string
   files: MaterialMetadata[]
   fileCount: number
@@ -223,16 +233,21 @@ export class PreviewRegistry {
   }
 }
 
-/** 输入摘要的载荷（**只有这些字段**进指纹）。 */
-export function valuationInputPayload(input: {
+/** Fields that make up the canonical input identity (digest). */
+export interface ValuationInputIdentity {
   assetType: AssetType
   methodRequest: MethodRequest
   baseDate: string | null
   purpose: string | null
   valueType: string | null
+  /** Archived material id of the calculation template; null when none. */
+  templateFileId: string | null
   supplementalPrompt: string
   files: readonly MaterialMetadata[]
-}): Record<string, unknown> {
+}
+
+/** 输入摘要的载荷（**只有这些字段**进指纹）。 */
+export function valuationInputPayload(input: ValuationInputIdentity): Record<string, unknown> {
   return {
     schemaVersion: VALUATION_INPUT_SCHEMA_VERSION,
     assetType: input.assetType,
@@ -241,22 +256,23 @@ export function valuationInputPayload(input: {
     // 评估目的与价值类型是**结论前提**：改了它们摘要就要变，否则"条件变了还按旧摘要启动"拦不住。
     purpose: input.purpose,
     valueType: input.valueType,
+    templateFileId: input.templateFileId,
     supplementalPrompt: input.supplementalPrompt,
     files: input.files.map(fingerprintOf),
   }
 }
 
 /** 规范化输入摘要：同一批字节与同一批条件，无论来自哪个绝对路径都得到同一个值。 */
-export function valuationInputDigest(input: {
-  assetType: AssetType
-  methodRequest: MethodRequest
-  baseDate: string | null
-  purpose: string | null
-  valueType: string | null
-  supplementalPrompt: string
-  files: readonly MaterialMetadata[]
-}): string {
+export function valuationInputDigest(input: ValuationInputIdentity): string {
   return digestOf([canonicalJson(valuationInputPayload(input))])
+}
+
+function emptyScan(): LocalAuditScan {
+  return {
+    ok: true, error: '', errorKind: '', items: [], files: [], skipped: [],
+    fileCount: 0, limit: MAX_MATERIAL_FILES, overLimit: false,
+    readableCount: 0, skippedCount: 0, truncated: false,
+  }
 }
 
 function failure(errorKind: FailureEnvelope['errorKind'], error: string, patch: Partial<PreviewResult> = {}): PreviewResult {
@@ -274,6 +290,7 @@ function failure(errorKind: FailureEnvelope['errorKind'], error: string, patch: 
     baseDate: null,
     purpose: null,
     valueType: null,
+    templateFileId: null,
     supplementalPrompt: '',
     files: [],
     fileCount: 0,
@@ -313,7 +330,7 @@ function messageOf(error: unknown): string {
  * 顺序（每一步失败都在**建任何东西之前**返回结构化失败）：
  *   ① 请求与条件收窄（requestId / 方法 / 基准日 / 补充要求长度）；
  *   ② 幂等：同一 requestId 已经准备过就直接回那一份；
- *   ③ 扫描 + 份数边界（1–30，超过整批阻止）；
+ *   ③ 扫描 + 份数边界（1–`MAX_MATERIAL_FILES`，超过整批阻止）；
  *   ④ 建目录 → 逐份按字节复制 → **读回归档副本、重算 sha256、与源字节比对**；
  *   ⑤ 生成摘要并登记预览。
  */
@@ -332,7 +349,7 @@ export async function preparePreview(input: PreviewRequest, deps: PreviewDeps): 
   if (!assetType.ok) return failure('input-invalid', assetType.error, { requestId })
   const method = text(input.method).trim()
   if (!isValuationMethod(method)) {
-    return failure('input-invalid', `评估方法不合法：只允许 auto / market / income / cost（收到「${method}」）`, { requestId })
+    return failure('input-invalid', `评估方法不合法：只允许 market / income / cost（收到「${method}」）`, { requestId })
   }
   const baseDate = normalizeBaseDate(input.baseDate)
   if (!baseDate.ok) return failure('input-invalid', baseDate.error, { requestId })
@@ -349,39 +366,89 @@ export async function preparePreview(input: PreviewRequest, deps: PreviewDeps): 
   }
 
   const selection = input.paths.map((item) => text(item).trim()).filter((item) => item !== '')
-  if (selection.length === 0) {
-    return failure('input-invalid', '还没有选择任何资料：请先选择要估值的文件或文件夹。', { requestId })
-  }
-  // 排除范围与选择范围一起收窄：两条都只接受绝对路径（`scanSelection` 自己也会再校验一次）。
+  // Excluded paths and selection are narrowed together; both are real absolute paths.
   const excluded = (input.excluded ?? []).map((item) => text(item).trim()).filter((item) => item !== '')
 
-  const scan = await deps.scan(selection, excluded)
+  // Optional template: validate the extension, then merge it into the scan so the realpath
+  // scanner deduplicates it against folder contents before archival.
+  const templatePath = trimTrailingSeparators(text(input.templatePath))
+  if (templatePath !== '' && extensionOf(templatePath) !== '.xlsx') {
+    return failure('input-invalid',
+      `计算表模板必须是一份 .xlsx 文件（收到「${basenameLocalPath(templatePath) || templatePath}」）：请重新选择计算表模板。`,
+      { requestId })
+  }
+  // Only an intentional empty choice bypasses scanning. A supplied selection or template
+  // still goes through the real scan and every failure remains visible.
+  const intentionalEmpty = selection.length === 0 && templatePath === ''
+  const scanSelectionInput = templatePath === '' ? selection : [...selection, templatePath]
+
+  const scan = intentionalEmpty ? emptyScan() : await deps.scan(scanSelectionInput, excluded)
   if (!scan.ok) {
     return failure(scan.errorKind === 'infrastructure' ? 'infrastructure' : 'input-invalid',
       scan.error || '扫描本机资料失败，请重新选择。', { requestId })
   }
   const skipped = scan.skipped.map((item) => `${item.relativePath}（${item.reason}）`)
-  if (scan.files.length === 0) {
+  if (scan.files.length === 0 && !intentionalEmpty) {
     return failure('input-invalid',
       `选中的资料里没有可读取的普通文件（跳过 ${String(scan.skippedCount)} 项：符号链接 / 特殊文件 / 权限不足）。`
       + '请重新选择要估值的资料。', { requestId, skipped })
   }
-  // ⚠️ **整批阻止**：超过上限时一份都不复制、也不截取前 30 份 —— 静默截取会让界面上的
-  // "已选 31 份"和真正参与估值的 30 份对不上，而两边都看不出差别。
+  // ⚠️ **整批阻止**：超过上限时一份都不复制、也不截取前若干份 —— 静默截取会让界面上的
+  // "已选 N 份"和真正参与估值的份数对不上，而两边都看不出差别。
   if (scan.overLimit || scan.files.length > MAX_MATERIAL_FILES) {
     return failure('input-invalid',
       `展开后共 ${String(scan.files.length)} 份资料，超过单次最多 ${String(MAX_MATERIAL_FILES)} 份的限制：`
       + `请分批提交（不会悄悄只取前 ${String(MAX_MATERIAL_FILES)} 份）。`, { requestId, skipped, overLimit: true })
   }
   // 枚举被安全上限截断：清单**不完整**，所以真实份数本身不可信 —— 不能拿截断后的数量当全部数量
-  // 去归档（否则员工以为交了 30 份、其实只是前 30 个）。
+  // 去归档（否则员工以为交了全部、其实只是前若干个）。
   if (scan.truncated) {
     return failure('input-invalid',
       '资料清单没有完整读取（选择的目录太大或层级太深）：请选择更小的文件夹，或分批提交。',
       { requestId, skipped })
   }
-  if (scan.files.every((item) => item.sizeBytes === 0)) {
+  // An empty array must not pass the all-zero check by vacuous truth.
+  if (!intentionalEmpty && scan.files.length > 0 && scan.files.every((item) => item.sizeBytes === 0)) {
     return failure('input-invalid', '选中的资料全是空文件（0 字节）：没有可估值的内容，本轮不能启动。', { requestId, skipped })
+  }
+
+  // Bind the template role by canonical identity against the scanned candidates, never by
+  // filename. Resolution failures reject before any directory is created; `fileId` is assigned
+  // during archival, so only the index is recorded here.
+  const canonicalOf = deps.canonicalPath ?? (async (path: string) => path)
+  let templateIndex = -1
+  if (templatePath !== '') {
+    let templateKey: string
+    try {
+      templateKey = await canonicalOf(templatePath)
+    } catch {
+      return failure('input-invalid', '计算表模板无法解析成真实路径：请重新选择计算表模板后再试。', { requestId })
+    }
+    if (templateKey === '') {
+      return failure('input-invalid', '计算表模板无法解析成真实路径：请重新选择计算表模板。', { requestId })
+    }
+    for (const [index, item] of scan.files.entries()) {
+      let candidateKey = ''
+      try {
+        candidateKey = await canonicalOf(item.sourcePath)
+      } catch (error) {
+        void error
+      }
+      if (candidateKey !== '' && candidateKey === templateKey) {
+        templateIndex = index
+        break
+      }
+    }
+    if (templateIndex < 0) {
+      return failure('input-invalid',
+        `计算表模板「${basenameLocalPath(templatePath) || templatePath}」不在可读取的资料清单里`
+        + '（可能已被移除、不可读、是目录或符号链接）：请重新选择计算表模板。', { requestId, skipped })
+    }
+    if (kindOf(scan.files[templateIndex].name) !== 'excel') {
+      return failure('input-invalid',
+        `计算表模板必须是一份 .xlsx 表格（收到「${scan.files[templateIndex].name}」）：请重新选择计算表模板。`,
+        { requestId, skipped })
+    }
   }
 
   const now = deps.now()
@@ -454,12 +521,15 @@ export async function preparePreview(input: PreviewRequest, deps: PreviewDeps): 
     })
   }
 
+  // Bind the role to the archived fileId (scan order equals archive order).
+  const templateFileId = templateIndex >= 0 ? files[templateIndex].fileId : null
   const inputDigest = valuationInputDigest({
     assetType: assetType.value,
     methodRequest: method,
     baseDate: baseDate.value,
     purpose: purpose.value,
     valueType: valueType.value,
+    templateFileId,
     supplementalPrompt,
     files,
   })
@@ -474,6 +544,7 @@ export async function preparePreview(input: PreviewRequest, deps: PreviewDeps): 
     baseDate: baseDate.value,
     purpose: purpose.value,
     valueType: valueType.value,
+    templateFileId,
     supplementalPrompt,
     files,
     fileCount: files.length,

@@ -703,6 +703,42 @@ export const zhCN = {
   wsCancelled: '已取消选择',
   wsFailed: '选定失败：',
   wsServiceUnavailable: '工作空间服务不可用（缺少 uiWorkspace / workspaces）',
+  // 清理工作空间（协议 49）。这是**不可逆**动作：清单先给人看，再要求逐字输入目录名。
+  wsCleanupOpen: '清理工作空间…',
+  wsCleanupTitle: '清理工作空间',
+  wsCleanupIrreversible: '不可逆',
+  wsCleanupFolders: '个文件夹',
+  wsCleanupFiles: '个文件',
+  wsCleanupSize: '约 ',
+  wsCleanupSizeAtLeast: '至少 ',
+  wsCleanupSessions: 'DSH 会话',
+  wsCleanupTopLevel: '顶层',
+  wsCleanupSubagent: '子代理',
+  wsCleanupRunning: '条运行中：确认后将先停止并归档',
+  wsCleanupStopWarn: '如果其中包含你正在使用的会话：确认后它的当前回复会立即中断，然后被归档。',
+  wsCleanupDeleteLogs: '同时彻底删除会话日志',
+  wsCleanupDeleteLogsHint: 'DSH 不支持删除会话；这一步由插件直接删日志文件，删完可能要重启 DSH 才彻底消失。',
+  wsCleanupKeepTitle: '不受影响',
+  wsCleanupKeep: '工作空间目录本身 · 其他工作空间 · 本机凭据与授权 · 系统回收站（不走）',
+  wsCleanupLimitsTitle: '限制',
+  wsCleanupLimitArchived: '已归档、不在会话列表里的旧会话无法枚举，其日志可能残留。',
+  wsCleanupLimitHistory: '清理后报告审核页的历史记录会一并清空。',
+  wsCleanupConfirmHint: '请输入目录名「{name}」以确认',
+  wsCleanupConfirmPlaceholder: '目录名',
+  wsCleanupCancel: '取消',
+  wsCleanupApply: '清空工作空间',
+  wsCleanupApplying: '正在清理…',
+  wsCleanupElapsed: '已用时 {seconds} 秒',
+  wsCleanupStages: '停止并归档会话 → 删除会话日志 → 删除文件夹 → 收尾',
+  wsCleanupDone: '清理完成',
+  wsCleanupPartial: '清理完成，但有失败项',
+  wsCleanupAborted: '已中止',
+  wsCleanupFailed: '清理没有开始',
+  wsCleanupRetry: '重新扫描',
+  wsCleanupRemaining: '仍有 {count} 项未删除：',
+  wsCleanupEmpty: '这个工作空间已经是空的。',
+  wsCleanupBlocked: '暂时不能清理：',
+  wsCleanupRunHint: '请勿关闭页面。页面若被关闭，不保证执行会中止；重新打开后请重新扫描查看真实剩余。',
   wsArtifactPrefix: '审核产物写到 ',
   wsCwdNote: '子会话的 cwd 只能继承父会话（DSH 的 subagent API 没有 cwd 覆盖入口），所以插件把案例目录作为绝对路径写进审核指令，由 crwu 按它落盘。',
   // 注意：这里**没有**「当前会话和案例根目录不是同一个」那类文案，是有意的。
@@ -813,6 +849,7 @@ export const zhCN = {
   envConsentCapIfind: '读写 .dsh/crwu-workbench 里的工作台状态和 iFinD API-Key',
   envConsentCapSystem: '执行插件内置的 crwu / dws / ossutil；登录时打开系统浏览器；写系统剪贴板；'
     + '在你选定的工作空间里创建本轮案例目录',
+  envConsentCapCleanup: '清空你选定的工作空间：删除根下的全部内容，并停止、归档或删除该工作空间下的会话',
   envConsentBoundary: '不会把凭据交给 Agent；不会向 Agent 开放任意系统命令；可以随时在工作台撤销；'
     + '权限范围升级后会重新询问。审核产物只写进你选定的工作空间。',
   envConsentDone: '已允许工作台访问本机账号和配置（一次允许、长期有效）',
@@ -895,7 +932,6 @@ export const zhCN = {
   envWsSummary: '案例根目录',
   envWsChange: '更换',
   envWsExpand: '展开',
-  envWsAuto: '自动识别',
   envWsMissing: '选定的目录不在了，请重新选择',
   envDiagPackages: '包内组件',
   envDiagPlatform: '平台',
@@ -1029,7 +1065,7 @@ export const zhCN = {
   localAuditNotice: '文件只会用于本次对话，不会进入报告审核或云端交付流程。',
   localAuditEmptyTitle: '还没有选择文件',
   localAuditEmptyLead: '请选择文件或文件夹开始本地审核。',
-  localAuditEmptyLimit: '单次最多审核 30 个文件。',
+  localAuditEmptyLimit: '单次最多审核 200 个文件。',
   localAuditSelectedTitle: '已选择内容',
   localAuditChooseTitle: '选择文件或文件夹',
   localAuditRemove: '移除',
@@ -1068,7 +1104,7 @@ export const zhCN = {
   localAuditCreatingButton: '正在创建审核对话…',
   localAuditNeedFiles: '先选择文件或文件夹，再开始本地审核。',
   localAuditScanning: '正在读取选择范围，请稍候。',
-  localAuditOverLimit: '请移除部分文件或文件夹，把文件数量降到 30 个以内。',
+  localAuditOverLimit: '请移除部分文件或文件夹，把文件数量降到 200 个以内。',
   localAuditNoReadable: '当前选择里没有可读取的文件，请移除或重新选择。',
   localAuditPreparing: '正在把选中的文件复制到临时快照，请不要关闭页面。',
   localAuditCreating: '正在创建审核对话并发送固定审核指令。',
@@ -1267,26 +1303,21 @@ export const zhCN = {
   valuationPickFolderUnsupported: '当前运行环境拿不到本机绝对路径，无法选择文件夹：请在 DeepSeek Harness 桌面端打开本页。',
   valuationScanFailed: '资料清单读不出来',
   valuationMethodTitle: '评估方法',
-  valuationMethodAuto: '自动判定',
-  /** 只讲这个方法做什么；"当前能跑到哪一步"是能力事实，不写在这里。 */
-  valuationMethodAutoHint: '由估值会话按本轮业务规范判断适用方法，可采用单一或组合方法。',
   valuationMethodMarket: '市场法',
   valuationMethodMarketHint: '按市场法处理；案例条件与适用性仍需在会话内核实。',
   valuationMethodIncome: '收益法',
   valuationMethodIncomeHint: '按收益法处理；适用条件与所需参数由本轮业务规范判定',
   valuationMethodCost: '成本法',
   valuationMethodCostHint: '按成本法处理；范围与贬值路线由本轮业务规范判定',
-  /** 默认项的推荐标记（形状 + 文字，不只靠颜色）。 */
-  valuationMethodRecommended: '推荐',
   /** 当前选项的一句说明（只出现一次，不重复"当前选项"前缀）。 */
   valuationMethodHintOnce: '{label}：{hint}',
   valuationMethodUnsupported: '这个评估方法不可用：请重新选择。',
   /** 未知枚举：**不许**静默落回"自动判定"。 */
   valuationMethodUnknown: '不认识的评估方法「{value}」：请重新选择。',
-  /** 方法未选时的占位与说明（自动判定是选项，不是默认值）。 */
+  /** 方法未选时的占位与说明。 */
   valuationMethodPlaceholder: '请选择评估方法',
-  valuationMethodEmptyHint: '未选择时不做默认判定：选「自动判定」由 Agent 根据资料与知识库判断，'
-    + '可采用单一方法或组合方法。',
+  valuationMethodEmptyHint: '必须选一个评估方法：市场法 / 收益法 / 成本法三选一，'
+    + '选定之后不能改成「自动判定」（这一档已移除）。',
   valuationBaseDateTitle: '评估基准日',
   valuationBaseDateOptional: '可选',
   valuationBaseDateHint: '不选也可以：不按基准日筛选案例、不做日期修正，'
@@ -1351,12 +1382,13 @@ export const zhCN = {
 
   /* 单工作面（§4.3）：分区标题 + 操作区 */
   valuationWorkfaceFiles: '估值资料',
+  valuationFilesOptional: '可选',
   valuationAddFiles: '添加文件',
   valuationAddFolder: '添加文件夹',
   valuationFilesEmptyTitle: '还没有添加资料',
   // 只说**真的提供**的能力：宿主没有把拖放交给我们（面板收不到文件拖入事件），
   // 所以这里不写"拖进来" —— 写了就是让用户去试一个不会发生的事（§4.3）。
-  valuationFilesEmptyHint: '点上面的「添加文件」或「添加文件夹」从本机选择。支持 PDF / Word / Excel / 图片；'
+  valuationFilesEmptyHint: '资料是可选的，可以稍后补充。点上面的「添加文件」或「添加文件夹」从本机选择。支持 PDF / Word / Excel / 图片；'
     + '扫描件与图片需要 OCR，本部署不具备时会在读取结果里如实说明。',
   valuationFilesShowAll: '查看全部 {count} 份',
   valuationFilesShowLess: '收起',
@@ -1406,6 +1438,9 @@ export const zhCN = {
   valuationSelectedCount: '已添加 {count} 份资料',
   /** 底栏只放"当前可行动摘要"（数量明细留在资料区，§9.1）。 */
   valuationActionSummaryEmpty: '先添加至少一份资料',
+  /** Revision 2: an empty material set is an accepted start, not a missing file. */
+  valuationActionSummaryOptional: '资料可选，可稍后补充；选好资产类型与方法即可开始',
+  valuationActionSummaryPendingScan: '资料已选中，等待清单读取结果',
   valuationActionSummaryScanning: '正在读取资料清单…',
   valuationActionSummaryReady: '已纳入 {count} 份 · 下一步核对输入',
   valuationActionSummaryOverLimit: '共 {count} 份，请减少到 {limit} 份以内',
@@ -1418,6 +1453,7 @@ export const zhCN = {
   /** 「确认」那一步的瞬时文案（不新增提取进度页）。 */
   valuationPreparePending: '正在准备…',
   valuationActionDisabledNoFiles: '还没有选择资料，先添加至少一份。',
+  valuationActionDisabledSelectionUnscanned: '选中的资料还没有扫描完成：请稍候或重新读取清单。',
   valuationActionDisabledUnreadable: '选中的资料都读不出来：请重新选择可读的文件。',
   valuationTooManyFiles: '展开后 {count} 份，超过单次上限 {limit} 份：请分批提交（不会悄悄只取前 {limit} 份）。',
 

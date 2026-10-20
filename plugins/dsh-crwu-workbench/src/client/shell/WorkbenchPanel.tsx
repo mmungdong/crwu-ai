@@ -21,6 +21,7 @@ import { ReportPane } from '../modules/report-audit/ui/ReportPane.tsx'
 import { openReportNotice, openSessionTarget, openSignedUrl } from '../modules/report-audit/model/row.ts'
 import { LocalAuditPane } from '../modules/local-audit/ui/LocalAuditPane.tsx'
 import type { LocalAuditController } from '../modules/local-audit/controller.ts'
+import type { WorkspaceCleanupController } from '../modules/environment/model/workspace-cleanup.ts'
 import { LOCAL_AUDIT_CLASSES } from '../modules/local-audit/consts.ts'
 import {
   childNodes,
@@ -36,8 +37,16 @@ import {
   TAB_PANEL_ID,
   type PageId,
 } from './navigation.ts'
-import { ReportEvaluationPane, type ReportEvaluationController } from '../modules/report-evaluation/ui/ReportEvaluationPane.tsx'
-import { createReportEvaluationPaneController, reportEvaluationPaneServices } from '../modules/report-evaluation/index.ts'
+import type { ReportEvaluationController } from '../modules/report-evaluation/ui/ReportEvaluationPane.tsx'
+import {
+  createReportEvaluationPaneController,
+  createValuationWorkflowController,
+  reportEvaluationPaneServices,
+  valuationWorkflowPort,
+  type ValuationWorkflowController,
+} from '../modules/report-evaluation/index.ts'
+import { AssetAssessmentWorkflow, type AssetWorkflowStep } from '../modules/report-evaluation/ui/AssetAssessmentWorkflow.tsx'
+import { openValuationSession } from '../modules/report-evaluation/session/open-session.ts'
 import { hostPickerCapabilities } from '../modules/local-audit/pick.ts'
 import { WorkbenchLoading } from './LoadingPane.tsx'
 import { createModuleStore, useModule, type ModuleStore } from './module-store.ts'
@@ -124,6 +133,15 @@ export interface WorkbenchPanelProps {
    * 缺省（单测直接渲染组件）时页面显示"暂不可用"，而不是抛错。
    */
   evaluation?: ReportEvaluationController
+  /**
+   * 「估值」工作流的图控制器（协议 43）。
+   *
+   * 与 `evaluation` 同一条理由：它握着当前项目、节点详情与轮询计时器，必须跨模块切换存活。
+   * 缺省（单测直接渲染组件）时就地建一份，保证页面在任何挂载方式下都能渲染。
+   */
+  workflow?: ValuationWorkflowController
+  /** 「清理工作空间」的状态机（协议 49）；缺省时环境页不渲染该入口。 */
+  cleanup?: WorkspaceCleanupController
   /** 当前平台：决定等待重启说明里的 macOS 提示。 */
   platform?: 'mac' | 'other'
   /** 过期判据用的时钟；缺省本机时钟（测试注入固定值）。 */
@@ -151,6 +169,14 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
   if (fallback.current === null) fallback.current = createEnvStatusStore()
   const envStatus = props.envStatus ?? fallback.current
   // 估值兜底控制器：同样放 ref（每次重渲染新建一个会把用户填的方法/基准日/补充要求丢掉）。
+  //
+  // 图工作流控制器先建：兜底估值控制器的 `onHandoff` 要刷新的是**同一个** workflow 控制器，
+  // 不是另建一个运行时，也不允许在这里创建会话。
+  const workflowFallback = React.useRef<ValuationWorkflowController | null>(null)
+  if (workflowFallback.current === null) {
+    workflowFallback.current = createValuationWorkflowController(valuationWorkflowPort(), { autoPoll: true })
+  }
+  const workflowController: ValuationWorkflowController = props.workflow ?? workflowFallback.current
   const evaluationFallback = React.useRef<ReportEvaluationController | null>(null)
   if (evaluationFallback.current === null) {
     evaluationFallback.current = createReportEvaluationPaneController(reportEvaluationPaneServices(
@@ -168,7 +194,10 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       ),
       // 会话跳转的两条服务同样现读（它们可能比本插件晚注册）。
       () => props.services,
-    ))
+    ), {
+      // 交接被接受后留在工作流：刷新同一个图控制器，由 Host 决定项目状态。
+      onHandoff: () => { void workflowController.refresh() },
+    })
   }
   const evaluationController: ReportEvaluationController = props.evaluation ?? evaluationFallback.current
   const snapshot = useEnvStatus(envStatus)
@@ -203,6 +232,38 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
    * generic two-level tree.
    */
   const flatAuditNav = navModule === 'audit'
+  /**
+   * 资产评估的业务步骤（协议 43）：总览 → 某一项业务（当前只有「估值」）。
+   *
+   * 它必须长在**面板实例**上，而不是长在 `AssetAssessmentWorkflow` 内部：注入式渲染器
+   * 每次展开嵌套组件都会新建实例，组件内部 state 在父级重渲染时会被重置 —— 那样点进
+   * 「估值」会立刻弹回总览。
+   */
+  const [workflowStep, setWorkflowStep] = React.useState<AssetWorkflowStep>('overview')
+  /**
+   * 估值页激活时才读取工作流状态；离开时中止在途请求与轮询计时器。
+   *
+   * `activate()` 是**被动读取**：它不会启动 / 恢复任务。切回总览或切走模块时 `deactivate()`
+   * 释放定时器；面板卸载同样走这条清理。
+   */
+  const onWorkflowPage = activeNode?.page === 'valuation'
+  /**
+   * The workflow projection belongs to one workspace. Re-enter (or change workspace) must
+   * re-read passively and drop the previous projection instead of flashing it.
+   */
+  const workflowWorkspaceIdentity = `${env?.workspace.id ?? ''}\u0000${env?.workspace.path ?? ''}`
+  React.useEffect(() => {
+    if (!onWorkflowPage) {
+      workflowController.deactivate()
+      return undefined
+    }
+    void workflowController.activate()
+    return () => { workflowController.deactivate() }
+  }, [onWorkflowPage, workflowController, workflowWorkspaceIdentity])
+  // 离开估值页就回到业务总览：下次进来先看业务步骤，而不是上次停在哪。
+  React.useEffect(() => {
+    if (!onWorkflowPage) setWorkflowStep('overview')
+  }, [onWorkflowPage])
   /**
    * 内容区容器（滚动容器）。它切换目录时**不重建**，所以滚动位置要按页面身份处理。
    */
@@ -480,6 +541,21 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       await deviceLoginRef.current?.start()
     })()
   }, [])
+
+  /**
+   * 打开工作流里的**真实父会话**（协议 43）：只在员工点击时发生。
+   *
+   * 走 `uiWorkspace.openSession`（不是 `openSubagent`）；两条服务都在调用时现读，
+   * 因为它们可能比本插件晚注册。
+   */
+  const openParentSession = React.useCallback((sessionId: string): void => {
+    void openValuationSession({
+      get uiWorkspace() { return props.services.uiWorkspace },
+      get layout() { return props.services.layout },
+    }, sessionId).then((result) => {
+      if (!result.ok && mounted.current) setNotice(result.error)
+    })
+  }, [props.services])
 
   React.useEffect(() => {
     let epoch = pageLoader.get().epoch
@@ -927,6 +1003,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     onDwsLocalAskRepair={() => { setDwsLocalConfirming(true) }}
     onDwsLocalCancelRepair={() => { setDwsLocalConfirming(false) }}
     onDwsLocalConfirmRepair={repairDwsLocal}
+    cleanup={props.cleanup}
   />
 
   /**
@@ -1095,9 +1172,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       />
     }
     if (page === 'valuation') {
-      // 通用估值页：资产类型在页面里选，所以「估值」本身就是页面（没有二级目录）。
-      // 控制器由 `apply()` 注入（它握着 RPC 与会话服务），切走再回来仍是同一份草稿。
-      return <ReportEvaluationPane controller={evaluationController} />
+      // 通用估值页已经是**资产评估工作流入口**（协议 43）：业务总览 → 估值工作面。
+      // 控制器由 `apply()` 注入（它握着 RPC 与轮询），切走再回来仍是同一份项目状态；
+      // 这里不再直接 `return <ReportEvaluationPane>` —— 那正是"另建了一个孤立组件"的旧接线。
+      return <AssetAssessmentWorkflow
+        workflow={workflowController}
+        evaluation={evaluationController}
+        step={workflowStep}
+        onStep={setWorkflowStep}
+        onOpenParentSession={openParentSession}
+      />
     }
     // 元数据里有、页面还没实现的（`enabled: false`，正常路径进不来）：不假装有内容。
     return <div className={C.navEmpty}>{zhCN.navParentEmpty}</div>
@@ -1151,10 +1235,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     </div>
 
     <div className={C.body}>
-      {/* 两级目录：一级始终在页面顶部，二级紧跟其下、随一级目录一起换。
-          点一级目录时"一级 + 二级 + 正文"在**同一次状态更新**里变完（见 module-store 的 landOn），
-          所以不存在"一级已经切了、二级还显示旧目录"的中间帧。 */}
-      {mod.kind === 'node' || mod.kind === 'empty'
+      {/*
+        两级目录：一级始终在页面顶部，二级紧跟其下、随一级目录一起换。
+        点一级目录时"一级 + 二级 + 正文"在**同一次状态更新**里变完（见 module-store 的 landOn），
+        所以不存在"一级已经切了、二级还显示旧目录"的中间帧。
+        ⚠️ 报告评估（`eval`）**不再画通用页签行**：那里的正文是业务总览 → 估值工作流，
+        业务步骤由页面自己的 `data-business-step` 表达；画一行只有一个「估值」的 tablist
+        既是重复导航，也会把正文错误地标成 `aria-labelledby` 指向的 tabpanel。
+        审核树的两级页签原样保留（本地审核 / 报告审核仍靠它切换）。
+      */}
+      {(mod.kind === 'node' || mod.kind === 'empty') && navModule !== 'eval'
         ? navModule === null ? null : <div className={C.navBar}>
             {/* Primary row: parent groups for generic modules; for audit the leaf pages themselves
                 (the sole parent group would otherwise repeat above them). Both use the existing
@@ -1231,12 +1321,16 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
           : {})}
         // 环境信息不是目录里的一页（那时目录条整个不画），所以内容区只在有目录时才是 tabpanel ——
         // 否则 `aria-labelledby` 会指向一个此刻并不存在的页签 id。
+        // 报告评估也没有页签行（见上面 navBar 的说明），所以它用普通 `region` 地标，
+        // 绝不把 `aria-labelledby` 指向一个已经删掉的 tab。
         {...(mod.kind === 'env'
           ? {}
-          : {
-              role: 'tabpanel',
-              'aria-labelledby': mod.kind === 'node' && activeNode !== null ? tabIdOf(activeNode.id) : parentTabIdOf(mod.parent),
-            })}
+          : navModule === 'eval'
+            ? { role: 'region', 'aria-label': '报告评估' }
+            : {
+                role: 'tabpanel',
+                'aria-labelledby': mod.kind === 'node' && activeNode !== null ? tabIdOf(activeNode.id) : parentTabIdOf(mod.parent),
+              })}
       >
         {bootError === '' ? null : <Notice tone="warn">{bootError}</Notice>}
 

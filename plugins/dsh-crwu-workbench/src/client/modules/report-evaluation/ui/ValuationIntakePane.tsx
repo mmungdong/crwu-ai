@@ -9,7 +9,10 @@ import { useInstanceId } from '../../../ui/components/ids.ts'
 import { VALUATION_CLASSES as V } from '../model/styles.ts'
 import {
   actionSummaryOf,
+  assetTypeLabelOf,
+  basenameOf,
   canEditInputs,
+  dirnameOf,
   entryStatusText,
   fileKindLabel,
   fileKindOf,
@@ -31,7 +34,7 @@ import {
  * 估值资料                             [选择文件] [选择文件夹]
  * v 项目资料            文件夹 · 纳入 3 份            [移除文件夹]
  *    权属资料.pdf       PDF · 2.4 MB   已纳入        [移除]
- * 已纳入 3 / 30 份；跳过 1 项                          [查看跳过项]
+ * 已纳入 3 / 200 份；跳过 1 项                          [查看跳过项]
  * ─────────────────────────────────────────────────────────────
  * 资产类型 *                     评估方法 *
  * [请选择资产类型        ▾]     [请选择评估方法        ▾]
@@ -96,6 +99,10 @@ export interface ValuationIntakePaneProps {
   /** 价值类型（空串 = 未指定）。 */
   onValueTypeChange: (value: string) => void
   onPromptChange: (value: string) => void
+  /** 选一份本机 .xlsx 计算表模板（可选；只接受原生选择的绝对路径）。 */
+  onPickTemplate: () => void
+  /** 移除已选模板。 */
+  onClearTemplate: () => void
   /** 「核对资料」：递归校验 + 字节归档 + 元信息回显。 */
   onConfirm: () => void
   /** 准备核对期间真实存在的「返回修改」（作废在途请求、回到可编辑草稿）。 */
@@ -130,22 +137,20 @@ function shortDir(dir: string): string {
 function assetTypeOptions(): SelectOption[] {
   return ASSET_TYPES.map((value) => ({
     value,
-    label: value === 'real-estate' ? zhCN.valuationAssetTypeRealEstate : value,
+    label: assetTypeLabelOf(value),
   }))
 }
 
 /**
- * 方法选项：四项**全部可选**（协议 39）。
+ * 方法选项：三项**指定方法**全部可选。
  *
- * 「自动判定」是一个明确的用户选项，带一枚轻量「推荐」标记，但**不是默认值** ——
- * 新草稿里它是未选状态（`state.method === ''`）。
+ * 没有「自动判定」这一档：方法必须由用户明确选择，新草稿里它是未选状态（`state.method === ''`）。
  */
 function methodOptions(): SelectOption[] {
   return valuationMethodOptions().map((option) => ({
     value: option.value,
     label: option.label,
     hint: option.hint,
-    ...(option.value === 'auto' ? { badge: zhCN.valuationMethodRecommended } : {}),
   }))
 }
 
@@ -408,9 +413,78 @@ export function ValuationIntakePane(props: ValuationIntakePaneProps): React.Reac
     {/* 正文滚动区：工作面是**确定高度的 flex 列**，只有这一层滚（§9.2 的第一方案）。
         底部操作栏因此是真正的 footer（`flex:none`），不再用 sticky 压在内容上面。 */}
     <div className="crwu-valuation-intake-body">
+    {/* Revision 2: only asset type and method are required; everything below is optional. */}
+    <section className="crwu-valuation-block" data-valuation-block="required">
+      <div className={V.requiredRow}>
+        <FormField
+          className={V.field}
+          id={fieldId('asset-type')}
+          label={zhCN.valuationAssetTypeTitle}
+          required
+          hint={state.assetType === '' ? zhCN.valuationAssetTypeRequired : zhCN.valuationAssetTypeHint}
+          error={assetTypeError}
+          dataAttributes={{ 'data-valuation-asset-type': 'true' }}
+          errorData={{ 'data-valuation-field-error': 'asset-type' }}
+        >
+          {(field) => <Select
+            name="asset-type"
+            labelId={field.labelId}
+            id={field.id}
+            value={state.assetType}
+            placeholder={zhCN.valuationAssetTypePlaceholder}
+            options={assetTypes}
+            disabled={!editable}
+            required
+            invalid={field.invalid}
+            describedBy={field.describedBy}
+            dataAttributes={{ 'data-valuation-select': 'asset-type' }}
+            optionAttributes={(option) => ({ 'data-valuation-option': option.value })}
+            onBlur={() => { setBlurred((prev) => ({ ...prev, assetType: true })) }}
+            onChange={props.onAssetTypeChange}
+          />}
+        </FormField>
+
+        <FormField
+          className={V.field}
+          id={fieldId('method')}
+          label={zhCN.valuationMethodTitle}
+          required
+          hint={currentMethod === undefined
+            ? zhCN.valuationMethodEmptyHint
+            : zhCN.valuationMethodHintOnce
+              .replace('{label}', currentMethod.label)
+              .replace('{hint}', currentMethod.hint ?? '')}
+          error={methodError}
+          dataAttributes={{ 'data-valuation-method-field': 'true' }}
+          hintData={{ 'data-valuation-method-hint': currentMethod?.value ?? '' }}
+          errorData={{ 'data-valuation-field-error': 'method' }}
+        >
+          {(field) => <Select
+            name="method"
+            labelId={field.labelId}
+            id={field.id}
+            value={state.method}
+            placeholder={zhCN.valuationMethodPlaceholder}
+            options={methods}
+            disabled={!editable}
+            required
+            invalid={field.invalid}
+            describedBy={field.describedBy}
+            dataAttributes={{ 'data-valuation-select': 'method' }}
+            optionAttributes={(option) => ({ 'data-valuation-option': option.value })}
+            onBlur={() => { setBlurred((prev) => ({ ...prev, method: true })) }}
+            onChange={(value) => { props.onMethodChange(value as ValuationMethodChoice) }}
+          />}
+        </FormField>
+      </div>
+    </section>
+
     <section className="crwu-valuation-block" data-valuation-block="files">
       <header className="crwu-valuation-block-head">
-        <h3 className="crwu-valuation-block-title">{zhCN.valuationWorkfaceFiles}</h3>
+        <h3 className="crwu-valuation-block-title">
+          {zhCN.valuationWorkfaceFiles}
+          <span className={V.fieldOptional}> · {zhCN.valuationFilesOptional}</span>
+        </h3>
         <div className="crwu-valuation-pick">
           <Button variant="secondary" className={V.btn} buttonRef={addFilesRef} disabled={!editable} onClick={props.onPickFiles}>
             <FileIcon size={14} /> {zhCN.valuationPickFiles}
@@ -512,73 +586,6 @@ export function ValuationIntakePane(props: ValuationIntakePaneProps): React.Reac
           >{zhCN.valuationUndo}</Button>
         </div>
         : null}
-    </section>
-
-    {/* ── 两个必填项：紧跟资料区，排在所有可选条件与辅助能力之前 ──────────────
-        容器 ≥560px 时并排等宽；更窄时纵向堆叠（容器查询按**面板实际宽度**判断）。 */}
-    <section className="crwu-valuation-block" data-valuation-block="required">
-      <div className={V.requiredRow}>
-        <FormField
-          className={V.field}
-          id={fieldId('asset-type')}
-          label={zhCN.valuationAssetTypeTitle}
-          required
-          hint={state.assetType === '' ? zhCN.valuationAssetTypeRequired : zhCN.valuationAssetTypeHint}
-          error={assetTypeError}
-          dataAttributes={{ 'data-valuation-asset-type': 'true' }}
-          errorData={{ 'data-valuation-field-error': 'asset-type' }}
-        >
-          {(field) => <Select
-            name="asset-type"
-            labelId={field.labelId}
-            id={field.id}
-            value={state.assetType}
-            placeholder={zhCN.valuationAssetTypePlaceholder}
-            options={assetTypes}
-            disabled={!editable}
-            required
-            invalid={field.invalid}
-            describedBy={field.describedBy}
-            dataAttributes={{ 'data-valuation-select': 'asset-type' }}
-            optionAttributes={(option) => ({ 'data-valuation-option': option.value })}
-            onBlur={() => { setBlurred((prev) => ({ ...prev, assetType: true })) }}
-            onChange={props.onAssetTypeChange}
-          />}
-        </FormField>
-
-        <FormField
-          className={V.field}
-          id={fieldId('method')}
-          label={zhCN.valuationMethodTitle}
-          required
-          hint={currentMethod === undefined
-            ? zhCN.valuationMethodEmptyHint
-            : zhCN.valuationMethodHintOnce
-              .replace('{label}', currentMethod.label)
-              .replace('{hint}', currentMethod.hint ?? '')}
-          error={methodError}
-          dataAttributes={{ 'data-valuation-method-field': 'true' }}
-          hintData={{ 'data-valuation-method-hint': currentMethod?.value ?? '' }}
-          errorData={{ 'data-valuation-field-error': 'method' }}
-        >
-          {(field) => <Select
-            name="method"
-            labelId={field.labelId}
-            id={field.id}
-            value={state.method}
-            placeholder={zhCN.valuationMethodPlaceholder}
-            options={methods}
-            disabled={!editable}
-            required
-            invalid={field.invalid}
-            describedBy={field.describedBy}
-            dataAttributes={{ 'data-valuation-select': 'method' }}
-            optionAttributes={(option) => ({ 'data-valuation-option': option.value })}
-            onBlur={() => { setBlurred((prev) => ({ ...prev, method: true })) }}
-            onChange={(value) => { props.onMethodChange(value as ValuationMethodChoice) }}
-          />}
-        </FormField>
-      </div>
     </section>
 
     {/* ── 补充条件 · 可选：三列（宽）/ 两列（中）/ 一列（窄）────────────────── */}
@@ -686,6 +693,39 @@ export function ValuationIntakePane(props: ValuationIntakePaneProps): React.Reac
           }}
         />}
       </FormField>
+
+      {/*
+        可选的计算表模板：与"本轮纳入哪些资料"分开的一个角色。
+        只接受原生选择器给出的一份 .xlsx 绝对路径；移除是独立动作，不动物料范围。
+      */}
+      <div className="crwu-valuation-template" data-valuation-template={state.templatePath === '' ? 'empty' : 'selected'}>
+        <div className="crwu-valuation-template-main">
+          <span className="crwu-valuation-template-title">计算表模板 · 可选</span>
+          <p className="crwu-valuation-hint">
+            选择一份 .xlsx 计算表模板；Host 会按本机路径归档并在本轮方案里绑定它。
+          </p>
+          {state.templatePath === '' ? null : <p className="crwu-valuation-template-path" data-valuation-template-path={state.templatePath}>
+            {basenameOf(state.templatePath)}
+            <span className="crwu-valuation-template-dir">{dirnameOf(state.templatePath)}</span>
+          </p>}
+        </div>
+        <div className="crwu-valuation-template-actions">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!editable}
+            data-valuation-template-pick="true"
+            onClick={props.onPickTemplate}
+          >{state.templatePath === '' ? '选择模板' : '更换模板'}</Button>
+          {state.templatePath === '' ? null : <Button
+            variant="text"
+            size="sm"
+            disabled={!editable}
+            data-valuation-template-clear="true"
+            onClick={props.onClearTemplate}
+          >移除</Button>}
+        </div>
+      </div>
     </section>
 
     {/* ── 信息获取辅助 · 可选 ──────────────────────────────────────────────

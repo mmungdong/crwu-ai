@@ -66,11 +66,16 @@ export interface ReportEvaluationController {
   setValueType: (value: string) => void
   setBaseDate: (value: string) => void
   setPrompt: (value: string) => void
+  /** 选一份本机 .xlsx 计算表模板（可选）。 */
+  pickTemplate: () => void
+  clearTemplate: () => void
   preparePreview: () => void
   backToEdit: () => void
   confirm: () => void
   openCreatedSession: () => void
   invalidate: () => void
+  /** Optional: reset to a fresh local draft after the workflow confirmed a clear. */
+  resetDraft?: () => void
   markStale: () => void
 }
 
@@ -225,6 +230,8 @@ export function ReportEvaluationPane(props: ReportEvaluationPaneProps): React.Re
           onPurposeChange={controller.setPurpose}
           onValueTypeChange={controller.setValueType}
           onPromptChange={controller.setPrompt}
+          onPickTemplate={controller.pickTemplate}
+          onClearTemplate={controller.clearTemplate}
           onConfirm={controller.preparePreview}
           onBackToEdit={controller.backToEdit}
           primaryRef={confirmButtonRef}

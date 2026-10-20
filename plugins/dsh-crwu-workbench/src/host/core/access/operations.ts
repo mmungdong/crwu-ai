@@ -86,7 +86,10 @@ export type LocalAccessOperation =
   | 'system.valuation-material.copy'
   | 'system.valuation-case.directory.write'
   | 'system.valuation-case.file.write'
+  | 'system.valuation-workflow.store'
   | 'system.valuation-recalculation.run'
+  | 'system.valuation-document.render'
+  | 'system.workspace-cleanup'
   | 'python.script.run'
 
 export interface LocalAccessDescriptor {
@@ -171,7 +174,10 @@ export const LOCAL_ACCESS_OPERATION_NAMES = [
   'system.valuation-material.copy',
   'system.valuation-case.directory.write',
   'system.valuation-case.file.write',
+  'system.valuation-workflow.store',
   'system.valuation-recalculation.run',
+  'system.valuation-document.render',
+  'system.workspace-cleanup',
   'python.script.run',
 ] as const satisfies readonly LocalAccessOperation[]
 
@@ -407,6 +413,16 @@ export const LOCAL_ACCESS_OPERATIONS = {
   'system.valuation-case.file.write': {
     capability: 'system-integration', transport: 'filesystem', privileged: true, allowedSources: PANEL,
   },
+  // 工作流任务的单当前记录存储（`<已选工作区>/.crwu/workflows.sqlite`，协议 43）。
+  //
+  // 路径只由 Host 从**选定工作区**推出，面板/工具/宿主后台都提交不了路径；读取与写入都要
+  // 先过这一条具名授权（存储句柄在每次读/写/检查点迭代时还会再判一次）。
+  // `filesystem` + `privileged: false`：SQLite 由 Host 自己的 fs 句柄打开，不跑 shell，
+  // 也不在会话 cwd 之外的任意位置 —— 边界由路径推导决定，不需要逐次提权。
+  'system.valuation-workflow.store': {
+    capability: 'system-integration', transport: 'filesystem', privileged: false,
+    allowedSources: ['panel', 'audit-tool', 'host-background'],
+  },
   // 审核子代理跑**本轮案例目录内**的技能脚本（DSH 自带 Python）。
   // **不提权**：脚本在案例目录里，而案例目录就在会话 cwd（工作空间）之内 —— 边界之内不需要
   // `danger-full-access`。反过来正是这条"不提权"让命令**落在受限沙箱里**，于是
@@ -430,6 +446,25 @@ export const LOCAL_ACCESS_OPERATIONS = {
   'system.valuation-recalculation.run': {
     capability: 'system-integration', transport: 'shell', privileged: true,
     allowedSources: ['audit-tool'],
+  },
+  // Frozen-PDF, case-only page rendering through the official DSH office-render
+  // capability. The command shape (absolute Node + LibreOffice Kit CLI, bounded
+  // args) is fixed inside the renderer; this is neither the Python operation nor
+  // a general document runner, so it stays non-privileged and audit-tool-only.
+  'system.valuation-document.render': {
+    capability: 'system-integration', transport: 'shell', privileged: false,
+    allowedSources: ['audit-tool'],
+  },
+  // 清空员工选定的工作空间（根下全部直接子项）并处理归属会话（协议 49）。
+  //
+  // 为什么单独一个能力：`system-integration` 描述的是"建一级案例目录"，
+  // 而这条会删整盘内容与会话日志 —— 借用前者等于静默扩权，所以配 `workspace-cleanup`
+  // 能力（授权收据 schema 2），老收据判 `outdated`、要求重新同意一次。
+  //
+  // `transport: 'filesystem'`：删除由 Host 内的 `node:fs` 完成，不拼 shell 命令；
+  // 只给 `panel`：这是员工在环境页手动点的一次性动作，审核子代理与后台都不该发起。
+  'system.workspace-cleanup': {
+    capability: 'workspace-cleanup', transport: 'filesystem', privileged: true, allowedSources: PANEL,
   },
 } as const satisfies Record<LocalAccessOperation, LocalAccessDescriptor>
 

@@ -44,14 +44,13 @@ import type {
 // 这几个是**跨进程合同**里的类型，组件从 model 取（页面不直接依赖 shared 的形状名）。
 export type { ValuationMethod, ValuationPagePhase, ValuationPreviewView, ValuationHandoffView }
 
-export const VALUATION_METHODS: readonly ValuationMethod[] = ['auto', 'market', 'income', 'cost']
+export const VALUATION_METHODS: readonly ValuationMethod[] = ['market', 'income', 'cost']
 
 /**
  * 草稿里的评估方法：**空串是"还没选"**。
  *
- * 为什么草稿不能用 `'auto'` 当空态：`auto` 是一个明确的用户选项（"由 Agent 判定"），
- * 拿它当默认值会让"没选"与"选了自动判定"在状态里长得一模一样 —— 于是必填校验恒真、
- * 空值被静默显示成"自动判定"。草稿因此用空串，提交与冻结输入才收窄成 `ValuationMethod`。
+ * 方法必须由用户在选择页明确指定（市场法 / 收益法 / 成本法），没有「自动判定」这一档。
+ * 草稿用空串表示"还没选"，提交与冻结输入才收窄成 `ValuationMethod`。
  */
 export type ValuationMethodChoice = '' | ValuationMethod
 
@@ -79,7 +78,9 @@ export function isKnownAssetType(value: unknown): boolean {
 export function assetTypeLabelOf(assetType: string): string {
   const value = text(assetType).trim()
   if (value === '') return ''
-  return value === 'real-estate' ? zhCN.valuationAssetTypeRealEstate : value
+  if (value === 'real-estate') return zhCN.valuationAssetTypeRealEstate
+  // 未登记的取值原样返回：宁可让员工看到一个陌生的标识，也不要把它显示成别的资产类型。
+  return value
 }
 
 /**
@@ -94,10 +95,10 @@ export function methodSupported(_method: ValuationMethod): boolean {
 }
 
 /**
- * 方法选项（界面顺序即数组顺序；默认第一项 = 自动判定）。
+ * 方法选项（界面顺序即数组顺序）。
  *
- * 四项都不禁用。真正的适用性判断归本轮知识（方法选择方案正文），归 Agent 执行，
- * 不归这一层写死。
+ * 三项指定方法都不禁用。真正的适用性判断归本轮知识（方法选择方案正文），归 Agent 执行，
+ * 不归这一层写死；没有「自动判定」这一档。
  */
 export function valuationMethodOptions(): Array<{
   value: ValuationMethod
@@ -106,7 +107,6 @@ export function valuationMethodOptions(): Array<{
   disabled: boolean
 }> {
   return [
-    { value: 'auto', label: zhCN.valuationMethodAuto, hint: zhCN.valuationMethodAutoHint, disabled: false },
     { value: 'market', label: zhCN.valuationMethodMarket, hint: zhCN.valuationMethodMarketHint, disabled: false },
     { value: 'income', label: zhCN.valuationMethodIncome, hint: zhCN.valuationMethodIncomeHint, disabled: false },
     { value: 'cost', label: zhCN.valuationMethodCost, hint: zhCN.valuationMethodCostHint, disabled: false },
@@ -263,6 +263,13 @@ export interface ValuationPageState {
   purpose: string
   /** 用户填的**价值类型**；未填是空串（= 未指定）。可选值清单待业务方确认，界面不做枚举。 */
   valueType: string
+  /**
+   * 可选的计算表模板（本机绝对路径，协议 43）。
+   *
+   * 空串 = 不指定。它**不在** `selection` / `excluded` 里：模板是"算哪张表"的角色，
+   * 与"本轮纳入哪些资料"是两件事；Host 预览时按 canonical 路径把它绑到归档 fileId。
+   */
+  templatePath: string
   supplementalPrompt: string
   /** 超过上限的输入原文（让"粘贴超长"有明确说明而不是静默截断）。 */
   promptOverLimit: boolean
@@ -277,6 +284,13 @@ export interface ValuationPageState {
    * 只有 `not-created` 才允许「返回修改」；`unknown` 与 `created` 都必须先完成同一轮恢复。
    */
   creationDisposition: CreationDisposition
+  /**
+   * Host-provided executable recovery for the last failure.
+   *
+   * Only `refresh-preview` (an expired preview with no parent session) turns the primary
+   * action into a fresh preparation; everything else keeps the same-request recovery.
+   */
+  recoveryAction: '' | 'refresh-preview' | 'retry-handoff'
   /** 同一 requestId / previewId 已经交接成功过（界面据此不重复提示）。 */
   reused: boolean
   /** 会话建好了、但自动打开失败：重试**只重新导航**，不再创建。 */
@@ -323,13 +337,15 @@ export function initialValuationState(patch: Partial<ValuationPageState> = {}): 
     fileCount: 0,
     overLimit: false,
     readableCount: 0,
-    limit: 30,
-    // 新草稿里两个必填项都**未选择**：不替用户默认「自动判定」，也不默认房地产。
+    limit: 200,
+    // 新草稿里两个必填项都**未选择**：资产类型与评估方法都由用户主动选，
+    // 没有「自动识别 / 自动判定」这一档，也不替用户默认成房地产或某一种方法。
     method: '',
     assetType: '',
     baseDate: '',
     purpose: '',
     valueType: '',
+    templatePath: '',
     supplementalPrompt: '',
     promptOverLimit: false,
     preview: null,
@@ -337,6 +353,7 @@ export function initialValuationState(patch: Partial<ValuationPageState> = {}): 
     parentSessionId: '',
     dispatchAccepted: false,
     creationDisposition: 'unknown',
+    recoveryAction: '',
     reused: false,
     openFailed: false,
     retrySameSession: false,
@@ -439,6 +456,27 @@ export function phaseHintOf(phase: ValuationPagePhase): string {
 }
 
 /**
+ * Expired-preview recovery copy.
+ *
+ * The generic not-created copy says "retry creation", which would resubmit an expired
+ * handoff. When the Host explicitly asks to refresh the preview there is no parent session
+ * to recover, so the only correct primary action is a fresh preparation.
+ */
+export const HANDOFF_REFRESH_PREVIEW_LABEL = '重新准备确认'
+export const HANDOFF_REFRESH_PREVIEW_NOTE = '这次预览已经过期：请重新准备确认，资料与条件会原样保留。'
+
+/**
+ * Whether the Host's expired-preview recovery is actionable: authoritative `not-created`
+ * with no known parent session. Anything else keeps the same-request recovery path.
+ */
+export function canRefreshExpiredPreview(state: ValuationPageState): boolean {
+  return state.phase === 'handoff-failed'
+    && state.recoveryAction === 'refresh-preview'
+    && state.creationDisposition === 'not-created'
+    && state.parentSessionId === ''
+}
+
+/**
  * 交接失败/结果未知时的结构化标题（UX-17）。
  *
  * 标题来自**结构化事实**，不是一句泛化的阶段话：会话已经建出来时还说"未创建"就是自相矛盾。
@@ -453,6 +491,7 @@ export function handoffTitleOf(state: ValuationPageState): string {
 
 /** 交接失败时的解释句（与标题配对，不再叠一句泛化阶段说明）。 */
 export function handoffNoteOf(state: ValuationPageState): string {
+  if (canRefreshExpiredPreview(state)) return HANDOFF_REFRESH_PREVIEW_NOTE
   if (state.creationDisposition === 'created' || state.parentSessionId !== '') {
     return zhCN.valuationHandoffCreatedNote
   }
@@ -473,6 +512,7 @@ export function canReturnToEdit(state: ValuationPageState): boolean {
 
 /** 「重试创建」与「恢复交接」共用同一颗按钮：复用 requestId 就是恢复。 */
 export function handoffRetryLabelOf(state: ValuationPageState): string {
+  if (canRefreshExpiredPreview(state)) return HANDOFF_REFRESH_PREVIEW_LABEL
   if (state.creationDisposition === 'not-created') return zhCN.valuationHandoffRetryCreate
   if (state.creationDisposition === 'created' || state.parentSessionId !== '') {
     return zhCN.valuationHandoffRetryDispatch
@@ -494,21 +534,28 @@ export function startDisabledReason(state: ValuationPageState): string {
   if (!canEditInputs(state.phase)) return inputLockedReason(state.phase)
   if (state.truncated) return zhCN.valuationActionDisabledTruncated
   if (state.scanState === 'failed') return zhCN.valuationActionSummaryScanFailed
-  if (state.selection.length === 0) return zhCN.valuationActionDisabledNoFiles
   if (state.scanState === 'scanning') return zhCN.valuationScanRunning
-  if (state.overLimit) {
-    return zhCN.valuationTooManyFiles
-      .replace('{count}', String(state.fileCount))
-      .replace('{limit}', String(state.limit))
+  // Revision 2: materials are optional. An intentional empty selection (idle scan,
+  // no phantom files) can start; any explicit nonempty selection keeps every safety
+  // gate below.
+  if (state.selection.length > 0) {
+    if (state.overLimit) {
+      return zhCN.valuationTooManyFiles
+        .replace('{count}', String(state.fileCount))
+        .replace('{limit}', String(state.limit))
+    }
+    if (state.fileCount === 0) return zhCN.valuationActionDisabledSelectionUnscanned
+    if (state.readableCount === 0) return zhCN.valuationActionDisabledUnreadable
   }
-  if (state.fileCount === 0) return zhCN.valuationActionDisabledNoFiles
-  if (state.readableCount === 0) return zhCN.valuationActionDisabledUnreadable
-  // 两个必填项都由用户主动选：未选不能确认，也**不替**用户默认成房地产 / 自动判定。
   if (state.assetType === '') return zhCN.valuationActionDisabledNoAssetType
   if (!isKnownAssetType(state.assetType)) {
     return zhCN.valuationAssetTypeUnknown.replace('{value}', state.assetType)
   }
   if (chosenMethod(state.method) === null) return zhCN.valuationActionDisabledNoMethod
+  // 模板是可选角色，但一旦选了就必须是原生选择器给出的 .xlsx 绝对路径。
+  if (state.templatePath !== '' && !isTemplatePath(state.templatePath)) {
+    return TEMPLATE_INVALID
+  }
   if (state.promptOverLimit || state.supplementalPrompt.length > VALUATION_PROMPT_MAX_LENGTH) {
     return zhCN.valuationPromptTooLong.replace('{limit}', String(VALUATION_PROMPT_MAX_LENGTH))
   }
@@ -520,7 +567,8 @@ export function actionSummaryOf(state: ValuationPageState): string {
   if (state.phase === 'preparing-confirmation') return zhCN.valuationActionSummaryPreparing
   if (state.scanState === 'scanning') return zhCN.valuationActionSummaryScanning
   if (state.scanState === 'failed') return zhCN.valuationActionSummaryScanFailed
-  if (state.selection.length === 0 || state.fileCount === 0) return zhCN.valuationActionSummaryEmpty
+  if (state.selection.length === 0) return zhCN.valuationActionSummaryOptional
+  if (state.fileCount === 0) return zhCN.valuationActionSummaryPendingScan
   if (state.overLimit) {
     return zhCN.valuationActionSummaryOverLimit
       .replace('{count}', String(state.fileCount))
@@ -839,6 +887,36 @@ export function setSupplementalPrompt(state: ValuationPageState, prompt: string)
   return accept(state, { supplementalPrompt: value, promptOverLimit: false })
 }
 
+/** 模板不合规时唯一的一句人话（`setTemplate` 与底栏判据共用）。 */
+export const TEMPLATE_INVALID = '计算表模板必须是一份本机 .xlsx 文件：请通过「选择模板」重新选择。'
+
+/**
+ * 模板路径的**形状**判据：必须是原生选择器给出的绝对路径，且扩展名是 `.xlsx`。
+ *
+ * 为什么非要绝对路径：浏览器里 `File.name` 只有一个文件名，那对 Host 毫无意义。
+ * 拿它冒充路径会让"模板已选中"变成一句假话 —— 预览时 Host 找不到这份文件。
+ */
+export function isTemplatePath(value: unknown): boolean {
+  const path = text(value).trim()
+  if (path === '') return false
+  if (!/\.xlsx$/i.test(path)) return false
+  // POSIX 绝对路径 / Windows 盘符 / UNC 三种原生形态；相对路径一律不接受。
+  return path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\')
+}
+
+/**
+ * 选 / 清计算表模板（`''` = 不指定）。
+ *
+ * 只接受单份 `.xlsx` 的绝对路径；选择与移除是两个显式动作（移除不影响资料范围）。
+ */
+export function setTemplate(state: ValuationPageState, templatePath: string): MutationResult {
+  if (!canEditInputs(state.phase)) return refuse(state, inputLockedReason(state.phase))
+  const value = text(templatePath).trim()
+  if (value === '') return accept(state, { templatePath: '' })
+  if (!isTemplatePath(value)) return refuse(state, TEMPLATE_INVALID)
+  return accept(state, { templatePath: value })
+}
+
 // ── 案例来源能力（**不是门禁**） ──────────────────────────────────────────────
 
 /**
@@ -1008,6 +1086,7 @@ export function beginPrepare(state: ValuationPageState, requestId: number): Muta
     phase: 'preparing-confirmation',
     prepareRequestId: requestId,
     preview: null,
+    recoveryAction: '',
     // 冻结范围：可编辑操作（撤销）不许带进只读抽屉（设计稿 §8.4）。
     lastRemoval: null,
     error: '',
@@ -1050,10 +1129,15 @@ export function prepareReady(
   if (preview.assetType !== state.assetType || verifiedMethod !== state.method) {
     return recover(zhCN.valuationPreviewMismatch)
   }
+  // 模板角色必须与本次提交一致：选了模板却没有归档 fileId（或反之）都不是可信的回执。
+  if ((state.templatePath !== '') !== (text(preview.templateFileId) !== '')) {
+    return recover(zhCN.valuationPreviewIncomplete)
+  }
   return accept(state, {
     phase: 'confirmation',
     prepareRequestId: 0,
     preview,
+    recoveryAction: '',
     projectId: preview.projectId || state.projectId,
     // 资产类型与方法**逐字**取自 Host 回包（已在上面的校验里确认过是本次提交的那一份）。
     assetType: preview.assetType,
@@ -1097,6 +1181,7 @@ export function backToEdit(state: ValuationPageState): MutationResult {
     // 新建一轮草稿不再持有上一轮的会话身份（最近会话入口另行保留）。
     parentSessionId: state.phase === 'handoff-failed' ? '' : state.parentSessionId,
     creationDisposition: 'unknown',
+    recoveryAction: '',
     dispatchAccepted: false,
     retrySameSession: false,
     error: '',
@@ -1148,6 +1233,7 @@ export function handoffDone(state: ValuationPageState, receipt: ValuationHandoff
     parentSessionId: sessionId,
     dispatchAccepted: true,
     creationDisposition: 'created',
+    recoveryAction: '',
     reused: receipt.reused === true,
     openFailed: false,
     retrySameSession: false,
@@ -1179,12 +1265,16 @@ export function handoffFailed(
   const disposition: CreationDisposition = raw === 'not-created' || raw === 'created' || raw === 'unknown'
     ? raw
     : (sessionId === '' ? 'unknown' : 'created')
+  const recovery = text(receipt.recoveryAction)
+  const recoveryAction: ValuationPageState['recoveryAction'] =
+    recovery === 'refresh-preview' ? 'refresh-preview' : recovery === 'retry-handoff' ? 'retry-handoff' : ''
   return accept(state, {
     phase: 'handoff-failed',
     projectId: text(receipt.projectId) || state.projectId,
     parentSessionId: sessionId,
     dispatchAccepted: false,
     creationDisposition: disposition,
+    recoveryAction,
     reused: receipt.reused === true,
     // "重试要发回同一条会话"是**会话存在**的事实（与判据分开）：`unknown` 时也可能已经建出
     // 会话来了，重试同样必须复用它。能不能「返回修改」只看 `creationDisposition`。
@@ -1233,12 +1323,13 @@ export function resetAfterHandoff(state: ValuationPageState): MutationResult {
     fileCount: 0,
     overLimit: false,
     readableCount: 0,
-    // 开始新一轮：两个必填项**一起**清回未选择。
+    // 开始新一轮：两个必填项回到未选择，模板与用户文本一起清空。
     method: '',
     assetType: '',
     baseDate: '',
     purpose: '',
     valueType: '',
+    templatePath: '',
     supplementalPrompt: '',
     promptOverLimit: false,
     preview: null,
@@ -1246,6 +1337,7 @@ export function resetAfterHandoff(state: ValuationPageState): MutationResult {
     parentSessionId: '',
     dispatchAccepted: false,
     creationDisposition: 'unknown',
+    recoveryAction: '',
     reused: false,
     openFailed: false,
     retrySameSession: false,

@@ -143,7 +143,7 @@ const OBJECT = {
 }
 const VALID_ARGS = {
   objects: [OBJECT],
-  proposals: [{ planId: 'plan-001', title: '方案1', objectIds: ['o-1'], propertyType: 'residential' }],
+  proposals: [{ planId: 'plan-001', title: '方案1', objectIds: ['o-1'], propertyType: 'residential', methodRequest: 'market' }],
   methodFacts: { 'plan-001': [{ method: 'market', applicable: true }] },
 }
 
@@ -154,7 +154,7 @@ function run(deps, args, exec) {
 function planArgs(planId, objectIds = ['o-1']) {
   return {
     objects: [OBJECT],
-    proposals: [{ planId, title: planId, objectIds, propertyType: 'residential' }],
+    proposals: [{ planId, title: planId, objectIds, propertyType: 'residential', methodRequest: 'market' }],
     methodFacts: { [planId]: [{ method: 'market', applicable: true }] },
   }
 }

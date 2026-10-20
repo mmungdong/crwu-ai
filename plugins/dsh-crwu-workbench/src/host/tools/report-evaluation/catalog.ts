@@ -39,8 +39,16 @@ export const SUFFIX_BY_EXTENSION: Record<string, string> = {
   xlsx: 'xlsx',
 }
 
+/** Host capabilities the knowledge readers need; Tools and reusable services share it. */
+export interface KnowledgeCatalogDeps {
+  access: ToolDeps['access']
+  config?: unknown
+  /** Stable plugin/runtime object used as the catalog-cache owner. */
+  cacheOwner?: object
+}
+
 /** 配置里的知识镜像根；没配 / 旧配置没有这一节时为空串（= 不启用）。 */
-export function knowledgeMirrorRootOf(deps: ToolDeps): string {
+export function knowledgeMirrorRootOf(deps: { config?: unknown }): string {
   const config = deps.config as { valuation?: { knowledge?: { mirrorRoot?: unknown } } } | undefined
   return text(config?.valuation?.knowledge?.mirrorRoot).trim()
 }
@@ -51,13 +59,13 @@ export function knowledgeMirrorRootOf(deps: ToolDeps): string {
  * 协议 39 起的唯一业务入口。它与技能 `references/knowledge-routing.md` 里声明的那一行
  * 指向同一份真实知识；放在配置里是为了让 Host 在会话开始前就能取到入口正文。
  */
-export function knowledgeWikiPathOf(deps: ToolDeps): string {
+export function knowledgeWikiPathOf(deps: { config?: unknown }): string {
   const config = deps.config as { valuation?: { knowledge?: { wikiPath?: unknown } } } | undefined
   return text(config?.valuation?.knowledge?.wikiPath).trim().replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
 /** 配置里的 manifest 库内路径（相对**知识库根**，posix；协议 39 起是**遗留**键）。 */
-export function knowledgeManifestPathOf(deps: ToolDeps): string {
+export function knowledgeManifestPathOf(deps: { config?: unknown }): string {
   const config = deps.config as { valuation?: { knowledge?: { manifestPath?: unknown } } } | undefined
   return text(config?.valuation?.knowledge?.manifestPath).trim().replace(/\\/g, '/').replace(/^\/+/, '')
 }
@@ -99,7 +107,7 @@ export interface ManifestRead {
  */
 export async function loadKnowledgeManifest(options: {
   ctx: Context
-  deps: ToolDeps
+  deps: KnowledgeCatalogDeps
   caseDir: string
   knowledgeDir: string
   platform: string
@@ -178,13 +186,14 @@ export interface KnowledgeCatalogRead {
  * In-flight requests are never deduplicated, so a cancellation cannot poison another caller.
  */
 const CATALOG_CACHE_LIMIT = 64
-const CATALOG_CACHE = new WeakMap<ToolDeps, Map<string, KnowledgeCatalogRead>>()
+const CATALOG_CACHE = new WeakMap<object, Map<string, KnowledgeCatalogRead>>()
 
-function catalogCacheOf(deps: ToolDeps): Map<string, KnowledgeCatalogRead> {
-  let map = CATALOG_CACHE.get(deps)
+function catalogCacheOf(deps: KnowledgeCatalogDeps): Map<string, KnowledgeCatalogRead> {
+  const owner = deps.cacheOwner ?? deps
+  let map = CATALOG_CACHE.get(owner)
   if (map === undefined) {
     map = new Map()
-    CATALOG_CACHE.set(deps, map)
+    CATALOG_CACHE.set(owner, map)
   }
   return map
 }
@@ -192,7 +201,7 @@ function catalogCacheOf(deps: ToolDeps): Map<string, KnowledgeCatalogRead> {
 /** 读一次业务库目录树（按精确库名定位，名字来自 `space-list` 而不是目录名）。 */
 export async function loadKnowledgeCatalog(options: {
   ctx: Context
-  deps: ToolDeps
+  deps: KnowledgeCatalogDeps
   caseDir: string
   platform: string
   /** Exact live-scope key (project/round/space); empty disables reuse. */

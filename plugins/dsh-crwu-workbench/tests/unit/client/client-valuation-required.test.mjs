@@ -79,31 +79,34 @@ const PREVIEW_OK = {
 
 // ── 1. 两个必填项的空态 ────────────────────────────────────────────────────
 
-test('新草稿：资产类型与评估方法**都未选择**（自动判定不是默认值）', () => {
+test('新草稿：资产类型与评估方法都未选择，auto 不再是有效方法', () => {
   const fresh = state.initialValuationState()
-  assert.equal(fresh.assetType, '', '资产类型初始为空')
-  assert.equal(fresh.method, '', '评估方法初始为空（自动判定是一个选项，不是默认值）')
-  assert.equal(state.chosenMethod(fresh.method), null, '空串不是有效方法')
+  assert.equal(fresh.assetType, '', '资产类型必须由用户手动选')
+  assert.equal(fresh.method, '', '评估方法必须由用户手动选')
+  assert.equal(state.chosenMethod(fresh.method), null, '未选择不是有效方法')
+  assert.equal(state.chosenMethod(''), null, '空串不是有效方法')
+  assert.equal(state.chosenMethod('auto'), null, 'auto 已不是有效方法')
   assert.equal(state.valuationMethodLabel(''), '', '空值不许被显示成「自动判定」')
+  assert.equal(state.valuationMethodLabel('auto'), '', 'auto 不许被显示成「自动判定」')
   assert.equal(state.valuationMethodLabel('income-v2'), '', '未知枚举同样不许回退成「自动判定」')
-  // 四项都是**有效**方法，其中包括 auto。
-  for (const method of ['auto', 'market', 'income', 'cost']) {
+  // 只剩三种**指定**方法。
+  for (const method of ['market', 'income', 'cost']) {
     assert.equal(state.chosenMethod(method), method)
   }
 })
 
-test('开始新一轮：两个必填项一起清回未选择，保留最近会话入口', () => {
+test('开始新一轮：两项都回到未选择，并保留最近会话入口', () => {
   const done = draftState({ phase: 'handed-off', recentSessionId: 'session-1', parentSessionId: 'session-1' })
   const next = state.resetAfterHandoff(done).state
-  assert.equal(next.assetType, '', '新一轮要重新选资产类型')
-  assert.equal(next.method, '', '新一轮要重新选评估方法')
+  assert.equal(next.assetType, '', '新一轮必须重新选资产类型')
+  assert.equal(next.method, '', '新一轮必须重新选评估方法')
   assert.equal(next.recentSessionId, 'session-1', '最近会话入口是唯一留下的东西')
   assert.equal(next.phase, 'draft')
 })
 
-test('setMethod：四项通过、空串清回未选、未知枚举与大小写变体被拒', () => {
+test('setMethod：三项通过、空串清回未选、auto 与未知枚举被拒', () => {
   const base = state.initialValuationState({ phase: 'draft' })
-  for (const method of ['auto', 'market', 'income', 'cost']) {
+  for (const method of ['market', 'income', 'cost']) {
     const outcome = state.setMethod(base, method)
     assert.equal(outcome.ok, true, method)
     assert.equal(outcome.state.method, method)
@@ -111,9 +114,9 @@ test('setMethod：四项通过、空串清回未选、未知枚举与大小写�
   // 清回未选是合法的（"我选错了"）。
   assert.equal(state.setMethod({ ...base, method: 'cost' }, '').state.method, '')
   assert.equal(state.setMethod({ ...base, method: 'cost' }, '   ').state.method, '')
-  // 未知枚举 / 大小写变体 / 带空白的枚举都要被拒（空串以外一律要求**逐字**等于已登记取值）。
+  // 未知枚举 / 大小写变体 / 已移除的 auto 都要被拒（空串以外一律要求**逐字**等于已登记取值）。
   // 前后空白会被 trim（与资产类型 / 基准日同一口径），所以这里只列真正的非法取值。
-  for (const bad of ['income-v2', 'MARKET', '收益法', '0']) {
+  for (const bad of ['auto', 'income-v2', 'MARKET', '收益法', '0']) {
     const outcome = state.setMethod(base, bad)
     assert.equal(outcome.ok, false, `${bad} 不该被接受`)
     assert.match(outcome.error, /不认识的评估方法/)
@@ -121,7 +124,7 @@ test('setMethod：四项通过、空串清回未选、未知枚举与大小写�
   }
   // 只有草稿能改。
   const locked = state.initialValuationState({ phase: 'confirmation' })
-  assert.equal(state.setMethod(locked, 'auto').ok, false)
+  assert.equal(state.setMethod(locked, 'market').ok, false)
 })
 
 test('底栏原因：两个必填项按页面顺序先报资产类型，再报评估方法', () => {
@@ -282,11 +285,11 @@ test('文件夹展开 / 收起是真的：收起后子列表不渲染，aria-exp
   assert.equal(subRows(), 2)
 })
 
-test('资料区在两个必填项之前；两个必填项在补充条件与辅助区之前', () => {
+test('revision 2 puts the two required choices before optional materials and conditions', () => {
   const tree = render(ValuationIntakePane, intakeProps()).tree
   const blocks = findAll(tree, (node) => node.props?.['data-valuation-block'] !== undefined)
     .map((node) => node.props['data-valuation-block'])
-  assert.deepEqual(blocks, ['files', 'required', 'conditions', 'capability'])
+  assert.deepEqual(blocks, ['required', 'files', 'conditions', 'capability'])
 })
 
 // ── 4. 复制路径的短反馈会恢复，且卸载时清掉计时器 ────────────────────────────

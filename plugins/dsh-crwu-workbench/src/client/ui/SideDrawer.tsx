@@ -116,6 +116,8 @@ export function SideDrawer(props: SideDrawerProps): React.ReactElement {
   const closeDisabled = props.closeDisabled === true
   const panelRef = React.useRef<AnyElement | null>(null)
   const headRef = React.useRef<AnyElement | null>(null)
+  /** This dialog's own scrim stays clickable; only the page behind it becomes inert. */
+  const backdropRef = React.useRef<AnyElement | null>(null)
   /**
    * `closeDisabled` 必须**当场**读最新值。
    *
@@ -139,7 +141,7 @@ export function SideDrawer(props: SideDrawerProps): React.ReactElement {
       const list = parent.children
       for (let index = 0; index < list.length; index += 1) {
         const node = list[index] as AnyElement | null
-        if (node === null || node === undefined || node === panel) continue
+        if (node === null || node === undefined || node === panel || node === backdropRef.current) continue
         const memo: SiblingMemo = {
           node,
           inert: node.hasAttribute?.('inert') === true,
@@ -219,6 +221,7 @@ export function SideDrawer(props: SideDrawerProps): React.ReactElement {
         创建期间连遮罩点击也失效 —— 否则"禁止关闭"只是画了个灰 ×。 */}
     <div
       {...CRWU_SCOPE_PROPS}
+      ref={backdropRef as unknown as React.Ref<HTMLDivElement>}
       className={classes(C.sideDrawerBackdrop, props.closing === true && C.sideDrawerBackdropOut)}
       onClick={closeDisabled ? undefined : onClose}
     />
