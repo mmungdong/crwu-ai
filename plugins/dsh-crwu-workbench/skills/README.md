@@ -7,8 +7,21 @@ DSH 技能根（`@deepseek-ai/dsh-skill-filesystem` 的 `customSkillDirs`）。
 | --- | --- | --- | --- |
 | `crwu` | `skills/crwu/` | 本仓自研的审核能力族 | 正常评审后改；必须过 Skill 自洽性 lint |
 | `biz` | `skills/biz/` | 本仓自研的业务能力族（估值等） | 正常评审后改；不依赖 `crwu-audit` 编排，独立执行 |
+| `capabilities` | `skills/capabilities/` | 共享能力技能（`crwu-ocr`：PDF/图片转页图、索引、识别记录与页序合并文本） | 正常评审后改；必须过自洽性 lint 与双平台渲染测试 |
 | `dws` | `skills/dws/` | 上游 `dingtalk-workspace-cli` 的钉钉技能（vendored） | **只能**由 `npm run dws:sync` 改写 |
 | 公共 | 包内 `common/skills/`（源在 `plugins/common/skills/`） | 跨插件公共技能 | 改源仓，再 `npm run skills:sync` |
+
+## `capabilities` 层
+
+`crwu-ocr` 把 PDF / 扫描件 / 图片转成可复核的逐页证据（页图 + 文本层 + 识别记录 + `ocr/merged/` 页序合并文本），
+审核链路（`crwu-audit` 与叶子）统一经它做页面级判读，不再各自直接读原始 PDF/图片。
+
+- 依赖随包发布：`vendor/wheels/` 的 `pypdf`（全平台）与 `pypdfium2`（Windows）按 sha256 校验，
+  由 DSH 自带 Python 解包到案例内缓存；macOS 因运行时硬化签名不能加载第三方原生库，
+  改用系统 CoreGraphics 渲染。
+- 脚本由 Host 在首次调用时暂存到 `<案例>/ocr-skill/`，模型只提交案例内相对路径。
+- 字段与恢复语义见技能 `references/01-execution-contract.md` 与
+  `references/02-dependency-and-platform.md`；测试只用合成 PDF/图片。
 
 ## 为什么一层一个技能根
 

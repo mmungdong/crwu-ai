@@ -35,6 +35,7 @@ const REPO = dirname(dirname(ROOT))
 const SCAN_ROOTS = [
   { path: join(ROOT, 'skills', 'crwu'), label: 'skills/crwu' },
   { path: join(ROOT, 'skills', 'biz'), label: 'skills/biz' },
+  { path: join(ROOT, 'skills', 'capabilities'), label: 'skills/capabilities' },
   { path: join(REPO, 'plugins', 'common', 'skills'), label: 'plugins/common/skills' },
 ]
 

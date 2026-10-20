@@ -20,7 +20,7 @@ the navigation metadata, so the valuation tree never shows an audit entry and vi
 and where you go to configure things).
 
 Under **审核 (audit)**, **本地审核 (local audit)**: pick local files or
-folders (at most 30 regular files per run); the plugin copies them into a temporary snapshot directory,
+folders (at most 200 regular files per run); the plugin copies them into a temporary snapshot directory,
 mints a one-shot `handoffId`, then tries to open an **ordinary DSH conversation**, sends the fixed audit
 prompt, and switches to it. When the conversation cannot be created it offers a manual path instead
 (switch to full access → create a conversation → copy the prompt and send it). This flow keeps **no audit
@@ -28,40 +28,42 @@ history, no sidecar, no cross-conversation monitoring, and uploads or downloads 
 only in that conversation and its temporary case directory. The report-audit flow and its deliverables are
 unchanged.
 
-**估值** (the first sidebar card row, **报告评估 (Report Evaluation)**), is the **generic valuation** entry point
-(available since protocol 32; since protocol 33 its input page is a **single workface** rather than a
-two-column layout; since protocol 35 it is **confirm-and-hand-off**; since protocol 39 the real-estate
-second level is gone and site login is an optional capability; since 0.0.46 the two required fields moved
-directly below the materials section, both use the same single-select control, and the drawer was
-reorganised; since 0.0.47 / protocol 40 delivery is unified on `估值报告数据.json`, knowledge
-materialisation supports `stage=parameters`, and finalize supports `target=project` close-out): pick 1–30 materials recursively (the Host copies them byte-for-byte into this run's valuation
-case directory and records a sha256), then choose the **two required fields** — an **asset type** (real estate
-today; it starts empty and confirmation is blocked until chosen) and a **valuation method**
-(**auto, market comparison, income and cost are all selectable**; auto is an explicit option, not a default) —
-optionally set the purpose, value type, valuation base date and a supplemental instruction, and press
-**「核对资料」(check materials)** to open a **read-only confirmation drawer** whose first screen is this run's
-asset type / method / material count / base date. The **「信息获取辅助 · 可选」(optional information
-retrieval assistance)** area below (formerly "case sources") lists the real state of each case
-source together with login / verification entry points — not signed in, unknown, or a failing site **never**
-blocks filling in the form or starting the run; the parent session receives the per-source policy and its
-reason and then follows the knowledge base's channel and fallback rules (Lianjia first; Fang and Anjuke as registered fallbacks when
-Lianjia does not cover the area, is not signed in, or has too few cases; the **Host keeps a persistent
-retrieval budget** — 10 pages / 20 candidates per source per group per round, stopping at whichever hits
-first, and neither keyword changes nor retries reset it).
+**估值** (the first sidebar card row, **报告评估 (Report Evaluation)**), is the **generic valuation** entry
+point: pick materials recursively (the Host copies them byte-for-byte into this run's valuation case
+directory and records a sha256), choose the **two required fields** — an **asset type** (real estate today,
+also file-driven identification; it starts empty and confirmation is blocked until chosen) and a
+**valuation method** (**auto, market comparison, income and cost are all selectable**; auto is an explicit
+option, not a default) — then optionally set the purpose, value type, valuation base date, a calculation
+template and a supplemental instruction. The **「信息获取辅助 · 可选」(optional information retrieval
+assistance)** area below (formerly "case sources") lists the real state of each case source together with
+login / verification entry points — not signed in, unknown, or a failing site **never** blocks filling in
+the form or starting the run; the parent session receives the per-source policy and its reason and then
+follows the knowledge base's channel and fallback rules.
 
-After confirmation the inputs are frozen, the Host creates **exactly one** parent valuation session in the
-selected workspace and sends it a fixed instruction, then opens it automatically — there is **no** progress
-page, no result page, and no completion polling. Analysis, object identification, plan splitting, method
-selection, retrieval (real-estate rules from the DSW business knowledge base; public listings from 链家
-and others, at most 3 attempts per page, with visible CAPTCHAs attempted first by a fixed script), scripted
-calculation and delivery all happen inside that session; each plan of a project lands under `方案/<planId>/`.
+After confirmation the inputs are frozen and the parent valuation session is created in the selected
+workspace; the page stays on the **real graph workface**, rendering the Host-compiled native node ids and
+edges with each node's state, inputs/outputs, adopted knowledge quotes, read materials and gaps, plus the
+real Host-prepared plan (method / sources / template and field mapping / basis / limitations). The plan must
+be confirmed by its **exact revision and digest**; a correction carries a reason and a source, invalidates
+the affected downstream nodes, and reruns them in a fresh bounded child session. Retrieval, calculation and
+delivery all happen inside the parent and child sessions; each plan of a project lands under
+`方案/<planId>/` (Lianjia first; Fang and Anjuke as registered fallbacks when Lianjia does not cover the
+area, is not signed in, or has too few cases; the **Host keeps a persistent retrieval budget** — 10 pages /
+20 candidates per source per group per round, stopping at whichever hits first, and neither keyword changes
+nor retries reset it; visible CAPTCHAs are attempted first by a fixed script).
 
-Two deliverables: the **full-process HTML report** (`估值报告.html`) and the **calculation workbook**
-(`估值底稿.xlsx`). Valuing **without** a base date is supported: the report records 「本次未指定评估基准日」
-and skips base-date filtering and date adjustment. All numeric conclusions follow the **recalculated**
-workbook; completion is decided by `crwu_valuation_finalize` from real files (missing screenshots, no
-recalculation record, or a missing plan directory all downgrade the status), and delivery requires passing
-both the workbook contract and the result-contract checks.
+Deliverables open by **closed kind**: the calculation workbook (`估值底稿.xlsx`), the full-process HTML
+report (`估值报告.html`), the calculation trace (`计算轨迹.json`) and the report data
+(`估值报告数据.json`). Valuing **without** a base date is supported: the report records
+「本次未指定评估基准日」 and skips base-date filtering and date adjustment. All numeric conclusions follow
+the **recalculated** workbook; completion is decided by `crwu_valuation_finalize` from real files (missing
+screenshots, no recalculation record, or a missing plan directory all downgrade the status). The first
+version delivers the **listing-reference** basis only; a reference result is never shown as a formal
+valuation conclusion.
+
+The full current behaviour (graph and nodes, plan and approval, corrections, persistence and recovery,
+directory responsibilities, limitations) is in
+[`docs/valuation-workflow.md`](docs/valuation-workflow.md).
 
 The audit process itself is **not** in this repository; the `crwu-audit` skill family runs it.
 This repository only *dispatches, watches, and ships back*.
@@ -116,7 +118,8 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
    summary plus a guided configuration workspace** with three steps on the left — **Accounts** (one-time
    credential consent, H3Yun sign-in, DingTalk sign-in), **Aliyun OSS** (enter the AccessKey your
    administrator gave you) and **Workspace** (pick an **existing** directory; the plugin does not
-   create one) — and the selected step on the right. It picks the first unfinished step for you and
+   create one; the same step also offers **Clean workspace…**, which lists what it will delete and
+   requires typing the directory name before wiping the root and archiving its sessions) — and the selected step on the right. It picks the first unfinished step for you and
    never moves you off a step you chose yourself. Below the steps sits the **external-data check**
    section. Required steps carry a **red asterisk** (* = base configuration, must be completed); the optional
    iFinD data source is the **last step** and carries **no** asterisk — when nothing is configured that
@@ -154,9 +157,9 @@ Building the tarball yourself (from the `crwu-ai` repository): `make plugin-pack
 
 > **The Skills ship with the package, organized in layers**: the tarball carries `skills/crwu/`
 > (27 in-repo audit/maintenance Skills), `skills/biz/` (in-repo business Skills such as
-> `crwu-biz-valuation-*`), `skills/dws/` (14 vendored `dingtalk-workspace-cli` Skills) and
-> `common/skills/`
-> (shared Skills `crwu-dws` / `crwu-h3yun-*`). The `crwu-workbench-skills` row in `cordis.patch.yml`
+> `crwu-biz-valuation-*`), `skills/capabilities/` (shared capabilities; `crwu-ocr` renders PDFs and
+> images into indexed page evidence), `skills/dws/` (14 vendored `dingtalk-workspace-cli` Skills) and
+> `common/skills/` (shared Skills `crwu-dws` / `crwu-h3yun-*`). The `crwu-workbench-skills` row in `cordis.patch.yml`
 > registers **each layer as its own skill root** (DSH scans exactly one level per root), so installing
 > the plugin is all it takes. Do **not** copy Skills into `~/.dsh/skills/` any more; the package root
 > outranks the user root, so a stale copy only creates drift (`make skills-install AGENT_DIR=…` is for
@@ -300,7 +303,7 @@ it builds when the sources are present and skips with an explanation when they a
 `tests/unit/host-package.test.mjs` pins this with a real `npm pack` + `npm install` + import regression —
 both failure modes were invisible to local gates and only surfaced for the person installing the package.
 
-`peerDependencies` cover **two DSH lines**: `@deepseek-ai/dsh-*@^0.1.7-rc.2 || ^0.2.0-rc.1` (cordis `^4.0.4`).
+`peerDependencies` retain the legacy lines and explicitly admit the new prerelease: `@deepseek-ai/dsh-*@^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2` (cordis `^4.0.4`).
 One `^` range per line, joined with `||`, rather than a single `>=… <…` — the latter would also admit the
 unverified 0.3 line. The DSH plugin API is a developer preview: **before adding a line**, diff the
 `@deepseek-ai/dsh-*` packages of both lines file by file, re-run the gate, and record the supported DSH
@@ -309,7 +312,7 @@ version in `CHANGELOG.md`.
 > **Since 0.1.7 this is a hard gate.** DSH compares the runtime version against every `@deepseek-ai/dsh*` peer
 > range and **skips the whole bundle** on any mismatch (recorded in `skippedBundles`) — the symptom is "the plugin
 > is installed but nothing appears", with a clean startup log; the plugin manager also marks the row
-> "incompatible with DSH \<version\>" and disables it. The check reads `peerDependencies`, not `engines.dsh`.
+> "incompatible with DSH \<version\>" and disables it. Older hosts check `peerDependencies`; `0.2.1-rc.2` gives `engines.dsh` precedence and checks peers only when it is absent. Keep both ranges aligned.
 > Note that `^0.1.7-rc.2` means `>=0.1.7-rc.2 <0.2.0-0` and therefore **excludes** `0.2.0-rc.1`;
 > `^0.2.0-rc.1` covers the whole 0.2.0 line, `0.2.0-rc.2` included.
 
@@ -321,7 +324,7 @@ version in `CHANGELOG.md`.
 | macOS / Linux | darwin-arm64 / linux-x64 | POSIX dialect; only `darwin-arm64` ships bundled binaries. |
 | CPU | `win32-x64` / `darwin-arm64` | **`win32-arm64` is explicitly unsupported**: the plugin reports a capability gap and never silently falls back to x64. |
 | Node.js | `^22.19.0 \|\| >=24` | CI covers 22 and 24 on both Linux and Windows. |
-| DSH | `0.1.7-rc.2` line, `0.2.0` line (package-by-package diffed up to `0.2.0-rc.2`) | `npm run compat:dsh` installs each line's full peer set into a clean project and calls DSH's own compatibility check; `0.3.x` is out of scope. One representative version per line — later rc patches and the stable release on the same line are covered by range semantics. |
+| DSH | `0.1.7-rc.2`, `0.2.0-rc.2`, `0.2.1-rc.2` | The local SDK is pinned to `0.2.1-rc.2`; `npm run compat:dsh` installs each version and checks compatibility and types. Audit prefers `startActivation` and uses legacy `start` only when the new entry is absent; creation failures never retry through the old entry. `0.3.x` is out of scope. |
 | Local paths | drive-letter absolute paths, spaces, CJK, single quotes | e.g. `C:\Users\Jane\Case's Work`. |
 | UNC | `\\server\share\…` | **Delegated to the underlying DSH `fs`**; when it cannot resolve, the plugin returns a readable "cannot resolve case directory: … (reason)" instead of building a broken path. Not yet accepted end-to-end on a real share. |
 
@@ -329,7 +332,7 @@ version in `CHANGELOG.md`.
 
 | Symptom | Check first | Fix |
 | --- | --- | --- |
-| Plugin installed, nothing appears, clean startup log | Whether DSH rejected it as **incompatible** (`skippedBundles`, or the plugin manager marking it "incompatible with DSH `<version>`") | The check reads `peerDependencies` (**not** `engines.dsh`); this package declares `^0.1.7-rc.2 \|\| ^0.2.0-rc.1`. Upgrade the plugin after a DSH upgrade; `npm run compat:dsh` reproduces the verdict |
+| Plugin installed, nothing appears, clean startup log | Whether DSH rejected it as **incompatible** (`skippedBundles`, or the plugin manager marking it "incompatible with DSH `<version>`") | Older hosts check `peerDependencies`; `0.2.1-rc.2` gives `engines.dsh` precedence; this package declares `^0.1.7-rc.2 \|\| ^0.2.0-rc.1 \|\| ^0.2.1-rc.2`. Upgrade the plugin after a DSH upgrade; `npm run compat:dsh` reproduces the verdict |
 | `ParserError` / `UnexpectedToken` / "unexpected token" | A command starting with a quoted path (in PowerShell that is a string expression, not a command invocation) | Upgrade to 0.0.14+: every command is generated by `src/host/core/platform/shell.ts` (with `&` on Windows). If it persists, a call site bypassed the adapter — the static gate in `host-platform-shell.test.mjs` goes red first |
 | "parameter name is ambiguous" / `mkdir` is not recognized | POSIX-only syntax leaking in (`mkdir -p`, `chmod`, `rm -f`, `cmd /c …`) | Same as above: those literals may only appear inside the adapter |
 | A command "succeeded" but the file was not touched | A swallowed failure (`-ErrorAction SilentlyContinue`) | Removed in 0.0.14+; `case-files.ts` also re-reads post-conditions with `ctx.fs.stat` |

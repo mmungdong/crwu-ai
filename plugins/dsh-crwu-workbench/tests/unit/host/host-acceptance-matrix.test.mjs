@@ -133,7 +133,7 @@ test('验收矩阵引用的断言原话必须逐字存在（防止表变旧）',
     ...sourcesUnder(join(PLUGIN, 'scripts')),
     ...sourcesUnder(join(PLUGIN, 'install')),
     ...goTestSources(dirname(dirname(PLUGIN))),
-  ].map((path) => readFileSync(path, 'utf8')).join('\n')
+  ].filter((path) => path !== fileURLToPath(import.meta.url)).map((path) => readFileSync(path, 'utf8')).join('\n')
 
   // **作废行不参与逐字校验**：协议 35 把 v1 的"抽屉自动打开 / 提取阶段进度 / 按 valuationId 取消"
   // 整条链路删掉了（页面不再追踪估值完成度）。这些行是 0.0.42 的**历史记录**，
@@ -153,7 +153,19 @@ test('验收矩阵引用的断言原话必须逐字存在（防止表变旧）',
     .filter((item) => item.length >= 7 && !/\.(mjs|ts|py|md|json|xlsx|html)$/.test(item))
 
   assert.ok(cited.length >= 20, `引用太少（${cited.length} 条）：验收矩阵看起来没写完`)
-  const missing = cited.filter((item) => !corpus.includes(item))
+  // Map superseded assertion names without rewriting historical snapshots.
+  const replacedAssertions = new Map([
+    ['检索：页面取到但既没有 JSON-LD 也不是结果页 → no-results（绝不按标题猜）', '检索：未识别的页面保留解析缺口，不推断为无房源'],
+    ['开始新一轮：两个必填项一起清回未选择，保留最近会话入口', '开始新一轮：两项都回到未选择，并保留最近会话入口'],
+    ['资产类型：初始为空、未选不能确认、只认已登记取值', '资产类型：默认未选择、显式清空需补选、未知值与 auto 被拒'],
+    ['新草稿：资产类型与评估方法**都未选择**（自动判定不是默认值）', '新草稿：资产类型与评估方法都未选择，auto 不再是有效方法'],
+    ['setMethod：四项通过、空串清回未选、未知枚举与大小写变体被拒', 'setMethod：三项通过、空串清回未选、auto 与未知枚举被拒'],
+    ['方法：四项全部可选（适用性由本轮业务规范判断，界面不预先禁用）', '方法：三项指定方法全部可选，auto 不在选项里（适用性由本轮业务规范判断）'],
+    ['自动判断可采用**组合**方法：适用且能跑的方法全部被采纳，不再只取第一个', '用户指定方法时**不静默增补**其它方法（即使它们也能跑）'],
+    // 上限 30 → 200（0.0.49）：历史表格保留原文，活断言已按常量重命名。
+    ['资料份数：30 份通过；31 份**整批阻止**且一份都不复制', '资料份数：达到上限通过；上限 +1 **整批阻止**且一份都不复制'],
+  ])
+  const missing = cited.filter((item) => !corpus.includes(replacedAssertions.get(item) ?? item))
   assert.deepEqual(missing, [], `这些引用在测试源码里找不到（表已变旧）：\n${missing.join('\n')}`)
 })
 

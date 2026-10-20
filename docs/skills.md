@@ -15,6 +15,7 @@ DSH 对每个 Skill 根只扫描一层，因此每一层都必须单独注册。
 | --- | --- | --- |
 | 自研 | `plugins/dsh-crwu-workbench/skills/crwu/` | 本仓维护；修改后运行自洽性校验 |
 | 自研·业务 | `plugins/dsh-crwu-workbench/skills/biz/` | 本仓维护；业务技能（估值等）独立执行，不依赖 `crwu-audit` 编排 |
+| 共享能力 | `plugins/dsh-crwu-workbench/skills/capabilities/` | 本仓维护；跨审核链路复用的能力（`crwu-ocr`），依赖随包发布 |
 | 上游 | `plugins/dsh-crwu-workbench/skills/dws/` | vendored `dingtalk-workspace-cli` 内容；只通过 `npm run dws:sync` 更新 |
 | 公共 | `plugins/common/skills/` | 跨插件共享；通过 `npm run skills:sync` 同步进插件包 |
 
@@ -86,8 +87,15 @@ npm run skills:check
 npm run dws:check
 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate \
   --skill-root skills/crwu \
+  --skill-root skills/biz \
+  --skill-root skills/capabilities \
   --skill-root common/skills
+python3 skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
+python3 skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
 ```
+
+`crwu-ocr` 的真实渲染需要 macOS 或 Windows：Linux 上渲染用例会 skip，不能当作通过证据；
+用 DSH 自带 Python 跑真实门禁见仓库根 `make plugin-ocr-check`。
 
 完整插件门禁使用仓库根目录的 `make plugin-check`。安装目录发现规则见
 [`agent-skill-dirs.md`](agent-skill-dirs.md)。

@@ -188,8 +188,9 @@ export async function smokeHost() {
   // 后者会把人引去查磁盘空间）而不是磁盘上的旧授权。
   const grant = fakeExchange({
     op: 'local-access-grant',
-    args: { schemaVersion: 1, capabilities: [
+    args: { schemaVersion: 2, capabilities: [
       'h3yun-credential-store', 'dws-profile', 'oss-config', 'ifind-credential', 'system-integration',
+      'workspace-cleanup',
     ] },
   })
   await routes[0].handler(grant.req, grant.res)

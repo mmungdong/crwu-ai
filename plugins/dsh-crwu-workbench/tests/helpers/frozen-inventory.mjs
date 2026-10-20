@@ -84,6 +84,11 @@ export const FROZEN_OPERATIONS = [
   // 客户端由 `src/client/modules/report-evaluation/api.ts` 的 `VALUATION_OPERATION_OF` 登记
   // （不再走审核门面的 `OPERATION_OF`）；冻结操作对账时两份清单合并核对。
   'valuation-project-resume',
+  // Protocol 43: the native graph panel operations are part of the same frozen inventory.
+  'valuation-workflow-current', 'valuation-workflow-node', 'valuation-workflow-action',
+  'valuation-workflow-preview', 'valuation-workflow-cancel', 'valuation-workflow-export',
+  'valuation-workflow-load', 'valuation-workflow-clear', 'valuation-workflow-reconcile',
+  'valuation-workflow-open-artifact',
   // 第 43~45 个：**钉钉设备流登录**（协议 32，2026-10-13）。用户口径是"loopback 回调不通 /
   // 无头环境"时要有退路：`dws auth login --device` 会打印短 URL 与授权码再等人授权，
   // 同步等它跑完（最多 5 分钟）面板拿不到码，所以必须拆成 start / status / cancel 三条。
@@ -91,6 +96,10 @@ export const FROZEN_OPERATIONS = [
   // 第 46 个：**取消正在跑的 loopback 登录**（协议 32）。login 最长要等人 5 分钟，两条路又抢同一把
   // `.dws` 锁 —— 没有这条，员工点了「登录钉钉」之后就没有任何出路（实测按钮一直是灰的）。
   'dws-login-cancel',
+  // 第 65~66 个：**清空工作空间**（协议 49，2026-10-20）。`plan` 只读扫描并产出一份
+  // 带指纹的内存计划；`apply` 带 planId + 指纹 + 目录名执行（停止并归档会话、可选删日志、
+  // 删根下全部直接子项、清审核历史）。旧宿主没有它们，新界面点下去只会 404。
+  'workspace-cleanup-plan', 'workspace-cleanup-apply',
   // ⚠️ 协议 22（2026-09-30）**删掉**了 `browser-session-bind`（氚云内置浏览器扫码，协议 20）
   // 与 `dws-login-start` / `dws-login-status`（钉钉设备码 / 两阶段登录，协议 21）。
   // 协议 32 只恢复了**设备流**这一半，而且是新名字：loopback 的同步 `dws-login` 语义未变，

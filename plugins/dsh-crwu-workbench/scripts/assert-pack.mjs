@@ -68,6 +68,17 @@ const REQUIRED = [
   'skills/README.md',
   'skills/crwu/crwu-audit/SKILL.md',
   'skills/biz/crwu-biz-valuation-realestate/SKILL.md',
+  // 共享能力层：OCR 技能的入口、运行脚本与随包依赖清单缺一不可（缺了审核里的
+  // PDF/图片判读整类不可用，而不是"少个文件"）。
+  'skills/capabilities/crwu-ocr/SKILL.md',
+  'skills/capabilities/crwu-ocr/scripts/ocr_prepare.py',
+  'skills/capabilities/crwu-ocr/scripts/ocr_record.py',
+  'skills/capabilities/crwu-ocr/scripts/ocr_status.py',
+  'skills/capabilities/crwu-ocr/scripts/ocr_engines.py',
+  'skills/capabilities/crwu-ocr/scripts/ocr_quartz.py',
+  'skills/capabilities/crwu-ocr/vendor/wheels/manifest.json',
+  'skills/capabilities/crwu-ocr/vendor/wheels/pypdf-6.21.1-py3-none-any.whl',
+  'skills/capabilities/crwu-ocr/vendor/wheels/pypdfium2-5.14.0-py3-none-win_amd64.whl',
   // 通用填表 / 校验脚本与报告模板随包发布：模板与它自己的填写说明是唯一入口，
   // 缺了脚本就只剩"手改单元格"（输入 / 公式区不被覆盖便无从保证）。
   'skills/biz/crwu-biz-valuation-realestate/scripts/check_workbook_contract.py',

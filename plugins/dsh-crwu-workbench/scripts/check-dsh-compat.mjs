@@ -51,9 +51,9 @@ const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
  * 另外 3 个只有运行时代码的小改动 —— `dsh-subagent/lib/typert.host.js` 多一条
  * `user-question-reply` 协议声明、`dsh-client-ui-renderer/lib/client.js` 加一个 `useMemo`、
  * `dsh-client-ui-sidebar/lib/client.js` 去掉品牌按钮外层 `Tooltip` 并换版本号。
- * 所以 0.2 线用 rc.2 作代表即可（同线后续 rc 补丁与正式版由区间语义覆盖）。
+ * 0.2.1-rc.2 changes subagent creation to startActivation, so it has a separate gate.
  */
-const RUNTIMES = ['0.1.7-rc.2', '0.2.0-rc.2']
+const RUNTIMES = ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2']
 
 /** 明确**不在**支持范围内：声明区间必须以这条为界（防止手滑写成 `>=0.1.7`）。 */
 const OUT_OF_RANGE_RUNTIME = '0.3.0-rc.1'

@@ -28,6 +28,7 @@ const { createValuationOperations } = await import(new URL('src/host/operations/
 const { createValuationBrowserRuntime } = await import(
   new URL('src/host/domains/report-evaluation/browser/runtime.ts', ROOT).href)
 const { ValuationLifecycles } = await import(new URL('src/host/domains/report-evaluation/lifecycle/index.ts', ROOT).href)
+const { createValuationWorkflowHost } = await import(new URL('src/host/integrations/valuation-workflow/host.ts', ROOT).href)
 const { ValuationScopes } = await import(new URL('src/host/domains/report-evaluation/scope.ts', ROOT).href)
 const { createCoreOperations } = await import(new URL('src/host/operations/core.ts', ROOT).href)
 const { createUpdateOperations } = await import(new URL('src/host/update/ops.ts', ROOT).href)
@@ -283,12 +284,14 @@ function operationsFor(config = {}, sessions, world = fakeWorld(), extraResolver
   const browserRuntime = createValuationBrowserRuntime({
     ctx, config: resolved, access: makeTestAccess(ctx, { state }).access, world,
   })
+  const scopes = new ValuationScopes()
+  const workflow = createValuationWorkflowHost({ ctx, state, config: resolved, world, access: makeTestAccess(ctx, { state }).access, valuationScopes: scopes, python })
   const valuation = {
     ...createValuationOperations({
       ctx, state, world,
       access: makeTestAccess(ctx, { state }).access,
       lifecycles,
-      scopes: new ValuationScopes(),
+      scopes, workflow,
     }),
     ...browserRuntime.operations,
   }
@@ -415,8 +418,8 @@ test('ping and boot answer with the state the panel needs to render', async () =
   //   snapshots. Protocol 42 = detail capture (actual URL + immutable PNG + manifest) and the
   //   background controlled-target browser flow. Both changed observable Tool output semantics,
   //   so an old Host must be recognized by the current generation.
-  assert.equal(WORKBENCH_PROTOCOL, 42,
-    '协议 41（列表快照 / 评估采用 / URL 身份）与协议 42（详情取证 / 案例证据 / 后台浏览器）进契约必须识别旧 Host')
+  assert.equal(WORKBENCH_PROTOCOL, 49,
+    '协议 49 的清空工作空间两操作必须识别旧 Host')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
   assert.equal(bootAnswer.localAccess.state, 'missing', '还没授权时 boot 要如实回 missing')
@@ -484,9 +487,11 @@ test('the Host half still registers the frozen inventory of operations', async (
   // 52 → 53（协议 37，2026-10-14）：新增 `valuation-browser-open-verification`
   // （受控的「打开验证窗口」：只提交 siteId，URL 与 profile 都由 Host 定）。
   // 53 → 54（P18，2026-10-15）：新增 `valuation-project-resume`（项目归属的显式恢复）。
+  // 66（协议 49，2026-10-20）：`workspace-cleanup-plan` / `workspace-cleanup-apply` ——
+  // 清空工作空间（清单 + 指纹执行）。旧宿主没有它们，新界面点了只会 404。
   // 新增操作**同样是跨进程契约变化**：旧宿主没有它，靠它恢复的界面只会 404 —— 需要协议号分开
   // （协议号本身在 `src/shared/consts.ts`，不在本文件）。
-  assert.equal(FROZEN_OPERATION_COUNT, 54)
+  assert.equal(FROZEN_OPERATION_COUNT, 66)
 })
 
 test('设备流正在跑时 dws-login 被拒，且一个进程都不起（两个登录抢同一把 .dws 锁）', async () => {
@@ -1136,7 +1141,25 @@ test('every declared peer dependency is a real DSH package reference', async () 
  * 2026-09-29 把 16 个 `@deepseek-ai/dsh-*` 的 rc.1 / rc.2 tarball 逐文件 diff 过，
  * **所有 `.d.ts` 零差异**，只有 3 个包有运行时代码的小改动（见 `scripts/check-dsh-compat.mjs`）。
  */
-const SUPPORTED_DSH_RUNTIMES = ['0.1.7-rc.2', '0.1.7', '0.2.0-rc.2']
+const SUPPORTED_DSH_RUNTIMES = ['0.1.7-rc.2', '0.1.7', '0.2.0-rc.2', '0.2.1-rc.2']
+
+test('local DSH SDK uses the activation runtime while retaining the legacy runtime', async () => {
+  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
+  const sdk = JSON.parse(await readFile(new URL('node_modules/@deepseek-ai/dsh-subagent/package.json', ROOT), 'utf8'))
+  assert.equal(pkg.devDependencies['@deepseek-ai/dsh-subagent'], '0.2.1-rc.2')
+  assert.equal(sdk.version, '0.2.1-rc.2')
+})
+
+test('npm peer resolution admits both SDK prerelease entry points', async () => {
+  const { satisfies } = await import('semver')
+  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
+  for (const [name, range] of Object.entries(pkg.peerDependencies)) {
+    if (!name.startsWith('@deepseek-ai/dsh-')) continue
+    for (const version of ['0.2.0-rc.2', '0.2.1-rc.2']) {
+      assert.equal(satisfies(version, range), true, `${name}: npm excludes ${version}`)
+    }
+  }
+})
 
 test('用 DSH **自己**的兼容判定跑一遍：受支持的三条线都不禁用，0.3 线明确禁用', async (t) => {
   // 上面那条测试用的是我们自己重写的 `semver.satisfies` 判据。这一条换成
@@ -1167,9 +1190,13 @@ test('用 DSH **自己**的兼容判定跑一遍：受支持的三条线都不�
   //（只写 `>=0.1.7` 这种手滑会顺带放行还没验证过的 0.3 线）。
   const outOfRange = boot.evaluatePluginCompatibility(pkg, {}, '0.3.0-rc.1')
   assert.notEqual(outOfRange, undefined, '0.3.0-rc.1 必须被判为不兼容')
-  const peers = Object.keys(outOfRange?.peers ?? {})
-  assert.equal(peers.includes('@deepseek-ai/dsh-sandbox-policy'), true, '子项目 C 新增的 peer 也要被判')
-  assert.equal(peers.includes('@deepseek-ai/dsh-user-approval'), true, '子项目 C 新增的 peer 也要被判')
+  if (outOfRange.requirements !== undefined) {
+    assert.equal(outOfRange.requirements['engines.dsh'], pkg.engines.dsh)
+  } else {
+    const peers = Object.keys(outOfRange.peers ?? {})
+    assert.equal(peers.includes('@deepseek-ai/dsh-sandbox-policy'), true)
+    assert.equal(peers.includes('@deepseek-ai/dsh-user-approval'), true)
+  }
   // 装到的这一条线本身必须是受支持集合里的（否则上面那些断言没意义）。
   assert.equal(SUPPORTED_DSH_RUNTIMES.includes(boot.getDshRuntimeVersion()), true,
     `当前装到的 DSH 运行时是 ${boot.getDshRuntimeVersion()}，不在声明支持的集合里`)

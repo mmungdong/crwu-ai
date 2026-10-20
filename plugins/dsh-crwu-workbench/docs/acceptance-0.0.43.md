@@ -24,7 +24,7 @@
 | ⟪协议39改判作废⟫门禁只拦房地产正文，其他二级目录照常可用 | `tests/unit/client/client-valuation-handoff.test.mjs`「未登录时房地产正文被拦，但目录切换 / 报告评估 / 报告审核 / 环境信息照常可用」 | 一个未登录的估值来源把整个工作台锁死 |
 | ⟪协议39改判作废⟫加载即显示"正在检查登录状态"，不预画未登录空态 | `tests/unit/client/client-valuation-handoff.test.mjs`「加载即显示「正在检查案例来源登录状态」，不预画未登录空态」 | 界面先骗人一次，员工以为本来就不能用 |
 | ⟪协议39改判作废⟫只有 authenticated 释放正文；unknown 只给原因与重新检查 | `tests/unit/client/client-valuation-handoff.test.mjs`「authenticated 才释放正文；unauthenticated 给中性登录按钮；unknown 只给原因与「重新检查」」 | 把网络问题说成"没登录"，员工反复重登 |
-| 递归整理后的文件数才是依据（1–30），0 份不能启动 | `tests/unit/client/client-valuation-handoff.test.mjs`「递归整理后的文件数才是依据（不是选中的目录数）；>30 整批阻止；0 份不能启动」 | 界面按目录数放行，实际复制 200 份 |
+| ⟪面板重构改判作废⟫ 递归整理后的文件数才是依据（1–30），0 份不能启动 | `tests/unit/client/client-valuation-handoff.test.mjs`「递归整理后的文件数才是依据（不是选中的目录数）；>30 整批阻止；0 份不能启动」 | 界面按目录数放行，实际复制 200 份 |
 | 30 份通过 / 31 份整批阻止且一份都不复制 | `tests/unit/host/host-valuation-handoff.test.mjs`「资料份数：30 份通过；31 份**整批阻止**且一份都不复制」 | 悄悄截取前 30 份，员工以为全算进去了 |
 | 同名不同路径 / 重复内容都能分辨 | `tests/unit/host/host-valuation-handoff.test.mjs`「同名不同路径保留两条：归档按 -2 改名，fileId 能分辨」 | 两份资料被当成一份，其中一份永远没被读 |
 | createdAt 取不到时是 null，不拿 mtime 冒充 | `tests/unit/host/host-valuation-handoff.test.mjs`「元信息逐条完整；createdAt 取不到时是 null（不许拿 mtime 冒充）」 | 界面显示一个看起来可靠的假创建时间 |

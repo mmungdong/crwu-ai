@@ -27,28 +27,18 @@ function underDevelopment(registryText, id) {
   return match[1] === 'true'
 }
 
-test('模块注册表说"开发完了"，浏览器验收就不许还断言它是占位页', () => {
+test('开发中标签与真实评估页面分别验收，不恢复占位页', () => {
   const registry = readFileSync(REGISTRY, 'utf8')
   const script = readFileSync(BROWSER_CHECK, 'utf8')
   const developing = underDevelopment(registry, 'eval')
 
-  // 占位页特有的文案（来自 `locales/zh-CN.ts` 的 Coming Soon 那一组）。
   const placeholders = ['AI 辅助资产评估工作流', '正在开发中']
   const assertedPlaceholder = placeholders.filter((text) => script.includes(text))
-  // 侧栏「开发中」小标签的断言。
-  const assertsDevTag = /还没开发的子项挂着一枚「开发中」小标签/.test(script)
-
-  if (developing) {
-    assert.notEqual(assertedPlaceholder.length, 0,
-      '报告评估还是占位页，浏览器验收却没有断言它是 Coming Soon')
-  } else {
-    assert.deepEqual(assertedPlaceholder, [],
-      `报告评估已实现（underDevelopment: false），但浏览器验收脚本还在断言占位页文案：${assertedPlaceholder.join('、')}`)
-    assert.equal(assertsDevTag, false,
-      '报告评估已实现，浏览器验收脚本还在断言侧栏挂着「开发中」小标签')
-    // 反过来：已经实现的模块**必须**在浏览器验收里被真的点开看一遍（否则没人证明它画得出来）。
-    assert.match(script, /crwu-valuation/, '浏览器验收里应当有报告评估面板的真实断言')
-  }
+  assert.equal(developing, true)
+  assert.deepEqual(assertedPlaceholder, [], '开发中标签不能把已实现页面变回占位页')
+  assert.match(script, /仅报告评估旁显示开发中标签，入口保持可用/)
+  assert.match(script, /await devTags.count\(\) === 1/)
+  assert.match(script, /crwu-valuation/, '浏览器验收里应当有报告评估面板的真实断言')
 })
 
 test('浏览器验收不许点「AI 审核」（一次真跑会写真实工作空间与 OSS）', () => {

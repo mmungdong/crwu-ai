@@ -4,6 +4,19 @@
 `plugins/dsh-crwu-workbench/AGENTS.md`，两者冲突时以那份为准；界面与样式看
 `docs/ui-design-guidelines.md`。
 
+审核的子会话创建适配两种实际接口：优先 `startActivation`，接口不存在时才使用旧 `start`。
+旧接口仍要求 provider 声明 `toolFilter`；新接口要求本地 `prepareContinuable` backend，预占 childId，
+在 `agent/created` 的串行创建窗口通过真实子 Agent 的 scoped `tools.restrict()` 设置三条 deny，
+并同步回读拒绝工具不可见、必需工具齐备。窗口校验失败会拒绝创建；收据必须匹配预占身份。
+新接口调用失败不重试旧入口。创建或工作区挂载失败后的清理若无法确认静默，必须保留身份、句柄、
+退役记录和占用，员工通过「停止审核」继续恢复。本地 SDK 为 `0.2.1-rc.2`，兼容门禁同时覆盖
+`0.2.0-rc.2`；后文注明日期的旧接口故障记录保留为历史依据。
+新 activation 的 signal 只负责发布前取消；发布后必须使用该 activation 的 `dispose()`，没有收据时则取消真实子 Agent。
+未静默退役记录跨重启仍保留占用；落盘中的停止阶段在新实例恢复成可重试状态，不能把磁盘阶段当成仍在运行的停止任务。
+
+估值工作流的**当前实现说明**（图与节点、方案与确认、修订、持久化与恢复、目录职责与限制）见
+[`valuation-workflow.md`](valuation-workflow.md)；本文只保留开发 / 踩坑视角。
+
 ---
 
 ## 1. 形态与产物
@@ -54,9 +67,10 @@ profile 的整棵树是「补丁层挂在 profile 的空根配置上」，所以
 界面是新版、行为是旧版（用户报过「还是挂错位置」，实际是宿主还跑着上一轮 build）。
 
 - `src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL` 是协议代数：**改跨进程契约就 +1**，
-  `ping` / `boot` 都会带上它。**当前 = 24**（历史见常量上方的注释：16→…→22 删掉登录类操作、
-  23 新增 `discussion-material-open`、**24 把审核根的 cwd/沙箱边界从"本轮案例目录"改成"已选工作空间"**
-  —— 后者决定审核会话是挂在工作空间下还是落「未分组」，见 §4.8 与 CHANGELOG 0.0.34）；
+  `ping` / `boot` 都会带上它。**当前值以那个常量的那一行为准，不要在这里抄数字**；
+  历史见常量上方的注释（16→…→22 删掉登录类操作、23 新增 `discussion-material-open`、
+  **24 把审核根的 cwd/沙箱边界从"本轮案例目录"改成"已选工作空间"** —— 后者决定审核会话是挂在
+  工作空间下还是落「未分组」，见 §4.8 与 CHANGELOG 0.0.34）；
 - 客户端发现 `boot.protocol !== WORKBENCH_PROTOCOL`：面板上明说「宿主插件是旧构建，请重启 web profile」，
   并把 `canDispatch` 置 false；
 - 排查口诀：`env` 应答里缺字段 = 宿主是旧代。`ping.builtAt` 是**模块加载那一刻**的产物写入时间，
@@ -171,8 +185,8 @@ DSH_PERMISSION_MODE=danger-full-access dsh --profile <你的 profile>
 加进 iFinD 之后"9 个工具"那条断言照样绿过一次。
 
 **协议号也只有一个事实源**：`src/shared/consts.ts` 的 `WORKBENCH_PROTOCOL`（当前值以那一行
-为准，**不要**在这里抄数字 —— 它每加一代就变一次，抄进来必然漂）。最新一代是 32：
-**工作区会话统一**（会话落点只有一条路：唯一来源是【环境信息】选中的 `env.workspace`，
+为准，**不要**在这里抄数字 —— 它每加一代就变一次，抄进来必然漂）。常量注释里记录着一代示例
+（32：**工作区会话统一** —— 会话落点只有一条路：唯一来源是【环境信息】选中的 `env.workspace`，
 唯一落点参数是 `workspaceId`，建完回读会话 cwd 与工作区成员关系；`caseRoot` / `cwd` 降级全部删除），
 见本文件末尾「工作区会话」一节。
 历史（13：`state` 统一环境模型 / iFinD 凭据改由插件保管；
@@ -968,6 +982,23 @@ DSH Runtime: （未设置） ·  · DSH 自带运行时（load_workspace_depende
   「未配置」、不报红、不堆说明。
 - ⚠️ 星号计数断言要限定在**步骤导航**子树里（`data-crwu-env-stepnav`）：面板标题上还有一枚"当前这一步"
   的星号，对整棵树数数会数出 4 而不是 3。
+
+### 20.6 清空工作空间：清单先给人看，指纹保证"删的就是看到的那份"
+
+- 两条 RPC：`workspace-cleanup-plan`（只读扫描，产出一份 5 分钟、单次使用的内存计划）与
+  `workspace-cleanup-apply`（带 planId + 指纹 + 目录名）。执行前**重新扫描并比对指纹**，
+  不一致就整体拒绝 —— 确认期间多出/少了任何顶层项或会话，都不许"照旧删"。
+- 指纹**不含**目录大小与会话运行状态：大小统计有预算、运行状态几秒就变，把它们放进去只会让
+  "什么都没变"也偶发拒绝。大小只用于展示；`stopActivity` 用执行时的实时列表决定。
+- 删除只用 `src/host/domains/workspace-cleanup/io.ts` 的 `node:fs/promises`，不拼 shell；
+  其它模块只看到 `CleanupIo`。边界：只处理 W 的**直接子项**、拒绝根/主目录/`~/.dsh`、
+  不跟随符号链接（链接按项 `unlink`）。
+- 会话先归档再谈删日志：`archiveSession` 失败、或 30 秒内没静止，都在动文件之前中止。
+  物理删除日志按 **sessionId 精确匹配目录**，命中 0 或 >1 都不删（不猜 slug）。
+- 删 `.crwu` 之前先 `closeWorkspaceStores(realPath)`：`workflows.sqlite` 被 `node:sqlite`
+  打开着，Windows 上文件占用会让整条删除失败。
+- 授权：新增能力 `workspace-cleanup`，收据 schema 1 → 2；操作 `system.workspace-cleanup`
+  是 `filesystem` / 特权 / 仅 `panel`。协议 48 → 49。
 
 ## 21. 「授权收据读不出来」不许显示成「需要授权」（2026-09-30 · 协议 25）
 

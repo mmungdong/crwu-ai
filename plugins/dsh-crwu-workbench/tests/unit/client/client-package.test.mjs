@@ -209,7 +209,7 @@ test('apply registers every slot through slots.inject', () => {
 
   // 只有两处走 effect：样式元素，以及自助更新状态（轮询定时器 + 面板开关的监听器）。
   // 槽位注入直接调用（与 DSH 自带的客户端插件一致）。
-  assert.deepEqual(effects.map((entry) => entry.label), ['crwu-workbench: styles', 'crwu-workbench: update state'])
+  assert.deepEqual(effects.map((entry) => entry.label), ['crwu-workbench: styles', 'crwu-workbench: valuation workflow', 'crwu-workbench: update state'])
   assert.deepEqual(injections.map((entry) => entry.name), [
     'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ], '四个槽位缺一不可：少了会话头那个，界面上就没有办法登记审核父级')
@@ -292,14 +292,11 @@ test('侧栏那一席是一张分组卡：卡头 + 三个子项，顺序固定',
   // 环境那一行的悬停文案顺带给出自检结论（颜色对色觉障碍用户不可读），所以它带结论后缀。
   assert.deepEqual(rows.map((row) => row.props.title), [zhCN.moduleEval, zhCN.moduleAudit, zhCN.moduleEnvMarkIdle])
   const evalRow = rows[0]
-  // 协议 32（2026-10-12）：报告评估（房地产估值）已经可用，所以**没有**「开发中」标签。
-  // 标签机制本身仍然在（`isUnderDevelopment` 决定），只是这个模块不再命中它。
-  assert.equal(isUnderDevelopment('eval'), false, '报告评估已交付，不该再标开发中')
-  assert.equal(
-    find(evalRow, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.moduleTag)),
-    null,
-    '已交付的子项旁边不该有「开发中」标签',
-  )
+  assert.equal(isUnderDevelopment('eval'), true)
+  const developmentTag = find(evalRow, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.moduleTag))
+  assert.ok(developmentTag, '报告评估旁边应显示开发中标签')
+  assert.equal(textOf(developmentTag), '开发中')
+  assert.equal(rows.slice(1).some((row) => find(row, (node) => String(node.props?.className ?? '') === WORKBENCH_CLASSES.moduleTag)), false)
   // 报告审核旁边不再标报告数（用户 2026-09-22 口径）：那一行只有图标 + 名字。
   assert.equal(
     find(rows[1], (node) => typeof node.props?.children === 'string' && /\d/.test(node.props.children)),
@@ -643,7 +640,7 @@ function stubOps(handlers) {
   globalThis.fetch = async (url, init) => {
     const payload = JSON.parse(init.body)
     ops.push(payload.op)
-    const entry = handlers[payload.op]
+    const entry = handlers[payload.op] ?? (payload.op === 'valuation-workflow-current' ? { body: { ok: true, empty: true, projectId: '', parentSessionId: '', runId: '', phase: 'empty', snapshot: null, progress: null, error: '' } } : undefined)
     if (entry === undefined) return { ok: true, status: 200, async json() { return { ok: true } } }
     const out = typeof entry === 'function' ? entry(payload) : entry
     if (out instanceof Error) throw out
@@ -3338,6 +3335,7 @@ test('侧栏分组卡上的子项就是模块切换：报告审核 ⇄ 环境信
 test('报告评估 是房地产估值模块：资料入口 + 方法 + 可选基准日（不再是 Coming Soon）', async () => {
   stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
+  const workflow = { getState: () => ({ current: { ok: true, empty: true, projectId: '', parentSessionId: '', error: '' }, detail: null, loading: false, busy: false, error: '' }), subscribe: () => () => {}, activate: async () => {}, deactivate() {} }
   const { modules } = await mountChecked(services)
 
   modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
@@ -3345,7 +3343,11 @@ test('报告评估 是房地产估值模块：资料入口 + 方法 + 可选基�
   // 所以注入一个"门禁已放行 + 草稿"的控制器；门禁自身的行为在
   // `client-valuation-handoff.test.mjs` 里逐条覆盖。
   const evaluation = fakeEvaluationController({ phase: 'draft' })
-  const after = rerender(WorkbenchPanel, { services, modules, evaluation })
+  let after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  find(after, (node) => node.props?.['data-business-step'] === 'valuation').props.onClick()
+  after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  await settle()
+  after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   // 面板这一页现在是估值模块（`crwu-valuation`），不再是占位页。
   const pane = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes('crwu-valuation'))
   assert.ok(pane, '估值模块的容器要在')
@@ -3356,7 +3358,8 @@ test('报告评估 是房地产估值模块：资料入口 + 方法 + 可选基�
   assert.equal(head, null, '估值页不再重复画一个大页头')
   const valuationTab = findAll(after, (node) => node.props?.role === 'tab'
     && textOf(node) === zhCN.navParentValuation)
-  assert.ok(valuationTab.length >= 1, '顶部「估值」页签仍然给出页面身份')
+  assert.equal(valuationTab.length, 0, '业务步骤替代旧估值页签')
+  assert.ok(find(after, (node) => node.props?.['data-workflow-step'] === 'valuation'))
   // 占位页那套话术（"将来提供" / "开发中" / 去报告审核）都不该再出现。
   // 被删掉的 Coming Soon 文案（`features/report-eval/` 已整体移除）：逐字钉住"不许复活"。
   for (const banned of ['该模块正在开发中', '开发中', '目前可以继续使用', '敬请期待', '重磅', '赋能']) {
@@ -3452,8 +3455,8 @@ test('两级目录按模块分离：审核树扁平为一条主行，评估树�
   modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
   const valuation = rerender(WorkbenchPanel, { services, modules })
   const evalParents = tabsIn(valuation, zhCN.navParentsLabel)
-  assert.deepEqual(evalParents.map((tab) => textOf(tab)), ['估值'], '评估树里不许出现审核入口')
-  assert.deepEqual(evalParents.map((tab) => tab.props['aria-selected']), [true])
+  assert.equal(evalParents, null, '评估入口使用业务步骤而非页签')
+  assert.ok(find(valuation, (node) => node.props?.['data-business-step'] === 'valuation'))
   assert.equal(tabsIn(valuation, zhCN.navChildrenLabel), null, '估值不再有二级目录页签')
   assert.equal(onReportPage(valuation), false, '正文跟着目录换')
   // Valuation no longer repeats a page heading: the "valuation" tab above is the identity (2026-10-16).
@@ -3498,8 +3501,10 @@ test('估值页不展示环境信息：没有环境胶囊、没有环境检查�
 // ── 估值草稿与轮询的持有者：面板（切目录不丢、也不取消）───────────────────────
 
 /** 一个只服务"切目录"这条链路的估值控制器替身（其余动作在 client-valuation-pane 里测）。 */
+const { initialValuationState: initialWorkflowIntake } = await import(new URL('src/client/modules/report-evaluation/model/valuation-state.ts', ROOT).href)
 function fakeEvaluationController(patch = {}) {
   const state = {
+    ...initialWorkflowIntake(),
     phase: 'draft', selection: ['/tmp/估值报告.pdf'], assetType: 'real-estate', method: 'market',
     baseDate: '2026-06-30', supplementalPrompt: '多考虑地铁因素',
     // 输入页还要逐份资料事实与扫描状态（§4）；替身也要照实给，否则测的是"假页面"。
@@ -3537,15 +3542,20 @@ function fakeEvaluationController(patch = {}) {
 test('切一级目录不丢估值草稿：控制器由 apply 层持有，切走再回来还是同一份', async () => {
   stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
+  const workflow = { getState: () => ({ current: { ok: true, empty: true, projectId: '', parentSessionId: '', error: '' }, detail: null, loading: false, busy: false, error: '' }), subscribe: () => () => {}, activate: async () => {}, deactivate() {} }
   const evaluation = fakeEvaluationController()
   const modules = createModuleStore()
-  const rendered = render(WorkbenchPanel, { services, modules, evaluation })
+  const rendered = render(WorkbenchPanel, { services, modules, evaluation, workflow })
   await flushEffects(rendered.instance)
-  rerender(WorkbenchPanel, { services, modules, evaluation })
+  rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   await flushEffects(rendered.instance)
 
   modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
-  let tree = rerender(WorkbenchPanel, { services, modules, evaluation })
+  let tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  find(tree, (node) => node.props?.['data-business-step'] === 'valuation').props.onClick()
+  tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  await settle()
+  tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   // 文件行的主标题是**文件名**，完整路径只留在 `title` 里（§4：显示绝对路径反而认不出资料）。
   assert.equal(textOf(tree).includes('估值报告.pdf'), true, '已选资料要画出来')
   assert.equal(textOf(tree).includes('/tmp/估值报告.pdf'), false, '完整路径不做主标题')
@@ -3563,12 +3573,12 @@ test('切一级目录不丢估值草稿：控制器由 apply 层持有，切走�
 
   // 切到审核：估值页卸载，但草稿在控制器里（不是页面组件的 state）。
   modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
-  tree = rerender(WorkbenchPanel, { services, modules, evaluation })
+  tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   assert.equal(textOf(tree).includes('估值报告.pdf'), false, '审核页上不该画估值页的内容')
 
   // 切回估值 / 房地产：选择、方法、基准日、补充要求原样还在。
   modules.navigateParent('valuation', { state: environmentStateOf(okEnvBody()) })
-  tree = rerender(WorkbenchPanel, { services, modules, evaluation })
+  tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   assert.equal(textOf(tree).includes('估值报告.pdf'), true, '切回来草稿必须还在')
   assert.equal(findAll(tree, (node) => node.props?.value === '多考虑地铁因素').length, 1)
   assert.equal(evaluation.getState().method, 'market')
@@ -4130,7 +4140,7 @@ test('报告审核直接展示工具条和七列表格，总数只在分页区',
   const { tree } = render(ReportPane, reportPaneProps({ state: { tasks: [PENDING_TASK], total: 8652 } }))
   assert.equal(findByClass(tree, 'crwu-audit-tabs'), null)
   assert.equal(findButtonLike(tree, zhCN.tabPending), null)
-  assert.equal(textOf(tree).includes(zhCN.tabPending), false)
+  assert.equal(textOf(findByClass(tree, 'crwu-audit-report-heading')), zhCN.tabPending)
   assert.equal(textOf(tree).includes(zhCN.tabResults), false)
   assert.equal(findAll(tree, (node) => node.type === 'th').length, 7)
   assert.equal(textOf(tree).includes(zhCN.colAudit), true)

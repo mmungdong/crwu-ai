@@ -741,7 +741,7 @@ test('19. 四个操作的响应里没有 URL、凭据、日志、命令、reques
   }
 })
 
-test('20. 协议号覆盖当前页批量 OSS 查询与请求取消', () => {
+test('20. 协议号覆盖当前页批量 OSS 查询、请求取消与工作空间清理', () => {
   // 18 = 本机访问授权收据 + 授权前零副作用自检；19 = 审核 scope 绑定
   //（案例目录/根会话 cwd 与沙箱边界都从"工作空间"收紧到"本轮案例目录"，氚云记录查询移出审核能力集）；
   // 20 = 新增 `browser-session-bind`；21 = 钉钉登录拆成两阶段；
@@ -769,7 +769,8 @@ test('20. 协议号覆盖当前页批量 OSS 查询与请求取消', () => {
   // 40 adds structured rule parameters and project-level finalization.
   // 41 adds assessments / canonical-URL identity / durable list snapshots;
   // 42 adds detail capture (actual URL + immutable PNG + manifest) and the background browser flow.
-  assert.equal(WORKBENCH_PROTOCOL, 42)
+  // Protocol 44 adds explicit same-parent recovery for stopped intent-only runs.
+  assert.equal(WORKBENCH_PROTOCOL, 49)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

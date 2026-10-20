@@ -1,6 +1,7 @@
 PLUGIN    ?= dsh-crwu-workbench
 GO        ?= go
 NPM       ?= npm
+PYTHON    ?= python3
 VERSION   ?= 0.0.1
 override NPM_REGISTRY := https://registry.npmjs.org
 COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -36,9 +37,11 @@ PLUGIN_PKG_NAME ?= $(shell node -p "require('$(PLUGIN_DIR)/package.json').name" 
 PLUGIN_VERSION ?= $(shell node -p "require('$(PLUGIN_DIR)/package.json').version" 2>/dev/null)
 DIST_DIR      := $(CURDIR)/dist
 PLUGIN_TGZ    := $(DIST_DIR)/$(PLUGIN_PKG_NAME)-$(PLUGIN_VERSION).tgz
+H3YUN_BUNDLE  := $(DIST_DIR)/crwu-h3yun-bundle-$(VERSION).zip
 
 .PHONY: build build-mac build-win fmt test clean docs-check \
-        plugin-deps plugin-skills plugin-dws plugin-bin plugin-bin-check plugin-check plugin-pack plugin-clean \
+        h3yun-bundle h3yun-bundle-check \
+        plugin-deps plugin-python plugin-skills plugin-dws plugin-bin plugin-bin-check plugin-check plugin-ocr-check plugin-pack plugin-clean \
         plugin-version plugin-version-set plugin-npm-login plugin-npm-whoami \
         plugin-publish-dry-run plugin-publish
 
@@ -65,6 +68,21 @@ docs-check:
 
 clean:
 	rm -rf -- "$(CURDIR)/$(BIN_DIR)"
+
+# ── WorkBuddy 便携包（零安装） ────────────────────────────────────────────────
+# 把 crwu 二进制（darwin-arm64 / win32-x64）与 crwu-h3yun-login / crwu-h3yun-query
+# 两个技能打成一个 zip：接收方解压后把包里的提示词交给 WorkBuddy，二进制按绝对路径
+# 从包内直接跑，不写 PATH、不写 ~/.workbuddy、不写 ~/.crwu。
+#
+# 入口文档与提示词在 scripts/h3yun-bundle/；打包脚本是 stdlib-only Python，
+# 两个平台都只是**复制**已构建的二进制，因此不引入新的外部命令。
+h3yun-bundle-check:
+	$(PYTHON) scripts/test_build_h3yun_bundle.py
+
+h3yun-bundle: build h3yun-bundle-check
+	$(PYTHON) scripts/build_h3yun_bundle.py \
+		--version "$(VERSION)" --commit "$(COMMIT)" --out "$(H3YUN_BUNDLE)"
+	@echo "==> $(H3YUN_BUNDLE)"
 
 # ── 插件目标 ────────────────────────────────────────────────────────────────
 
@@ -115,10 +133,31 @@ plugin-bin: build plugin-deps
 plugin-bin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && node scripts/sync-binaries.mjs --check
 
+# ── DSH 自带 Python（OCR 门禁的解释器）────────────────────────────────────────
+# 门禁**不退回系统 `python3`**：员工机器与干净机器上那一份既不保证存在，也不保证带 Pillow；
+# 缺了它 OCR 真实渲染的两条用例只会 skip，而 **skip 不是通过证据**（那会让整条门禁看起来通过）。
+# 没有显式指定时按 DSH 自己的目录约定解析（`$DSH_HOME/dsh-runtimes/*/dependencies/python`），
+# 解析/探测逻辑在 scripts/resolve-dsh-python.mjs，交付前还会再校验一次它能 `import PIL`。
+# 覆盖：`make plugin-check DSH_PYTHON=<python 绝对路径>`，或导出同名环境变量。
+ifndef DSH_PYTHON
+DSH_PYTHON := $(shell node "$(CURDIR)/scripts/resolve-dsh-python.mjs" 2>/dev/null)
+endif
+
+# 门禁前置：拿不到（或跑不动）DSH 自带 Python 就立刻红，而不是等到门禁末尾才发现两条用例被 skip。
+plugin-python:
+	@test -n "$(DSH_PYTHON)" || { \
+		node "$(CURDIR)/scripts/resolve-dsh-python.mjs" > /dev/null; \
+		exit 1; \
+	}
+	@"$(DSH_PYTHON)" -c 'import sys, PIL; print("DSH 自带 Python：" + sys.version.split()[0] + "（Pillow " + PIL.__version__ + "）")' \
+		|| { echo "✖ 上面这个解释器不可用（需要能 import PIL）：$(DSH_PYTHON)"; \
+		     echo "  处理：用 make plugin-check DSH_PYTHON=<别的绝对路径> 覆盖，或修复 DSH 运行时。"; exit 1; }
+
 # 完整门禁 = 版本一致 + 公共技能同步 + dws 层内容一致 + 类型 + 测试 + 构建 + 产物冒烟 + tarball 自检
 #            + 技能自洽性 lint（crwu 层与公共层各一次）+ 三个源仓契约测试 + 分发守卫判定自检
 #            （与 CI 同一条命令集）。dws 层是上游正文，按 `skills/README.md` 的口径豁免自洽性 lint。
-plugin-check: plugin-deps
+#            OCR 真实渲染用 **DSH 自带 Python**（见上面的 plugin-python），不用系统 python3。
+plugin-check: plugin-deps plugin-python
 	cd "$(PLUGIN_DIR)" && npm run check
 	cd "$(PLUGIN_DIR)" && npm run pack:assert
 	# 发布严格模式：两个平台六个二进制 + manifest 必须在真实 tarball 里且逐个哈希一致。
@@ -127,10 +166,14 @@ plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root common/skills
 	# 业务层（skills/biz）自包含性同样要过一次（非 vendored 层各一次）。
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/biz
+	# 共享能力层（skills/capabilities）：OCR 技能同样必须能作为副本独立工作。
+	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/capabilities
 	# 门禁只读源码：`PYTHONDONTWRITEBYTECODE=1` 保证不在包目录留下 `__pycache__/*.pyc`
 	# —— `files` 里有 `skills/crwu/`，残留会被 `pack:assert` 判成「打进了不该发布的东西」。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
+	# 阶段一材料盘点契约（H0 隔离 / 工作版重建 / 媒体证据 / OCR 兜底清单 ocrRequired）。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_prepare_materials.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 	# 业务层（skills/biz）：报告评估的多类型资料提取脚本契约。缺 openpyxl / python-docx / Pillow
 	# 时对应用例**跳过**（那是运行时能力差异，不是脚本缺陷），缺口分支照常断言。
@@ -144,6 +187,18 @@ plugin-check: plugin-deps
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_calculate_market.py
 	# 挂牌参考一次性交付：固定输入身份、四件产物、修订目录、generatedAt 冻结与只读校验。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/biz/crwu-biz-valuation-realestate/scripts/test_listing_reference.py
+	# OCR 能力：依赖清单/哈希/路径安全 + **真实 PDF 渲染**，两条都必须跑实。解释器固定用
+	# DSH 自带 Python（plugin-python 已前置校验过它带 Pillow），避免在没装 python3、或装了但
+	# 缺 Pillow 的机器上被 skip 掉却当作通过。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
+
+# OCR 能力的**真实渲染**门禁（`plugin-check` 里那两条的聚焦入口）：解释器自动取 DSH 自带
+# Python（macOS 走系统 CoreGraphics、Windows 走随包 pypdfium2），一般不需要传参。
+# 覆盖：make plugin-ocr-check DSH_PYTHON=<python 绝对路径>
+plugin-ocr-check: plugin-deps plugin-python
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
 
 # 打成可直接分发的 tgz（`npm publish` 的对象，也是接收方自测的输入）。
 # 包内已含全部技能层（skills/crwu、skills/dws、common/skills）与两个平台的自带二进制。
@@ -178,5 +233,7 @@ plugin-publish:
 	cd "$(PLUGIN_DIR)" && $(NPM) publish --registry="$(NPM_REGISTRY)"
 
 # 插件侧的构建产物：分发包（dist/）、装配好的二进制（bin/）与它的下载缓存（.cache/）。
+# `.npm-cache/` 是包内 `.npmrc` 锚定的 npm 缓存：每次 `npm pack` 都会缓存一份 ~40MB 的 tarball，
+# 跑多了会累积，这里一并清掉（下次门禁会自动重建，只影响下载/打包的复用速度）。
 plugin-clean:
-	rm -rf -- "$(DIST_DIR)" "$(PLUGIN_DIR)/bin" "$(PLUGIN_DIR)/.cache"
+	rm -rf -- "$(DIST_DIR)" "$(PLUGIN_DIR)/bin" "$(PLUGIN_DIR)/.cache" "$(PLUGIN_DIR)/.npm-cache"

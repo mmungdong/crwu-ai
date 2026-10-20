@@ -120,7 +120,7 @@ test('the valuation API sends its declared operation for every method', async ()
   const args = {
     filesScan: { paths: [] },
     intake: {
-      requestId: 'req-1', paths: [], assetType: 'residential', method: 'auto', baseDate: '',
+      requestId: 'req-1', paths: [], assetType: 'real-estate', method: 'market', baseDate: '',
     },
     browserPreflight: {},
     browserLogin: { siteId: 'lianjia' },

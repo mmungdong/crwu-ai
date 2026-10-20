@@ -101,11 +101,16 @@ jobs:
           }
           status=0
           run_gate "自洽性 lint：skills/crwu" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/crwu || status=1
+          run_gate "自洽性 lint：skills/capabilities" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/capabilities || status=1
           run_gate "自洽性 lint：../common/skills" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root ../common/skills || status=1
           run_gate "维护者源仓契约测试" python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py || status=1
           run_gate "router 源仓契约测试" python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py || status=1
           run_gate "crwu-dws 源仓契约测试" python3 ../common/skills/crwu-dws/scripts/test_dws_source_contract.py || status=1
           exit $status
+
+      # OCR 依赖清单与哈希（纯 Python，不渲染）：所有 job 都能跑，缺 wheel 就是包不完整。
+      - name: OCR dependency manifest
+        run: PYTHONDONTWRITEBYTECODE=1 python3 skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
 
       # 公共层是**生成产物**：`common/skills/` 在 `.gitignore` 里，源是 `../common/skills`。
       # 下面的 `pack:assert`（tarball 的必需文件里有 `common/skills/crwu-dws/SKILL.md`）与
@@ -256,3 +261,34 @@ jobs:
           name: windows-powershell-logs
           path: ${{ runner.temp }}/native-pwsh-tests.log
           if-no-files-found: ignore
+
+  # OCR 技能的**真实渲染**双平台门禁：
+  # - macOS：随包不发布 pypdfium2（DSH 运行时硬化签名加载不了），走系统 CoreGraphics；
+  # - Windows：随包 pypdfium2 wheel 解包后渲染。
+  # Pillow 用 PyPI 版本，因为 CI 没有 DSH 自带运行时；生产里用 DSH 自带 Python 的那一份。
+  # 这里验证的是脚本/渲染路径，不等于"员工机器已验收"——真机验收仍由安装后的 profile 完成。
+  ocr:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: plugins/dsh-crwu-workbench
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: runtime-provided Pillow
+        run: python -m pip install --disable-pip-version-check "pillow==13.0.0"
+
+      - name: OCR dependency manifest
+        run: PYTHONDONTWRITEBYTECODE=1 python skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
+
+      - name: OCR render + record flow
+        run: PYTHONDONTWRITEBYTECODE=1 python skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py

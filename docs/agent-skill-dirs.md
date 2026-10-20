@@ -9,7 +9,25 @@ DSH 技能随插件包发布。其它宿主按需选择单个 Skill，并使用�
 
 ```bash
 make plugin-pack    # DSH：打成插件包，技能按层随包发布
+make h3yun-bundle   # WorkBuddy：零安装便携包（crwu 二进制 + crwu-h3yun-* 技能 + 提示词）
 ```
+
+## WorkBuddy 零安装便携包
+
+`make h3yun-bundle` 产出 `dist/crwu-h3yun-bundle-<version>.zip`，内含：
+
+- `crwu` 二进制：`bin/darwin-arm64/crwu`（macOS Apple Silicon）、`bin/win32-x64/crwu.exe`（Windows x64）；
+- 技能副本：`skills/crwu-h3yun-login/`、`skills/crwu-h3yun-query/`（构建时从 `plugins/common/skills/` 复制）；
+- 入口文档 `AGENTS.md`（AI 执行规则）、`README.md`（人看的三步说明）、`PROMPT.md`（两段可复制提示词）、
+  `VERSION.txt`（版本、构建提交、逐文件 SHA-256）。
+
+它**不安装任何东西**：二进制按包内绝对路径调用，浏览器 profile 通过 `CRWU_BROWSER_PROFILE`
+留在包内，技能不复制进 `~/.workbuddy/skills/`。接收方解压后把提示词交给 WorkBuddy 即可。
+代价是宿主不会自动发现技能，必须由提示词点名——这正是“零污染”的边界。
+
+入口文档与提示词模板在 `scripts/h3yun-bundle/`（`AGENTS.bundle.md` 打包时改名为 `AGENTS.md`，
+避免被仓库内的 Agent 当作目录指令加载）；打包脚本 `scripts/build_h3yun_bundle.py` 只做复制、
+校验与打 zip，两种平台通用，无第三方依赖。`make h3yun-bundle-check` 跑包布局与拒绝路径的契约测试。
 
 ## 目录表
 

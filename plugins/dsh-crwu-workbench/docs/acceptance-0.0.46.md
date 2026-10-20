@@ -25,7 +25,7 @@
 | 一致性：回显与本次提交不同 → 可恢复错误 + 留在草稿 | `tests/unit/client/client-valuation-required.test.mjs`「prepareReady：完整且与本次提交一致的回包才进确认，方法/资产类型取自 Host 回包」 | 沿用草稿里的旧方法冒充本次 Host 确认结论 |
 | 空方法根本发不出准备请求 | `tests/unit/client/client-valuation-required.test.mjs`「controller：空方法根本发不出准备请求（禁用判据与提交判据是同一处）」 | 禁用判据与提交判据分家，界面拦住了但请求还是发出去了 |
 | 抽屉的资产类型与方法只认 Host 回包 | `tests/unit/client/client-valuation-required.test.mjs`「抽屉的资产类型与方法只认 Host 回包（组件不再接收草稿方法）」 | 抽屉另接一份可能漂移的草稿方法，核对回显与本次提交对不上 |
-| 必填项顺序：资料区之后、所有可选条件与辅助能力之前 | `tests/unit/client/client-valuation-pane.test.mjs`「输入页：两个必填项紧跟资料区，用同一种单选下拉（四项可选 + 轻量推荐 + 必填标记）」 | 长文件清单把必填项推到大量重复元信息后面，员工找不到该填什么 |
+| ⟪面板重构改判作废⟫ 必填项顺序：资料区之后、所有可选条件与辅助能力之前 | `tests/unit/client/client-valuation-pane.test.mjs`「输入页：两个必填项紧跟资料区，用同一种单选下拉（四项可选 + 轻量推荐 + 必填标记）」 | 长文件清单把必填项推到大量重复元信息后面，员工找不到该填什么 |
 
 ## 2. 必填项的可见性与错误呈现（设计稿 §2）
 
@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | 初次进入不显示字段红字；失焦或清空已填值之后才出现短错误 | `tests/unit/client/client-valuation-pane.test.mjs`「输入页：初次进入不显示字段红字；失焦或清空已填值之后才有短错误」 | 一进页面满屏红字；或者反过来，永远不告诉员工哪个字段是空的 |
 | 底栏的禁用原因与字段顺序一致（先资产类型，再评估方法） | `tests/unit/client/client-valuation-pane.test.mjs`「输入页：底栏显示的必填原因与字段顺序一致（先资产类型，再评估方法）」 | 两个必填项都没选时先说第二条，员工改完一处还是点不动 |
-| 两个必填项的标签与控件**真的关联**（`aria-labelledby` 指向存在的元素） | `tests/unit/client/client-valuation-pane.test.mjs`「输入页：两个必填项紧跟资料区，用同一种单选下拉（四项可选 + 轻量推荐 + 必填标记）」 | 控件没有可访问名称，读屏只念出一个"下拉" |
+| ⟪面板重构改判作废⟫ 两个必填项的标签与控件**真的关联**（`aria-labelledby` 指向存在的元素） | `tests/unit/client/client-valuation-pane.test.mjs`「输入页：两个必填项紧跟资料区，用同一种单选下拉（四项可选 + 轻量推荐 + 必填标记）」 | 控件没有可访问名称，读屏只念出一个"下拉" |
 
 ## 3. 统一单选下拉（设计稿 §4）
 
@@ -52,7 +52,7 @@
 | 验收标准 | 强制点 | 去掉它会放走什么 |
 | --- | --- | --- |
 | 文件夹展开 / 收起是真的（收起后子列表不渲染） | `tests/unit/client/client-valuation-required.test.mjs`「文件夹展开 / 收起是真的：收起后子列表不渲染，aria-expanded 与实际一致」 | 有文件的目录一直展开，箭头点了没用；被收起的后代仍在键盘顺序里 |
-| 资料区在两个必填项之前，必填项在补充条件与辅助区之前 | `tests/unit/client/client-valuation-required.test.mjs`「资料区在两个必填项之前；两个必填项在补充条件与辅助区之前」 | 页面顺序退回到"可选条件先、必填项埋在中段" |
+| ⟪面板重构改判作废⟫ 资料区在两个必填项之前，必填项在补充条件与辅助区之前 | `tests/unit/client/client-valuation-required.test.mjs`「资料区在两个必填项之前；两个必填项在补充条件与辅助区之前」 | 页面顺序退回到"可选条件先、必填项埋在中段" |
 
 ## 5. 信息获取辅助（设计稿 §6）
 

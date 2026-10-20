@@ -133,12 +133,12 @@ const confirmIn = (tree) => findUnresolved(tree, (node) => {
 })
 const describedByOf = (node) => node.props?.['aria-describedby'] ?? node.props?.describedBy
 
-test('估值工作面：资料区 → 必填两项 → 条件 → 辅助的顺序不变', () => {
+test('估值工作面：必填两项 → 可选资料 → 条件 → 辅助', () => {
   const tree = render(ValuationIntakePane, intakeProps(readyState())).tree
   const order = findAll(tree, (node) => node.props?.['data-valuation-block'] !== undefined)
     .map((node) => node.props['data-valuation-block'])
-  assert.deepEqual(order, ['files', 'required', 'conditions', 'capability'],
-    '必填两项必须紧接资料区，排在可选条件与辅助能力之前')
+  assert.deepEqual(order, ['required', 'files', 'conditions', 'capability'],
+    '必填两项必须先于可选资料、条件与辅助能力')
 })
 
 test('估值工作面接入共享控件：不用原生 type=date，改用共享 DatePicker/Select/FormField/Input/TextArea', () => {

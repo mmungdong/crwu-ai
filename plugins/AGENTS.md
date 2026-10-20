@@ -18,6 +18,7 @@ DSH scans one level below each registered Skill root. Every layer is therefore r
 | --- | --- | --- |
 | `dsh-crwu-workbench/skills/crwu/` | Repository-owned audit and maintenance Skills | Edit in place; run self-containment and audit contract gates. |
 | `dsh-crwu-workbench/skills/biz/` | Repository-owned business Skills (valuation, …) | Edit in place; run independently of `crwu-audit` routing. |
+| `dsh-crwu-workbench/skills/capabilities/` | Repository-owned shared capabilities (`crwu-ocr`, …) | Edit in place; run self-containment, CLI guard, and the capability's own platform tests. |
 | `dsh-crwu-workbench/skills/dws/` | Vendored `dingtalk-workspace-cli` content | Change only through `npm run dws:sync`; verify provenance with `npm run dws:check`. |
 | `common/skills/` | Repository-owned shared Skills | Edit the source layer; synchronize the package copy with `npm run skills:sync`. |
 | `dsh-crwu-workbench/common/skills/` | Generated package copy | Never edit directly. |
@@ -71,5 +72,7 @@ git diff --check
 ```
 
 For focused Skill work, also run the validator and contract test that own the changed layer or audit behavior. The standard Workbench gate already covers version/config consistency, synchronized Skills, CLI guards, TypeScript, tests, build, smoke loading, and package assertions.
+
+`make plugin-check` runs the OCR real-render cases with the **DSH-bundled Python**, resolved from `$DSH_HOME` (default `~/.dsh`) by `scripts/resolve-dsh-python.mjs` and verified to import Pillow; it fails instead of skipping when that interpreter is unavailable. Override with `make plugin-check DSH_PYTHON=<absolute path>`. The package `.npmrc` keeps npm's cache at `./.npm-cache` so `npm pack` and `npm ci` do not depend on writing `~/.npm`.
 
 Do not manually modify or publish generated output. Publishing remains a user-authorized action; see the Workbench-specific instructions and release guide.
