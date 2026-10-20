@@ -111,7 +111,7 @@ test('§8 扫描中：正在扫描文件…（禁用）', () => {
   assert.equal(state.reason, zhCN.localAuditScanning)
 })
 
-test('§8 超过 30 个文件：文件数量超限（禁用，扫描中优先）', () => {
+test('§8 超过上限：文件数量超限（禁用，扫描中优先）', () => {
   const state = buttonStateOf(readyState({ overLimit: true, fileCount: 36, readableCount: 36 }))
   assert.equal(state.label, '文件数量超限')
   assert.equal(state.disabled, true)
@@ -193,8 +193,8 @@ test('summaryLineOf 说清"选了几个项目、展开后多少个文件"', () =
 })
 
 test('overLimitMessageOf 只在上限被突破时给一句可执行的话', () => {
-  const over = overLimitMessageOf(scanOf({ overLimit: true, fileCount: 36, limit: 30 }))
-  assert.equal(over, '当前选择会展开为 36 个文件，超过单次最多 30 个文件的限制。请移除部分文件或文件夹后再继续。')
+  const over = overLimitMessageOf(scanOf({ overLimit: true, fileCount: 206, limit: 200 }))
+  assert.equal(over, '当前选择会展开为 206 个文件，超过单次最多 200 个文件的限制。请移除部分文件或文件夹后再继续。')
   assert.equal(overLimitMessageOf(scanOf({ overLimit: false, fileCount: 3 })), '')
 })
 
@@ -758,7 +758,7 @@ test('文案契约：设计 §2–§9 的逐字文案都在（含五个文件状
     // §3 已选择内容
     '还没有选择文件',
     '请选择文件或文件夹开始本地审核。',
-    '单次最多审核 30 个文件。',
+    '单次最多审核 200 个文件。',
     '已选择 %s 个项目，展开后共 %s 个文件',
     '当前选择会展开为 %s 个文件，超过单次最多 %s 个文件的限制。请移除部分文件或文件夹后再继续。',
     // §3 五个文件状态

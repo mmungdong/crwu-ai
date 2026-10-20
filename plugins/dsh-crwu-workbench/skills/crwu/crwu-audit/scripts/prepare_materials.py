@@ -114,6 +114,10 @@ class DependencyUnavailable(Exception):
     """
 
 
+class PdfEncrypted(Exception):
+    """PDF 加密且无可用口令：进 OCR 兜底清单，不算材料缺失，也不让盘点崩掉。"""
+
+
 def dependency_state(module: str) -> tuple:
     """探测某个**顶层依赖**的三态，返回 `(state, detail)`。
 
@@ -394,17 +398,66 @@ def docx_to_text(p: str):
         return None, f"python-docx 缺失且 textutil 回退失败：{err}"
 
 
-def pdf_to_text(p: str):
+def _join_pages(pages) -> str:
+    """复刻既有页分隔格式：首行前导换行，页间双换行（`提取/*.txt` 逐字节不变）。"""
+    return "\n".join("\n===== 第 %d 页 =====\n%s" % (i, t) for i, t in enumerate(pages, 1))
+
+
+def pdf_pages_and_text(p: str):
+    """逐页原文 + 拼接文本。**真的打不开**的加密件才抛 PdfEncrypted。
+
+    pypdf 对 `owner` 口令（user 口令为空）的 PDF 会自动用空口令解开，`is_encrypted` 仍为真；
+    这类文件文字可读，必须照旧走 pypdf 主通道，不能因为"带 /Encrypt"就判成需要口令。
+    判定以**能否真的取到页**为准，不以外科式标志为准。
+    """
     from pypdf import PdfReader
     r = PdfReader(p)
-    out = []
-    for i, page in enumerate(r.pages, 1):
-        out.append(f"\n===== 第 {i} 页 =====")
-        out.append(page.extract_text() or "")
-    txt = "\n".join(out)
+    if getattr(r, "is_encrypted", False):
+        try:
+            r.decrypt("")
+            len(r.pages)                       # 空口令解不开时这里才会抛
+        except Exception:                      # noqa: BLE001 —— 解不开就是解不开
+            raise PdfEncrypted(p)
+    pages = [page.extract_text() or "" for page in r.pages]
+    return pages, _join_pages(pages)
+
+
+def pdf_page_stats(pages) -> dict:
+    """逐页有字/空页统计：`empty` 判据是 `strip() == ""`（空白页不算有字）。"""
+    empty = [i for i, t in enumerate(pages, 1) if t.strip() == ""]
+    return {"total": len(pages), "withText": len(pages) - len(empty),
+            "empty": len(empty), "emptyPages": empty}
+
+
+def pdf_to_text(p: str):
+    pages, txt = pdf_pages_and_text(p)
     if len(txt.strip()) < 50:
         return txt, "PDF 无文本层或内容极少（疑扫描件）"
     return txt, None
+
+
+def read_pdf_pages(rec: dict, rel: str, p: str):
+    """返回 `(pages, None)` 或 `(None, 原因)`；pypdf 不可用时抛 `DependencyUnavailable`。
+
+    坏文件与加密件都**不抛到文件级**：它们进 OCR 兜底清单（见 `ocrRequired`），
+    而不是让整个盘点中断或把材料记成"缺失"。
+    """
+    try:
+        ok, parsed = _call_with_dependency(rec, rel, "pypdf", ".pdf", pdf_pages_and_text, p)
+    except PdfEncrypted:
+        return None, "encrypted"
+    except Exception as error:                        # noqa: BLE001 —— 坏文件也是事实
+        return None, f"{type(error).__name__}: {error}"
+    if not ok:
+        raise DependencyUnavailable()
+    return parsed[0], None
+
+
+def ocr_required_entry(rec: dict, rel: str, kind: str, reason: str,
+                       empty_pages=None, page_count: int = 0) -> dict:
+    """兜底清单条目：只是"这些页 pypdf 读不到"，不含任何审核结论。"""
+    return {"path": rel, "stage": rec.get("stage", ""), "kind": kind, "reason": reason,
+            "emptyPages": list(empty_pages or []), "pageCount": page_count}
 
 
 def xls_dump(p: str):
@@ -917,6 +970,7 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
     media_dir = os.path.abspath(media_dir or os.path.join(case, "媒体证据"))
     media_entries, budget = [], media_extract._Budget()
     inv, seen_xlsx, archives = [], set(), []
+    ocr_required = []     # OCR 兜底清单：pypdf 读不到的页 / 独立图片（只是事实，不含结论）
     hidden_by_stem = {}   # 同名（跨版本）文件的隐藏结构，用于元数据级跨版本比对
     sheet_anomalies = []  # B3：声明用区远大于实际有值区的表（表格规范提示，非审核范围变更）
     queue = []
@@ -932,7 +986,9 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
         kind = magic(p)
         rec = {"path": rel, "name": os.path.basename(p),
                "stage": os.path.basename(os.path.dirname(p)),
-               "ext": ext, "magic": kind, "size": os.path.getsize(p)}
+               "ext": ext, "magic": kind, "size": os.path.getsize(p),
+               # 文本来源只有三种：pypdf 读到了 / 需要 OCR 兜底 / 本格式没有文本通道
+               "textSource": "none"}
         if origin:
             rec["originArchive"] = origin
         extracted = []
@@ -980,17 +1036,39 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                 if err:
                     rec["note"] = err
             elif ext == ".pdf":
-                _ok, _parsed = _call_with_dependency(rec, rel, "pypdf", ext, pdf_to_text, p)
-                if not _ok:
-                    raise DependencyUnavailable()
-                txt, err = _parsed
-                rec["readable"] = not err
-                with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
-                          encoding="utf-8") as fh:
-                    fh.write(txt)
-                rec["chars"] = len(txt)
-                if err:
-                    rec["note"] = err
+                pages, pdf_error = read_pdf_pages(rec, rel, p)
+                if pages is None:
+                    # 读不出来（加密 / 坏文件）不是"材料缺失"：进兜底清单，盘点继续。
+                    encrypted = pdf_error == "encrypted"
+                    rec["readable"] = False
+                    rec["textSource"] = "ocr-required"
+                    rec["chars"] = 0
+                    rec["note"] = ("PDF 加密、无可用口令：已进 OCR 兜底清单（未核 ≠ 缺失）"
+                                   if encrypted
+                                   else f"PDF 读不出来（{pdf_error}）：已进 OCR 兜底清单（未核 ≠ 缺失）")
+                    ocr_required.append(ocr_required_entry(
+                        rec, rel, "pdf", "encrypted" if encrypted else "pypdf-error"))
+                else:
+                    txt = _join_pages(pages)
+                    stats = pdf_page_stats(pages)
+                    err = ("PDF 无文本层或内容极少（疑扫描件）"
+                           if len(txt.strip()) < 50 else None)
+                    rec["textPages"] = stats
+                    rec["readable"] = not err
+                    with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
+                              encoding="utf-8") as fh:
+                        fh.write(txt)
+                    rec["chars"] = len(txt)
+                    reason = ""
+                    if err:
+                        rec["note"] = err
+                        reason = "no-text-layer"
+                    elif stats["empty"]:
+                        reason = "empty-pages"
+                    rec["textSource"] = "ocr-required" if reason else "pypdf"
+                    if reason:
+                        ocr_required.append(ocr_required_entry(
+                            rec, rel, "pdf", reason, stats["emptyPages"], stats["total"]))
             elif ext == ".xlsx":
                 out_name = os.path.basename(p)
                 if out_name in seen_xlsx:
@@ -1056,7 +1134,10 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                     fh.write(txt)
             elif kind == "png" or ext in (".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"):
                 rec["readable"] = False       # 文本抽取口径：图片本机无 OCR，仍不是"文本可读"
+                rec["textSource"] = "ocr-required"
                 rec["note"] = "图片：本机无 OCR；媒体证据由媒体通道导出，判读交宿主多模态（见 mediaEvidence）"
+                ocr_required.append(ocr_required_entry(rec, rel, "image", "image-source",
+                                                       page_count=1))
             elif kind == "zip-ooxml" or ext == ".zip":
                 rec["readable"] = False
                 rec["note"] = "压缩包：未解压审核"
@@ -1070,6 +1151,10 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
             #
             # 依赖归因**只**发生在各格式分支内，这里不再按 `e.name` 猜依赖（跨格式推导正是
             # R1/R2 要消灭的形态）。
+            if rec.get("ext") == ".pdf":
+                # 缺 pypdf 时 PDF 仍要能兜底：没有它能读的通道，就交 OCR
+                rec["textSource"] = "ocr-required"
+                ocr_required.append(ocr_required_entry(rec, rel, "pdf", "pypdf-error"))
             pass
         except Exception as e:
             rec["readable"] = False
@@ -1153,6 +1238,8 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
     }
     payload = {"items": inv, "archives": archives, "hiddenStructureDrift": drift,
                "sheetAnomalies": sheet_anomalies,
+               # pypdf 读不到的页与独立图片：由 crwu-ocr 兜底，清单只写事实（路径/页号/原因）
+               "ocrRequired": ocr_required,
                "nonCellEvidence": non_cell_summary}
     inv_path = os.path.join(case, inventory_name)
     with open(inv_path, "w", encoding="utf-8") as fh:
@@ -1171,6 +1258,7 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
     return {"inventory": inv_path, "items": len(inv),
             "readable": sum(1 for r in inv if r.get("readable")),
             "archives": archives, "sheetAnomalies": sheet_anomalies,
+            "ocrRequiredCount": len(ocr_required),
             "nonCellEvidence": non_cell_summary,
             "mediaIndex": media_index_path,
             "mediaExported": len(media_entries),

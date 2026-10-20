@@ -30,7 +30,10 @@
   环境中无 soffice → 如实声明"该表未能重算/未能解析"，计入未核表清单，禁止猜测。
 - **媒体/版式类证据不得据工作版判"缺失"**（重建法必然丢 `xl/media`、`word/media`、页眉页脚、批注、形状、图表）：
   询价截图、位置图、现场照片等**内嵌图/独立图片**已由编排层导出到 `媒体证据/` 并列入 `<阶段>媒体索引.json`；
-  本能力**只按该放行清单的 `locator`/`localPath` 消费**，经宿主多模态读图（DSH `read_image`）判读——
+  本能力**只按该放行清单的 `locator`/`localPath` 消费**，经 DSH 图片判读读取；PDF 整页、扫描页与独立图片
+  统一走 `crwu-ocr` 技能（先 `ocr_prepare.py` 转页图并索引〔只补读不出的件时加 `--only <清单 path>`〕，
+  再按 `ocr/index.json` 读图、`ocr_record.py` 记录、`ocr_merge.py` 合并成页序连贯文本、
+  `ocr_status.py` 核对覆盖），**不要**直接读原始 PDF/图片——
   **不得自行解析 raw 原件包**（raw 只由编排层持有），也**不得**只看单元格（含 raw 的单元格）：
   那会把"证据在图片里"误判为"为空/缺失"。清单外（未导出）或宿主无视觉能力时只能出「**未核验**」，
   并逐条进 `scope.notCheckedItems`（`reasonCode=unreadable|unsupported`）——**未核 ≠ 缺失**。

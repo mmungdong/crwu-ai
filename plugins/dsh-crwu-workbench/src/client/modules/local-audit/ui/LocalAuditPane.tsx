@@ -227,18 +227,8 @@ export function LocalAuditPane(props: LocalAuditPaneProps): React.ReactElement {
         小屏自动回到单栏，DOM 顺序就是阅读顺序（选择 → 已选择 → 提示词）。 */}
     <div className={L.columns}>
       <div className={L.column}>
-    <LocalAuditSelectionList
-      items={state.items}
-      files={state.files}
-      fileCount={state.fileCount}
-      limit={state.limit}
-      overLimit={state.overLimit}
-      skippedCount={state.skippedCount}
-      skipped={state.skipped}
-      scanning={state.phase === 'scanning'}
-      onRemove={(path) => { controller.remove(path); void controller.rescan() }}
-    />
-
+    {/* Controls sit before the list: with many files the pick/clear actions must stay
+        within reach instead of being pushed below a long selection. */}
     <Card title={zhCN.localAuditChooseTitle} extra={zhCN.localAuditPickHint}>
       {canPickDirectory || canPickFiles
         ? <>
@@ -275,6 +265,18 @@ export function LocalAuditPane(props: LocalAuditPaneProps): React.ReactElement {
       </div>
     </Card>
 
+    <LocalAuditSelectionList
+      items={state.items}
+      files={state.files}
+      fileCount={state.fileCount}
+      limit={state.limit}
+      overLimit={state.overLimit}
+      skippedCount={state.skippedCount}
+      skipped={state.skipped}
+      scanning={state.phase === 'scanning'}
+      onRemove={(path) => { controller.remove(path); void controller.rescan() }}
+    />
+
       </div>
       <div className={L.column}>
     <LocalAuditPromptField
@@ -301,8 +303,6 @@ export function LocalAuditPane(props: LocalAuditPaneProps): React.ReactElement {
 
     {/* 阶段条：只在真的在准备 / 建会话时出现（干等的时候必须看得见进度）。 */}
     {busy ? <LocalAuditPreparationState stageIndex={stageIndexOf(state)} /> : null}
-      </div>
-    </div>
 
     <div className={L.action}>
       <Button
@@ -318,5 +318,8 @@ export function LocalAuditPane(props: LocalAuditPaneProps): React.ReactElement {
       />
       {reasonText === '' ? null : <span id={REASON_ID} className={L.actionReason}>{reasonText}</span>}
     </div>
+      </div>
+    </div>
+
   </div>
 }

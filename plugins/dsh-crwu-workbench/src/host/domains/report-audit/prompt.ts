@@ -246,6 +246,43 @@ function pythonUnresolvedSection(platform: string): string[] {
     === 'powershell' ? [...section, ...windowsPythonBridge(null)] : section
 }
 
+/**
+ * 「OCR / 图片判读」那一段。
+ *
+ * PDF 文本层只证明"取到了字"，不证明印章、签名、勾选与版式。所有页面级判读统一走
+ * `crwu-ocr` 技能（先转图 + 索引，再由会话模型读图并记录），避免每个叶子各写一套读图指令。
+ */
+function ocrSection(): string[] {
+  return [
+    '## OCR / 图片判读：统一走 crwu-ocr 技能',
+    '',
+    '材料里的 PDF（含文字层）、扫描件、照片、截图、票据、证照、签章页，一律先经 `crwu-ocr` 技能：',
+    '',
+    '0. **pypdf 优先、OCR 只兜底**：`材料盘点.json` 的 `ocrRequired[]` **只回答"哪些页没有文本"**'
+      + '（整份无文本层 / 有空页 / 加密 / 读取出错）与独立图片。清单非空时用 `--only <清单里的 path>` 只索引这些文件；'
+      + '清单为空时可读 PDF 不必整份渲染。',
+    '0b. **该看图的页不受清单限制**：需要核验印章、签名、证照、勾选、横竖版式或表格结构的页，'
+      + '即使有文本层也必须 `ocr_prepare.py --only <该文件> --visual pages:<页号>` 渲成页图再判读；'
+      + '`ocrRequired[]` 不登记这类页，别拿"清单里没有"当作不用看的理由。',
+    '1. 用 `crwu_run_python_script` 执行 `ocr-skill/scripts/ocr_prepare.py`（参数 `--case <案例目录>`，'
+      + '只跑兜底清单时加 `--only <案例内相对路径>`，可重复）。'
+      + '脚本首次调用时由 Host 暂存进案例目录，依赖随插件发布，**不要**自己安装或换解释器。',
+    '2. 只读 `ocr/index.json` 的 `image` 指向的页图（DSH `read_image`）；**不要**直接读原始 PDF/图片，'
+      + '也不要以"有文本层"为由跳过印章、签名、勾选、横竖版式与表格的视觉核验。',
+    '3. 每批页图读完后，用 `ocr-skill/scripts/ocr_record.py --case <案例目录> --input <案例内 JSON>` 记录；'
+      + '页号或页图指纹不符会被拒绝，必须重读该页。',
+    '4. 全部页记录后跑 `ocr-skill/scripts/ocr_merge.py --case <案例目录>`：产出 `ocr/merged/<sourceId>.txt`，'
+      + '按页序顺读；未判读的页是显式占位（`[第 N 页 未判读：<原因>]`），**不得**当作"本页为空"。'
+      + '页数多也读这一份，别把逐页记录当正文。',
+    '5. 收尾前用 `ocr-skill/scripts/ocr_status.py --case <案例目录>` 核对覆盖：`pending` 未清零、'
+      + '`unreadable` 未登记前，相关检查项只能写「未核」。',
+    '',
+    '硬口径：**已生成页图 ≠ 已识别**；**未核 ≠ 缺失，也 ≠ 通过**。页面图由当前会话的 DSH 模型判读'
+      + '（不是独立的离线上传服务）；模型没有图片能力或页图不可读时按能力缺口登记，不猜内容。',
+    '',
+  ]
+}
+
 function legacyAuditPrompt(task: LegacyTask) {
   const ws = asText(task.workspace).replace(/\/+$/, '')
   const seq = asText(task.seqNo)
@@ -273,6 +310,7 @@ function legacyAuditPrompt(task: LegacyTask) {
   // 宿主**没问到**运行时（启动/自检阶段没有会话作用域）时的替代指令：让子会话自己解析。
   // 这不是「去找解释器」—— 那个工具是唯一允许的来源，它返回的绝对路径是唯一允许的解释器。
   else L.push(...pythonUnresolvedSection(platform))
+  L.push(...ocrSection())
   if (caseDir) {
     // 协议 19 起：审核根的 cwd **就是本案例目录**，沙箱边界（`workspace-write.workspaceRoot`）
     // 也是它 —— 子会话继承这两者，所以"可写范围"在指令里必须说成案例目录，

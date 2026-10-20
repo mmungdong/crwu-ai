@@ -426,6 +426,26 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
       workspace: selectedWorkspace.workspace,
     })
     if (!started.ok) {
+      if (started.childId !== '') {
+        state.audits[key] = {
+          ...pendingRecord,
+          childId: started.childId,
+          parentSessionId,
+          pending: false,
+          retired: true,
+          status: 'unknown',
+          stopPhase: 'timeout',
+          quiesced: false,
+          stopReason: '创建失败后未能确认子会话停止',
+        }
+        state.runs[started.childId] = started.handle
+        state.activeKey = key
+        state.activeChildId = started.childId
+        state.activeSince = stamp.getTime()
+        const recorded = await persistAudits({ ctx, home: await deps.world.home(), state, access: deps.access })
+        const recovery = recorded ? '' : '恢复记录未能写入磁盘，身份与占用目前仅保留在内存中，请先停止子会话再重启工作台。'
+        return failed(`${started.error} ${recovery}请在工作台「停止审核」重试，确认停止前不会启动新的审核。`)
+      }
       // 回滚 pending：否则会留下一条永远"待接管"的记录（面板上显示在跑，其实没有子会话）。
       if (previousRecord === undefined) delete state.audits[key]
       else state.audits[key] = previousRecord

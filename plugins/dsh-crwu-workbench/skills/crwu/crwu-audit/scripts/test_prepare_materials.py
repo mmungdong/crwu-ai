@@ -862,6 +862,143 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertFalse((self.case / "材料盘点.json").exists(),
                          "只跑阶段二时不应产出阶段一盘点表")
 
+    # ---- 8 OCR 兜底清单：pypdf 读得到的照旧，读不到的按页进 ocrRequired ----
+    def _write_pdf(self, name: str, pages, encrypt: str = None,
+                   owner: str = None) -> Path:
+        """造一个可指定逐页文字的最小 PDF；`pages` 里的空串表示空白页。
+
+        `encrypt` 设 user 口令，`owner` 设 owner 口令（只为 owner 加密时 user 口令为空，
+        pypdf 仍能自动解开——这类文件**不该**被当成"需要口令"）。
+        """
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        writer = PdfWriter()
+
+        def add(text: str) -> None:
+            page = writer.add_blank_page(width=300, height=200)
+            if text == "":
+                return
+            font = DictionaryObject()
+            font[NameObject("/Type")] = NameObject("/Font")
+            font[NameObject("/Subtype")] = NameObject("/Type1")
+            font[NameObject("/BaseFont")] = NameObject("/Helvetica")
+            resources = DictionaryObject()
+            resources[NameObject("/Font")] = DictionaryObject(
+                {NameObject("/F1"): writer._add_object(font)})
+            page[NameObject("/Resources")] = resources
+            stream = DecodedStreamObject()
+            stream.set_data(("BT /F1 12 Tf 20 100 Td (%s) Tj ET" % text).encode("ascii"))
+            page[NameObject("/Contents")] = writer._add_object(stream)
+
+        for text in pages:
+            add(text)
+        if encrypt is not None and owner is None:
+            writer.encrypt(encrypt)
+        elif encrypt is None and owner is not None:
+            writer.encrypt(user_password="", owner_password=owner)
+        elif encrypt is not None and owner is not None:
+            writer.encrypt(user_password=encrypt, owner_password=owner)
+        path = self.src / name
+        with open(path, "wb") as handle:
+            writer.write(handle)
+        return path
+
+    def test_text_pdf_is_not_flagged_for_ocr(self):
+        """纯文本 PDF 不进兜底清单，textSource 仍是 pypdf。"""
+        self._write_pdf("报告.pdf", ["A" * 70, "B" * 70])
+        self._run()
+
+        self.assertEqual([], self._payload()["ocrRequired"])
+        item = self._inventory()[0]
+        self.assertEqual("pypdf", item["textSource"])
+        self.assertEqual({"total": 2, "withText": 2, "empty": 0, "emptyPages": []},
+                         item["textPages"])
+
+    def test_pdf_with_blank_page_is_flagged_with_exact_pages(self):
+        """含空页的 PDF 进清单，且精确到页号（不整份重做）。"""
+        self._write_pdf("报告.pdf", ["A" * 70, "", "C" * 70])
+        self._run()
+
+        required = self._payload()["ocrRequired"]
+        self.assertEqual(1, len(required), required)
+        entry = required[0]
+        self.assertEqual(os.path.join("材料-源", "报告.pdf"), entry["path"])
+        self.assertEqual("pdf", entry["kind"])
+        self.assertEqual("empty-pages", entry["reason"])
+        self.assertEqual([2], entry["emptyPages"])
+        self.assertEqual(3, entry["pageCount"])
+        self.assertEqual("ocr-required", self._inventory()[0]["textSource"])
+
+    def test_whitespace_only_page_counts_as_empty(self):
+        """只有空白字符的页算空页，不能算 withText。"""
+        self._write_pdf("报告.pdf", ["A" * 70, "   ", "C" * 70])
+        self._run()
+
+        entry = self._payload()["ocrRequired"][0]
+        self.assertEqual([2], entry["emptyPages"])
+        self.assertEqual(2, self._inventory()[0]["textPages"]["withText"])
+
+    def test_pdf_without_text_layer_is_flagged(self):
+        """整份无文本层（扫描件）进清单，reason 为 no-text-layer。"""
+        self._write_pdf("扫描.pdf", ["", ""])
+        self._run()
+
+        entry = self._payload()["ocrRequired"][0]
+        self.assertEqual("no-text-layer", entry["reason"])
+        self.assertEqual(2, entry["pageCount"])
+        self.assertEqual(2, self._inventory()[0]["textPages"]["empty"])
+
+    def test_pdf_error_is_flagged_not_fatal(self):
+        """坏 PDF 进清单，但不许让整个盘点崩掉。"""
+        (self.src / "坏.pdf").write_bytes(b"%PDF-1.7\nnot a pdf\n")
+        self._run()
+
+        entry = self._payload()["ocrRequired"][0]
+        self.assertEqual("pypdf-error", entry["reason"])
+        self.assertFalse(self._inventory()[0]["readable"])
+        self.assertEqual("ocr-required", self._inventory()[0]["textSource"])
+
+    def test_owner_password_pdf_stays_readable(self):
+        """只有 owner 口令的 PDF：pypdf 用空口令就能读，必须照旧写 提取/、不进兜底清单。"""
+        self._write_pdf("报告.pdf", ["A" * 70], owner="owner-secret")
+        self._run()
+
+        self.assertEqual([], self._payload()["ocrRequired"])
+        written = (self.case / "提取" / "报告.pdf.txt").read_text(encoding="utf-8")
+        self.assertIn("A" * 70, written)
+        self.assertEqual("pypdf", self._inventory()[0]["textSource"])
+
+    def test_encrypted_pdf_is_flagged_not_fatal(self):
+        """加密 PDF 进清单（reason=encrypted），盘点继续。"""
+        self._write_pdf("加密.pdf", ["A" * 70], encrypt="pw")
+        self._run()
+
+        entry = self._payload()["ocrRequired"][0]
+        self.assertEqual("encrypted", entry["reason"])
+        self.assertEqual("ocr-required", self._inventory()[0]["textSource"])
+
+    def test_standalone_image_is_flagged(self):
+        """独立图片没有 pypdf 通道，同样进兜底清单。"""
+        (self.src / "现场.png").write_bytes(_PNG)
+        self._run()
+
+        entry = self._payload()["ocrRequired"][0]
+        self.assertEqual("image", entry["kind"])
+        self.assertEqual("image-source", entry["reason"])
+        self.assertEqual("ocr-required", self._inventory()[0]["textSource"])
+
+    def test_extracted_text_is_byte_identical(self):
+        """`提取/*.txt` 的页分隔格式逐字节不变（改动只在元数据）。"""
+        path = self._write_pdf("报告.pdf", ["Alpha", "Beta"])
+        self._run()
+
+        legacy = "\n===== 第 1 页 =====\nAlpha\n\n===== 第 2 页 =====\nBeta"
+        self.assertEqual(legacy, self.module._join_pages(["Alpha", "Beta"]))
+        pages, _text = self.module.pdf_pages_and_text(str(path))
+        written = (self.case / "提取" / "报告.pdf.txt").read_text(encoding="utf-8")
+        self.assertEqual(self.module._join_pages(pages), written)
+
 
 _RUNNER_TEMPLATE = """\
 import importlib.abc

@@ -1555,6 +1555,39 @@ test('真实 toolFilter 生效（deny 工具对子会话不可见）时，子会
   assert.equal(state.activeChildId, 'child-1', '子会话没有被误杀')
 })
 
+for (const failPersistence of [false, true]) test(`activation startup failure retains its child; persistence failure=${failPersistence}`, async () => {
+  let blockWrites = false
+  const ctx = makeCtx({
+    subagents: {
+      list: () => ['spawn'],
+      getProvider: () => ({ prepareContinuable() {}, capabilities: { agentPreset: true } }),
+      async startActivation() {
+        blockWrites = failPersistence
+        return { childId: 'child-1', result: new Promise(() => {}), dispose: () => new Promise(() => {}) }
+      },
+    },
+  })
+  ctx.on = () => () => {}
+  const originalGet = ctx.get
+  ctx.get = (name) => name === 'timer' ? { timeout: async () => {} } : originalGet(name)
+  const { deps, state } = startDeps({ ctx, state: { parentSessionId: 'parent-1' } })
+  const write = deps.access.writeText.bind(deps.access)
+  deps.access = {
+    ...deps.access,
+    writeText: (...args) => blockWrites ? Promise.resolve({ ok: false, error: 'disk write failed' }) : write(...args),
+  }
+  const result = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(result.ok, false)
+  if (failPersistence) assert.match(result.error, /内存/)
+  assert.equal(state.audits.k?.childId, 'child-1')
+  assert.equal(state.audits.k?.retired, true)
+  assert.equal(state.audits.k?.quiesced, false)
+  assert.equal(state.activeChildId, 'child-1')
+  assert.equal(typeof state.runs['child-1']?.abort, 'function')
+  const retry = await auditStart(deps, { key: 'k', seqNo: 'S1', objectId: 'o1' })
+  assert.equal(retry.ok, false)
+})
+
 test('启动后复查失败 + dispose 不收敛：**保留**身份 / 句柄 / 占用（不许抹掉仍在跑的子会话）', async () => {
   // 用户第三轮复查的 P1：这三条失败分支调用 stopChild 后直接 rollbackRecord ——
   // 若 dispose 超时且 Agent 仍 running，旧子会话还在写案例目录，而 Host 已经删掉它的身份与 scope。

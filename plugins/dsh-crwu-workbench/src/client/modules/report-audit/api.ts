@@ -6,6 +6,7 @@ import type {
 import type { Gating } from './types.ts'
 import type {
   AccessDiagnosticsView, AuditRootView, DwsDeviceLoginView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
+  WorkspaceCleanupPlan, WorkspaceCleanupRequest, WorkspaceCleanupResult,
 } from '../../../shared/types.ts'
 
 /**
@@ -248,6 +249,10 @@ export interface WorkbenchApi extends UpdateApi {
   ossCredSave: (args: { accessKeyId: string; accessKeySecret: string; stsToken?: string; endpoint?: string }) => Promise<Record<string, unknown>>
   workspace: (args: { path: string; title?: string; id?: string }) => Promise<Record<string, unknown>>
   workspaceAuto: () => Promise<Record<string, unknown>>
+  /** 清空工作空间（协议 49）：只读扫描，产出一份带指纹的内存计划。 */
+  workspaceCleanupPlan: () => Promise<WorkspaceCleanupPlan>
+  /** 带 planId + 指纹 + 目录名执行；服务端会重新扫描比对。 */
+  workspaceCleanupApply: (request: WorkspaceCleanupRequest) => Promise<WorkspaceCleanupResult>
   bindSession: (args: { sessionId: string }) => Promise<Record<string, unknown>>
   /**
    * 允许工作台访问本机账号和配置（协议 18）。
@@ -351,6 +356,8 @@ export const workbenchApi: WorkbenchApi = {
   ossCredSave: (args) => call('oss-cred-save', args),
   workspace: (args) => call('workspace', args),
   workspaceAuto: () => call('workspace-auto'),
+  workspaceCleanupPlan: () => call('workspace-cleanup-plan', {}),
+  workspaceCleanupApply: (request) => call('workspace-cleanup-apply', request),
   bindSession: (args) => call('bind-session', args),
   localAccessGrant: (args) => call('local-access-grant', args),
   localAccessRevoke: () => call('local-access-revoke', {}),
@@ -403,6 +410,8 @@ export const OPERATION_OF: Record<keyof WorkbenchApi, string> = {
   ossCredSave: 'oss-cred-save',
   workspace: 'workspace',
   workspaceAuto: 'workspace-auto',
+  workspaceCleanupPlan: 'workspace-cleanup-plan',
+  workspaceCleanupApply: 'workspace-cleanup-apply',
   bindSession: 'bind-session',
   localAccessGrant: 'local-access-grant',
   localAccessRevoke: 'local-access-revoke',

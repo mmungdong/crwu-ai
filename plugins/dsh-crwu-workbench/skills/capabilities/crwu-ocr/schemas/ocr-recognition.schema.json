@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://crwu.local/schemas/ocr-recognition.v1.json",
+  "title": "crwu-ocr recognition record",
+  "type": "object",
+  "required": ["sourceId", "pages"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "sourceId": { "type": "string" },
+    "relativePath": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["page", "status"],
+        "additionalProperties": true,
+        "properties": {
+          "page": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["recognized", "partial", "unreadable"] },
+          "imageSha256": { "type": "string" },
+          "orientation": { "enum": ["normal", "rotated-90", "rotated-180", "rotated-270", "unknown"] },
+          "text": { "type": "string" },
+          "tables": { "type": "array" },
+          "visibleElements": { "type": "array" },
+          "uncertainties": { "type": "array", "items": { "type": "string" } },
+          "note": { "type": "string" },
+          "inputPath": { "type": "string" },
+          "recordedAt": { "type": "string" }
+        }
+      }
+    }
+  }
+}

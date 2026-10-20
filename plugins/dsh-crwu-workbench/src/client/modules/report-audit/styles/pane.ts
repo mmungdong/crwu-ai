@@ -17,13 +17,24 @@ export const REPORT_AUDIT_STYLE_TEXT = `
    （注意：这段注释在模板字符串里，**不能出现反引号**，否则会把样式文本截断。）
    ──────────────────────────────────────────────────────────────────── */
 .crwu-audit-table {
-  width: 100%; min-width: 1200px;
+  width: 100%; min-width: 1040px;
   border-collapse: collapse; table-layout: fixed;
 }
+/* The table card is the local container for width decisions (panel width, not viewport). */
+.crwu-audit-report-card {
+  container-type: inline-size; container-name: crwu-audit-report;
+  border: 1px solid var(--crwu-border); border-radius: 14px;
+  background: var(--crwu-surface); box-shadow: var(--crwu-shadow-surface);
+  overflow: hidden; min-width: 0;
+}
+.crwu-audit-report-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 16px 18px 10px; min-width: 0; }
+.crwu-audit-report-heading { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--crwu-text-primary); }
+.crwu-audit-report-meta { font-size: 12px; line-height: 18px; color: var(--crwu-text-secondary); overflow-wrap: anywhere; }
+.crwu-audit-report-card .crwu-audit-toolbar { margin: 0; padding: 0 18px 12px; }
+.crwu-audit-report-list { padding: 0 18px 14px; }
 /* Seven columns share the page width; identifiers and dates stay unwrapped.
-   min-width is the intrinsic floor: the 16% action column must still fit one primary button plus
-   the 32px whale and ••• (16% of 1200 = 192px, ~24px padding, ~158px of controls). Narrower panels
-   scroll the table wrap instead of shrinking those controls. */
+   min-width is the intrinsic floor for the widest table. Narrower report containers drop it
+   (see the container queries below) so controls wrap instead of forcing horizontal scroll. */
 .crwu-audit-col-name { width: 16%; }
 .crwu-audit-col-seq-no { width: 23%; }
 .crwu-audit-col-risk { width: 6%; }
@@ -263,4 +274,76 @@ export const REPORT_AUDIT_STYLE_TEXT = `
 }
 .crwu-audit-pane-main::-webkit-scrollbar-corner,
 .crwu-audit-table-wrap::-webkit-scrollbar-corner { background: transparent; }
+
+/* ── Current audit task card (outside the list, independent of search/paging) ───── */
+.crwu-audit-current { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.crwu-audit-current-head { align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.crwu-audit-current-title { font-size: 13px; line-height: 20px; font-weight: 600; color: var(--crwu-text-primary); }
+.crwu-audit-current-id {
+  font-family: var(--crwu-font-mono); font-size: 12px; line-height: 18px;
+  color: var(--crwu-text-secondary); overflow-wrap: anywhere;
+}
+.crwu-audit-current-meta {
+  margin-top: 2px; display: block; overflow: visible;
+  white-space: normal; overflow-wrap: anywhere;
+  -webkit-line-clamp: unset; -webkit-box-orient: initial;
+}
+.crwu-audit-current-controls { align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.crwu-audit-current-controls .crwu-ui-btn { flex: 0 0 auto; }
+
+/* Fluid seven-column table before the card breakpoint: keep controls usable by wrapping. */
+@container crwu-audit-report (max-width: 1180px) {
+  .crwu-audit-table { min-width: 0; }
+  .crwu-audit-col-name { width: 19%; }
+  .crwu-audit-col-seq-no { width: 20%; }
+  .crwu-audit-col-risk { width: 7%; }
+  .crwu-audit-col-review { width: 12%; }
+  .crwu-audit-col-ai { width: 14%; }
+  .crwu-audit-col-modified { width: 14%; }
+  .crwu-audit-col-action { width: 14%; }
+  .crwu-audit-td-name, .crwu-audit-td-review, .crwu-audit-td-action { min-width: 0; }
+  .crwu-audit-row-actions { flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+}
+
+/* Narrow panels become per-report cards: no 1200px table forcing horizontal scroll. */
+@container crwu-audit-report (max-width: 760px) {
+  .crwu-audit-report-head { padding: 14px 14px 8px; }
+  .crwu-audit-report-card .crwu-audit-toolbar { padding: 0 14px 10px; flex-wrap: wrap; }
+  .crwu-audit-report-list { padding: 0 14px 12px; }
+  .crwu-audit-table-wrap { overflow: visible; }
+  .crwu-audit-table { display: block; min-width: 0; }
+  .crwu-audit-table colgroup, .crwu-audit-table thead { display: none; }
+  .crwu-audit-table tbody { display: grid; gap: 10px; }
+  .crwu-audit-tbody-row {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px; height: auto; padding: 12px;
+    border: 1px solid var(--crwu-border); border-radius: 10px;
+    background: var(--crwu-surface);
+  }
+  .crwu-audit-tbody-row:hover .crwu-audit-td { background: transparent; }
+  .crwu-audit-td {
+    display: block; min-width: 0; padding: 0; border: 0;
+    white-space: normal; overflow: visible; overflow-wrap: anywhere;
+  }
+  .crwu-audit-td::before {
+    content: attr(data-label); display: block; margin-bottom: 2px;
+    font-size: 11px; line-height: 15px; color: var(--crwu-text-tertiary);
+  }
+  .crwu-audit-td-name, .crwu-audit-td-action { grid-column: 1 / -1; }
+  .crwu-audit-td-name::before, .crwu-audit-td-action::before { display: none; }
+  .crwu-audit-td-action {
+    padding-top: 8px; margin-top: 2px; border-top: 1px solid var(--crwu-border);
+  }
+  .crwu-audit-row-actions { flex-wrap: wrap; min-width: 0; justify-content: flex-start; }
+  .crwu-audit-cell-title { font-size: 13px; }
+  .crwu-audit-pager { padding-bottom: 5px; }
+}
+
+/* ── Audit info drawer: quieter rhythm for the existing real content ───────────── */
+.crwu-audit-drawer .crwu-audit-km { padding: 16px; border-radius: 12px; }
+.crwu-audit-drawer .crwu-audit-sec { margin-top: 20px; }
+.crwu-audit-drawer .crwu-audit-sec-title { font-size: 13px; }
+.crwu-audit-drawer .crwu-audit-fold-head { height: 42px; }
+.crwu-audit-drawer .crwu-audit-kv { grid-template-columns: 132px 1fr; gap: 8px 12px; }
+.crwu-audit-drawer .crwu-audit-issue-row { padding-left: 0; padding-right: 0; }
 `

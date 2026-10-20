@@ -67,7 +67,7 @@ test('技能根表达式按包名解析：link 形态的 profile 下每一层技
       '前提：profile 目录下没有 skills/，所以按 baseUrl 拼路径必然指向不存在的目录',
     )
 
-    // ② 真正求值：拿到四个技能根（自研审核层 + 自研业务层 + 上游 vendored 层 + 公共层）。
+    // ② 真正求值：拿到五个技能根（自研审核层 + 自研业务层 + 共享能力层 + 上游 vendored 层 + 公共层）。
     const dirs = evaluate(expression, baseUrl)
     assert.ok(Array.isArray(dirs), 'customSkillDirs 表达式必须返回数组')
     assert.deepEqual(
@@ -75,6 +75,7 @@ test('技能根表达式按包名解析：link 形态的 profile 下每一层技
       [
         join(PACKAGE_DIR, 'skills', 'crwu'),
         join(PACKAGE_DIR, 'skills', 'biz'),
+        join(PACKAGE_DIR, 'skills', 'capabilities'),
         join(PACKAGE_DIR, 'skills', 'dws'),
         join(PACKAGE_DIR, 'common', 'skills'),
       ],
@@ -95,9 +96,10 @@ test('技能根表达式按包名解析：link 形态的 profile 下每一层技
       }
       return names.length
     }
-    const [crwuCount, bizCount, dwsCount, commonCount] = await Promise.all(dirs.map(countSkills))
+    const [crwuCount, bizCount, capabilityCount, dwsCount, commonCount] = await Promise.all(dirs.map(countSkills))
     assert.equal(crwuCount, 27, '自研层技能数变了（27 个）')
     assert.equal(bizCount, 1, '自研业务层技能数变了（crwu-biz-valuation-realestate）')
+    assert.equal(capabilityCount, 1, '共享能力层技能数变了（crwu-ocr）')
     assert.equal(dwsCount, 14, 'vendored 的上游钉钉技能数变了（14 个）')
     assert.equal(commonCount, 3, '公共层技能数变了（crwu-dws / crwu-h3yun-login / crwu-h3yun-query）')
   } finally {

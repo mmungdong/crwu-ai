@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://crwu.local/schemas/ocr-index.v1.json",
+  "title": "crwu-ocr index",
+  "type": "object",
+  "required": ["schemaVersion", "render", "runtime", "sources", "coverage"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "render": {
+      "type": "object",
+      "required": ["dpi", "format", "engine"],
+      "properties": {
+        "dpi": { "type": "integer", "minimum": 72, "maximum": 600 },
+        "scale": { "type": "number" },
+        "format": { "const": "png" },
+        "engine": { "type": "string" },
+        "engineNotes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "platformKey": { "type": "string" },
+        "source": { "type": "string" },
+        "manifestDigest": { "type": "string" },
+        "packages": { "type": "object", "additionalProperties": { "type": "string" } },
+        "python": { "type": "string" }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sourceId", "kind", "relativePath", "sha256", "pageCount", "status", "pages"],
+        "properties": {
+          "sourceId": { "type": "string" },
+          "kind": { "enum": ["pdf", "image"] },
+          "relativePath": { "type": "string" },
+          "sha256": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "cacheKey": { "type": "string" },
+          "pageCount": { "type": "integer", "minimum": 0 },
+          "status": { "enum": ["prepared", "partial", "failed"] },
+          "errors": { "type": "array", "items": { "type": "string" } },
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["page", "textStatus", "visualRequired", "visualStatus"],
+              "properties": {
+                "page": { "type": "integer", "minimum": 1 },
+                "image": { "type": "string" },
+                "imageSha256": { "type": "string" },
+                "imageBytes": { "type": "integer" },
+                "width": { "type": "integer" },
+                "height": { "type": "integer" },
+                "pageRotation": { "enum": [0, 90, 180, 270] },
+                "engine": { "type": "string" },
+                "textPath": { "type": "string" },
+                "textChars": { "type": "integer" },
+                "textStatus": { "enum": ["ok", "empty", "garbled", "failed"] },
+                "textError": { "type": "string" },
+                "visualRequired": { "type": "boolean" },
+                "visualReasons": { "type": "array", "items": { "type": "string" } },
+                "visualStatus": { "enum": ["pending", "done", "unreadable", "skipped", "not-required"] },
+                "recognitionStatus": { "enum": ["recognized", "partial", "unreadable"] },
+                "renderError": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "relativePath": { "type": "string" }, "reason": { "type": "string" } } }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    }
+  }
+}

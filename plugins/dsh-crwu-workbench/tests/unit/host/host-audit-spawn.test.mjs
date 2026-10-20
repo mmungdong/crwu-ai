@@ -50,6 +50,178 @@ function agentsServing(parent = PARENT) {
 
 const ARGS = { label: '审核 S1 · 10:00:00', prompt: '请审核这份报告。', parentSessionId: 'session-parent' }
 
+const DENIED = ['crwu_h3yun_record_get', 'crwu_h3yun_files_list', 'crwu_audit_case_bootstrap']
+const { REQUIRED_AUDIT_CHILD_TOOLS } = await import(new URL('src/host/tools/report-audit/consts.ts', ROOT).href)
+
+function activationFixture({ failure = '', stuck = false, restrictWorks = true } = {}) {
+  const listeners = new Set()
+  const calls = { activations: [], legacy: 0, disposed: 0, cancelled: 0, restricted: [], firstTurns: 0, firstVisibility: [] }
+  const children = new Map()
+  const toolsFor = (agent) => ({
+    restrict(filter) {
+      calls.restricted.push({ id: agent.id, filter })
+      if (failure === 'restrict') throw new Error('restriction refused')
+      if (restrictWorks) agent.denied = new Set(filter.deny)
+      return () => { agent.denied.clear() }
+    },
+    get(name) { return agent.denied.has(name) ? undefined : { name } },
+  })
+  const runtime = {
+    list: () => ['spawn'],
+    getProvider: () => ({ capabilities: { agentPreset: true }, prepareContinuable() {} }),
+    async start() { calls.legacy += 1; throw new Error('legacy must not run') },
+    async startActivation(spec) {
+      calls.activations.push(spec)
+      if (failure === 'start') throw new Error('activation failed')
+      const agent = {
+        id: spec.childId, status: 'running', denied: new Set(),
+        session: { header: { id: spec.childId, parentSession: ARGS.parentSessionId, cwd: '/ws' } },
+        cancel() { calls.cancelled += 1; if (!stuck) this.status = 'idle' },
+      }
+      agent.ctx = { get: (name) => name === 'tools' ? toolsFor(agent) : undefined }
+      children.set(agent.id, agent)
+      if (failure === 'parent') agent.session.header.parentSession = 'unrelated'
+      if (failure !== 'event') {
+        try {
+          for (const listener of listeners) await listener({ agent })
+        } catch (error) {
+          children.delete(agent.id)
+          throw error
+        }
+      }
+      if (failure === 'after-create') throw new Error('activation failed after creation')
+      if (failure === 'receipt') spec = { ...spec, childId: 'wrong-receipt' }
+      calls.firstVisibility.push([...agent.denied])
+      calls.firstTurns += 1
+      return {
+        childId: spec.childId, result: new Promise(() => {}),
+        dispose: async () => {
+          calls.disposed += 1
+          assert.equal(spec.signal.aborted, true, 'abort must precede disposal')
+          if (stuck) await new Promise(() => {})
+          if (failure !== 'receipt') agent.status = 'idle'
+        },
+      }
+    },
+  }
+  const ctx = {
+    on(event, listener, options) {
+      assert.equal(event, 'agent/created')
+      assert.equal(options.global, true)
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    get(name) {
+      if (name === 'subagents') return runtime
+      if (name === 'agents') return { get: (id) => id === PARENT.id ? PARENT : children.get(id) }
+      if (name === 'timer') return { timeout: async () => {} }
+      return undefined
+    },
+  }
+  return { ctx, runtime, calls, listeners, children }
+}
+
+test('activation takes priority and restricts the reserved child before its first turn', async () => {
+  const f = activationFixture()
+  const result = await startChild(f.ctx, ARGS)
+  assert.equal(result.ok, true, result.error)
+  assert.equal(f.calls.legacy, 0)
+  assert.equal(f.calls.activations.length, 1)
+  const spec = f.calls.activations[0]
+  assert.equal(result.childId, spec.childId)
+  assert.equal(result.localAgent, f.children.get(spec.childId))
+  assert.deepEqual(f.calls.restricted, [{ id: spec.childId, filter: { deny: DENIED } }])
+  assert.deepEqual(f.calls.firstVisibility, [DENIED])
+  assert.equal(spec.request.parent, PARENT)
+  assert.deepEqual(spec.request.prompt, [{ type: 'text', text: ARGS.prompt }])
+  assert.equal('toolFilter' in spec.request, false)
+  for (const name of DENIED) assert.equal(result.localAgent.ctx.get('tools').get(name), undefined)
+  for (const name of REQUIRED_AUDIT_CHILD_TOOLS) assert.ok(result.localAgent.ctx.get('tools').get(name))
+  assert.equal(f.listeners.size, 0)
+  result.handle.abort()
+  await result.handle.run.dispose()
+  assert.equal(f.calls.disposed, 1)
+})
+
+for (const failure of ['start', 'parent', 'restrict', 'event', 'receipt']) {
+  test(`activation ${failure} failure never retries the legacy entry`, async () => {
+    const f = activationFixture({ failure })
+    const result = await startChild(f.ctx, ARGS)
+    assert.equal(result.ok, false)
+    assert.equal(f.calls.legacy, 0)
+    assert.equal(f.calls.activations.length, 1)
+    assert.equal(f.listeners.size, 0)
+    if (failure === 'parent' || failure === 'restrict') assert.equal(f.calls.firstTurns, 0)
+    if (failure === 'event' || failure === 'receipt') {
+      assert.equal(f.calls.activations[0].signal.aborted, true)
+      assert.equal(f.calls.disposed, failure === 'receipt' ? 0 : 1)
+      if (failure === 'receipt') {
+        assert.equal(f.calls.cancelled, 1)
+        assert.equal(f.children.get(f.calls.activations[0].childId).status, 'idle')
+      }
+    }
+  })
+}
+
+test('activation restriction is read back before the first turn', async () => {
+  const f = activationFixture({ restrictWorks: false })
+  const result = await startChild(f.ctx, ARGS)
+  assert.equal(result.ok, false)
+  assert.equal(f.calls.firstTurns, 0)
+})
+
+test('activation failure after creation cancels the reserved live agent without a receipt', async () => {
+  const f = activationFixture({ failure: 'after-create' })
+  const result = await startChild(f.ctx, ARGS)
+  assert.equal(result.ok, false)
+  assert.equal(f.calls.cancelled, 1)
+  assert.equal(f.children.get(f.calls.activations[0].childId).status, 'idle')
+  assert.equal(result.childId, '')
+})
+
+test('synchronous disposal failure returns a recoverable child instead of throwing', async () => {
+  const f = activationFixture({ failure: 'event', stuck: true })
+  const start = f.runtime.startActivation
+  f.runtime.startActivation = async (spec) => {
+    const receipt = await start(spec)
+    return { ...receipt, dispose() { throw new Error('dispose sync failure') } }
+  }
+  const result = await startChild(f.ctx, ARGS)
+  assert.equal(result.ok, false)
+  assert.equal(result.childId, f.calls.activations[0].childId)
+  assert.equal(typeof result.handle.run.dispose, 'function')
+})
+
+test('activation refuses before creation when the hook or local provider is absent', async () => {
+  for (const missing of ['hook', 'local']) {
+    const f = activationFixture()
+    if (missing === 'hook') f.ctx.on = undefined
+    else f.runtime.getProvider = () => ({ capabilities: { agentPreset: true } })
+    assert.equal((await startChild(f.ctx, ARGS)).ok, false)
+    assert.equal(f.calls.activations.length, 0)
+    assert.equal(f.calls.legacy, 0)
+  }
+})
+
+test('a failed activation keeps its identity and handle if stopping cannot be confirmed', async () => {
+  const f = activationFixture({ failure: 'event', stuck: true })
+  const result = await startChild(f.ctx, ARGS)
+  assert.equal(result.ok, false)
+  assert.equal(result.childId, f.calls.activations[0]?.childId)
+  assert.equal(typeof result.handle.abort, 'function')
+  assert.equal(typeof result.handle.run?.dispose, 'function')
+  assert.match(result.error, /停止|静默/)
+})
+
+test('concurrent activations restrict only their own reserved children', async () => {
+  const f = activationFixture()
+  const results = await Promise.all([startChild(f.ctx, ARGS), startChild(f.ctx, ARGS)])
+  assert.ok(results.every((result) => result.ok))
+  assert.notEqual(results[0].childId, results[1].childId)
+  assert.deepEqual(f.calls.restricted.map((item) => item.id).sort(), results.map((result) => result.childId).sort())
+  assert.equal(f.listeners.size, 0)
+})
+
 test('startChild sends the request shape DSH declares', async () => {
   const { calls, subagents } = stubSubagents()
   const result = await startChild(makeCtx({ agents: agentsServing(), subagents }), ARGS)

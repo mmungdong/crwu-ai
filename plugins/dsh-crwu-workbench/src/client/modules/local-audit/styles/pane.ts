@@ -35,6 +35,7 @@ export const LOCAL_AUDIT_STYLE_TEXT = `
   box-sizing: border-box; flex: 1 1 auto; min-height: 0; overflow: auto;
   padding: var(--crwu-space-4) var(--crwu-pad-x) var(--crwu-space-6);
   background: var(--crwu-surface);
+  container-type: inline-size; container-name: crwu-local-audit;
 }
 /* 本页没有 24px 的页头（身份由上一行的页签直接说明），正文顶部留白与报告审核那一页
    （.crwu-audit-pane-main）**同档**，两页切换时内容起始位置不跳。 */
@@ -134,7 +135,7 @@ export const LOCAL_AUDIT_STYLE_TEXT = `
    两列都用 minmax(0, …)，避免长文件名把列撑出横向滚动。 */
 .crwu-audit-local-columns { display: flex; flex-direction: column; gap: var(--crwu-space-4); min-width: 0; }
 .crwu-audit-local-column { display: flex; flex-direction: column; gap: var(--crwu-space-4); min-width: 0; }
-@media (min-width: 1024px) {
+@container crwu-local-audit (min-width: 900px) {
   .crwu-audit-local-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); align-items: start; }
 }
 /* 超限是**明确阻止**，不是警告色的小提示：左缘一条琥珀强调边，正文仍用主文字色。 */
@@ -185,14 +186,22 @@ export const LOCAL_AUDIT_STYLE_TEXT = `
   animation: crwu-audit-spin 0.8s linear infinite;
 }
 
-/* ── 成功态 / 失败兜底卡 ──────────────────────────────────────────────── */
-.crwu-audit-local-done { display: flex; gap: 12px; align-items: flex-start; }
+/* ── 成功态 / 失败兜底卡：语义只靠一条窄边 + 图标/文字，不做大面积警示块 ───── */
+.crwu-audit-local-done {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 12px; border: 1px solid var(--crwu-border); border-left: 3px solid var(--crwu-risk-pass);
+  border-radius: 10px; background: var(--crwu-surface-subtle);
+}
 .crwu-audit-local-done-mark { flex: none; color: var(--crwu-risk-pass); padding-top: 2px; }
 .crwu-audit-local-done-title { font-size: 14px; font-weight: 600; color: var(--crwu-text-primary); }
 .crwu-audit-local-done-meta { color: var(--crwu-text-secondary); font-size: 12px; line-height: 20px; }
 .crwu-audit-local-done-hint { color: var(--crwu-text-tertiary); font-size: 12px; line-height: 20px; }
 
-.crwu-audit-local-handoff { display: flex; gap: 12px; align-items: flex-start; }
+.crwu-audit-local-handoff {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 12px; border: 1px solid var(--crwu-border); border-left: 3px solid var(--crwu-risk-b);
+  border-radius: 10px; background: var(--crwu-surface-subtle);
+}
 .crwu-audit-local-handoff-mark { flex: none; color: var(--crwu-risk-b); padding-top: 2px; }
 .crwu-audit-local-handoff-title { font-size: 14px; font-weight: 600; color: var(--crwu-text-primary); }
 .crwu-audit-local-handoff-lead { color: var(--crwu-text-secondary); font-size: 12px; line-height: 20px; margin-top: 2px; }

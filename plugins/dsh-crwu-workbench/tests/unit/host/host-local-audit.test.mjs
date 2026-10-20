@@ -4,7 +4,7 @@
  * 这一份盯的是**设计与验收场景**（`docs/superpowers/plans/2026-10-11-workbench-local-audit.md`
  * 的 §2–§4、§7–§10），不是实现细节：
  *
- * - 扫描：递归、不跟随符号链接、特殊文件跳过、多入口去重、**超过 30 个明确阻止且不截取**；
+ * - 扫描：递归、不跟随符号链接、特殊文件跳过、多入口去重、**超过上限明确阻止且不截取**；
  * - 快照：逐件复制、部分失败仍可继续、全部失败即"没有可审核的文件"、清单与元数据可回读；
  * - handoff：存在 / 未用 / 未过期 / 快照仍在四条判据，**同一条会话重复认领幂等**、别的会话拒绝；
  * - 提示词：只含展示名与相对路径，**不含绝对路径 / oss:// / 氚云标识**；
@@ -23,6 +23,7 @@ const { prepareSnapshot, readManifest, localAuditCaseDir } = await import(new UR
 const { createLocalAuditRegistry, newHandoffId } = await import(new URL('src/host/domains/local-audit/handoff.ts', ROOT).href)
 const { localAuditPrompt, snapshotStatusLine } = await import(new URL('src/host/domains/local-audit/prompt.ts', ROOT).href)
 const { localAuditStart, localAuditStatus, localAuditClaim } = await import(new URL('src/host/domains/local-audit/ops.ts', ROOT).href)
+const { LOCAL_AUDIT_MAX_FILES } = await import(new URL('src/host/domains/local-audit/consts.ts', ROOT).href)
 
 // ── 内存替身 ──────────────────────────────────────────────────────────────────
 
@@ -139,22 +140,29 @@ test('扫描：同一个文件经多个入口进来只出现一次（去重按�
   assert.deepEqual(scan.files.map((item) => item.name), ['资产清单.xlsx'])
 })
 
-test('扫描：超过 30 个文件时明确阻止，而且**不截取**（fileCount 是真实数量）', async () => {
+test('上限是 200 个普通文件（产品约束：界面、Host、提示词共用同一个数）', () => {
+  assert.equal(LOCAL_AUDIT_MAX_FILES, 200)
+})
+
+test('扫描：超过上限时明确阻止，而且**不截取**（fileCount 是真实数量）', async () => {
   const entries = { '/work/资料': DIR }
-  for (let index = 1; index <= 36; index += 1) {
-    entries[`/work/资料/表${String(index).padStart(2, '0')}.xlsx`] = FILE(index)
+  const over = LOCAL_AUDIT_MAX_FILES + 6
+  for (let index = 1; index <= over; index += 1) {
+    entries[`/work/资料/表${String(index).padStart(3, '0')}.xlsx`] = FILE(index)
   }
   const scan = await scanSelection(['/work/资料'], memoryFs(entries))
-  assert.equal(scan.fileCount, 36, '不许静默截取前 30 个')
+  assert.equal(scan.fileCount, over, '不许静默截取前若干个')
   assert.equal(scan.overLimit, true)
   assert.equal(scan.items[0].status, 'over-limit')
 })
 
-test('扫描：恰好 30 个不算超限', async () => {
+test('扫描：恰好达到上限不算超限', async () => {
   const entries = { '/work/资料': DIR }
-  for (let index = 1; index <= 30; index += 1) entries[`/work/资料/表${String(index)}.xlsx`] = FILE(1)
+  for (let index = 1; index <= LOCAL_AUDIT_MAX_FILES; index += 1) {
+    entries[`/work/资料/表${String(index)}.xlsx`] = FILE(1)
+  }
   const scan = await scanSelection(['/work/资料'], memoryFs(entries))
-  assert.equal(scan.fileCount, 30)
+  assert.equal(scan.fileCount, LOCAL_AUDIT_MAX_FILES)
   assert.equal(scan.overLimit, false)
 })
 
@@ -475,13 +483,14 @@ test('操作：没有选择时不可启动（input 失败，且不建任何东�
   assert.equal(registry.size(), 0)
 })
 
-test('操作：超过 30 个文件时 Host 也拒绝（界面禁用只是体验）', async () => {
+test('操作：超过上限时 Host 也拒绝（界面禁用只是体验）', async () => {
   const entries = { '/work/资料': DIR }
-  for (let index = 0; index < 31; index += 1) entries[`/work/资料/表${String(index)}.xlsx`] = FILE(1)
+  const over = LOCAL_AUDIT_MAX_FILES + 1
+  for (let index = 0; index < over; index += 1) entries[`/work/资料/表${String(index)}.xlsx`] = FILE(1)
   const { deps, registry } = opsDeps(entries)
   const started = await localAuditStart(deps, { selection: ['/work/资料'] })
   assert.equal(started.ok, false)
-  assert.match(started.error, /超过单次最多 30 个文件/)
+  assert.match(started.error, new RegExp(`超过单次最多 ${String(LOCAL_AUDIT_MAX_FILES)} 个文件`))
   assert.equal(registry.size(), 0)
 })
 
@@ -590,7 +599,7 @@ test('操作：status 只回事实（不建快照、不建 handoff）', async ()
   const scan = await localAuditStatus(deps, { selection: ['/work/资料'] })
   assert.equal(scan.ok, true)
   assert.equal(scan.fileCount, 1)
-  assert.equal(scan.limit, 30)
+  assert.equal(scan.limit, LOCAL_AUDIT_MAX_FILES)
   assert.equal(io.files.size, 0)
   assert.equal(registry.size(), 0)
 })

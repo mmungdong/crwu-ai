@@ -98,7 +98,7 @@ export type LocalAuditStageKey = typeof LOCAL_AUDIT_STAGE_KEYS[number]
 
 export function initialLocalAuditState(): LocalAuditState {
   return {
-    selected: [], items: [], files: [], excluded: [], fileCount: 0, limit: 30, overLimit: false,
+    selected: [], items: [], files: [], excluded: [], fileCount: 0, limit: 200, overLimit: false,
     readableCount: 0, skippedCount: 0, skipped: [],
     phase: 'idle', error: '', pickError: '', prompt: '',
     handoff: null, preparedSelection: [], providedCount: 0, skippedProvidedCount: 0,
@@ -230,7 +230,7 @@ export function createLocalAuditController(input: { port: LocalAuditPort; dispat
       items,
       files,
       fileCount: number(view.fileCount),
-      limit: number(view.limit, 30),
+      limit: number(view.limit, 200),
       overLimit: view.overLimit === true,
       readableCount: number(view.readableCount),
       skippedCount: number(view.skippedCount),

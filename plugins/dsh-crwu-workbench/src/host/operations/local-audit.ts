@@ -1,6 +1,7 @@
 import type { OperationMap } from './types.ts'
 import type { OperationHost } from './common.ts'
 import { localAuditClaim, localAuditStart, localAuditStatus } from '../domains/local-audit/ops.ts'
+import { LOCAL_AUDIT_MAX_FILES } from '../domains/local-audit/consts.ts'
 
 /**
  * **本地审核**（协议 28）的三条操作。
@@ -22,7 +23,7 @@ export function localAuditOperations(host: OperationHost): OperationMap {
       const ready = localAuditDeps()
       if (ready === null) {
         return {
-          ...localAuditUnwired, fileCount: 0, limit: 30, overLimit: false,
+          ...localAuditUnwired, fileCount: 0, limit: LOCAL_AUDIT_MAX_FILES, overLimit: false,
           readableCount: 0, skippedCount: 0, items: [], skipped: [],
         }
       }

@@ -4,6 +4,7 @@
  * 名字是**跨进程契约**的一部分：审核提示词、审核根会话的 capability 预检、
  * 技能正文和测试都逐字引用它们。改名字必须同批改那些地方（并有测试盯着）。
  */
+import { VALUATION_TOOL_NAMES } from '../report-evaluation/consts.ts'
 
 /**
  * **审核根会话**必需的工具集（根看不到任何一个就在**创建子代理之前**失败）。
@@ -102,6 +103,9 @@ export const CRWU_BUSINESS_TOOLS = [
   'crwu_valuation_recalculate',
   // 挂牌参考一次性交付（协议 40 起）：固定输入、一次打包脚本、四件产物，只回 partial。
   'crwu_valuation_listing_reference',
+  // 受控图控制工具（协议 43）：父会话凭 Host 铸造的 commandId 推进同一轮工作流。
+  // 身份由 `tools/report-evaluation/workflow.ts` 的命名常量持有，这里只并入注册面分类。
+  VALUATION_TOOL_NAMES.workflowRun,
 ] as const
 
 export const TOOL_NAMES = {

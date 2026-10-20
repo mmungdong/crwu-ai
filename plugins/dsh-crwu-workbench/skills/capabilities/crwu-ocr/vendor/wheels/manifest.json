@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "python": "3.12",
+  "packages": {
+    "pypdf": {
+      "module": "pypdf",
+      "version": "6.21.1",
+      "wheel": "pypdf-6.21.1-py3-none-any.whl",
+      "sha256": "553e2d42f5bb3bb2a785a7d3de8ef90bb7df74b5413eff5a7b4388007ea9254b",
+      "bytes": 405134,
+      "platforms": [
+        "any"
+      ]
+    },
+    "pypdfium2": {
+      "module": "pypdfium2",
+      "version": "5.14.0",
+      "wheel": "pypdfium2-5.14.0-py3-none-win_amd64.whl",
+      "sha256": "149fd5c6397b8df8bf7911a93506eff0be874f877afe7ac936cf5d37d21a6a06",
+      "bytes": 3947280,
+      "platforms": [
+        "win32-x64"
+      ]
+    }
+  },
+  "runtimeProvided": {
+    "Pillow": {
+      "module": "PIL",
+      "version": "runtime"
+    }
+  }
+}

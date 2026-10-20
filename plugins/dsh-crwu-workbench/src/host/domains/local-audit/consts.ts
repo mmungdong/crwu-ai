@@ -5,8 +5,8 @@
  * 所以只在这里出现一次。
  */
 
-/** 单次审核的普通文件上限。超过时**明确阻止**，绝不静默截取前 30 个。 */
-export const LOCAL_AUDIT_MAX_FILES = 30
+/** 单次审核的普通文件上限。超过时**明确阻止**，绝不静默截取。 */
+export const LOCAL_AUDIT_MAX_FILES = 200
 
 /** 一次性 handoff 的有效期（用户复制提示词后太久没发就会过期）。 */
 export const LOCAL_AUDIT_HANDOFF_TTL_MS = 30 * 60_000
@@ -39,7 +39,7 @@ export const LOCAL_AUDIT_META_FILE = '快照元数据.json'
 /**
  * 扫描时的**安全上限**：一个选择项最多枚举多少个条目。
  *
- * 它不是业务上限（业务上限是 30 个文件）—— 用户可能误选了一个巨大的目录。
+ * 它不是业务上限（业务上限是 `LOCAL_AUDIT_MAX_FILES` 个文件）—— 用户可能误选了一个巨大的目录。
  * 到顶就停止枚举并如实说明，而不是把整个磁盘读完再回答。
  */
 export const LOCAL_AUDIT_SCAN_MAX_ENTRIES = 20_000

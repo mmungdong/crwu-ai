@@ -1,10 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { SubagentRun, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { text } from '../../../shared/utils/value.ts'
 import { AUDIT_CHILD_DENIED_TOOLS } from '../../tools/report-audit/consts.ts'
 import { samePathText } from './scope.ts'
+import { startAuditActivation } from './activation.ts'
+import type { AuditChildRun, AuditSubagentRuntime } from './subagent-runtime.ts'
 import {
   attachSessionToWorkspace,
   attachedSessionIds,
@@ -23,12 +24,12 @@ import {
  *    拿一个不会响的信号去 dispose，等于干等审核跑完。所以句柄里必须留着可 abort 的信号。
  * 2. **句柄会随插件重装失效**。每次 `cordis_define`/profile 重启都是新实例，`runs` 表必然为空，
  *    而子会话还在跑。所以停止要有退路：直接对 `agents.get(childId).cancel()` 下手。
- * 3. **provider 要挑**：优先 `spawn`，其次 `fork`，否则用第一个注册的。
+ * 3. Only local spawn/fork providers with verifiable tool isolation are eligible.
  */
 
 export interface ChildHandle {
   /** 已发布的 run；持有它是为了在停止时调用 `dispose()`。 */
-  run: SubagentRun | undefined
+  run: AuditChildRun | undefined
   /** 取消通道：必须在 dispose 之前触发，否则 dispose 会一直等到审核跑完。 */
   abort: ((reason?: unknown) => void) | undefined
 }
@@ -71,12 +72,12 @@ export function boundParentAgent(ctx: Context, parentSessionId: string): unknown
 }
 
 /** 可选的 subagents 服务。 */
-export function subagentRegistry(ctx: Context): SubagentRuntime | undefined {
-  return ctx.get('subagents') as SubagentRuntime | undefined
+export function subagentRegistry(ctx: Context): AuditSubagentRuntime | undefined {
+  return ctx.get('subagents') as AuditSubagentRuntime | undefined
 }
 
 /**
- * 挑选子代理 provider：spawn > fork > 第一个注册的，**且必须支持 `toolFilter`**。
+ * Pick a local provider with the loaded API's isolation mechanism.
  *
  * 为什么把"支持过滤"当成硬条件：审核子会话的工具可见范围必须真的收窄
  *（`record_get` / `files_list` / `case_bootstrap` 不能给它）—— 只靠"必需集名单"是**假边界**，
@@ -116,19 +117,29 @@ export function pickProvider(ctx: Context): { ok: boolean; error: string; provid
 /**
  * 这个 provider 能不能做子会话工具过滤。
  *
- * 三级都要过：服务有 `getProvider` → provider 在注册表里 → `capabilities.toolFilter === true`。
- * 任何一级问不到都算**不支持**（fail closed）：宁可拒绝起审核，也不让子会话带着未收窄的工具集跑。
+ * Legacy providers require toolFilter; activation providers require the local backend.
+ * The activation creation hook verifies the actual scoped restriction.
  */
 function toolFilterSupport(
-  subagents: SubagentRuntime,
+  subagents: AuditSubagentRuntime,
   provider: string,
 ): { ok: boolean; error: string } {
   if (typeof subagents.getProvider !== 'function') {
     return { ok: false, error: 'subagents 服务没有 getProvider：无法确认子代理支持 toolFilter，拒绝创建审核子会话。' }
   }
-  const descriptor = subagents.getProvider(provider)
+  let descriptor
+  try {
+    descriptor = subagents.getProvider(provider)
+  } catch {
+    return { ok: false, error: '无法读取子代理 provider 的隔离能力，拒绝创建审核子会话。' }
+  }
   if (descriptor === undefined) {
     return { ok: false, error: `子代理 provider（${provider}）不在注册表里：无法确认它支持 toolFilter。` }
+  }
+  if (typeof subagents.startActivation === 'function') {
+    return typeof descriptor.prepareContinuable === 'function'
+      ? { ok: true, error: '' }
+      : { ok: false, error: 'activation provider 不是本地可验证实现，拒绝创建审核子会话。' }
   }
   if (descriptor.capabilities?.toolFilter !== true) {
     return {
@@ -175,34 +186,52 @@ export async function startChild(
 
   // 包形态有真正的 AbortController：legacy 手写的 signal 替身整段可以删掉。
   const controller = new AbortController()
-  let started: SubagentRun
+  let started: AuditChildRun | undefined
+  let startError = ''
   try {
-    started = await subagents.start(picked.provider, {
-      label: options.label,
-      prompt: [{ type: 'text', text: options.prompt }],
-      parent: parent as Agent,
-      signal: controller.signal,
-      // **真实的工具边界**：DSH 在子会话的创建窗口里做 scoped `tools.restrict()` ——
-      // deny 的工具从 prompt 消失**并且**拒绝执行（一个可见性），未知名字会被响亮地校验出来。
-      toolFilter: { deny: [...AUDIT_CHILD_DENIED_TOOLS] },
-    })
+    if (typeof subagents.startActivation === 'function') {
+      const attempt = await startAuditActivation(ctx, subagents, picked.provider, parent, {
+        label: options.label, prompt: options.prompt, signal: controller.signal,
+      })
+      started = attempt.run
+      startError = attempt.error
+    } else if (typeof subagents.start === 'function') {
+      started = await subagents.start(picked.provider, {
+        label: options.label,
+        prompt: [{ type: 'text', text: options.prompt }],
+        parent: parent as Agent,
+        signal: controller.signal,
+        toolFilter: { deny: [...AUDIT_CHILD_DENIED_TOOLS] },
+      })
+    } else {
+      return failed('subagents 服务没有受支持的创建入口。')
+    }
   } catch (error) {
     return failed(`创建子会话失败：${error instanceof Error ? error.message : String(error)}`)
   }
 
+  if (started === undefined) return failed(startError || '未取得审核子会话收据。')
   const childId = text(started.id)
   const handle: ChildHandle = {
     run: started,
     abort: (reason?: unknown) => controller.abort(reason ?? new Error('用户在中瑞世联工作台停止了这条审核')),
   }
+  const rejectStarted = async (reason: string): Promise<SpawnResult> => {
+    const stopped = await stopChild(ctx, childId, reason, { handle })
+    if (stopped.quiesced) return failed(reason)
+    return {
+      ok: false, error: `${reason} 无法确认子会话已停止：已保留身份与句柄。`,
+      childId, provider: picked.provider, handle, localAgent: started.localAgent,
+    }
+  }
+  if (startError !== '') return await rejectStarted(startError)
 
   // **挂载 + 回读**：只在真的拿到成员关系之后才把子会话交出去。
   // 失败要**停掉刚建的 child**（否则会留下一条在跑、却没人认领的子会话）。
   if (options.workspace !== undefined) {
     const placed = await attachChildToWorkspace(ctx, options.workspace, childId, parent)
     if (!placed.ok) {
-      await releaseChild(ctx, started, handle, placed.reason)
-      return failed(`子会话没能挂到选定的工作区下：${placed.reason}`)
+      return await rejectStarted(`子会话没能挂到选定的工作区下：${placed.reason}`)
     }
   }
 
@@ -244,35 +273,6 @@ async function attachChildToWorkspace(
     return { ok: false, reason: '挂载之后回读不到成员关系' }
   }
   return { ok: true, reason: '' }
-}
-
-/**
- * 交接失败时释放刚建好的子会话。
- *
- * 顺序与 `stopChild` 一致（abort → dispose），但这里**必须有界**：这条路径没有身份记录、
- * 也还没有占用可释放，无限等下去只会让"发起审核"这个用户动作挂死
- *（`dispose` 不收敛的部署是存在的 —— `stopChild` 早就为此设了 8 秒上限）。
- * 所以：abort 立刻发；dispose 只等一个有界窗口，超时就按"没停干净"放过去（发起本来就已经失败了）。
- * 全程不抛。
- */
-async function releaseChild(
-  ctx: Context,
-  run: SubagentRun,
-  handle: ChildHandle,
-  reason: string,
-): Promise<void> {
-  try {
-    handle.abort?.(new Error(reason))
-  } catch (error) {
-    void error
-  }
-  if (typeof run.dispose !== 'function') return
-  const timer = ctx.get('timer') as { timeout?: (ms: number) => Promise<void> } | undefined
-  try {
-    await raceWithTimeout(Promise.resolve(run.dispose()).catch(() => undefined), timer, 3_000)
-  } catch (error) {
-    void error
-  }
 }
 
 export interface StopOutcome {
@@ -351,7 +351,9 @@ export async function stopChild(
     } catch (error) {
       out.errors.push(`abort：${error instanceof Error ? error.message : String(error)}`)
     }
-  } else {
+  }
+  if (typeof handle?.abort !== 'function' || typeof handle.run?.dispose !== 'function') {
+    // Activation startup signals stop owning cancellation after publication.
     // 句柄没了的退路：插件重装后子会话还在跑，但 runs 表已清空。
     // `agents.get(childId)` 拿到的就是那个还活着的子 Agent。
     const registry = agentRegistry(ctx)
@@ -378,7 +380,13 @@ export async function stopChild(
   if (handle?.run !== undefined && typeof handle.run.dispose === 'function') {
     const timer = ctx.get('timer') as { timeout?: (ms: number) => Promise<void> } | undefined
     let settled = false
-    const pending = handle.run.dispose().then(
+    let disposal: Promise<void>
+    try {
+      disposal = handle.run.dispose()
+    } catch (error) {
+      disposal = Promise.reject(error)
+    }
+    const pending = disposal.then(
       () => { settled = true },
       (error: unknown) => { out.errors.push(`dispose：${error instanceof Error ? error.message : String(error)}`) },
     )

@@ -22,7 +22,7 @@ import { changesSince, freshnessOf, type AuditContextSnapshot, type SnapshotChan
 import { asRecord, textOf } from '../model/audit-summary.ts'
 import { AuditAnalysisDialog, type AuditAskState } from './AuditAnalysisDialog.tsx'
 import { WorkbenchLoading } from '../../../shell/LoadingPane.tsx'
-import { buildRows, menuActionsOf, pageCount, primaryActionOf, hasFormalResult, remoteQueryText, rowKeyOf, riskBadge } from '../model/row.ts'
+import { buildRows, menuActionsOf, pageCount, primaryActionOf, hasFormalResult, remoteQueryText, rowKeyOf, riskBadge, statusBadge } from '../model/row.ts'
 import type { AuditView, ButtonSpec, RowView, TaskRow } from '../types.ts'
 import { caseDirOf } from '../../../../shared/utils/case-dir.ts'
 
@@ -306,7 +306,7 @@ function PendingTable(props: ReportPaneProps & {
         if (view === undefined) return null
         const risk = riskBadge(task.risk)
         return <tr key={task.id} className={[C.tbodyRow, props.openMenuKey === task.id ? C.tbodyRowOn : ''].filter((one) => one !== '').join(' ')}>
-          <td className={`${C.td} ${C.tdName}`}>
+          <td className={`${C.td} ${C.tdName}`} data-label={zhCN.colName}>
             {/* 这份表单里 name 常常就等于流水号，重复显示既没用又占宽度：
                 主行一律给项目名，名字与流水号不同（别的表单）时才补一行。 */}
             <div className={C.cellTitle}>{task.project === '' ? task.name : task.project}</div>
@@ -316,18 +316,18 @@ function PendingTable(props: ReportPaneProps & {
             <div className={C.cellMono}>{task.idTail}</div>
           </td>
           {/* nowrap 列在固定布局里可能被压窄：截断时用 title 兜住完整值。 */}
-          <td className={`${C.td} ${C.tdNowrap}`} title={task.seqNo}>
+          <td className={`${C.td} ${C.tdNowrap}`} title={task.seqNo} data-label={zhCN.colSeqNo}>
             <span className={C.mono}>{task.seqNo}</span>
           </td>
           {/* 风险等级是**扫描信息**，不是装饰：小圆点 + 等级字母，没有底色也没有描边
               （用户 2026-09-22 口径：不要 Ant Design Tag 那种彩色矩形）。 */}
-          <td className={`${C.td} ${C.tdNowrap}`} title={`${zhCN.colRisk} ${risk.text}`}>
+          <td className={`${C.td} ${C.tdNowrap}`} title={`${zhCN.colRisk} ${risk.text}`} data-label={zhCN.colRisk}>
             <span className={C.risk}>
               <span className={[C.riskDot, dotClassOf(risk.tone)].join(' ')} aria-hidden={true} />
               {risk.text}
             </span>
           </td>
-          <td className={`${C.td} ${C.tdReview}`}>
+          <td className={`${C.td} ${C.tdReview}`} data-label={zhCN.colReview}>
             {/* 主状态 13px、处理节点 12px（两级字重不同），间距 4px。**不新增任何业务枚举**：
                 显示的还是氚云给的那两个字段，只是排版分开。 */}
             <div className={C.reviewMain}>{`${task.reviewLevel} · ${task.reviewState}`}</div>
@@ -339,7 +339,7 @@ function PendingTable(props: ReportPaneProps & {
                 它是**状态解释**，所以留在状态列，不进行动区。 */}
             {view.notes.map((note) => <div key={note} className={C.cellSub}>{note}</div>)}
           </td>
-          <td className={C.td}>
+          <td className={C.td} data-label={zhCN.colAudit}>
             {(() => {
               const query = state.remote?.[task.seqNo]
               const cloud = state.ossIndex[task.seqNo]
@@ -363,10 +363,10 @@ function PendingTable(props: ReportPaneProps & {
           </td>
           {/* 业务时间**一律保留完整年份**（用户 2026-09-23 口径：禁止「昨天 / 09-20」这类相对时间，
               这是审核留痕系统，跨年数据很容易被误读）。完整原值留在 title 里。 */}
-          <td className={`${C.td} ${C.tdNowrap}`} title={task.modifiedAt}>
+          <td className={`${C.td} ${C.tdNowrap}`} title={task.modifiedAt} data-label={zhCN.colModified}>
             <div className={C.mono}>{formatDateTime(task.modifiedAt)}</div>
           </td>
-          <td className={`${C.td} ${C.tdAction}`}>
+          <td className={`${C.td} ${C.tdAction}`} data-label={zhCN.colAction}>
             {/* 行动区只有操作：**一个主操作 + 小鲸鱼 + 必要时一个 •••**。
                 状态徽章与备注属于状态列（见 人工复核 列），不在这里占位。 */}
             <RowButtons
@@ -1046,12 +1046,14 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       })
       const childId = activeRecord?.childId ?? ''
       const canOpen = childId !== ''
+      const statusText = activeRecord === undefined ? '' : statusBadge(activeRecord.status).text
       // `Notice` 只支持 ok/warn 两种语气（不改它的 API）：阶段语义由文案表达，
       // 成功态用 `ok`，其余（等待 / 超时 / 失败）用 `warn`。
       return <Notice tone={stop.tone === 'success' ? 'ok' : 'warn'}>
-        <div className={C.row}>
-          <strong>{zhCN.currentAuditTitle}</strong>
-          <span className={C.grow}>{`${state.activeKey}${activeRecord?.project === undefined || activeRecord.project === '' ? '' : ` · ${activeRecord.project}`}`}</span>
+        <div className="crwu-audit-current">
+        <div className={`${C.row} crwu-audit-current-head`}>
+          <strong className="crwu-audit-current-title">{zhCN.currentAuditTitle}</strong>
+          <span className={`${C.grow} crwu-audit-current-id`}>{`${state.activeKey}${activeRecord?.project === undefined || activeRecord.project === '' ? '' : ` · ${activeRecord.project}`}`}</span>
           <Button
             label={canOpen ? zhCN.openAuditSession : zhCN.openAuditSessionPending}
             onClick={() => { props.onOpenSession(state.activeKey) }}
@@ -1059,13 +1061,13 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
             title={zhCN.openAuditSessionHint}
           />
         </div>
-        <div className={C.cellSub}>
-          {`${activeRecord?.status ?? ''}${activeRecord === undefined ? '' : ` · ${zhCN.currentAuditAttempt}${activeRecord.attempt}${zhCN.currentAuditAttemptSuffix}`}${activeRecord?.startedAt === undefined || activeRecord.startedAt === '' ? '' : ` · ${zhCN.currentAuditStarted}${formatDateTime(activeRecord.startedAt)}`}${childId === '' ? '' : ` · ${zhCN.currentAuditChildTail}${childId.slice(-8)}`}`}
+        <div className={`${C.cellSub} crwu-audit-current-meta`}>
+          {`${statusText}${activeRecord === undefined ? '' : ` · ${zhCN.currentAuditAttempt}${activeRecord.attempt}${zhCN.currentAuditAttemptSuffix}`}${activeRecord?.startedAt === undefined || activeRecord.startedAt === '' ? '' : ` · ${zhCN.currentAuditStarted}${formatDateTime(activeRecord.startedAt)}`}${childId === '' ? '' : ` · ${zhCN.currentAuditChildTail}${childId.slice(-8)}`}`}
         </div>
         {/* 阶段文案用 aria-live 播报：键盘焦点不动，屏幕阅读器也能听到阶段变化（F2）。
             记录还没拿到（`audit-status` 首次返回前）时不渲染这一行 —— 那时说"宿主没回报"
             只会让人以为部署有问题。 */}
-        <div className={C.row} style={{ marginTop: '6px' }}>
+        <div className={`${C.row} crwu-audit-current-controls`} style={{ marginTop: '6px' }}>
           {/* 阶段文案用 aria-live 播报：键盘焦点不动，屏幕阅读器也能听到阶段变化（F2）。
               记录还没拿到（`audit-status` 首次返回前）时不渲染这句 —— 那时说"宿主没回报"
               只会让人以为部署有问题；但**停止按钮一直在**（占用锁在，用户必须能停）。 */}
@@ -1084,6 +1086,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
         </div>
         {activeRecord === undefined || stop.hint === '' ? null : <div className={C.cellSub}>{stop.hint}</div>}
         {stop.notes.length === 0 ? null : <div className={C.cellSub}>{stop.notes.join('；')}</div>}
+        </div>
       </Notice>
     })()}
 
@@ -1103,8 +1106,13 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
       : null}
 
     <>
+          <div className="crwu-audit-report-card">
           {/* 首次加载那一轮不挂顶部进度条：等待页自己已经有一条，两条同时动只是噪音。 */}
           <LoadingBar active={(props.gating.busy === true || state.ossLoading) && state.auditsReady} />
+          <div className="crwu-audit-report-head">
+            <div className="crwu-audit-report-heading">{zhCN.tabPending}</div>
+            {state.formName === '' ? null : <div className="crwu-audit-report-meta">{state.formName}</div>}
+          </div>
           {/* 搜索区单独成组：读屏可以按 region 跳进来（`role="search"`）。 */}
     <div className={C.toolbar} role="search">
             <SearchField
@@ -1131,7 +1139,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
           {/* 列表数据区：首次加载与拉报告资料的等待页**只盖这一块** ——
               页头、列表标题、工具条保持可见（用户 2026-09-23 口径：Loading 只覆盖列表数据区）。
               min-height 与列表可视区齐平，数据回来时不会 Layout Shift。 */}
-          <div className={C.listArea}>
+          <div className={`${C.listArea} crwu-audit-report-list`}>
             {analysisStage === '' ? null : <div className={C.aiMask}><WorkbenchLoading title={analysisStage} size={56} hint="" /></div>}
             {pulling === '' ? null : <div className={C.aiMask}>
               {/* 用户 2026-09-22 口径：loading 只留中瑞世联的 logo + 一句干净文案，
@@ -1185,6 +1193,7 @@ export function ReportPane(props: ReportPaneProps): React.ReactElement {
                     onGoPage={props.onGoPage}
                   />
                 </div>}
+          </div>
           </div>
     </>
 

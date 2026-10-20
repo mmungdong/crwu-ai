@@ -198,19 +198,11 @@ test('audit shell: one primary underlined report/local row and no redundant 审�
     'tabpanel 的 aria-labelledby 指向真实选中的页签 id')
 })
 
-test('eval shell: generic two-level navigation stays untouched (single 估值 primary tab)', async () => {
+test('eval shell: business overview replaces the valuation tab', async () => {
   const { tree } = await mountShell('eval')
-
-  // Production guard: only the audit module flattens; the eval tree keeps its parent row.
-  const tablists = navTablists(tree)
-  assert.equal(tablists.length, 1)
-  assert.equal(tablists[0].props['aria-label'], zhCN.navParentsLabel)
-
-  const tabs = navTabs(tree)
-  assert.deepEqual(tabs.map(labelOf), [zhCN.navParentValuation],
-    '评估树只应有「估值」一项')
-  assert.equal(hasClass(tabs[0], L.tab), true, '「估值」继续用一级主行类')
-  assert.equal(hasClass(tabs[0], L.tabOn), true, '「估值」继续用一级选中类')
+  assert.equal(navTablists(tree).length, 0)
+  assert.equal(navTabs(tree).length, 0)
+  assert.ok(find(tree, (node) => node.props?.['data-business-step'] === 'valuation'))
   assert.equal(findAll(tree, (node) => hasClass(node, C.navChildren)).length, 0)
 })
 

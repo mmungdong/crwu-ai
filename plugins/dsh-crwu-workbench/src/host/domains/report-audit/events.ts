@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-subagent'
 import { text } from '../../../shared/utils/value.ts'
 import type { WorkbenchState } from '../../core/state/types.ts'
 

@@ -63,12 +63,12 @@ python3 scripts/test_audit_delivery.py
 
 | 文件 | 作用 | 对应口径 |
 | --- | --- | --- |
-| `prepare_materials.py` | 材料盘点 + 隐藏区隔离（工作版重建）+ 归档解压 + **媒体证据导出与放行清单** | `references/00-input-and-route-profile.md` §Excel 隐藏数据隔离 |
+| `prepare_materials.py` | 材料盘点 + 隐藏区隔离（工作版重建）+ 归档解压 + **媒体证据导出与放行清单** + **`ocrRequired[]` 兜底清单** | `references/00-input-and-route-profile.md` §Excel 隐藏数据隔离 |
 | `media_extract.py` | 媒体抽取库：xlsx 绘图锚点 / docx·doc 正文图（段落序）/ PDF 内嵌图 / 独立图片；H0 与 fail-closed | 同上 §非单元格证据 |
 | `test_prepare_materials.py`、`test_media_extract.py` | 上述两脚本的契约测试 | — |
 
 ```text
-# 阶段一：盘点 + 工作版 + 媒体证据（产出 材料盘点.json / 媒体索引.json / 提取/ / 工作版/ / 媒体证据/）
+# 阶段一：盘点 + 工作版 + 媒体证据（产出 材料盘点.json〔含 ocrRequired[]〕/ 媒体索引.json / 提取/ / 工作版/ / 媒体证据/）
 python3 scripts/prepare_materials.py --case <案例目录>
 
 # 阶段二：复核件（复核意见附件里的图同样要抽取；产物名加后缀，绝不覆盖阶段一冻结产物）
