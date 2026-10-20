@@ -74,7 +74,7 @@ test('operations/ 取代了 ops/（方案 §4.2 的目录名）', () => {
   assert.deepEqual(operations, [
     'common.ts', 'core.ts', 'environment.ts', 'local-audit.ts',
     'register.ts', 'report-audit.ts', 'report-evaluation', 'report-evaluation.ts',
-    'types-export.ts', 'types.ts',
+    'types-export.ts', 'types.ts', 'workspace-cleanup.ts',
   ])
   // `report-evaluation.ts` 是薄装配：面板预检 handler 是它允许留的**唯一**一个
   // （Task 3 把登录作业搬进 `report-evaluation/auth.ts` 之后连这一个也会走），
@@ -97,19 +97,19 @@ test('operations/ 取代了 ops/（方案 §4.2 的目录名）', () => {
   assert.match(core, /export \{ createCoreOperations \} from '\.\/register\.ts'/)
 })
 
-test('host/ 只剩五个顶层目录：core / domains / integrations / operations / tools（+ update/config）', () => {
+test('host/ 按运行边界分层，graph 独立组合业务工作流', () => {
   const entries = readdirSync(join(PLUGIN, 'src/host'), { withFileTypes: true })
   const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
   // `update/`（自助更新子系统：检查器 / 安装器 / 持久化）与 `config/`（部署配置解析）是**子系统**，
   // 不属于"按运行时边界分的五个目录"，所以照旧留在顶层。
-  assert.deepEqual(dirs, ['config', 'core', 'domains', 'integrations', 'operations', 'tools', 'update'])
+  assert.deepEqual(dirs, ['config', 'core', 'domains', 'graph', 'integrations', 'operations', 'tools', 'update'])
   const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name).sort()
   assert.deepEqual(files, ['apply.ts', 'build-info.ts', 'consts.ts'])
 
   // 四类归位的判据：外部提供方进 integrations、业务进 domains、机制进 core。
   for (const [dir, expected] of [
-    ['src/host/integrations', ['crwu', 'dws', 'h3yun', 'ifind', 'oss']],
-    ['src/host/domains', ['local-audit', 'report-audit', 'report-evaluation']],
+    ['src/host/integrations', ['crwu', 'dws', 'h3yun', 'ifind', 'oss', 'valuation-workflow']],
+    ['src/host/domains', ['local-audit', 'report-audit', 'report-evaluation', 'workspace-cleanup']],
   ]) {
     const names = readdirSync(join(PLUGIN, dir), { withFileTypes: true })
       .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()

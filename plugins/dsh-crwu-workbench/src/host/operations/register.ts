@@ -16,6 +16,7 @@ import { createOperationHost } from './common.ts'
 import { environmentOperations } from './environment.ts'
 import { reportAuditOperations } from './report-audit.ts'
 import { localAuditOperations } from './local-audit.ts'
+import { workspaceCleanupOperations } from './workspace-cleanup.ts'
 import type { CoreDeps, HostResolvers } from './types-export.ts'
 import type { OperationMap } from './types.ts'
 
@@ -50,6 +51,7 @@ export function createCoreOperations(
     ...environmentOperations(host),
     ...reportAuditOperations(host),
     ...localAuditOperations(host),
+    ...workspaceCleanupOperations(host),
     // Task 4：自助更新四个操作（检查 / 手动检查 / 安装 / 取消）。由 update/ops.ts 组装，
     // 这里只并表；没有注入时就不登记（声明必须跟着实现走）。
     ...updateOperations,
@@ -103,6 +105,8 @@ export function createCoreOperations(
           'discussion-material-open',
           // 协议 28：本地审核（扫描 / 建快照与 handoff / 认领）。
           'local-audit-status', 'local-audit-start', 'local-audit-claim',
+          // 协议 49：清空工作空间（只读扫描 + 带指纹执行）。
+          'workspace-cleanup-plan', 'workspace-cleanup-apply',
           // 第 6 层：iFinD 凭据生命周期（插件 Host 自己保管 SK；不再是「读技能目录里的文件」）。
           'ifind-status', 'ifind-credential-save', 'ifind-credential-clear', 'ifind-probe',
           // 第 5 层：零碎但用户每天会点的那些。

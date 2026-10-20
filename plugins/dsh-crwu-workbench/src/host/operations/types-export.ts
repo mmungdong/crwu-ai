@@ -31,6 +31,8 @@ export interface CoreDeps {
   update?: OperationMap
   /** 报告评估（房地产估值）的八个操作（协议 32）。 */
   valuation?: OperationMap
+  /** 关闭某工作空间下已打开的估值工作流存储（清空工作空间前调用）。 */
+  closeWorkspaceStores?: (workspacePath: string) => Promise<string[] | void>
 }
 
 export interface HostResolvers {

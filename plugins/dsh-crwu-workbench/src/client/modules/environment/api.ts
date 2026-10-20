@@ -1,6 +1,7 @@
 import { rpc } from '../../core/rpc.ts'
 import type {
   AccessDiagnosticsView, DwsLocalDoctorView, DwsLocalRepairView, EnvResultView,
+  WorkspaceCleanupPlan, WorkspaceCleanupRequest, WorkspaceCleanupResult,
 } from '../../../shared/contracts/index.ts'
 import type {
   EnvironmentBootView, IfindProbeResult, IfindSaveResult, IfindStatusResult, LocalAccessResult, SimpleResult,
@@ -52,6 +53,9 @@ export const environmentApi = {
   env: (args?: { refresh?: boolean }) => call<EnvResult>('env', args ?? {}),
   workspace: (args: { path: string; title?: string; id?: string }) => call<Record<string, unknown>>('workspace', args),
   workspaceAuto: () => call<Record<string, unknown>>('workspace-auto', {}),
+  workspaceCleanupPlan: () => call<WorkspaceCleanupPlan>('workspace-cleanup-plan', {}),
+  workspaceCleanupApply: (request: WorkspaceCleanupRequest) =>
+    call<WorkspaceCleanupResult>('workspace-cleanup-apply', request),
   localAccessGrant: (args: { schemaVersion: number; capabilities: string[] }) =>
     call<LocalAccessResult>('local-access-grant', args),
   localAccessRevoke: () => call<LocalAccessResult>('local-access-revoke', {}),

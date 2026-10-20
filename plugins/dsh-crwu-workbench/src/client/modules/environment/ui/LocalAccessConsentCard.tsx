@@ -43,6 +43,7 @@ export function capabilityLabel(capability: LocalAccessCapability): string {
   if (capability === 'dws-profile') return zhCN.envConsentCapDws
   if (capability === 'oss-config') return zhCN.envConsentCapOss
   if (capability === 'ifind-credential') return zhCN.envConsentCapIfind
+  if (capability === 'workspace-cleanup') return zhCN.envConsentCapCleanup
   return zhCN.envConsentCapSystem
 }
 

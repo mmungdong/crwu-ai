@@ -231,6 +231,36 @@ test('ensureRegistry restores records AND the occupancy lock', async () => {
   assert.equal(state.workspaceChosen, false)
 })
 
+for (const stopPhase of ['timeout', 'failed', 'requested', 'aborting', 'waiting-quiescence']) test(`an unquiesced retired child restores occupancy and retries stopping after restart from ${stopPhase}`, async () => {
+  const fs = memoryFs()
+  const state = makeState()
+  state.audits.k = normalizeAudit('k', {
+    childId: 'child-1', parentSessionId: 'parent-1', retired: true,
+    stopPhase, quiesced: false,
+  })
+  state.activeKey = 'k'
+  state.activeChildId = 'child-1'
+  assert.equal(await persistAudits(regDeps(fs.ctx, state)), true)
+  const fresh = makeState()
+  await ensureRegistry(regDeps(fs.ctx, fresh))
+  assert.equal(fresh.activeKey, 'k')
+  assert.equal(fresh.activeChildId, 'child-1')
+  assert.equal(fresh.audits.k.retired, true)
+  const { auditStop } = await import('../../../src/host/domains/report-audit/ops.ts')
+  const { makeAuditAgent } = await import('../../helpers/audit-policy-fixture.mjs')
+  let cancelled = 0
+  const child = makeAuditAgent({}, { id: 'child-1', status: 'running', cancel() { cancelled += 1; this.status = 'idle' } })
+  const originalGet = fs.ctx.get
+  fs.ctx.get = (name) => name === 'agents' ? { get: (id) => id === child.id ? child : undefined } : originalGet(name)
+  const access = makeTestAccess(fs.ctx).access
+  const stopped = await auditStop({ ctx: fs.ctx, state: fresh, access, world: { home: async () => '/Users/x' } }, {})
+  assert.equal(stopped.accepted, true)
+  await fresh.stopInFlight['child-1']
+  assert.equal(cancelled, 1)
+  assert.equal(fresh.audits.k.quiesced, true)
+  assert.equal(fresh.activeChildId, '')
+})
+
 test('ensureRegistry never overwrites a live record and only reads once', async () => {
   const fs = memoryFs({
     '/Users/x/.dsh/crwu-workbench.json': JSON.stringify({ audits: { k: { childId: 'from-disk' } }, activeChildId: 'disk-child' }),

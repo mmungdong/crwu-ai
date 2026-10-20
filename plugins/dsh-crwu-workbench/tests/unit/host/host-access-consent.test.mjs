@@ -96,7 +96,7 @@ test('规范收据 → granted，并保留授权时刻与规范能力顺序', ()
 test('版本不同 / 缺项 / 多项 / 重复 / 顺序不同 / 缺时刻，一律 outdated（任何不精确的集合都不是授权）', () => {
   const base = consentRecord(GRANTED_AT)
   const cases = [
-    ['版本不同', { ...base, schemaVersion: 2 }, /其它版本/],
+    ['版本不同', { ...base, schemaVersion: LOCAL_ACCESS_SCHEMA_VERSION + 1 }, /其它版本/],
     ['版本缺失', { ...base, schemaVersion: undefined }, /其它版本/],
     ['缺一项', { ...base, capabilities: base.capabilities.slice(0, 4) }, /重新允许/],
     ['多一个已知项（重复）', { ...base, capabilities: [...base.capabilities, base.capabilities[0]] }, /重新允许/],

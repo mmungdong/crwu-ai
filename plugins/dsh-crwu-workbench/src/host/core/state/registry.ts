@@ -155,9 +155,15 @@ export async function ensureRegistry(deps: RegistryDeps): Promise<void> {
     // 那条记录来自"创建子会话失败、而且回滚写盘也失败"的现场 —— 它绑不到任何已确认的 child。
     // 保留它但**退役**：既不发放任何 scope，也不再参与占用锁；同时 `isAuditChild` 仍认它
     //（父会话匹配），所以万一那个孩子还活着，面板类 Tool 继续拒绝。
-    state.audits[key] = record.pending === true && record.childId === ''
+    const restored = record.pending === true && record.childId === ''
       ? { ...record, retired: true, status: 'unknown', stopReason: '重启时发现未落地的子会话记录（已退役）' }
       : record
+    // A persisted phase cannot represent an in-process stop task after restart.
+    const interruptedStop = ['requested', 'aborting', 'waiting-quiescence'].includes(restored.stopPhase ?? '')
+      && restored.quiesced !== true
+    state.audits[key] = interruptedStop
+      ? { ...restored, stopPhase: 'timeout', stopError: '上次停止流程被重启中断，请重试停止审核。' }
+      : restored
   }
 
   // 占用锁必须跟着恢复：否则重装后同一条报告能被起第二条子会话，两条往同一个案例目录对写。
@@ -167,7 +173,9 @@ export async function ensureRegistry(deps: RegistryDeps): Promise<void> {
     const candidateChild = text(config.activeChildId)
     const candidate = candidateChild === '' ? undefined : state.audits[candidateKey]
     const usable = candidateChild !== '' && candidate !== undefined
-      && candidate.retired !== true && candidate.ended !== true && candidate.stopped !== true
+      && candidate.childId === candidateChild
+      && (candidate.retired !== true || candidate.quiesced === false)
+      && candidate.ended !== true && candidate.stopped !== true
     state.activeKey = usable ? candidateKey : ''
     state.activeChildId = usable ? candidateChild : ''
   }

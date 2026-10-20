@@ -7,12 +7,18 @@ import { AuditParentButton } from './modules/report-audit/ui/AuditParentButton.t
 import { RunCardAction } from './shell/RunCardAction.tsx'
 import { WorkbenchPanel } from './shell/WorkbenchPanel.tsx'
 import { createLocalAuditPaneController } from './modules/local-audit/ui/LocalAuditPane.tsx'
-import { createReportEvaluationPaneController, reportEvaluationPaneServices } from './modules/report-evaluation/index.ts'
+import {
+  createReportEvaluationPaneController,
+  createValuationWorkflowController,
+  reportEvaluationPaneServices,
+  valuationWorkflowPort,
+} from './modules/report-evaluation/index.ts'
 import { hostPickerCapabilities } from './modules/local-audit/pick.ts'
 import { WorkbenchSidebarEntry, WORKBENCH_PANEL_KEY } from './shell/WorkbenchSidebarEntry.tsx'
 import { createBuildStore } from './shell/build-store.ts'
 import { createModuleStore } from './shell/module-store.ts'
 import { createEnvStatusStore } from './modules/environment/model/status.ts'
+import { createWorkspaceCleanupController } from './modules/environment/model/workspace-cleanup.ts'
 import { updateApi } from './modules/update/api.ts'
 import { createUpdateDialogStore } from './modules/update/model/dialog-store.ts'
 import { createUpdateStore } from './modules/update/model/update-store.ts'
@@ -60,6 +66,10 @@ export function apply(ctx: ClientContext): void {
   // 环境状态 store 同理：侧栏底部入口与面板必须看到**同一份**自检结论，所以在这里创建、
   // 由 props 下发；模块级单例会在插件卸载后残留。
   const envStatus = createEnvStatusStore()
+  // 清理工作空间（协议 49）：执行结束后环境快照与审核历史都变了，直接复用同一个刷新入口。
+  const cleanupStore = createWorkspaceCleanupController({
+    onSettled: () => { void envStatus.refresh() },
+  })
   // 「现在跑的是哪一份插件」（dev / 装好的包 + 版本）同理：侧栏入口与面板头部必须显示同一枚标签，
   // 也共用一个 store —— 各自 `boot()` 会同时打两次请求，还会出现「标签是新的、门禁说旧的」这种画面。
   const buildStore = createBuildStore()
@@ -76,11 +86,23 @@ export function apply(ctx: ClientContext): void {
    */
   const localAudit = createLocalAuditPaneController(services)
   /**
+   * 「资产评估」工作流的图控制器（协议 43）。
+   *
+   * 与 `evaluation` 同一条口径：实例级、只有一份。它轮询的是 Host 的图状态，所以寿命必须
+   * 由 effect 管 —— 插件释放时停掉轮询与在途请求（`dispose`），不留一个还在打请求的定时器。
+   * **先建它**：`evaluation` 交接成功后的 `onHandoff` 要刷新的是同一个实例。
+   */
+  const workflow = createValuationWorkflowController(valuationWorkflowPort(), { autoPoll: true })
+  ctx.effect(() => () => { workflow.dispose() }, 'crwu-workbench: valuation workflow')
+  /**
    * 「报告评估」的估值控制器（协议 35）。与 `localAudit` 同一条口径：实例级、只有一份，
    * 于是切模块 / 离开面板再回来时，用户选的文件、方法、基准日与补充要求都还在。
    *
    * 会话跳转（`uiWorkspace` / `layout`）也从这里接进去：控制器在交接成功后要**立刻**
    * 打开刚建出来的顶层父会话 —— 那两个服务可能比本插件晚注册，所以一律现读。
+   *
+   * 协议 43 起交接**不再自动跳转**：`onHandoff` 刷新同一个 workflow 控制器，员工留在
+   * 工作流里；需要打开父会话时由页面上的显式按钮触发。
    */
   const evaluation = createReportEvaluationPaneController(reportEvaluationPaneServices(
     hostPickerCapabilities(
@@ -102,7 +124,10 @@ export function apply(ctx: ClientContext): void {
       },
     ),
     () => services,
-  ))
+  ), {
+    // 交接被 Host 接受 → 刷新同一个工作流控制器（不新建运行时、不创建第二个会话）。
+    onHandoff: () => { void workflow.refresh() },
+  })
   // 自助更新同理，而且这条是**硬要求**：侧栏那枚版本徽标与面板里的更新面板必须共用
   // 唯一一份更新状态（各自建 store 就会各发一次 status/check，还会出现"徽标说有更新、
   // 面板说已是最新"）。开关状态也挂在实例上（侧栏徽标要能打开面板里的那只 Dialog）。
@@ -157,10 +182,12 @@ export function apply(ctx: ClientContext): void {
       envStatus,
       localAudit,
       evaluation,
+      workflow,
       build: buildStore,
       modules,
       update: updateStore,
       updateDialog,
+      cleanup: cleanupStore,
       platform,
     }),
   ))

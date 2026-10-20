@@ -23,7 +23,7 @@
  */
 
 /** 当前授权收据的 schema 版本。范围或语义变化时必须 +1。 */
-export const LOCAL_ACCESS_SCHEMA_VERSION = 1 as const
+export const LOCAL_ACCESS_SCHEMA_VERSION = 2 as const
 
 /**
  * 线协议上的字段名（`boot.permissionSchemaVersion`）。
@@ -42,7 +42,10 @@ export const PERMISSION_SCHEMA_VERSION = LOCAL_ACCESS_SCHEMA_VERSION
  * - `oss-config`：`%USERPROFILE%\.ossutilconfig`（交付件回传的 AK/SK）；
  * - `ifind-credential`：`.dsh/crwu-workbench` 下的 iFinD API-Key 与工作台状态；
  * - `system-integration`：打开系统浏览器（登录）、写系统剪贴板、在文件管理器里定位案例目录、
- *   在**员工选定的工作空间**里创建本轮案例目录（`<工作空间>/<流水号>`，插件唯一自动创建的一级目录）。
+ *   在**员工选定的工作空间**里创建本轮案例目录（`<工作空间>/<流水号>`，插件唯一自动创建的一级目录）；
+ * - `workspace-cleanup`：**清空**员工选定的工作空间（根下全部直接子项）并处理其会话。
+ *   它与 `system-integration` 刻意分开：那个能力说的是「建一级案例目录」，
+ *   而清空是删除整盘内容 —— 借用前者等于**静默扩权**（协议 49，收据 schema 2）。
  */
 export const LOCAL_ACCESS_CAPABILITIES = [
   'h3yun-credential-store',
@@ -50,6 +53,7 @@ export const LOCAL_ACCESS_CAPABILITIES = [
   'oss-config',
   'ifind-credential',
   'system-integration',
+  'workspace-cleanup',
 ] as const
 
 export type LocalAccessCapability = (typeof LOCAL_ACCESS_CAPABILITIES)[number]

@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Badge, Button, Card, Notice } from '../ui/primitives.tsx'
+import { Button as ActionButton } from '../ui/components/index.ts'
 import { WORKBENCH_CLASSES as C } from './consts.ts'
 import { zhCN } from '../locales/zh-CN.ts'
 import type { WorkspaceView } from '../../shared/types.ts'
@@ -43,6 +44,17 @@ export interface WorkspaceCardProps {
    * 恢复自动识别），所以收起只是默认视图，不是删功能。
    */
   collapsed?: boolean
+  /**
+   * 「清理工作空间…」入口（协议 49）。
+   *
+   * `allowed` / `reason` 由环境页从 Host 的授权收据推出；卡片只渲染，不自己判断。
+   */
+  cleanup?: {
+    allowed: boolean
+    /** 不允许时的一句原因（空串 = 允许）。 */
+    reason: string
+    onOpen: () => void
+  }
 }
 
 export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
@@ -128,9 +140,20 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
       <div className={C.row}>
         <span className={C.mono} style={{ fontWeight: 600 }}>{status.path}</span>
         <span className={C.grow} />
+        {props.cleanup === undefined ? null : <ActionButton
+          variant="danger"
+          size="sm"
+          label={zhCN.wsCleanupOpen}
+          title={props.cleanup.reason}
+          disabled={props.busy || !props.cleanup.allowed}
+          onClick={props.cleanup.onOpen}
+        />}
         <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={() => { setExpanded(true) }} />
       </div>
       <div className={C.muted}>{artifactHint(status.path)}</div>
+      {props.cleanup === undefined || props.cleanup.reason === ''
+        ? null
+        : <div className={C.muted}>{`${zhCN.wsCleanupBlocked}${props.cleanup.reason}`}</div>}
       {props.message === '' ? null : <div className={C.muted}>{props.message}</div>}
     </Card>
   }
@@ -164,6 +187,17 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
               <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={pick} />
               {status.canAuto ? <Button label={zhCN.wsAuto} small disabled={props.busy} onClick={auto} /> : null}
             </div>
+            {props.cleanup === undefined ? null : <div className={C.row} style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--crwu-border)' }}>
+              <ActionButton
+                variant="danger"
+                size="sm"
+                label={zhCN.wsCleanupOpen}
+                title={props.cleanup.reason}
+                disabled={props.busy || !props.cleanup.allowed}
+                onClick={props.cleanup.onOpen}
+              />
+              {props.cleanup.reason === '' ? null : <span className={C.muted}>{props.cleanup.reason}</span>}
+            </div>}
           </>
         : <>
             <Notice tone="warn">{zhCN.wsMissing}</Notice>

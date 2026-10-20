@@ -7,6 +7,10 @@ import { headlineOf, environmentApi, type EnvResult } from '../api.ts'
 import type { AccessDiagnosticView, DwsDeviceLoginView, DwsLocalDoctorView, DwsLocalRepairView } from '../../../../shared/types.ts'
 import type { SetupItemView } from '../../../../shared/environment/model.ts'
 import { WorkspaceCard } from '../../../shell/WorkspaceCard.tsx'
+import {
+  cleanupBlockedReason, initialCleanupState, type CleanupViewState, type WorkspaceCleanupController,
+} from '../model/workspace-cleanup.ts'
+import { WorkspaceCleanupDialog } from './WorkspaceCleanupDialog.tsx'
 import type { ClientServices } from '../../../shell/services.ts'
 import { DeviceLoginCard } from './DeviceLoginCard.tsx'
 import { deviceLoginCardView } from '../model/device-login.ts'
@@ -109,6 +113,8 @@ export interface EnvironmentPaneProps {
   gateReason?: string
   /** 浏览器侧可选服务（目录选择器 / 工作空间注册表 / layout）。 */
   services: ClientServices
+  /** 「清理工作空间」的状态机（协议 49）；缺省时整块入口不渲染。 */
+  cleanup?: WorkspaceCleanupController
   wsBusy: boolean
   wsMessage: string
   onWsBusy: (busy: boolean) => void
@@ -712,8 +718,20 @@ function DeveloperDiagnostics(props: {
  * 打开的 OAuth URL，也没有需要复制的设备码 —— 少一个入口就少一处"DSH 提供内置登录"的错觉。
  */
 
+const CLOSED_CLEANUP: CleanupViewState = initialCleanupState()
+
 export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement {
   const { env } = props
+  // 不用 `useSyncExternalStore`：测试的 fake React 不实现它，而这里只需要"初值 + 订阅刷新"。
+  const [cleanupState, setCleanupState] = React.useState<CleanupViewState>(
+    () => props.cleanup?.get() ?? CLOSED_CLEANUP,
+  )
+  React.useEffect(() => {
+    const controller = props.cleanup
+    if (controller === undefined) return
+    setCleanupState(controller.get())
+    return controller.subscribe(() => { setCleanupState(controller.get()) })
+  }, [props.cleanup])
   const [developerDiagnosticsOpen, setDeveloperDiagnosticsOpen] = React.useState(false)
   // 最近的本机访问诊断：**展开时才取**（它是排障视图，没人看就不该产生请求；
   // 而且它只读、零副作用，所以随取随用，不进任何缓存）。
@@ -769,6 +787,13 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
   const setup = env.state?.userSetup
   const authorized = props.authorized ?? consentGranted(env)
   const activeStep = pickStep(setupSteps(setupStepInput(env, authorized), manualStep), manualStep)
+  const cleanupBlocked = cleanupBlockedReason({
+    chosen: env.workspace.chosen,
+    missing: env.workspace.missing,
+    busy: props.wsBusy,
+    consent: consentOf(env),
+    schemaMismatch: props.authSchemaMismatch === true,
+  })
 
   return <div className="crwu-environment-page" data-crwu-environment="1">
     {props.error === '' ? null : <Notice tone="warn">{props.error}</Notice>}
@@ -795,6 +820,11 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
             canDiagnoseDws={canDiagnoseDws}
             activeStep={activeStep}
             onPick={setManualStep}
+            cleanupEntry={props.cleanup === undefined ? undefined : {
+              allowed: cleanupBlocked === '',
+              reason: cleanupBlocked,
+              onOpen: () => { props.cleanup?.open() },
+            }}
           />}
 
       <DeveloperDiagnostics
@@ -806,6 +836,14 @@ export function EnvironmentPane(props: EnvironmentPaneProps): React.ReactElement
         onToggle={toggleDiagnostics}
       />
     </div>
+    {props.cleanup === undefined || cleanupState.phase === 'closed' ? null : <WorkspaceCleanupDialog
+      state={cleanupState}
+      onConfirmName={(value) => { props.cleanup?.setConfirmName(value) }}
+      onToggleDeleteSessionLogs={(value) => { props.cleanup?.setDeleteSessionLogs(value) }}
+      onApply={() => { void props.cleanup?.apply() }}
+      onRescan={() => { void props.cleanup?.rescan() }}
+      onClose={() => { props.cleanup?.close() }}
+    />}
   </div>
 }
 
@@ -817,6 +855,7 @@ function SetupWorkspace(props: EnvironmentPaneProps & {
   authorized: boolean
   activeStep: SetupStepKind
   onPick: (id: SetupStepKind) => void
+  cleanupEntry?: { allowed: boolean; reason: string; onOpen: () => void }
 }): React.ReactElement {
   const { env } = props
   const setup = env.state?.userSetup
@@ -857,6 +896,7 @@ function SetupWorkspace(props: EnvironmentPaneProps & {
             onMessage={props.onWsMessage}
             onRefresh={props.onRefresh}
             collapsed={done}
+            cleanup={props.cleanupEntry}
           />
         : null}
       {setup === undefined ? null : null}
