@@ -27,7 +27,45 @@
           "uncertainties": { "type": "array", "items": { "type": "string" } },
           "note": { "type": "string" },
           "inputPath": { "type": "string" },
-          "recordedAt": { "type": "string" }
+          "recordedAt": { "type": "string" },
+          "keyValues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["label", "value", "quote"],
+              "properties": {
+                "label": { "type": "string" },
+                "value": { "type": "string" },
+                "quote": { "type": "string" }
+              }
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": { "type": "string" },
+                "values": { "type": "array", "items": { "type": ["string", "null"] } },
+                "reads": { "type": "array", "items": { "type": "integer", "minimum": 1 } }
+              }
+            }
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["n", "status"],
+              "properties": {
+                "n": { "type": "integer", "minimum": 1 },
+                "renderN": { "type": "integer", "minimum": 1 },
+                "status": { "enum": ["recognized", "partial", "unreadable"] },
+                "recordedAt": { "type": "string" }
+              }
+            }
+          },
+          "recognizer": { "type": "string" },
+          "recognitionStatus": { "enum": ["recognized", "partial", "unreadable", "conflict"] }
         }
       }
     }

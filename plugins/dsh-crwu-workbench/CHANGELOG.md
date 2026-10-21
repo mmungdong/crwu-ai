@@ -7,6 +7,41 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.52 · 2026-10-21 · fix · OCR 实测校准
+
+用一份 8 页真实扫描件跑通后，修掉六处“设计与实际不符”。
+
+- 分辨率上限：`ocr_runtime.SESSION_MAX_WIDTH = 1721`（实测值），超过等效宽度的 DPI 只往
+  `render.engineNotes` 记一条告警，不再让 300 DPI 白占磁盘（实测仅提升约 4%）。
+- `--re-render` 与 `--force` 都计入双读预算；超出时直接拒绝（退出码 2），显式 `--force-budget`
+  才放行，并在 `budget.exceededBy` 记录超出页数。重复执行同一重渲命令按“变体已存在”复用，
+  不再被误判超预算；未知页号/无索引在任何写入之前就拒绝。
+- `escalate[]` 带 `priority`（表格 > 关键字段 > 不确定项），且只返回预算内条数，不再给出
+  “建议 7 页、预算只够 3 页”的悬空清单。
+- `ocr_status.py` 的 `actions[]` 按实际 `reads` 生成：已双读就说“已对 N 页双读”，不再一律写
+  “本次未做双读”。
+- `ocr_merge.py` 页头增加 `方向`（仅 `rotated-90/180/270` 时出现），旋转扫描页不再需要
+  下游自己回查记录；`policy.mode` 记录重渲后最后使用的手段，不再恒为 `none`。
+- 文档与 schema 同步；旧案例目录（无 `budget` / `renders`）继续可读。
+
+## package · 0.0.51 · 2026-10-21 · feat · OCR 关键字段回指、双读冲突与自适应预算
+
+识别结果从"模型说它对"推进到"能指出它在哪、两次不一致会暴露"。
+
+- `crwu-ocr` 页级新增 `pageClass / riskTier / policy / renders[] / pendingReason`，顶层新增
+  `budget`：首轮按风险选 144/200 DPI，大文档（>50 页整份无文本层）仍从 144 起步；
+  `--policy fast|auto|quality`、`--budget N`（0 = 禁止双读）、`--re-render pages:N --dpi X --mode tile`。
+- 识别记录新增 `keyValues[]`（`label/value/quote`，quote 必须是本页原文逐字片段）、
+  `conflicts[]`、`reads[]`、`recognizer`；`recognitionStatus` 增加 `conflict`。
+  同一字段两次判读不一致时整页标冲突，**不替人选值**，合并文本追加冲突说明行。
+- `ocr_record.py` 返回 `escalate[]`（表格 ≥10 行 → `tile`；关键字段 ≥3 或出现小字/模糊等 →
+  `dpi-retry`），预算耗尽时停止升级；新增 `--vision-unavailable`，把待判读页整类标为未判读并退出 3。
+- `ocr_status.py` 新增 `conflictPages / budgetExhausted / notVerified[]`（每页一条，
+  `conflict > unreadable > pending`）；`ocr_merge.py` 页头增加档位与读取次数。
+- 维护期新增 `ocr_bench.py`（关键字段准确率、静默错误率、表格单元格准确率），不进 Host 暂存清单。
+- 打包断言补齐 `ocr_runtime.py / ocr_merge.py / ocr_bench.py / schemas`（此前漏断言，缺文件不会被发现）。
+- 门禁：`test_ocr_flow.py` 32 项、`test_ocr_bench.py` 3 项接入 `make plugin-ocr-check`。
+
 ## package · 0.0.50 · 2026-10-20 · feat · 审核 PDF 文字 OCR 兜底与连贯合并文本
 
 pypdf 能读的文本**保持原样**（`提取/*.txt` 文件名、内容、页分隔符不变）；只有 pypdf 读不到的页

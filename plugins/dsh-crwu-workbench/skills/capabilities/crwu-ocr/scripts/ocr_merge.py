@@ -52,7 +52,9 @@ def missing_reason(page: dict) -> str:
     return "no-text-layer"
 
 
-def page_status(page: dict) -> str:
+def page_status(page: dict, recognition_page=None) -> str:
+    if (recognition_page or {}).get("recognitionStatus") == "conflict":
+        return "conflict"
     if page.get("renderError"):
         return "render-failed"
     return page.get("visualStatus") or "unknown"
@@ -61,8 +63,13 @@ def page_status(page: dict) -> str:
 def page_body(case_dir: str, page: dict, recognition_page) -> tuple:
     """返回 `(正文, 来源标签)`；认不出时正文是显式占位，不是空串。"""
     recorded = (recognition_page or {}).get("text") or ""
-    if recorded.strip():
+    record_sha = (recognition_page or {}).get("imageSha256") or ""
+    page_sha = page.get("imageSha256") or ""
+    stale = recorded.strip() != "" and record_sha != "" and record_sha != page_sha
+    if recorded.strip() and not stale:
         return recorded.strip(), LABEL_RECOGNISED
+    if stale:
+        return "[第 %s 页 未判读：stale-record]" % page.get("page"), LABEL_MISSING
     if page.get("textStatus") == "ok" and page.get("textPath"):
         try:
             with open(os.path.join(case_dir, *str(page["textPath"]).split("/")),
@@ -75,11 +82,25 @@ def page_body(case_dir: str, page: dict, recognition_page) -> tuple:
     return "[第 %s 页 未判读：%s]" % (page.get("page"), missing_reason(page)), LABEL_MISSING
 
 
+def conflict_line(item: dict) -> str:
+    values = " / ".join(str(value) for value in item.get("values") or [])
+    return "[冲突：%s %s —— 不得直接引用，须人工确认]" % (item.get("field", ""), values)
+
+
 def page_section(case_dir: str, page: dict, recognition_page) -> str:
     body, label = page_body(case_dir, page, recognition_page)
     sha = (page.get("imageSha256") or "")[:12]
-    return "===== 第 %s 页 | 来源: %s | sha256: %s | 状态: %s =====\n%s" % (
-        page.get("page"), label, sha, page_status(page), body)
+    reads = len((recognition_page or {}).get("reads") or []) or len(page.get("renders") or []) or 1
+    tier = page.get("riskTier") or "unknown"
+    orientation = str((recognition_page or {}).get("orientation") or "")
+    direction = (" | 方向: %s" % orientation
+                 if orientation in ("rotated-90", "rotated-180", "rotated-270") else "")
+    lines = ["===== 第 %s 页 | 来源: %s | sha256: %s | 状态: %s | 档位: %s/%d 次%s =====\n%s" % (
+        page.get("page"), label, sha, page_status(page, recognition_page), tier, reads, direction, body)]
+    for item in (recognition_page or {}).get("conflicts") or []:
+        if isinstance(item, dict):
+            lines.append(conflict_line(item))
+    return "\n".join(lines)
 
 
 def clear_stale(out_dir: str, source_id: str) -> None:

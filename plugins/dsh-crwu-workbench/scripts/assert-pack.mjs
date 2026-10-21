@@ -71,11 +71,16 @@ const REQUIRED = [
   // 共享能力层：OCR 技能的入口、运行脚本与随包依赖清单缺一不可（缺了审核里的
   // PDF/图片判读整类不可用，而不是"少个文件"）。
   'skills/capabilities/crwu-ocr/SKILL.md',
+  'skills/capabilities/crwu-ocr/scripts/ocr_runtime.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_prepare.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_record.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_status.py',
+  'skills/capabilities/crwu-ocr/scripts/ocr_merge.py',
+  'skills/capabilities/crwu-ocr/scripts/ocr_bench.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_engines.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_quartz.py',
+  'skills/capabilities/crwu-ocr/schemas/ocr-index.schema.json',
+  'skills/capabilities/crwu-ocr/schemas/ocr-recognition.schema.json',
   'skills/capabilities/crwu-ocr/vendor/wheels/manifest.json',
   'skills/capabilities/crwu-ocr/vendor/wheels/pypdf-6.21.1-py3-none-any.whl',
   'skills/capabilities/crwu-ocr/vendor/wheels/pypdfium2-5.14.0-py3-none-win_amd64.whl',

@@ -65,8 +65,52 @@
                 "visualRequired": { "type": "boolean" },
                 "visualReasons": { "type": "array", "items": { "type": "string" } },
                 "visualStatus": { "enum": ["pending", "done", "unreadable", "skipped", "not-required"] },
-                "recognitionStatus": { "enum": ["recognized", "partial", "unreadable"] },
-                "renderError": { "type": "string" }
+                "recognitionStatus": { "enum": ["recognized", "partial", "unreadable", "conflict"] },
+                "renderError": { "type": "string" },
+                "pageClass": { "enum": ["text", "scan", "image"] },
+                "riskTier": { "enum": ["high", "normal", "low"] },
+                "policy": {
+                  "type": "object",
+                  "properties": {
+                    "dpi": { "type": "integer", "minimum": 72, "maximum": 600 },
+                    "doubleRead": { "type": "boolean" },
+                    "mode": { "enum": ["none", "dpi-retry", "tile"] }
+                  }
+                },
+                "renders": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["n", "dpi", "mode", "image", "imageSha256"],
+                    "properties": {
+                      "n": { "type": "integer", "minimum": 1 },
+                      "dpi": { "type": "integer", "minimum": 72, "maximum": 600 },
+                      "mode": { "enum": ["page", "tile"] },
+                      "image": { "type": "string" },
+                      "imageSha256": { "type": "string" },
+                      "imageBytes": { "type": "integer" },
+                      "width": { "type": "integer" },
+                      "height": { "type": "integer" },
+                      "pageRotation": { "enum": [0, 90, 180, 270] },
+                      "engine": { "type": "string" },
+                      "createdAt": { "type": "string" },
+                      "tiles": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "index": { "type": "integer", "minimum": 1, "maximum": 4 },
+                            "image": { "type": "string" },
+                            "imageSha256": { "type": "string" },
+                            "width": { "type": "integer" },
+                            "height": { "type": "integer" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "pendingReason": { "enum": ["", "not-attempted", "vision-unavailable"] }
               }
             }
           }
@@ -80,6 +124,19 @@
     "coverage": {
       "type": "object",
       "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "pagesRequired": { "type": "integer", "minimum": 0 },
+        "pagesRead": { "type": "integer", "minimum": 0 },
+        "doubleReads": { "type": "integer", "minimum": 0 },
+        "maxDoubleReads": { "type": "integer", "minimum": 0 },
+        "imageCalls": { "type": "integer", "minimum": 0 },
+        "elapsedMs": { "type": "integer", "minimum": 0 },
+        "exceededBy": { "type": "integer", "minimum": 1 },
+        "exhausted": { "type": "boolean" }
+      }
     }
   }
 }

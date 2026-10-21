@@ -192,6 +192,7 @@ plugin-check: plugin-deps plugin-python
 	# 缺 Pillow 的机器上被 skip 掉却当作通过。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_bench.py
 
 # OCR 能力的**真实渲染**门禁（`plugin-check` 里那两条的聚焦入口）：解释器自动取 DSH 自带
 # Python（macOS 走系统 CoreGraphics、Windows 走随包 pypdfium2），一般不需要传参。
@@ -199,6 +200,7 @@ plugin-check: plugin-deps plugin-python
 plugin-ocr-check: plugin-deps plugin-python
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_bench.py
 
 # 打成可直接分发的 tgz（`npm publish` 的对象，也是接收方自测的输入）。
 # 包内已含全部技能层（skills/crwu、skills/dws、common/skills）与两个平台的自带二进制。

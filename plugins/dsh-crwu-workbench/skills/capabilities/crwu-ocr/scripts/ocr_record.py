@@ -53,6 +53,29 @@ def normalise_pages(payload) -> list:
     return []
 
 
+def validate_key_values(entry, text: str) -> str:
+    """Every key value must point at a verbatim fragment of this page's own text."""
+    page = entry.get("page")
+    values = entry.get("keyValues")
+    if values is None:
+        return ""
+    if not isinstance(values, list):
+        return "第 %s 页 keyValues 必须是数组" % page
+    for index, item in enumerate(values):
+        if not isinstance(item, dict):
+            return "第 %s 页 keyValues[%d] 必须是对象" % (page, index)
+        for field in ("label", "value", "quote"):
+            if not isinstance(item.get(field), str) or item.get(field).strip() == "":
+                return "第 %s 页 keyValues[%d].%s 必须是非空字符串" % (page, index, field)
+        if not ocr_runtime.quote_in_text(text, item["quote"]):
+            return ("第 %s 页 keyValues[%d] quote-not-found：quote 不是本页 text 的逐字片段"
+                    % (page, index))
+        if not ocr_runtime.value_in_quote(item["value"], item["quote"]):
+            return ("第 %s 页 keyValues[%d] value-not-in-quote：value 未在 quote 中出现"
+                    % (page, index))
+    return ""
+
+
 def validate_page(entry) -> str:
     if not isinstance(entry, dict):
         return "识别记录不是对象"
@@ -70,7 +93,7 @@ def validate_page(entry) -> str:
     orientation = entry.get("orientation", "unknown")
     if orientation not in ORIENTATIONS:
         return "第 %s 页 orientation 必须是 %s" % (page, "/".join(ORIENTATIONS))
-    return ""
+    return validate_key_values(entry, entry.get("text", ""))
 
 
 def minimal_record(entry) -> dict:
@@ -82,10 +105,70 @@ def minimal_record(entry) -> dict:
         "tables": entry.get("tables", []),
         "visibleElements": entry.get("visibleElements", []),
         "uncertainties": entry.get("uncertainties", []),
+        "keyValues": entry.get("keyValues", []),
     }
     if entry.get("note"):
         record["note"] = str(entry["note"])
     return record
+
+
+def merge_conflicts(previous_page, record) -> list:
+    """Keep every disagreement between reads; never pick one value for the reader."""
+    conflicts = list((previous_page or {}).get("conflicts") or [])
+    prior = {item.get("label"): item.get("value")
+             for item in (previous_page or {}).get("keyValues") or [] if isinstance(item, dict)}
+    current = {item.get("label"): item.get("value")
+               for item in record.get("keyValues") or [] if isinstance(item, dict)}
+    if not (previous_page or {}).get("reads"):
+        # First read of this page: nothing to disagree with yet.
+        return conflicts
+    prior_read = max(1, len((previous_page or {}).get("reads") or []))
+    current_read = max(1, len(record.get("reads") or []))
+    for label in sorted(set(prior) | set(current)):
+        if label not in prior or label not in current:
+            values = [prior.get(label), current.get(label)]
+        elif ocr_runtime.normalize_value(str(prior[label])) == ocr_runtime.normalize_value(str(current[label])):
+            continue
+        else:
+            values = [prior[label], current[label]]
+        conflict = {"field": label, "values": values, "reads": [prior_read, current_read]}
+        if conflict not in conflicts:
+            conflicts.append(conflict)
+    return conflicts
+
+
+ESCALATION_PRIORITY = {"table": 0, "keyValues": 1, "uncertainty": 2}
+
+
+def escalate_for(page, record, index):
+    """Return one prioritized second-pass candidate, or None when it already had two reads."""
+    if record.get("recognitionStatus") != "recognized":
+        return None
+    if len(page.get("renders") or []) >= 2:
+        return None
+    rows = 0
+    for table in record.get("tables") or []:
+        if isinstance(table, dict):
+            rows = max(rows, len(table.get("rows") or []))
+    if rows >= 10:
+        return {"page": page.get("page"), "mode": "tile", "priority": "table"}
+    values = len(record.get("keyValues") or [])
+    keywords = ("小字", "模糊", "折痕", "遮挡", "反光")
+    uncertain = any(word in str(item) for item in record.get("uncertainties") or []
+                    for word in keywords)
+    if values >= 3:
+        return {"page": page.get("page"), "mode": "dpi-retry", "priority": "keyValues"}
+    if uncertain:
+        return {"page": page.get("page"), "mode": "dpi-retry", "priority": "uncertainty"}
+    return None
+
+
+def select_escalations(candidates, remaining: int) -> list:
+    """Order by evidence class (table > keyValues > uncertainty), then page, and cap."""
+    ordered = sorted(candidates,
+                     key=lambda item: (ESCALATION_PRIORITY.get(item.get("priority"), 99),
+                                       int(item.get("page") or 0)))
+    return ordered[:max(0, int(remaining))]
 
 
 def recompute(index) -> dict:
@@ -122,15 +205,43 @@ def recompute(index) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Merge page-image recognition into the OCR index")
     parser.add_argument("--case", required=True)
-    parser.add_argument("--input", required=True, help="case-relative JSON with the page results")
+    parser.add_argument("--input", default="", help="case-relative JSON with the page results")
     parser.add_argument("--source", default="", help="sourceId or case-relative path")
+    parser.add_argument("--recognizer", default="session-vision",
+                        help="recognizer identity written into the record (not model-supplied)")
+    parser.add_argument("--vision-unavailable", action="store_true",
+                        help="mark every pending page as not readable by the host; no --input needed")
     args = parser.parse_args(argv)
+    recognizer = args.recognizer.strip() or "session-vision"
+    if recognizer != "session-vision":
+        ocr_runtime.emit(ocr_runtime.fail(
+            "input", "--recognizer 本期只接受 session-vision：专用识别引擎接入后再开放"))
+        return ocr_runtime.EXIT_USAGE
 
     case_dir = os.path.abspath(args.case)
     index, index_path, error = load_index(case_dir)
     if index is None:
         ocr_runtime.emit(ocr_runtime.fail("input", error))
         return ocr_runtime.EXIT_USAGE
+
+    if args.vision_unavailable:
+        marked = []
+        for item in index.get("sources", []):
+            for page in item.get("pages", []):
+                page.setdefault("pendingReason", "")
+                if page.get("visualStatus") == "pending":
+                    page["pendingReason"] = "vision-unavailable"
+                    marked.append({"sourceId": item.get("sourceId", ""),
+                                   "relativePath": item.get("relativePath", ""),
+                                   "page": page.get("page")})
+        index["recognitionUpdatedAt"] = now()
+        ocr_runtime.write_json_atomic(index_path, index)
+        ocr_runtime.emit({**ocr_runtime.fail(
+            "capability-gap",
+            "宿主无法读取页图：%d 页已标记为未判读，请人工补读或登记未核" % len(marked),
+            action="换用具备图片判读能力的会话，或让员工按页图人工核对后登记未核"),
+            "marked": marked})
+        return ocr_runtime.EXIT_CAPABILITY_GAP
 
     raw = args.input.strip()
     if raw == "" or os.path.isabs(raw) or ".." in raw.replace("\\", "/").split("/"):
@@ -152,6 +263,9 @@ def main(argv=None) -> int:
         return ocr_runtime.EXIT_USAGE
 
     pages = {page["page"]: page for page in source.get("pages", []) if isinstance(page, dict)}
+    recognition_path = os.path.join(case_dir, "ocr", "recognition", source["sourceId"] + ".json")
+    previous = ocr_runtime.read_json(recognition_path, {}) or {}
+    merged = {page.get("page"): page for page in previous.get("pages", []) if isinstance(page, dict)}
     entries = normalise_pages(payload)
     if not entries:
         ocr_runtime.emit(ocr_runtime.fail("input", "识别结果里没有 pages"))
@@ -183,11 +297,18 @@ def main(argv=None) -> int:
         record["imageSha256"] = actual
         record["inputPath"] = raw
         record["recordedAt"] = now()
+        prior = merged.get(page_no) or {}
+        reads = list(prior.get("reads") or [])
+        reads.append({"n": len(reads) + 1,
+                      "renderN": len(target.get("renders") or []) or 1,
+                      "status": entry["status"],
+                      "recordedAt": record["recordedAt"]})
+        record["reads"] = reads
+        record["recognizer"] = recognizer
+        record["conflicts"] = merge_conflicts(prior, record)
+        record["recognitionStatus"] = "conflict" if record["conflicts"] else entry["status"]
         checked.append(record)
 
-    recognition_path = os.path.join(case_dir, "ocr", "recognition", source["sourceId"] + ".json")
-    previous = ocr_runtime.read_json(recognition_path, {}) or {}
-    merged = {page.get("page"): page for page in previous.get("pages", []) if isinstance(page, dict)}
     for record in checked:
         merged[record["page"]] = record
     recognition = {
@@ -199,12 +320,25 @@ def main(argv=None) -> int:
     }
     ocr_runtime.write_json_atomic(recognition_path, recognition)
 
-    status_by_page = {record["page"]: record["status"] for record in checked}
+    status_by_page = {record["page"]: record["recognitionStatus"] for record in checked}
     for page in source.get("pages", []):
         page_no = page.get("page")
         if page_no in status_by_page:
-            page["visualStatus"] = "unreadable" if status_by_page[page_no] == "unreadable" else "done"
-            page["recognitionStatus"] = status_by_page[page_no]
+            status = status_by_page[page_no]
+            page["visualStatus"] = "unreadable" if status == "unreadable" else "done"
+            page["recognitionStatus"] = status
+            page["pendingReason"] = ""
+
+    budget = index.get("budget") or {}
+    remaining = max(0, int(budget.get("maxDoubleReads") or 0) - int(budget.get("doubleReads") or 0))
+    candidates = []
+    for record in checked:
+        page = pages.get(record["page"])
+        if page is not None:
+            item = escalate_for(page, record, index)
+            if item is not None:
+                candidates.append(item)
+    escalate = select_escalations(candidates, remaining)
 
     coverage = recompute(index)
     index["generatedAt"] = index.get("generatedAt") or now()
@@ -225,6 +359,7 @@ def main(argv=None) -> int:
         "recognitionPath": ocr_runtime.relpath(case_dir, recognition_path),
         "coverage": coverage,
         "pending": pending,
+        "escalate": escalate,
     })
     return ocr_runtime.EXIT_OK
 

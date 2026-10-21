@@ -24,6 +24,7 @@ import platform as host_platform
 import re
 import shutil
 import sys
+import unicodedata
 import zipfile
 
 SCHEMA_VERSION = 1
@@ -100,6 +101,76 @@ def fail(error_kind: str, message: str, **extra) -> dict:
 def relpath(case_dir: str, path: str) -> str:
     """Case-relative POSIX path; never leak an absolute host path into records."""
     return os.path.relpath(path, case_dir).replace(os.sep, "/")
+
+
+def normalize_text(value: str) -> str:
+    """NFKC plus whitespace removal: layout changes must not break quote matching."""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value or ""))
+
+
+SESSION_MAX_WIDTH = 1721  # measured 2026-10-21: the session normalizes page images to this width
+
+
+def resolution_note(max_width: int) -> str:
+    """Warn when the largest render exceeds the width the session actually reads."""
+    if max_width <= SESSION_MAX_WIDTH:
+        return ""
+    return ("会话侧有效宽度约 %d px；本次最大页图宽 %d px，超出部分不增加信息量"
+            % (SESSION_MAX_WIDTH, max_width))
+
+
+def quote_in_text(text: str, quote: str) -> bool:
+    """True when the quote is a verbatim fragment of the page text (ignoring layout)."""
+    normalized = normalize_text(quote)
+    if normalized == "":
+        return False
+    return normalized in normalize_text(text)
+
+
+def normalize_value(raw: str) -> str:
+    """Normalize a figure for comparison; separators and currency symbols never matter."""
+    text = unicodedata.normalize("NFKC", raw or "")
+    text = re.sub(r"\s+", "", text)
+    text = text.replace(",", "")
+    for symbol in "￥¥$元":
+        text = text.replace(symbol, "")
+    return text
+
+
+def value_in_quote(value: str, quote: str) -> bool:
+    """True when the normalized value appears inside the normalized quote."""
+    normalized = normalize_value(value)
+    return normalized != "" and normalized in normalize_value(quote)
+
+
+def parse_page_selection(spec: str) -> set[int]:
+    """Parse ``1,3-5`` into page numbers; reject empty, zero, reversed or non-numeric parts."""
+    raw = (spec or "").strip()
+    if raw == "":
+        raise ValueError("页号列表为空")
+    pages: set[int] = set()
+    for chunk in raw.split(","):
+        item = chunk.strip()
+        if item == "":
+            raise ValueError("页号列表含空段：%s" % spec)
+        if "-" in item:
+            start_text, _, end_text = item.partition("-")
+            try:
+                start, end = int(start_text), int(end_text)
+            except ValueError:
+                raise ValueError("页号区间不是数字：%s" % item)
+            if start < 1 or end < start:
+                raise ValueError("页号区间不合法：%s" % item)
+            pages.update(range(start, end + 1))
+        else:
+            try:
+                page = int(item)
+            except ValueError:
+                raise ValueError("页号不是数字：%s" % item)
+            if page < 1:
+                raise ValueError("页号必须从 1 开始：%s" % item)
+            pages.add(page)
+    return pages
 
 
 def safe_join(root: str, *parts: str) -> str:

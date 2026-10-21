@@ -167,5 +167,29 @@ class ShippedManifestTest(unittest.TestCase):
         self.assertIn("Pillow", manifest.get("runtimeProvided", {}))
 
 
+class NormalizeTest(unittest.TestCase):
+    def test_quote_matches_across_line_breaks(self):
+        text = "评估值：人民币\n12,345,678.00 元"
+        self.assertTrue(ocr_runtime.quote_in_text(text, "评估值：人民币 12,345,678.00 元"))
+
+    def test_quote_rejects_single_character_change(self):
+        text = "评估值：人民币 12,345,678.00 元"
+        self.assertFalse(ocr_runtime.quote_in_text(text, "评估值：人民币 12,345,687.00 元"))
+
+    def test_value_normalization_ignores_separators(self):
+        self.assertEqual("12345678.00", ocr_runtime.normalize_value(" ￥12,345,678.00 元 "))
+
+    def test_value_in_quote(self):
+        quote = "评估值：人民币 12,345,678.00 元"
+        self.assertTrue(ocr_runtime.value_in_quote("12345678.00", quote))
+        self.assertFalse(ocr_runtime.value_in_quote("12345687.00", quote))
+
+    def test_parse_page_selection(self):
+        self.assertEqual({1, 3, 4, 5}, ocr_runtime.parse_page_selection("1,3-5"))
+        for bad in ("", "0", "5-3", "x", "1,,2"):
+            with self.assertRaises(ValueError):
+                ocr_runtime.parse_page_selection(bad)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

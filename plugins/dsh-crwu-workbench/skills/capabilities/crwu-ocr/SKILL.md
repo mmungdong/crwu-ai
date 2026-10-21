@@ -36,7 +36,7 @@ description: Use when audit materials include PDFs, scans, or images whose pages
 | 路径 | 内容 |
 | --- | --- |
 | `ocr/index.json` | 来源清单、逐页页图路径/指纹、文本层、视觉判读要求与状态、覆盖统计 |
-| `ocr/pages/<sourceId>/<stem>_pageNNNN.png` | 整页图，默认 144 DPI，页号从 1 起 |
+| `ocr/pages/<sourceId>/<stem>_pageNNNN.png` | 整页图，基准 144 DPI（高风险页 200，变体带 `@<dpi>`），页号从 1 起 |
 | `ocr/text/<sourceId>/pageNNNN.txt` | 该页文本层（存在时） |
 | `ocr/recognition/<sourceId>.json` | 逐页识别记录，绑定页图 sha256 |
 | `ocr/merged/<sourceId>.txt` | **按页序合并的连贯文本**（`--split-pages N` 时为 `…partNN.txt`） |
@@ -52,22 +52,31 @@ description: Use when audit materials include PDFs, scans, or images whose pages
 1. **准备与索引**
    `script=ocr-skill/scripts/ocr_prepare.py`，参数 `--case <案例目录>`；
    需要复核件时加 `--src 复核-人工`。输出 `ocr/index.json` 与逐页摘要。
-   默认 `--visual auto`（无文本层/文本过短/乱码的页要求判读）。
+   默认 `--visual auto`（无文本层/文本过短/乱码的页要求判读）；`--policy fast|auto|quality`
+   决定首轮 DPI，`--budget N` 限制双读次数（`0` = 不做双读）。
    **只处理清单里的文件**时加 `--only <案例内相对路径>`（可重复，如 `--only 材料-源/报告.pdf`）：
    未列出的既有来源保持原样，不为它们重渲染；`--only` 与 `--reset`、`--src` 不能同用。
 2. **按索引逐页判读**：只读 `index.json` 里 `image` 指向的页图（`DSH read_image`），
    **不要**直接读原始 PDF 或未导出图片。对每页记录：原文文字、表格、可见要素、
-   不确定项、方向与状态。需要补判印章/签名/勾选/版式的页，先以
+   不确定项、方向与状态；金额、面积、日期、证号等关键字段再写成 `keyValues`
+   （`value` 必须能在本页 `text` 的逐字 `quote` 里找到）。
+   需要补判印章/签名/勾选/版式的页，先以
    `--visual pages:1,3-5` 重跑准备，再读对应页图。
 3. **记录识别结果**（每批一次，不要只在脑子里过）：
    把本批结果写成案例内 JSON（例如 `ocr/recognition-input.json`），字段见
    [03-recognition-record.md](references/03-recognition-record.md)，然后
    `script=ocr-skill/scripts/ocr_record.py`，参数 `--case <案例目录> --input <案例内 JSON>`。
-   记录会校验页号与页图指纹；图变了就必须重读，不能沿用旧结果。
+   记录会校验页号、页图指纹与 `keyValues` 的 quote；图变了就必须重读，不能沿用旧结果。
+   返回 `escalate[]` 时，按建议用 `ocr_prepare.py --re-render pages:<页号> --dpi <更高>`（不给 `--dpi` 时自动取更高一档）
+   （`--mode tile` 用于表格页）重渲再读一遍；预算耗尽时不再升级。
+   两次判读给出不同值时，记录会把该页标成 `conflict`——**不要在两值之间挑一个**。
+   宿主没有视觉能力时，改用 `ocr_record.py --case <案例目录> --vision-unavailable`，
+   把待判读页全部标为未判读并整类停止，不要逐页重试。
 4. **合并成连贯文本**（页数多也必须能顺读）：
    `script=ocr-skill/scripts/ocr_merge.py --case <案例目录>`（可选 `--source <sourceId>`、
    `--split-pages N`），产出 `ocr/merged/<sourceId>.txt`：按页序拼接，每页一行页头
    `===== 第 N 页 | 来源: 页图判读|文本层|未判读 | sha256: <前12位> | 状态: … =====`，
+   旋转扫描页的页头另有 `| 方向: rotated-90`；
    未判读的页写成 `[第 N 页 未判读：<原因>]` 占位（**绝不写空行**）。
    默认一份到底，不建议分卷；确需分卷才用 `--split-pages N`。
 5. **核对覆盖**：`script=ocr-skill/scripts/ocr_status.py --case <案例目录>`。
@@ -77,6 +86,9 @@ description: Use when audit materials include PDFs, scans, or images whose pages
 ## 硬规则
 
 - **渲染 ≠ 识别**：页图生成、文本层提取都只是准备；没有 `record` 的页仍是 `pending`。
+- **冲突不选值**：两次判读不一致就是 `conflict`，只能人工确认或登记未核，不许脚本"挑一个"。
+- **预算只停双读**：`budget.exhausted=true` 表示没做第二遍，不表示页面没读；`actions[]` 按实际 `reads` 说话。
+- **有效分辨率有上限**：会话读图约 1721 px 宽，超过该宽度的 DPI 只增磁盘不增信息；`--re-render` 计入双读预算，非必要不重渲（重渲会让该页记录失效）。
 - **不能因为有文本层就跳过必要视觉核验**：印章、签名、勾选、横竖版式、表格结构必须看页图。
 - **未核 ≠ 缺失，也 ≠ 通过**：图片读不出、页图损坏、模型无图片能力时，只能登记未核与原因。
 - **单页失败继续**：某页渲染/读取失败时保留该页与页号，继续其余材料；依赖该页的检查项标未核。
