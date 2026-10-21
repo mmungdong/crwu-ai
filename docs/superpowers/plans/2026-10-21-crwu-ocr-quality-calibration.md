@@ -318,14 +318,14 @@ Run: `make plugin-ocr-check`；`git diff --check`。不提交。
 - Modify: `skills/capabilities/crwu-ocr/references/01-execution-contract.md`（`--force-budget`、重渲预算、`SESSION_MAX_WIDTH`）
 - Modify: `skills/capabilities/crwu-ocr/references/03-recognition-record.md`（`escalate[].priority`）
 - Modify: `skills/capabilities/crwu-ocr/schemas/ocr-index.schema.json`（`budget.exceededBy`）
-- Modify: `plugins/dsh-crwu-workbench/CHANGELOG.md`、`package.json`、`VERSION`、`src/host/consts.ts`（版本 0.0.52）
+- Modify: `plugins/dsh-crwu-workbench/CHANGELOG.md`、`package.json`、`VERSION`、`src/host/consts.ts`（发布号 0.0.43）
 
 **Interfaces:**
 - Consumes: Task 1–5 的最终 CLI 与字段名。
 
 - [ ] **Step 1: 升版本**
 
-Run: `make plugin-version-set PLUGIN_RELEASE_VERSION=0.0.52`
+Run: `make plugin-version-set PLUGIN_RELEASE_VERSION=0.0.43`
 Expected: 四处版本一致。
 
 - [ ] **Step 2: 更新文档与 Schema**
@@ -334,7 +334,7 @@ Expected: 四处版本一致。
 
 - [ ] **Step 3: 补 CHANGELOG 小节**
 
-`## package · 0.0.52 · 2026-10-21 · fix · OCR 实测校准`，逐条对应 §14.2 的 6 项。
+`## package · 0.0.43 · 2026-10-21 · fix · OCR 实测校准`，逐条对应 §14.2 的 6 项。
 
 - [ ] **Step 4: 运行门禁**
 
