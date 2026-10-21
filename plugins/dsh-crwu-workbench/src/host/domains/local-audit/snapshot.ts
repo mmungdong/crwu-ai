@@ -73,6 +73,13 @@ export interface SnapshotFile {
   relativePath: string
   name: string
   sizeBytes: number
+  /**
+   * 落点被改名时记录**原始**相对路径。
+   *
+   * 单选文件时 `relativePath` 只有末段名，`/案件A/报告.pdf` 与 `/案件B/报告.pdf` 会拼成
+   * 同一个落点；直接覆盖的后果是清单记两条、快照里只有一份，而"少的那份"没有任何记录。
+   */
+  renamedFrom?: string
 }
 
 export interface SnapshotOutcome {
@@ -121,18 +128,21 @@ export async function prepareSnapshot(
       error: `无法创建本地审核临时目录：${reasonOf(error)}`,
     }
   }
+  const taken = new Set<string>()
   for (const candidate of candidates) {
     // 相对路径是按 `/` 拼的展示路径；`joinLocalPath` 按案例目录风格重拼，并拒绝绝对片段与 `..`。
-    const parts = candidate.relativePath.split('/').filter((part) => part !== '')
+    const wanted = uniqueTarget(candidate.relativePath, taken)
+    const parts = wanted.split('/').filter((part) => part !== '')
     const target = joinLocalPath(casePath, LOCAL_AUDIT_SOURCE_DIR, ...parts)
     const targetDir = joinLocalPath(casePath, LOCAL_AUDIT_SOURCE_DIR, ...parts.slice(0, -1))
     try {
       await io.makeDir(targetDir)
       await io.copyFile(candidate.sourcePath, target)
       files.push({
-        relativePath: `${LOCAL_AUDIT_SOURCE_DIR}/${candidate.relativePath}`,
+        relativePath: `${LOCAL_AUDIT_SOURCE_DIR}/${wanted}`,
         name: candidate.name,
         sizeBytes: candidate.sizeBytes,
+        ...(wanted === candidate.relativePath ? {} : { renamedFrom: candidate.relativePath }),
       })
     } catch (error) {
       void error
@@ -158,7 +168,12 @@ export async function prepareSnapshot(
     mode: 'local',
     fileCount: files.length,
     skippedCount: skipped.length,
-    files: files.map((item) => ({ name: item.name, relativePath: item.relativePath, sizeBytes: item.sizeBytes })),
+    files: files.map((item) => ({
+      name: item.name,
+      relativePath: item.relativePath,
+      sizeBytes: item.sizeBytes,
+      ...(item.renamedFrom === undefined ? {} : { renamedFrom: item.renamedFrom }),
+    })),
     skipped: skipped.map((item) => ({ name: item.name, relativePath: item.relativePath, reason: item.reason })),
   }
   const meta = {
@@ -182,6 +197,31 @@ export async function prepareSnapshot(
     }
   }
   return { ok: true, error: '', errorKind: '', casePath, files, skipped, digest }
+}
+
+/**
+ * 给这份文件的落点取一个**未被占用**的相对路径。
+ *
+ * 顺序即选择顺序：先到的保留原名，后到的按系统习惯加 ` (2)`、` (3)`。只在落点重名时改，
+ * 正常路径的产物因此逐字节不变。
+ */
+function uniqueTarget(relative: string, taken: Set<string>): string {
+  if (!taken.has(relative)) {
+    taken.add(relative)
+    return relative
+  }
+  const dot = relative.lastIndexOf('.')
+  const slash = relative.lastIndexOf('/')
+  const hasExtension = dot > slash && dot !== relative.length - 1
+  const stem = hasExtension ? relative.slice(0, dot) : relative
+  const extension = hasExtension ? relative.slice(dot) : ''
+  for (let index = 2; ; index += 1) {
+    const next = `${stem} (${String(index)})${extension}`
+    if (!taken.has(next)) {
+      taken.add(next)
+      return next
+    }
+  }
 }
 
 /**

@@ -151,6 +151,12 @@ export function createWorkspaceCleanupService(deps: WorkspaceCleanupServiceDeps)
         return failedResult('清理清单在确认期间发生了变化，请重新扫描后再确认', 'input')
       }
 
+      // 重扫与拉会话列表之间有数十秒：授权在这段时间里被撤回，就不能再进入删除。
+      const stillAllowed = authorize()
+      if (!stillAllowed.ok) {
+        return failedResult(`本机访问授权已撤回，未删除任何内容：${stillAllowed.error}`, 'policy')
+      }
+
       if (!store.acquire()) return failedResult('已有一次清理正在执行', 'conflict')
       deps.access.note(
         { operation: 'system.workspace-cleanup', source: 'panel' },
@@ -163,6 +169,7 @@ export function createWorkspaceCleanupService(deps: WorkspaceCleanupServiceDeps)
         closeWorkflowStores: deps.closeWorkflowStores,
         clearAudits: deps.clearAudits,
         persistAudits: deps.persistAudits,
+        reauthorize: authorize,
         now: deps.now ?? (() => Date.now()),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       }

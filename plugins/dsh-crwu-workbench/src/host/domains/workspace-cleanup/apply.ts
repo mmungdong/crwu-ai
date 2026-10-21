@@ -1,4 +1,4 @@
-import { joinLocalPath } from '../../../shared/utils/local-path.ts'
+import { joinLocalPath, trimTrailingSeparators } from '../../../shared/utils/local-path.ts'
 import type {
   WorkspaceCleanupFailure, WorkspaceCleanupResult,
 } from '../../../shared/contracts/workspace-cleanup.ts'
@@ -23,6 +23,11 @@ export interface ApplyDeps extends SessionRunDeps {
   closeWorkflowStores(workspacePath: string): Promise<void>
   clearAudits(): void
   persistAudits(): Promise<boolean>
+  /**
+   * 授权复核。扫描与归档加起来可能有数十秒，授权在这段时间里被撤回必须能挡住删除：
+   * 只在确认之前判一次，等于让撤回对不可逆动作无效。
+   */
+  reauthorize(): { ok: boolean; error: string }
 }
 
 export async function applyCleanup(
@@ -40,9 +45,17 @@ export async function applyCleanup(
     result.failures.push(...archive.failures)
     result.stuckSessionIds = archive.stuckSessionIds
     // 中止也要说真话：一条都没删，`remaining` 就是 W 现在的真实样子。
-    const left = await readRemaining(deps, plan)
-    result.remaining = left.length
-    result.remainingNames = left.slice(0, WORKSPACE_CLEANUP_REMAINING_NAME_LIMIT)
+    recordReadback(result, await readRemaining(deps, plan))
+    return result
+  }
+
+  // 归档是本轮最长的一段等待。授权在确认之后被撤回时，一条都不许删。
+  const allowed = deps.reauthorize()
+  if (!allowed.ok) {
+    result.status = 'aborted'
+    result.error = `本机访问授权已撤回，未删除任何内容：${allowed.error}`
+    result.errorKind = 'policy'
+    recordReadback(result, await readRemaining(deps, plan))
     return result
   }
 
@@ -62,6 +75,13 @@ export async function applyCleanup(
   }
 
   for (const entry of plan.entries) {
+    // 确认到动手之间的空档里，祖先目录可能被改名并换成指向别处的软链：
+    // 每次删除前重新核对真实路径，变了就整体停手，绝不跟着新路径删下去。
+    const changed = await workspaceRealPathChanged(deps, plan)
+    if (changed !== '') {
+      result.failures.push({ name: entry.name, kind: 'entry', reason: changed })
+      break
+    }
     const path = joinLocalPath(plan.identity.realPath, entry.name)
     if (!isDirectChild(plan.identity.realPath, path)) {
       result.failures.push({ name: entry.name, kind: 'entry', reason: '不是工作空间的直接子项' })
@@ -106,21 +126,51 @@ export async function applyCleanup(
     result.failures.push({ name: '审核历史', kind: 'state', reason: reasonOf(error) })
   }
 
-  const remaining = await readRemaining(deps, plan)
-  result.remaining = remaining.length
-  result.remainingNames = remaining.slice(0, WORKSPACE_CLEANUP_REMAINING_NAME_LIMIT)
+  recordReadback(result, await readRemaining(deps, plan))
   result.status = result.failures.length === 0 && result.remaining === 0 ? 'completed' : 'partial'
   result.ok = result.status === 'completed'
   return result
 }
 
-async function readRemaining(deps: ApplyDeps, plan: CleanupPlan): Promise<string[]> {
+async function readRemaining(deps: ApplyDeps, plan: CleanupPlan): Promise<{ names: string[]; error: string }> {
   try {
     const names = (await deps.io.readdir(plan.identity.realPath)).map((dirent) => dirent.name)
-    return names.sort()
-  } catch {
-    // 回读失败不改变"删了什么"的结论；调用方按 0 剩余处理会误导，所以记在 notes 里。
-    return []
+    return { names: names.sort(), error: '' }
+  } catch (error) {
+    // 回读失败不是"剩余为 0"：读不到就说不出来，绝不能据此宣布清空成功。
+    return { names: [], error: reasonOf(error) }
+  }
+}
+
+/**
+ * 把回读结果写进结论。失败的**必须**登记成 failure —— 只有 `failures` 与 `remaining`
+ * 一起为空才会被判定为 `completed`，所以"零剩余"不能由一次读失败伪造出来。
+ */
+function recordReadback(result: WorkspaceCleanupResult, left: { names: string[]; error: string }): void {
+  result.remaining = left.names.length
+  result.remainingNames = left.names.slice(0, WORKSPACE_CLEANUP_REMAINING_NAME_LIMIT)
+  if (left.error === '') return
+  result.failures.push({
+    name: '剩余回读', kind: 'state', reason: `删除后无法回读工作空间：${left.error}`,
+  })
+  result.notes.push('剩余数量未知：回读失败，不能当作已清空')
+}
+
+/**
+ * 工作空间的真实路径是否还是确认时的那一个。
+ *
+ * 只做 realpath：确认时已经用 realpath 建立了身份，执行时再取一次就是判据 ——
+ * 祖先被换成软链时这里会指向别处，目录被改名移走时这里会抛 ENOENT，两种都停手。
+ * 检查到 `unlink` 之间仍有极短的空档，Node 没有 `unlinkat`，做不到完全免疫；
+ * 这里保证的是"换链之后一个都不再删"。
+ */
+async function workspaceRealPathChanged(deps: ApplyDeps, plan: CleanupPlan): Promise<string> {
+  try {
+    const real = trimTrailingSeparators(await deps.io.realpath(plan.identity.realPath))
+    if (real === plan.identity.realPath) return ''
+    return `工作空间真实路径已变为 ${real}：确认期间目录被替换，已停止删除`
+  } catch (error) {
+    return `无法复核工作空间真实路径，已停止删除：${reasonOf(error)}`
   }
 }
 

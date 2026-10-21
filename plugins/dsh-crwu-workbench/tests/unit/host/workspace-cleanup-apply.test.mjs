@@ -31,6 +31,7 @@ function harness(options = {}) {
     async closeWorkflowStores(path) { calls.push(`close ${path}`) },
     clearAudits() { calls.push('clearAudits') },
     async persistAudits() { calls.push('persistAudits'); return true },
+    reauthorize: () => ({ ok: true, error: '' }),
     now: () => 0,
     sleep: async () => {},
     waitMs: 5,
@@ -106,4 +107,62 @@ test('状态写盘失败 → partial，不报 completed', async () => {
   const out = await applyCleanup(deps, { plan: plan([]), deleteSessionLogs: false })
   assert.equal(out.status, 'partial')
   assert.equal(out.failures.some((failure) => failure.kind === 'state'), true)
+})
+
+test('归档期间授权被撤回 → aborted，零删除', async () => {
+  const { deps, calls } = harness({ rows: [{
+    sessionId: 's1', cwd: '/w', running: false, agentAvailable: true,
+    parentSessionId: '', updatedAt: 1, title: 's1',
+  }] })
+  let allowed = true
+  deps.reauthorize = () => (allowed ? { ok: true, error: '' } : { ok: false, error: '授权已撤回' })
+  const originalArchive = deps.port.archive
+  // 归档是确认之后最长的一段等待：撤回就发生在这段时间里。
+  deps.port.archive = async (input) => { allowed = false; return originalArchive(input) }
+
+  const out = await applyCleanup(deps, {
+    plan: { ...plan([{ name: 'a', kind: 'directory', sizeBytes: 1, mtimeMs: 1 }]),
+      sessions: [{ sessionId: 's1', title: 's1', running: false, agentAvailable: true,
+        parentSessionId: '', updatedAt: 1 }] },
+    deleteSessionLogs: false,
+  })
+  assert.equal(out.status, 'aborted')
+  assert.equal(out.errorKind, 'policy')
+  assert.deepEqual(calls.filter((line) => line.startsWith('removeTree')), [])
+})
+
+test('删除途中工作空间真实路径变了 → 立即停止，剩余条目一律不删', async () => {
+  const { deps, io } = harness({ nodes: [
+    { path: '/w/a', kind: 'dir' }, { path: '/w/b', kind: 'dir' },
+  ] })
+  let flipped = false
+  const originalRealpath = io.realpath
+  const originalRemove = io.removeTree
+  io.realpath = async (path) => (flipped && path === '/w' ? '/elsewhere' : originalRealpath(path))
+  io.removeTree = async (path) => { flipped = true; return originalRemove(path) }
+
+  const out = await applyCleanup(deps, {
+    plan: plan([
+      { name: 'a', kind: 'directory', sizeBytes: 1, mtimeMs: 1 },
+      { name: 'b', kind: 'directory', sizeBytes: 1, mtimeMs: 1 },
+    ]),
+    deleteSessionLogs: false,
+  })
+  assert.equal(out.status, 'partial')
+  assert.equal(out.deleted.folders, 1, '第一项是在换链之前删的')
+  assert.deepEqual(out.remainingNames, ['b'], '换链之后必须停手，不能跟着新路径删下去')
+  assert.equal(out.failures.some((failure) => /真实路径/.test(failure.reason)), true)
+})
+
+test('删除后回读失败 → partial，不能报 completed', async () => {
+  const { deps, io } = harness()
+  io.readdir = async () => { throw new Error('EACCES') }
+
+  const out = await applyCleanup(deps, {
+    plan: plan([{ name: 'a', kind: 'directory', sizeBytes: 1, mtimeMs: 1 }]),
+    deleteSessionLogs: false,
+  })
+  assert.notEqual(out.status, 'completed')
+  assert.equal(out.ok, false, '读不到剩余项就不能宣布清空成功')
+  assert.equal(out.failures.length > 0, true, '回读失败必须登记，不能悄悄当成 0 剩余')
 })

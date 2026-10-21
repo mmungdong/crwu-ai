@@ -47,6 +47,25 @@ test('拒绝文件系统根、主目录与 ~/.dsh（含祖先与内部）', asyn
   }
 })
 
+test('主目录是符号链接时，真实主目录、其祖先与 ~/.dsh 仍被拒绝', async () => {
+  // macOS 常见形态：/Users/x 是指向 /Volumes/Data/x 的软链。只比原串时，
+  // 真实路径那一侧的判据全部失配 —— 二次确认后删的是真实主目录。
+  const deps = depsOf({
+    '/Volumes/Data': 'dir',
+    '/Volumes/Data/x': 'dir',
+    '/Volumes/Data/x/.dsh': 'dir',
+    '/Volumes/Data/x/work': 'dir',
+    'real:/Users/x': '/Volumes/Data/x',
+  })
+  for (const path of ['/Volumes/Data/x', '/Volumes/Data', '/Volumes/Data/x/.dsh']) {
+    const out = await guardWorkspace({ ...input(path, HOME, deps) })
+    assert.equal(out.ok, false, `${path} 必须被拒（主目录真实路径是 /Volumes/Data/x）`)
+  }
+  // 反例：主目录内部的工作空间是正常用法，不能被这道判据连坐。
+  const inside = await guardWorkspace({ ...input('/Volumes/Data/x/work', HOME, deps) })
+  assert.equal(inside.ok, true, '主目录内的工作空间必须仍可清理')
+})
+
 test('Windows 盘符根、UNC 共享根与主目录祖先也被拒', async () => {
   assert.equal(isFilesystemRoot('C:\\'), true)
   assert.equal(isFilesystemRoot('C:'), true)

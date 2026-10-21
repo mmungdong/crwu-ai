@@ -18,7 +18,7 @@ import type { WorkspaceIdentity } from './types.ts'
  * 拒绝清单（任何一条成立就整体拒绝）：
  * - 不是绝对路径 / 不存在 / 不是目录 / `realpath` 失败；
  * - 文件系统根（`/`、`C:`、`C:\`、UNC 共享根）；
- * - 主目录本身，或是主目录的祖先；
+ * - 主目录本身，或是主目录的祖先（主目录与候选都按**真实路径**比，软链不放过）；
  * - `~/.dsh` 本身、它的祖先、以及它内部的任何目录（插件状态与会话日志都在里面）；
  * - 是插件状态文件 `~/.dsh/crwu-workbench.json` 的祖先。
  */
@@ -109,16 +109,32 @@ export async function guardWorkspace(input: GuardInput): Promise<GuardOutcome> {
 
   const home = trimTrailingSeparators(input.home)
   if (home !== '') {
-    if (isLocalPathUnder(home, real)) {
-      return { ok: false, error: '拒绝清理主目录或主目录的祖先' }
+    /**
+     * 主目录也必须换成真实路径再比：`/Users/x` 常常是指向 `/Volumes/Data/x` 的软链，
+     * 只比原串时，真实路径那一侧的主目录、它的祖先、`~/.dsh` 全部失配 —— 二次确认后
+     * 删掉的就是真实主目录。解析不出来时**拒绝**，不退回字符串比较。
+     */
+    let homeReal: string
+    try {
+      homeReal = trimTrailingSeparators(await input.deps.realpath(home))
+    } catch (error) {
+      return { ok: false, error: `无法解析主目录的真实路径，拒绝清理：${reasonOf(error)}` }
     }
-    const dshHome = joinLocalPath(home, '.dsh')
-    if (isLocalPathUnder(real, dshHome) || isLocalPathUnder(dshHome, real)) {
-      return { ok: false, error: '拒绝清理 DSH 主目录（~/.dsh）本身、其祖先或内部目录' }
+    if (homeReal === '' || !isAbsoluteLocalPath(homeReal)) {
+      return { ok: false, error: '主目录的真实路径不可用，拒绝清理' }
     }
-    const statePath = joinLocalPath(dshHome, 'crwu-workbench.json')
-    if (isLocalPathUnder(statePath, real)) {
-      return { ok: false, error: '拒绝清理包含插件状态文件的工作空间' }
+    for (const base of new Set([home, homeReal])) {
+      if (isLocalPathUnder(base, real)) {
+        return { ok: false, error: '拒绝清理主目录或主目录的祖先' }
+      }
+      const dshHome = joinLocalPath(base, '.dsh')
+      if (isLocalPathUnder(real, dshHome) || isLocalPathUnder(dshHome, real)) {
+        return { ok: false, error: '拒绝清理 DSH 主目录（~/.dsh）本身、其祖先或内部目录' }
+      }
+      const statePath = joinLocalPath(dshHome, 'crwu-workbench.json')
+      if (isLocalPathUnder(statePath, real)) {
+        return { ok: false, error: '拒绝清理包含插件状态文件的工作空间' }
+      }
     }
   }
 

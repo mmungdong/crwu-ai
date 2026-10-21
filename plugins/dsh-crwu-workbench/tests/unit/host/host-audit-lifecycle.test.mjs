@@ -2030,3 +2030,36 @@ test('assessAudit 在 Windows 案例根下用 `\\` 拼 key 候选', async () => 
   assert.equal(result.casePath, winCase)
   assert.equal(result.resultFile, '审核结果.key-1.json')
 })
+
+test('并发发起：进程内锁必须在第一个 await 之前抢占，否则会起两条子会话', async () => {
+  // 检查与赋值之间只要有一个 await，两个并发 audit-start 就会同时通过检查：
+  // 后一条覆盖 `state.audits[key]` 与 `activeChildId`，先启动的子代理面板再也停不掉。
+  let starts = 0
+  const { deps, state } = startDeps({
+    ctx: makeCtx({
+      dirs: ['/cases/space'],
+      agents: agentsServingChild(),
+      subagents: {
+        list: () => ['spawn'],
+        async listChildren() { return [] },
+        async start(_provider, request) {
+          starts += 1
+          return { id: `child-${starts}`, provider: 'spawn', dispose: async () => {}, request }
+        },
+      },
+      sessions: { get: (id) => (id === 'parent-1' ? { header: { delegationDepth: 0, cwd: '/cases/space' } } : undefined) },
+    }),
+  })
+  const results = await Promise.all([
+    auditStart(deps, { key: 'k1', seqNo: 'S1', objectId: 'o1' }),
+    auditStart(deps, { key: 'k1', seqNo: 'S1', objectId: 'o1' }),
+  ])
+  const accepted = results.filter((item) => item.ok)
+  assert.equal(accepted.length, 1, '并发两次发起只允许成功一条')
+  assert.equal(Object.keys(state.audits).length, 1, '状态里只能有一条审核记录')
+  assert.match(
+    results.find((item) => !item.ok)?.error ?? '',
+    /正在创建审核子会话|请勿重复提交/,
+  )
+  assert.equal(state.startingKey, '', '抢占必须在结束时放掉，否则再也发不起来')
+})

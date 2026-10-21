@@ -23,7 +23,8 @@ function service(options = {}) {
     setWorkspace: (next) => { current = next },
     service: createWorkspaceCleanupService({
       access: {
-        authorize: () => options.denied === true ? { ok: false, error: '未授权' } : { ok: true },
+        authorize: options.authorize
+          ?? (() => (options.denied === true ? { ok: false, error: '未授权' } : { ok: true })),
         note: () => {},
       },
       resolveWorkspace: async () => options.resolve ?? { ok: true, workspace: current },
@@ -92,6 +93,23 @@ test('确认期间工作空间被换掉 → conflict，零删除', async () => {
   const out = await svc.apply({ planId: plan.planId, digest: plan.digest,
     confirmName: 'w', deleteSessionLogs: false })
   assert.equal(out.errorKind, 'conflict')
+  assert.deepEqual(io.calls.filter((line) => line.startsWith('removeTree')), [])
+})
+
+test('重扫期间授权被撤回 → policy，零删除', async () => {
+  // 第一次 authorize 在 plan，第二次在 apply 开头，第三次在重扫之后（新加的那一次）。
+  let calls = 0
+  const { service: svc, io } = service({
+    authorize: () => {
+      calls += 1
+      return calls >= 3 ? { ok: false, error: '授权已撤回' } : { ok: true }
+    },
+  })
+  const plan = await svc.plan()
+  const out = await svc.apply({ planId: plan.planId, digest: plan.digest,
+    confirmName: 'w', deleteSessionLogs: false })
+  assert.equal(out.errorKind, 'policy')
+  assert.equal(calls >= 3, true, '删除前必须再判一次授权')
   assert.deepEqual(io.calls.filter((line) => line.startsWith('removeTree')), [])
 })
 

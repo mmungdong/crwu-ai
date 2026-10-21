@@ -177,29 +177,33 @@ export async function auditStart(deps: AuditDeps, args: Record<string, unknown>)
     }
   }
 
-  stage = '工作空间'
-  await ensureRegistry({ ctx, home: await deps.world.home(), state, access: deps.access })
-
   const key = auditKeyOf(args)
   if (key === '') return failed('缺少任务标识')
   if (state.startingKey !== '') {
     return failed(`正在创建审核子会话（${state.startingKey}），请勿重复提交。`)
   }
-  // 硬门禁零：没有选定的工作区就不发起（协议 32：判据统一由 `core/workspace-session` 给）。
-  //
-  // 这条不是「体验优化」，是**安全门禁**：审核指令里的案例目录由工作区路径决定，
-  // 为空时指令里根本不会出现「唯一根目录」，子会话的 cwd 又只能继承父会话 ——
-  // 于是审核产物会落到父会话的工作目录里（常常就是源码仓库）。
-  // 本仓反复强调的「绝不采用父会话自己的工作空间」这条规则，缺了这道门禁就等于没有。
-  //
-  // ⚠️ 这里以前是 `state.workspaceChosen` + `workspacePath || caseRoot`：后者是**部署配置**里的
-  // 目录，把"忘了选工作区"变成"审核照样跑，产物写到部署默认目录"。降级已删除。
-  const selectedWorkspace = await resolveSelectedWorkspace(ctx, state)
-  if (!selectedWorkspace.ok) {
-    return failed(selectedWorkspace.error, { errorKind: 'workspace' })
-  }
+  /**
+   * 抢占必须**同步**完成：检查与赋值之间只要有一个 await，两个并发 audit-start 就会同时
+   * 通过检查、各起一条子会话，后一条覆盖 `state.audits[key]` 与 `activeChildId` ——
+   * 先启动的那个子代理面板再也停不掉。
+   */
   state.startingKey = key
   try {
+    stage = '工作空间'
+    await ensureRegistry({ ctx, home: await deps.world.home(), state, access: deps.access })
+    // 硬门禁零：没有选定的工作区就不发起（协议 32：判据统一由 `core/workspace-session` 给）。
+    //
+    // 这条不是「体验优化」，是**安全门禁**：审核指令里的案例目录由工作区路径决定，
+    // 为空时指令里根本不会出现「唯一根目录」，子会话的 cwd 又只能继承父会话 ——
+    // 于是审核产物会落到父会话的工作目录里（常常就是源码仓库）。
+    // 本仓反复强调的「绝不采用父会话自己的工作空间」这条规则，缺了这道门禁就等于没有。
+    //
+    // ⚠️ 这里以前是 `state.workspaceChosen` + `workspacePath || caseRoot`：后者是**部署配置**里的
+    // 目录，把"忘了选工作区"变成"审核照样跑，产物写到部署默认目录"。降级已删除。
+    const selectedWorkspace = await resolveSelectedWorkspace(ctx, state)
+    if (!selectedWorkspace.ok) {
+      return failed(selectedWorkspace.error, { errorKind: 'workspace' })
+    }
     const seqNo = text(args.seqNo)
     const platform = await deps.world.platform()
     const previous = state.audits[key]

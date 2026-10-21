@@ -243,6 +243,29 @@ test('快照：逐件复制到 材料-源/，清单与元数据可回读且 hand
   assert.equal(await readManifest(io, localAuditCaseDir(WORKSPACE, id), 'la-other'), null, 'handoffId 对不上就是没读到')
 })
 
+test('快照：同名文件不得互相覆盖（两份都要真的进快照）', async () => {
+  // 单选文件时 relativePath 只有末段名：/案件A/报告.pdf 与 /案件B/报告.pdf 会拼成同一个落点。
+  // 静默覆盖的后果是清单记两条、实际只有一份，"另一份从未进入快照"且没有任何 skipped 记录。
+  const io = memoryIo()
+  const id = 'la-same'
+  const outcome = await prepareSnapshot(id, [
+    { sourcePath: '/work/案件A/报告.pdf', relativePath: '报告.pdf', name: '报告.pdf', sizeBytes: 10 },
+    { sourcePath: '/work/案件B/报告.pdf', relativePath: '报告.pdf', name: '报告.pdf', sizeBytes: 20 },
+  ], io, { casePath: caseOf(id) })
+  assert.equal(outcome.ok, true)
+  assert.equal(outcome.files.length, 2)
+  const targets = outcome.files.map((item) => item.relativePath)
+  assert.equal(new Set(targets).size, 2, '两条清单必须指向两个不同的落点')
+  const copied = [...io.files.entries()].filter(([key]) => key.includes('/材料-源/'))
+  assert.equal(copied.length, 2, '写入的文件数必须是 2：后一份不能盖掉前一份')
+  assert.deepEqual(copied.map(([, from]) => from).sort(),
+    ['/work/案件A/报告.pdf', '/work/案件B/报告.pdf'])
+  // 改名必须可追溯：清单里要留下原相对路径，模型才不会以为两份都叫"报告.pdf"。
+  const renamed = outcome.files.filter((item) => item.renamedFrom !== undefined)
+  assert.equal(renamed.length, 1)
+  assert.equal(renamed[0].renamedFrom, '报告.pdf')
+})
+
 test('快照：部分文件复制失败仍可继续（跳过原因"快照读取失败"）', async () => {
   const io = memoryIo({ failCopy: ['/work/坏.zip'] })
   const outcome = await prepareSnapshot('la-2', [
