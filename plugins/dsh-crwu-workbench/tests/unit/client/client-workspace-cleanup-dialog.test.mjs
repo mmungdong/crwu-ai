@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { fakeReact, registerTsxLoader } from '../../helpers/tsx-loader.mjs'
+import { find, findAll } from '../../helpers/render.mjs'
 
 registerTsxLoader()
 
@@ -150,4 +151,112 @@ test('done 态展示计数与剩余项', () => {
   const text = textOf(tree)
   assert.match(text, /删除 2 个文件夹、1 个文件/)
   assert.match(text, /仍有 1 项未删除/)
+})
+
+test('confirmation input is associated with its visible directory-name label', () => {
+  const tree = render(WorkspaceCleanupDialog, { state: readyState(), ...handlers })
+  const input = find(tree, (node) => node.type === 'input' && node.props.type === 'text')
+  assert.ok(input?.props.id)
+  const label = find(tree, (node) => node.type === 'label' && node.props.htmlFor === input.props.id)
+  assert.match(textOf(label), /中瑞世联工作空间/)
+})
+
+test('session log option has a concise label and separately associated explanation', () => {
+  const tree = render(WorkspaceCleanupDialog, { state: readyState(), ...handlers })
+  const checkbox = find(tree, (node) => node.type === 'input' && node.props.type === 'checkbox')
+  const label = find(tree, (node) => node.type === 'label' && node.props.htmlFor === checkbox.props.id)
+  assert.equal(textOf(label), '同时彻底删除会话日志')
+  const description = find(tree, (node) => node.props.id === checkbox.props['aria-describedby'])
+  assert.match(textOf(description), /重启 DSH/)
+})
+
+test('recycle-bin warning stays visible while host limitations are in collapsed details', () => {
+  const tree = render(WorkspaceCleanupDialog, {
+    state: readyState({ plan: { ...readyState().plan, notes: ['这条限制来自 Host'] } }), ...handlers,
+  })
+  const details = find(tree, (node) => node.type === 'details')
+  assert.ok(details, 'supplementary limitations can be expanded')
+  assert.notEqual(details.props.open, true)
+  assert.match(textOf(details), /这条限制来自 Host/)
+  const warning = find(tree, (node) => node.props.role === 'note')
+  assert.match(textOf(warning), /不.*回收站/)
+  const keep = find(tree, (node) => node.props['data-crwu-cleanup-keep'] === '1')
+  assert.match(textOf(keep), /本机凭据与授权/)
+  assert.doesNotMatch(textOf(keep), /回收站/)
+})
+
+test('done and error states offer a single close action', () => {
+  for (const phase of ['done', 'error']) {
+    const tree = render(WorkspaceCleanupDialog, { state: readyState({ phase }), ...handlers })
+    const cancel = findAll(tree, (node) => node.type === 'button' && textOf(node) === '取消')
+    assert.equal(cancel.length, 1, `${phase} must not repeat the cancel button`)
+  }
+})
+
+test('Escape closes a ready dialog and cannot dismiss an active cleanup', () => {
+  let closed = 0
+  for (const phase of ['ready', 'applying']) {
+    const tree = render(WorkspaceCleanupDialog, {
+      state: readyState({ phase }), ...handlers, onClose: () => { closed += 1 },
+    })
+    const dialog = find(tree, (node) => node.props.role === 'dialog')
+    assert.equal(typeof dialog.props.onKeyDown, 'function')
+    dialog.props.onKeyDown({ key: 'Escape', preventDefault() {} })
+    assert.equal(closed, 1)
+  }
+})
+
+test('Tab cycles within the dialog and unmount restores the opening control', () => {
+  const previousDocument = globalThis.document
+  const previousHTMLElement = globalThis.HTMLElement
+  class Element {
+    focus() { globalThis.document.activeElement = this }
+    getClientRects() { return [{}] }
+  }
+  const opener = new Element()
+  const first = new Element()
+  const last = new Element()
+  const dialogElement = new Element()
+  dialogElement.querySelectorAll = () => [first, last]
+  dialogElement.contains = (element) => [dialogElement, first, last].includes(element)
+  globalThis.HTMLElement = Element
+  globalThis.document = { activeElement: opener }
+  try {
+    const tree = render(WorkspaceCleanupDialog, { state: readyState(), ...handlers })
+    const dialog = find(tree, (node) => node.props.role === 'dialog')
+    dialog.props.ref.current = dialogElement
+    const restoreFocus = globalThis.__crwuTestInstance.effects[0].callback()
+    assert.equal(globalThis.document.activeElement, dialogElement)
+    let prevented = 0
+    const pressTab = (shiftKey = false) => dialog.props.onKeyDown({
+      key: 'Tab', shiftKey, preventDefault() { prevented += 1 },
+    })
+    pressTab()
+    assert.equal(globalThis.document.activeElement, first)
+    pressTab(true)
+    assert.equal(globalThis.document.activeElement, last)
+    pressTab()
+    assert.equal(globalThis.document.activeElement, first)
+    assert.equal(prevented, 3)
+    restoreFocus()
+    assert.equal(globalThis.document.activeElement, opener)
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document
+    else globalThis.document = previousDocument
+    if (previousHTMLElement === undefined) delete globalThis.HTMLElement
+    else globalThis.HTMLElement = previousHTMLElement
+  }
+})
+
+test('editing the confirmation and toggling log deletion forwards the employee choices', () => {
+  const choices = []
+  const tree = render(WorkspaceCleanupDialog, {
+    state: readyState(), ...handlers,
+    onConfirmName: (value) => choices.push(value), onToggleDeleteSessionLogs: (value) => choices.push(value),
+  })
+  find(tree, (node) => node.type === 'input' && node.props.type === 'text')
+    .props.onChange({ target: { value: '中瑞世联工作空间' } })
+  find(tree, (node) => node.type === 'input' && node.props.type === 'checkbox')
+    .props.onChange({ target: { checked: true } })
+  assert.deepEqual(choices, ['中瑞世联工作空间', true])
 })

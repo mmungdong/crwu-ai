@@ -30,6 +30,7 @@ export const CRWU_TOKEN_STYLE_TEXT = `
   --crwu-radius-sm: 8px; --crwu-radius-md: 10px; --crwu-radius-lg: 12px; --crwu-radius-xl: 14px;
   --crwu-ease: cubic-bezier(0.16, 1, 0.3, 1);
   --crwu-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --crwu-color-scheme: light;
   --crwu-pad-x: 24px;
 
   /* 面与线 */
@@ -139,6 +140,7 @@ body[data-ds-dark-theme] [data-crwu-scope="workbench"] {
 
   --crwu-text-primary: #F1F3F7;
   --crwu-text-secondary: #ABB3C1;
+  --crwu-color-scheme: dark;
   --crwu-text-tertiary: #6F7075;
   --crwu-text-body: #C8C9CD;
   --crwu-text-mono: #B8B9BE;

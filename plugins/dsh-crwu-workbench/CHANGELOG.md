@@ -43,6 +43,14 @@ pypdf 能读的文本**保持原样**（`提取/*.txt` 文件名、内容、页�
   操作 `system.workspace-cleanup` 为 `filesystem` / 特权 / 仅面板。
 - 协议 48 → 49：客户端门面新增 `workspaceCleanupPlan` / `workspaceCleanupApply`。
 
+### style · 2026-10-21 · 工作空间清理界面
+
+- 清理入口独立放在工作空间配置底部；弹窗分为工作空间、清单摘要、会话选项、确认输入和固定底栏。
+- 清单独立滚动，长路径和文件名换行；补充限制可展开，永久删除与报告审核历史清空仍直接可见。
+- 修正复选框错行、按钮拥挤及完成/错误态重复取消；支持键盘焦点循环、返回入口和执行中禁止退出。
+- 使用现有主题 token，原生复选框跟随应用深浅主题。删除范围、授权与目录名确认判据保持原行为。
+- 隔离浏览器验收使用现有轻量渲染器和外部测试 Playwright，不增加 ReactDOM 或产品依赖；本次仅 macOS 验证。
+
 ### chore · 门禁：OCR 只认 DSH 自带 Python，npm 缓存锚在包根
 
 - **OCR 真实渲染不再依赖系统 `python3`**：`make plugin-check` 先用 `scripts/resolve-dsh-python.mjs`

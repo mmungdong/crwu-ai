@@ -63,6 +63,19 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
   // 摘要态只在"已就绪 + 调用方要求收起"时生效：缺失/失效永远展开（那是要用户处理的状态）。
   const [expanded, setExpanded] = React.useState(false)
   const summaryOnly = props.collapsed === true && status.chosen && !status.missing && !expanded
+  const cleanupEntry = props.cleanup === undefined ? null : <div className={C.workspaceCleanupEntry}>
+    <span className={C.workspaceCleanupHint}>
+      {props.cleanup.reason === '' ? zhCN.wsCleanupEntryHint : `${zhCN.wsCleanupBlocked}${props.cleanup.reason}`}
+    </span>
+    <ActionButton
+      variant="text"
+      size="sm"
+      label={zhCN.wsCleanupOpen}
+      title={props.cleanup.reason}
+      disabled={props.busy || !props.cleanup.allowed}
+      onClick={props.cleanup.onOpen}
+    />
+  </div>
 
   /** 把「一个用户选中的已有目录」登记为工作空间并通知 Host。 */
   const adopt = React.useCallback(async (path: string): Promise<void> => {
@@ -140,20 +153,10 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
       <div className={C.row}>
         <span className={C.mono} style={{ fontWeight: 600 }}>{status.path}</span>
         <span className={C.grow} />
-        {props.cleanup === undefined ? null : <ActionButton
-          variant="danger"
-          size="sm"
-          label={zhCN.wsCleanupOpen}
-          title={props.cleanup.reason}
-          disabled={props.busy || !props.cleanup.allowed}
-          onClick={props.cleanup.onOpen}
-        />}
         <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={() => { setExpanded(true) }} />
       </div>
       <div className={C.muted}>{artifactHint(status.path)}</div>
-      {props.cleanup === undefined || props.cleanup.reason === ''
-        ? null
-        : <div className={C.muted}>{`${zhCN.wsCleanupBlocked}${props.cleanup.reason}`}</div>}
+      {cleanupEntry}
       {props.message === '' ? null : <div className={C.muted}>{props.message}</div>}
     </Card>
   }
@@ -187,17 +190,7 @@ export function WorkspaceCard(props: WorkspaceCardProps): React.ReactElement {
               <Button label={zhCN.wsChange} small disabled={props.busy || !servicesReady} onClick={pick} />
               {status.canAuto ? <Button label={zhCN.wsAuto} small disabled={props.busy} onClick={auto} /> : null}
             </div>
-            {props.cleanup === undefined ? null : <div className={C.row} style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--crwu-border)' }}>
-              <ActionButton
-                variant="danger"
-                size="sm"
-                label={zhCN.wsCleanupOpen}
-                title={props.cleanup.reason}
-                disabled={props.busy || !props.cleanup.allowed}
-                onClick={props.cleanup.onOpen}
-              />
-              {props.cleanup.reason === '' ? null : <span className={C.muted}>{props.cleanup.reason}</span>}
-            </div>}
+            {cleanupEntry}
           </>
         : <>
             <Notice tone="warn">{zhCN.wsMissing}</Notice>

@@ -13,6 +13,7 @@ import { CRWU_LAYOUT_STYLE_TEXT } from '../shell/styles/layout.ts'
 import { CRWU_NAVIGATION_STYLE_TEXT } from '../shell/styles/navigation.ts'
 import { CRWU_SIDEBAR_STYLE_TEXT } from '../shell/styles/sidebar.ts'
 import { ENVIRONMENT_STYLE_TEXT } from '../modules/environment/styles/pane.ts'
+import { WORKSPACE_CLEANUP_STYLE_TEXT } from '../modules/environment/styles/cleanup.ts'
 import { LOCAL_AUDIT_STYLE_TEXT } from '../modules/local-audit/styles/pane.ts'
 import { REPORT_AUDIT_STYLE_TEXT } from '../modules/report-audit/styles/pane.ts'
 import { VALUATION_STYLE_TEXT } from '../modules/report-evaluation/styles/pane.ts'
@@ -54,6 +55,7 @@ const OWNED_STYLE_TEXTS: ReadonlyArray<{ owner: string; text: string }> = [
   { owner: 'shell/styles/layout', text: CRWU_LAYOUT_STYLE_TEXT },
   { owner: 'shell/styles/navigation', text: CRWU_NAVIGATION_STYLE_TEXT },
   { owner: 'ui/styles/dialog', text: CRWU_DIALOG_STYLE_TEXT },
+  { owner: 'modules/environment/styles/cleanup', text: WORKSPACE_CLEANUP_STYLE_TEXT },
   { owner: 'modules/update/styles/pane', text: UPDATE_STYLE_TEXT },
   { owner: 'modules/local-audit/styles/pane', text: LOCAL_AUDIT_STYLE_TEXT },
   { owner: 'modules/report-evaluation/styles/pane', text: VALUATION_STYLE_TEXT },

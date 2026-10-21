@@ -10,6 +10,14 @@
  */
 
 export const CRWU_LAYOUT_STYLE_TEXT = `
+.crwu-audit-workspace-cleanup-entry {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--crwu-border);
+}
+.crwu-audit-workspace-cleanup-hint {
+  flex: 1 1 180px; min-width: 0; font-size: 12px; line-height: 18px;
+  color: var(--crwu-text-secondary); overflow-wrap: anywhere;
+}
 /* ════════════════════════════════════════════════════════════════════
    20. Workspace Surface：报告审核页
    ────────────────────────────────────────────────────────────────────

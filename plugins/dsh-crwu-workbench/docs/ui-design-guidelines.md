@@ -159,6 +159,26 @@ src/client/modules/<模块>/styles/pane.ts
 
 ---
 
+### 4.1 工作空间清理弹窗
+
+清理入口在工作空间配置底部分组。弹窗使用环境模块自己的
+`src/client/modules/environment/styles/cleanup.ts`，不再复用简单选择弹窗的排版。
+头部与底栏不滚动，正文和待删清单各自限高；路径、文件名允许换行。
+“不进回收站”和审核历史清空直接可见，Host 返回的补充限制保留在原生 `details` 中。
+目录名确认与执行期间禁止关闭继续沿用原判据；焦点在弹窗内循环，关闭后返回入口。
+原生控件通过 `tokens.ts` 中的 `--crwu-color-scheme` 跟随应用主题。
+
+无需 ReactDOM 的专用布局验收（现有轻量渲染器生成真实组件快照，浏览器验证布局及原生折叠交互）：
+
+```bash
+node install/workspace-cleanup-browser-check.mjs --playwright <node_modules> --browser <browser-executable> --out <new-directory>
+```
+
+Playwright 和 Chromium 系浏览器为外部测试依赖，不随插件安装；macOS、Windows 均显式传入本机路径，
+脚本在启动前检查文件存在，缺失时给出修复参数并退出。此轮仅 macOS + Edge 实测，Windows 未验证。
+React 状态、回调及执行安全使用 `client-workspace-cleanup-dialog.test.mjs` 和清理状态机测试验证；
+快照布局验收不代替真实 DSH profile 验收。
+
 ## 5. 侧栏入口：一张分组卡（唯一入口席位）
 
 席位是 `sidebar.footer.action`（左侧栏底部、Settings 上方），**只占一个席位**，内容是插件自绘的一张卡：

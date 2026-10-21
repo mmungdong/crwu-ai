@@ -30,6 +30,8 @@
  */
 
 export const WORKBENCH_CLASSES = {
+  workspaceCleanupEntry: 'crwu-audit-workspace-cleanup-entry',
+  workspaceCleanupHint: 'crwu-audit-workspace-cleanup-hint',
   root: 'crwu-audit-root',
   header: 'crwu-audit-header',
   title: 'crwu-audit-title',

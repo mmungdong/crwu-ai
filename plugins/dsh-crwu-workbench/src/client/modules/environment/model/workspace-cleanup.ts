@@ -87,7 +87,7 @@ export function cleanupResultSummary(result: WorkspaceCleanupResult): string {
   return parts.join(' · ')
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let value = bytes
