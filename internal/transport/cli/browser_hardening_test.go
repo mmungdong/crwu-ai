@@ -179,6 +179,19 @@ func TestBrowserLoginOpensLoginTabsWhenAttaching(t *testing.T) {
 	}
 }
 
+func TestBrowserProfileFlagRejectsRelativePath(t *testing.T) {
+	// 相对路径跟着调用方的 cwd 走：这次落在仓库里，下次换个目录就是另一个空 profile，
+	// 凭据库也就跟着漂。这条与 CRWU_BROWSER_PROFILE 同一条口径。
+	deps := browserDeps(t, filepath.Join(t.TempDir(), "profile"), nil)
+	code, _, stderr := runCLI(deps, "browser", "profile", "--profile", "relative/profile")
+	if code == 0 {
+		t.Fatal("--profile relative/profile was accepted; the credential directory must not follow the cwd")
+	}
+	if !strings.Contains(stderr, "绝对") {
+		t.Fatalf("stderr = %q, want it to require an absolute path", stderr)
+	}
+}
+
 func TestBrowserProfileReportsPermission(t *testing.T) {
 	profileDir := filepath.Join(t.TempDir(), "profile")
 	if err := browser.EnsureProfileDir(profileDir); err != nil {

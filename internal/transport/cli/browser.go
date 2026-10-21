@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -140,7 +141,7 @@ func newBrowserCommand(deps Dependencies, examples map[string][]schemeExample) *
 	command.PersistentFlags().StringVar(&flags.sitesPath, "sites", "",
 		"Path to a JSON file describing the sites (required by login and status)")
 	command.PersistentFlags().StringVar(&flags.profileDir, "profile", "",
-		"Browser profile directory (default: ~/.crwu/browser/profile)")
+		"Absolute browser profile directory (default: ~/.crwu/browser/profile)")
 
 	command.AddCommand(newBrowserProfileCommand(deps, flags, examples))
 	command.AddCommand(newBrowserLoginCommand(deps, flags, examples))
@@ -153,11 +154,20 @@ func newBrowserCommand(deps Dependencies, examples map[string][]schemeExample) *
 }
 
 // withProfile resolves the profile directory, falling back to the shared default.
+//
+// `--profile` has to be absolute for the same reason `CRWU_BROWSER_PROFILE` does: a
+// relative path follows the caller's cwd, so the profile — and the live session
+// cookies inside it — lands wherever that happened to be, and the next run from
+// another directory silently starts from a different, empty profile.
 func (f *browserFlags) withProfile(deps Dependencies) (string, error) {
-	if strings.TrimSpace(f.profileDir) != "" {
-		return strings.TrimSpace(f.profileDir), nil
+	override := strings.TrimSpace(f.profileDir)
+	if override == "" {
+		return browser.ProfileDir(deps.Getenv)
 	}
-	return browser.ProfileDir(deps.Getenv)
+	if !filepath.IsAbs(override) {
+		return "", fmt.Errorf("--profile 必须是绝对路径：%s（相对路径会随当前目录漂移，凭据缓存也会落到别处）", override)
+	}
+	return filepath.Clean(override), nil
 }
 
 // selectedSites loads the site list and narrows it to --site values.

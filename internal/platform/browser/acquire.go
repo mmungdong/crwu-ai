@@ -2,11 +2,15 @@ package browser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,9 +19,35 @@ import (
 	"github.com/mmungdong/crwu-ai/internal/platform/scanlogin"
 )
 
-// debugPortFileName sits beside the profile, not inside it: the profile directory
-// is handed whole to the browser, and anything placed there becomes profile state.
+// debugPortFileName is the prefix of the per-profile debug-port record. It sits
+// beside the profile, not inside it: the profile directory is handed whole to the
+// browser, and anything placed there becomes profile state.
 const debugPortFileName = "debug-port"
+
+// debugPortRecord binds a debugger port to the profile that owns it.
+//
+// The file used to hold a bare port number and to be shared by every profile under
+// one parent: `~/.crwu/browser/profile` and `~/.crwu/browser/profile-test` read the
+// same bytes, so the second profile attached to the first profile's browser — its
+// cookies and its tabs. The owner is part of the record now, and so is the name.
+type debugPortRecord struct {
+	Profile string `json:"profile"`
+	Port    int    `json:"port"`
+}
+
+// normalizeProfileDir is the identity used for owner comparison: absolute when the
+// caller's path can be made absolute, cleaned, and case-folded on Windows, where the
+// same directory can arrive with a different case on each call.
+func normalizeProfileDir(dir string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(dir))
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		cleaned = abs
+	}
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
+}
 
 // devToolsActivePortName is Chromium's own discovery file. It is read as a second
 // source because our own file can be missing (deleted by an earlier run, cleaned by
@@ -42,8 +72,24 @@ const (
 )
 
 // DebugPortFile is where the port of the helper's own browser instance is recorded.
+//
+// The name carries a digest of the profile path so two profiles under one parent
+// directory keep separate records instead of overwriting each other.
 func DebugPortFile(profileDir string) string {
-	return filepath.Join(filepath.Dir(profileDir), debugPortFileName)
+	clean := filepath.Clean(strings.TrimSpace(profileDir))
+	sum := sha256.Sum256([]byte(normalizeProfileDir(clean)))
+	return filepath.Join(filepath.Dir(clean), debugPortFileName+"-"+hex.EncodeToString(sum[:4]))
+}
+
+func writeDebugPort(profileDir string, port int) error {
+	raw, err := json.Marshal(debugPortRecord{Profile: normalizeProfileDir(profileDir), Port: port})
+	if err != nil {
+		return fmt.Errorf("编码调试端口记录失败：%w", err)
+	}
+	if err := os.WriteFile(DebugPortFile(profileDir), raw, 0o600); err != nil {
+		return fmt.Errorf("写入调试端口文件失败：%w", err)
+	}
+	return nil
 }
 
 // RunningPort reports a live debugger port for this profile.
@@ -67,7 +113,7 @@ func DebugPortFile(profileDir string) string {
 // left the file behind, so every candidate must actually answer.
 func RunningPort(profileDir string) (int, bool) {
 	for _, candidate := range []int{
-		portFromFile(DebugPortFile(profileDir)),
+		portFromFile(DebugPortFile(profileDir), profileDir),
 		portFromDevToolsActivePort(profileDir),
 		portFromProfileLock(profileDir),
 	} {
@@ -78,17 +124,28 @@ func RunningPort(profileDir string) (int, bool) {
 	return 0, false
 }
 
-// portFromFile reads a bare port number from a file.
-func portFromFile(path string) int {
+// portFromFile reads this profile's recorded port.
+//
+// A record that does not name exactly this profile is not a candidate: it belongs to
+// a sibling profile, or it is the legacy bare number, which carries no owner at all
+// and therefore cannot be shown to belong here. A browser still running under a
+// legacy record is found through DevToolsActivePort or SingletonLock instead.
+func portFromFile(path string, profileDir string) int {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return 0
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || port <= 0 || port > 65535 {
+	var record debugPortRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
 		return 0
 	}
-	return port
+	if record.Profile == "" || record.Profile != normalizeProfileDir(profileDir) {
+		return 0
+	}
+	if record.Port <= 0 || record.Port > 65535 {
+		return 0
+	}
+	return record.Port
 }
 
 // portFromDevToolsActivePort reads Chromium's own discovery file (port on line 1).
@@ -338,10 +395,10 @@ func AcquireWithOptions(ctx context.Context, exe, profileDir string, urls []stri
 		stopProcess(process)
 		return nil, err
 	}
-	if err := os.WriteFile(DebugPortFile(profileDir), []byte(strconv.Itoa(port)), 0o600); err != nil {
+	if err := writeDebugPort(profileDir, port); err != nil {
 		_ = client.Close()
 		stopProcess(process)
-		return nil, fmt.Errorf("写入调试端口文件失败：%w", err)
+		return nil, err
 	}
 
 	return &Browser{

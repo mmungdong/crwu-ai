@@ -88,7 +88,7 @@ func TestDoShotDoesNotWriteFileWhenVerdictIsNotOK(t *testing.T) {
 	browser := browserOnFakeCDP(t, captchaResponder)
 	out := filepath.Join(t.TempDir(), "shot.png")
 
-	result, err := DoShot(context.Background(), browser, Options{URL: "https://x/", Out: out})
+	result, err := DoShot(context.Background(), browser, Options{URL: "https://example.com/", Out: out})
 	if err != nil {
 		t.Fatalf("DoShot() error = %v, want nil (a classified page is a result, not an error)", err)
 	}
@@ -107,7 +107,7 @@ func TestDoFetchDoesNotWriteOutWhenVerdictIsNotOK(t *testing.T) {
 	browser := browserOnFakeCDP(t, captchaResponder)
 	out := filepath.Join(t.TempDir(), "page.html")
 
-	result, err := DoFetch(context.Background(), browser, Options{URL: "https://x/", Out: out})
+	result, err := DoFetch(context.Background(), browser, Options{URL: "https://example.com/", Out: out})
 	if err != nil {
 		t.Fatalf("DoFetch() error = %v, want nil", err)
 	}
@@ -125,7 +125,7 @@ func TestDoFetchWritesDumpEvenWhenVerdictIsNotOK(t *testing.T) {
 	out := filepath.Join(dir, "page.html")
 	dump := filepath.Join(dir, "dump.html")
 
-	if _, err := DoFetch(context.Background(), browser, Options{URL: "https://x/", Out: out, Dump: dump}); err != nil {
+	if _, err := DoFetch(context.Background(), browser, Options{URL: "https://example.com/", Out: out, Dump: dump}); err != nil {
 		t.Fatalf("DoFetch() error = %v, want nil", err)
 	}
 	if _, statErr := os.Stat(out); statErr == nil {
@@ -160,7 +160,7 @@ func TestDoFetchWritesPageAndDigestWhenVerdictIsOK(t *testing.T) {
 	browser := browserOnFakeCDP(t, responder)
 	out := filepath.Join(t.TempDir(), "page.html")
 
-	result, err := DoFetch(context.Background(), browser, Options{URL: "https://x/", Out: out})
+	result, err := DoFetch(context.Background(), browser, Options{URL: "https://example.com/", Out: out})
 	if err != nil {
 		t.Fatalf("DoFetch() error = %v, want nil", err)
 	}
@@ -176,5 +176,39 @@ func TestDoFetchWritesPageAndDigestWhenVerdictIsOK(t *testing.T) {
 	}
 	if !strings.Contains(string(written), "listing page") {
 		t.Fatalf("DoFetch() wrote %q, want the rendered DOM", string(written))
+	}
+}
+
+// TestRequirePublicHTTPURLRejectsLocallyResolvableSpellings covers the forms
+// Chromium canonicalises to 127.0.0.1 but net.ParseIP refuses: a shortened IPv4
+// (127.1), a hex/octal/decimal word (0x7f.1, 0177.0.0.1, 2130706433), a trailing
+// root dot (localhost.), and a single-label intranet name. Checking the raw
+// spelling let every one of them through to a browser that runs without its own
+// sandbox.
+func TestRequirePublicHTTPURLRejectsLocallyResolvableSpellings(t *testing.T) {
+	for _, raw := range []string{
+		"http://127.0.0.1/", "http://127.1/", "http://0x7f.1/", "http://2130706433/",
+		"http://0x7f000001/", "http://0177.0.0.1/", "http://0.0.0.0/",
+		"http://localhost./", "http://LOCALHOST/", "http://app.localhost./",
+		"http://[::1]/", "http://[::ffff:127.0.0.1]/", "http://[fe80::1]/",
+		"http://10.1.2.3/", "http://192.168.0.1./", "http://169.254.169.254/",
+		"http://intranet/", "http://user:pass@127.0.0.1/",
+	} {
+		if err := requirePublicHTTPURL(raw); err == nil {
+			t.Fatalf("requirePublicHTTPURL(%q) = nil, want a rejection", raw)
+		}
+	}
+}
+
+func TestRequirePublicHTTPURLAllowsPublicHosts(t *testing.T) {
+	for _, raw := range []string{
+		"https://bj.lianjia.com/ershoufang/1.html",
+		"https://sub.domain.example.co.uk/path?q=1",
+		"http://example.com./",
+		"https://[2606:4700:4700::1111]/",
+	} {
+		if err := requirePublicHTTPURL(raw); err != nil {
+			t.Fatalf("requirePublicHTTPURL(%q) = %v, want nil", raw, err)
+		}
 	}
 }

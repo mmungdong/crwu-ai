@@ -1,4 +1,22 @@
 # 变更纪要（CLI Changelog）
+
+## 2026-10-21 · fix(cli) · `crwu browser`：本机地址判定、profile 隔离与 `--profile` 口径
+
+- **影响**：`fetch` / `shot` / `recover` 的地址校验改为按浏览器**实际解析的写法**判定；
+  `--profile` 现在必须是绝对路径（与 `CRWU_BROWSER_PROFILE` 同口径）；调试端口记录按 profile 拆开。
+  命令、参数集合与输出契约不变。
+- **本机地址**：Chromium 在解析前会规范化主机名，`127.1`、`0x7f.1`、`0177.0.0.1`、`2130706433`、
+  `localhost.` 都会落到 `127.0.0.1`，而 `net.ParseIP` 一个都不认。现在先按同一规则规范化
+  （小写、去根点），再用 `netip.ParseAddr` 判定；字面量地址之外拒绝单标签主机名与纯数字主机。
+  浏览器以 `--no-sandbox` 运行，"只加载该加载的地址"是补偿控制之一。
+  残余风险如实保留：只校验首个 URL，302 到回环地址仍会跟；彻底关闭需要 CDP 请求拦截。
+- **profile 隔离**：`debug-port` 的文件名带上 profile 路径摘要，内容是 `{profile, port}`；读取时
+  要求属主一致，旧的无属主裸端口文件不再采信（仍活着的浏览器由 `DevToolsActivePort` 与
+  `SingletonLock` 两条回退发现）。此前 `~/.crwu/browser/profile` 与 `profile-test` 共用一份记录，
+  第二个 profile 会连到第一个 profile 的浏览器（读写的都是别人的 Cookie 与标签页）。
+- **验证**：`go test ./internal/platform/browser/ ./internal/transport/cli/`。新增表驱动用例覆盖上述每一种
+  写法、两个 profile 的交叉读取，以及相对 `--profile` 的拒绝。
+
 ## 2026-10-16 · feat(cli) · `crwu browser fetch/shot` 默认复用自有后台窗口
 
 - **影响**：`crwu browser fetch` 与 `crwu browser shot` 新增布尔参数 `--background`（默认 `true`）。

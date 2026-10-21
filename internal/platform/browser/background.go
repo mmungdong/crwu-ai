@@ -419,9 +419,9 @@ func attachControlledCold(ctx context.Context, port int, profileDir string, urls
 	if err != nil {
 		return nil, fmt.Errorf("连接自有页面目标失败：%w", err)
 	}
-	if err := os.WriteFile(DebugPortFile(profileDir), []byte(strconv.Itoa(port)), 0o600); err != nil {
+	if err := writeDebugPort(profileDir, port); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("写入调试端口文件失败：%w", err)
+		return nil, err
 	}
 	if err := writeOwnedTarget(profileDir, port, targetID); err != nil {
 		_ = client.Close()

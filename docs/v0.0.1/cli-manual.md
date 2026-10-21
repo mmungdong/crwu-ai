@@ -146,7 +146,9 @@ crwu h3yun session bind --token-stdin   # 从管道、密钥管理器或粘贴�
 ### 浏览器抓取（`browser`）
 
 开一个**真实可见**的浏览器读页面。CLI 不内置任何站点：站点清单由 `--sites` 指向的 JSON 给出。
-登录态存在 `~/.crwu/browser/profile`（权限 0700），**下次不用重登**。`crwu browser status`
+登录态存在 `~/.crwu/browser/profile`（权限 0700），**下次不用重登**。`--profile` 与
+`CRWU_BROWSER_PROFILE` **都必须给绝对路径**：相对路径会跟着调用方的 cwd 漂移，凭据缓存就会落到
+一个没人预期的地方（下一条命令换目录执行时又解析成另一个空 profile）。`crwu browser status`
 默认只读该 profile 里的凭据，**不开窗口、不加载页面**。`fetch` / `shot` 默认在**自有后台窗口**
 里执行：窗口不主动抢焦点，同一 profile 的下一次调用复用同一张已渲染页面，而不是每次抓取都弹一个窗。
 它只承诺"不主动聚焦"，**不保证**操作系统层面完全不出现任何窗口/启动 UI，窗口本身仍是普通有头窗口。

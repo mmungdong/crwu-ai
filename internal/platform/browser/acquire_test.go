@@ -64,14 +64,14 @@ func fakeBrowser(t *testing.T) (port int, versionHits *int32) {
 	return value, hits
 }
 
-// seedPortFile 把端口写进 profile 对应的端口文件，返回 profileDir。
+// seedPortFile 把端口写进 profile 对应的端口记录，返回 profileDir。
 func seedPortFile(t *testing.T, port int) string {
 	t.Helper()
 	profileDir := filepath.Join(t.TempDir(), "profile")
 	if err := os.MkdirAll(filepath.Dir(DebugPortFile(profileDir)), 0o700); err != nil {
 		t.Fatalf("seed profile parent: %v", err)
 	}
-	if err := os.WriteFile(DebugPortFile(profileDir), []byte(strconv.Itoa(port)), 0o600); err != nil {
+	if err := writeDebugPort(profileDir, port); err != nil {
 		t.Fatalf("seed port file: %v", err)
 	}
 	return profileDir
@@ -79,9 +79,63 @@ func seedPortFile(t *testing.T, port int) string {
 
 func TestDebugPortFileSitsBesideTheProfileNotInsideIt(t *testing.T) {
 	profileDir := "/home/x/.crwu/browser/profile"
-	want := "/home/x/.crwu/browser/debug-port"
-	if got := DebugPortFile(profileDir); got != want {
-		t.Fatalf("DebugPortFile() = %q, want %q (a file inside the profile would be profile content)", got, want)
+	got := DebugPortFile(profileDir)
+	if filepath.Dir(got) != "/home/x/.crwu/browser" {
+		t.Fatalf("DebugPortFile() = %q, want it beside the profile (a file inside the profile would be profile content)", got)
+	}
+	// 同一父目录下的两个 profile 不能共用一份记录：共用时第二个 profile 会连上
+	// 第一个 profile 的浏览器，读写的都是别人的 Cookie 与标签页。
+	other := DebugPortFile("/home/x/.crwu/browser/profile-test")
+	if got == other {
+		t.Fatalf("DebugPortFile() = %q for two profiles under one parent; the record must be per profile", got)
+	}
+	// 尾分隔符不能让"旁边的文件"退化成"profile 里的文件"。
+	if same := DebugPortFile("/home/x/.crwu/browser/profile/"); same != got {
+		t.Fatalf("DebugPortFile() = %q for a trailing separator, want %q", same, got)
+	}
+}
+
+func TestRunningPortIgnoresARecordWrittenForAnotherProfile(t *testing.T) {
+	port, _ := fakeBrowser(t)
+	parent := t.TempDir()
+	first := filepath.Join(parent, "profile")
+	second := filepath.Join(parent, "profile-test")
+	if err := os.MkdirAll(filepath.Dir(DebugPortFile(second)), 0o700); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	// 端口号合法、调试器也确实活着，但记录属于另一个 profile。
+	raw, err := json.Marshal(debugPortRecord{Profile: normalizeProfileDir(first), Port: port})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(DebugPortFile(second), raw, 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if got, ok := RunningPort(second); ok || got != 0 {
+		t.Fatalf("RunningPort(second) = (%d,%v), want (0,false): 它连上了第一个 profile 的浏览器", got, ok)
+	}
+	// 记录回到自己的 profile 上就必须认。
+	if err := writeDebugPort(second, port); err != nil {
+		t.Fatalf("seed own record: %v", err)
+	}
+	if got, ok := RunningPort(second); !ok || got != port {
+		t.Fatalf("RunningPort(second) = (%d,%v), want (%d,true)", got, ok, port)
+	}
+}
+
+func TestRunningPortIgnoresALegacyBarePortFile(t *testing.T) {
+	// 旧格式只有一个端口号，没有属主：无法证明它是这个 profile 的，就不再采信。
+	// 仍然活着的浏览器由 DevToolsActivePort 与 SingletonLock 两条回退发现。
+	port, _ := fakeBrowser(t)
+	profileDir := filepath.Join(t.TempDir(), "profile")
+	if err := os.MkdirAll(filepath.Dir(DebugPortFile(profileDir)), 0o700); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if err := os.WriteFile(DebugPortFile(profileDir), []byte(strconv.Itoa(port)), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if got, ok := RunningPort(profileDir); ok || got != 0 {
+		t.Fatalf("RunningPort() = (%d,%v), want (0,false) for a record with no owner", got, ok)
 	}
 }
 

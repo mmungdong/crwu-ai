@@ -7,9 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -224,6 +225,17 @@ const restoreTimeout = 2 * time.Second
 // non-HTTP schemes keeps local files out of an agent-readable artifact; rejecting
 // loopback, private, and link-local hosts keeps the employee's own network from
 // becoming reachable through a URL that arrived in page content.
+//
+// The check runs on the spelling Chromium resolves, not the one the caller supplied.
+// Chromium canonicalises before it dials: it lowercases, drops the trailing root dot,
+// and accepts IPv4 as 127.1, 0x7f.1, 0177.0.0.1, or 2130706433 — all of which
+// net.ParseIP rejects, so judging the raw spelling let every one of them through to a
+// browser with its sandbox off.
+//
+// Residual risk, deliberately out of scope here: the guard sees the first URL only,
+// so a 302 to 127.0.0.1 is still followed, and a public name that resolves to a
+// private address is still reachable. Closing those needs request interception at the
+// CDP layer, not a host check.
 func requirePublicHTTPURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -236,16 +248,66 @@ func requirePublicHTTPURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("URL 缺少主机名：%q", raw)
 	}
-	lower := strings.ToLower(host)
+	// Same normalisation Chromium applies before resolving: case-insensitive, and the
+	// trailing dot of an absolute DNS name is not part of the identity.
+	lower := strings.TrimSuffix(strings.ToLower(host), ".")
+	if lower == "" {
+		return fmt.Errorf("URL 缺少主机名：%q", raw)
+	}
 	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
 		return fmt.Errorf("拒绝本机地址：%s", host)
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+	if addr, parseErr := netip.ParseAddr(lower); parseErr == nil {
+		if !isPublicAddr(addr) {
 			return fmt.Errorf("拒绝本机或内网地址：%s", host)
 		}
+		return nil
+	}
+	// Not a literal address. A single-label name is never a public site — that is how
+	// `localhost.` and intranet hostnames arrive — and a name made only of numeric
+	// labels is another IPv4 spelling the browser accepts.
+	if !strings.Contains(lower, ".") {
+		return fmt.Errorf("拒绝单标签主机名：%s（内网名不是公网站点）", host)
+	}
+	if looksNumeric(lower) {
+		return fmt.Errorf("拒绝非标准写法的地址：%s", host)
 	}
 	return nil
+}
+
+// isPublicAddr reports whether an address may be dialled as a public web host.
+//
+// Unmap first: `::ffff:127.0.0.1` is loopback in IPv4 terms and netip's predicates
+// answer for the mapped form's own family.
+func isPublicAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return !(addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() || addr.IsUnspecified() || addr.IsMulticast())
+}
+
+// looksNumeric reports whether every dot-separated label is a decimal or 0x-prefixed
+// number. Such a host is an IPv4 literal to the browser even when the parts do not
+// fit the four-octet form (127.1, 0x7f.0.0.1, 1.2.3.4.5).
+func looksNumeric(host string) bool {
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" {
+			return true
+		}
+		if strings.HasPrefix(label, "0x") || strings.HasPrefix(label, "0X") {
+			if _, err := strconv.ParseUint(label[2:], 16, 32); err != nil {
+				return false
+			}
+			continue
+		}
+		if _, err := strconv.ParseUint(label, 10, 32); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // statusExpression reads the document's HTTP status from the Navigation Timing API.
