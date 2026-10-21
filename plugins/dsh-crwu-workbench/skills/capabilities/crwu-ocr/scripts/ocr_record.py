@@ -203,7 +203,7 @@ def recompute(index) -> dict:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Merge page-image recognition into the OCR index")
+    parser = argparse.ArgumentParser(allow_abbrev=False, description="Merge page-image recognition into the OCR index")
     parser.add_argument("--case", required=True)
     parser.add_argument("--input", default="", help="case-relative JSON with the page results")
     parser.add_argument("--source", default="", help="sourceId or case-relative path")
@@ -219,6 +219,10 @@ def main(argv=None) -> int:
         return ocr_runtime.EXIT_USAGE
 
     case_dir = os.path.abspath(args.case)
+    staged_problem = ocr_runtime.staged_case_problem(case_dir, __file__)
+    if staged_problem:
+        ocr_runtime.emit(ocr_runtime.fail("input", staged_problem))
+        return ocr_runtime.EXIT_USAGE
     index, index_path, error = load_index(case_dir)
     if index is None:
         ocr_runtime.emit(ocr_runtime.fail("input", error))

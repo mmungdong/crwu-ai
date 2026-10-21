@@ -83,6 +83,11 @@ test('only the four OCR scripts are staged on demand', () => {
   for (const name of ['ocr_prepare', 'ocr_record', 'ocr_merge', 'ocr_status']) {
     assert.equal(isOcrSkillScript(`ocr-skill/scripts/${name}.py`), true, name)
     assert.equal(isOcrSkillScript(`ocr-skill\\scripts\\${name}.py`), true, `${name} (windows separator)`)
+    // 这些写法在 macOS/NTFS 上解析到同一个文件：只认字面串等于给校验留后门。
+    assert.equal(isOcrSkillScript(`ocr-skill//scripts/${name}.py`), true, `${name} (double separator)`)
+    assert.equal(isOcrSkillScript(`ocr-skill/./scripts/${name}.py`), true, `${name} (dot segment)`)
+    assert.equal(isOcrSkillScript(`./ocr-skill/scripts/${name}.py`), true, `${name} (leading dot)`)
+    assert.equal(isOcrSkillScript(`OCR-SKILL/scripts/${name}.py`), true, `${name} (case variant)`)
   }
   for (const value of ['ocr-skill/scripts/other.py', 'scripts/ocr_prepare.py', '../ocr-skill/scripts/ocr_prepare.py', '']) {
     assert.equal(isOcrSkillScript(value), false, value)
@@ -99,6 +104,15 @@ test('OCR scripts may only run against this audit case', () => {
   assert.equal(
     ocrCaseArgumentProblem(['--case', 'C:\\Cases\\A'], 'c:\\cases\\a\\', 'win32'), '',
     'Windows 路径比较不区分大小写与结尾分隔符')
+  // 重复出现时 Python argparse 取**最后**一个：只看第一个等于让脚本换到别的案例。
+  assert.match(
+    ocrCaseArgumentProblem(['--case', '/tmp/workspace/2026-301705-LX10170', '--case', '/tmp/other'],
+      casePath, 'darwin'),
+    /只允许出现一次/)
+  assert.match(
+    ocrCaseArgumentProblem(['--case=/tmp/workspace/2026-301705-LX10170', '--case', '/tmp/other'],
+      casePath, 'darwin'),
+    /只允许出现一次/)
 })
 
 test('the audit prompt routes PDF and image reading through crwu-ocr', () => {

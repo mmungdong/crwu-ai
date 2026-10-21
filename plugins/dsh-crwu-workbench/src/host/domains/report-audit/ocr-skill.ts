@@ -38,10 +38,19 @@ export const OCR_RUNTIME_FILES = [
 ] as const
 
 /** 模型可以提交的 OCR 脚本（案例内相对路径）。 */
-const OCR_SCRIPT_PATTERN = /^ocr-skill\/scripts\/(ocr_prepare|ocr_record|ocr_merge|ocr_status)\.py$/
+const OCR_SCRIPT_NAMES = new Set(['ocr_prepare.py', 'ocr_record.py', 'ocr_merge.py', 'ocr_status.py'])
 
+/**
+ * 是否是 Host 暂存的 OCR 运行时脚本。
+ *
+ * 先按**路径语义**归一，再判位置：`ocr-skill//scripts/x.py`、`ocr-skill/./scripts/x.py`
+ * 与 `OCR-SKILL/scripts/x.py` 在 APFS/NTFS 上解析到同一个文件，只认字面串等于给
+ * `--case` 校验（以及"谁会用到暂存脚本"的判断）留了一个稳定的后门。
+ */
 export function isOcrSkillScript(relative: string): boolean {
-  return OCR_SCRIPT_PATTERN.test(text(relative).trim().replace(/\\/g, '/').replace(/^\.\//, ''))
+  const canonical = normalize(text(relative).trim().replace(/\\/g, '/')).replace(/\\/g, '/')
+  const match = /^ocr-skill\/scripts\/([^/]+)$/i.exec(canonical)
+  return match !== null && OCR_SCRIPT_NAMES.has(match[1].toLowerCase())
 }
 
 /**
@@ -51,20 +60,25 @@ export function isOcrSkillScript(relative: string): boolean {
  * model-supplied path would let one case read/write another case's OCR directory
  * wherever the sandbox happens to allow it. The Host already validated the call's
  * case, so the argument has to agree with it.
+ *
+ * Every occurrence is collected: Python's argparse keeps the **last** `--case`, so
+ * reading only the first one validated a value the script never used.
  */
 export function ocrCaseArgumentProblem(scriptArgs: readonly string[], casePath: string, platform: string): string {
-  let given = ''
+  const givens: string[] = []
   for (let index = 0; index < scriptArgs.length; index += 1) {
     const item = text(scriptArgs[index])
     if (item === '--case') {
-      given = text(scriptArgs[index + 1])
-      break
+      givens.push(text(scriptArgs[index + 1]))
+      index += 1
+      continue
     }
-    if (item.startsWith('--case=')) {
-      given = item.slice('--case='.length)
-      break
-    }
+    if (item.startsWith('--case=')) givens.push(item.slice('--case='.length))
   }
+  if (givens.length > 1) {
+    return 'OCR 脚本的 `--case` 只允许出现一次：重复时 Python 取最后一个，等于绕开本轮案例校验'
+  }
+  const given = givens[0] ?? ''
   if (given === '') return 'OCR 脚本必须带 `--case <本轮案例目录>`'
   const absolute = platform === 'win32'
     ? /^[a-zA-Z]:[\\/]/.test(given) || given.startsWith('\\\\')

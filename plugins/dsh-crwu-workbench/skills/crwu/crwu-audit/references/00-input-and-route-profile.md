@@ -222,7 +222,9 @@ router 只负责把五轴画像映射成轴标签并选出 available 叶子；�
   `ocr_prepare.py --only <清单里的 path>`（**不要**为可读 PDF 白渲染）→ 判读页图并 `ocr_record.py`
   → `ocr_merge.py` → 按 `ocr/merged/<sourceId>.txt` **页序顺读**。
   合并文本里未判读的页是显式占位（`[第 N 页 未判读：<原因>]`），只能记未核，不得当作"本页为空"；
-  清单里每个 `path` 都必须在 `ocr/index.json` 有对应来源且未 `failed`，否则视为编排未完成。
+  清单里每个 `path` 都必须在 `ocr/index.json` 有对应来源，且状态不是 `failed`，否则视为编排未完成；
+  `needs-password`（加密 PDF、本机无口令通道）是**可接受终态**：整份来源登记进 `scope.notCheckedItems`
+  （`reasonCode=needs-password`）并给出员工动作（提供口令或解密版），不得判成缺失或通过。
   `ocrRequired[]` **只回答"哪些页没有文本"**：需要核验印章、签名、证照、勾选或版式的页，即使有文本层
   也必须 `ocr_prepare.py --only <该文件> --visual pages:<页号>` 渲成页图再判读，不得以"清单里没有"为由跳过。
 - **压缩包必须先解压再审核**：盘点时遇 `.zip/.tar/.tar.gz/.tar.bz2/.tar.xz/.tgz` 等归档，**必须先解压，再对解压产物实施审核**——归档内的测算底稿、明细表与源材料同等对待（同样提取文本、重建工作版、执行隐藏区隔离）。**不得把归档登记为"未解压"就跳过**（真实案例中一个归档内的"土地使用权-工业拟变更住宅-测算底稿"因此长期未被审核，属潜在漏检）。

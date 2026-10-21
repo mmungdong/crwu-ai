@@ -27,6 +27,45 @@ import ocr_runtime
 DEFAULT_SRC = ("材料-源",)
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff")
 PDF_EXTS = (".pdf",)
+
+# 内容判据：进 `ocrRequired[]` 的是 magic，脚本这边也必须按同一套标准，
+# 否则 `scan.dat`（其实是 PNG）会「清单里有、索引里没有」，门禁永远过不去。
+_MAGIC = (
+    (b"%PDF-", "pdf"),
+    (b"\x89PNG\r\n\x1a\n", "image"),
+    (b"\xff\xd8\xff", "image"),
+    (b"GIF87a", "image"),
+    (b"GIF89a", "image"),
+    (b"BM", "image"),
+    (b"II*\x00", "image"),
+    (b"MM\x00*", "image"),
+)
+
+
+def sniff_ocr_kind(path):
+    """按文件头判断 PDF/图片；认不出返回空串（不按扩展名猜）。"""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(16)
+    except OSError:
+        return ""
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image"
+    for prefix, kind in _MAGIC:
+        if head.startswith(prefix):
+            return kind
+    return ""
+
+
+def ocr_source_kind(path, extension):
+    """一份 OCR 源的种类：扩展名优先（它最便宜），认不出时看内容。"""
+    if extension in PDF_EXTS:
+        return "pdf"
+    if extension in IMAGE_EXTS:
+        return "image"
+    return sniff_ocr_kind(path) or "image"
+
+
 DEFAULT_DPI = 144
 HIGH_DPI = 200
 MIN_TEXT_CHARS = 20
@@ -312,17 +351,33 @@ def prepare_pdf(case_dir, relative_path, source_id, stem, prev, args, engine):
     abs_path = os.path.join(case_dir, relative_path)
     result = {"pages": [], "pageCount": 0, "status": "prepared", "errors": []}
     reader = None
+    password_required = False
     try:
         reader = PdfReader(abs_path)
         if reader.is_encrypted:
             try:
-                reader.decrypt("")
+                # pypdf 对 owner 口令（user 口令为空）的 PDF 能用空口令解开，这类文件可读；
+                # 空口令也解不开才是真的要口令。
+                opened = reader.decrypt("")
             except Exception as error:  # noqa: BLE001 - record, do not guess a password
+                password_required = True
                 result["errors"].append("PDF 已加密且无法用空密码打开：%s" % error)
+            else:
+                if not opened:
+                    password_required = True
+                    result["errors"].append("PDF 已加密且无法用空密码打开")
+            if password_required:
                 reader = None
     except Exception as error:  # noqa: BLE001
         result["errors"].append("PDF 打开失败：%s" % error)
         reader = None
+
+    if password_required:
+        # 这里不是 failed：没有口令通道时，failed 会让"每个 ocrRequired 都要有非 failed 来源"
+        # 这条门禁永远过不去 —— 模型既删不掉清单项，也变不出口令。终态交给人工。
+        return {**result, "status": "needs-password",
+                "reasonCode": "pdf-password-required",
+                "errors": result["errors"] + ["PDF 需要口令：未渲染、未判读"]}
 
     try:
         document = engine.open(abs_path)
@@ -600,25 +655,73 @@ def summarize(index) -> dict:
     return coverage
 
 
+def resolve_srcs(case_dir, values):
+    """把 `--src` 归一成案例内相对子目录；返回 `(dirs, problems)`。
+
+    `--src` 以前直接 `join(case_dir, src)` 就开 walk：`--src ..` 或绝对路径会把任意
+    可读目录里的 PDF/图片渲染进案例，等于把本机文档带进审核材料。判据与 `--only` 同口径：
+    案例内相对路径、不含 `..`、真实路径不越界（案例内的软链指向外部同样拒绝）。
+    """
+    base = os.path.realpath(case_dir)
+    dirs, problems = [], []
+    for raw in values:
+        item = (raw or "").strip().replace("\\", "/")
+        while item.startswith("./"):
+            item = item[2:]
+        if item in ("", "."):
+            problems.append("空的子目录：%r" % raw)
+            continue
+        if item.startswith("/") or re.match(r"^[A-Za-z]:", item):
+            problems.append("不接受绝对路径：%s" % raw)
+            continue
+        if ".." in item.split("/"):
+            problems.append("路径不能含 ..：%s" % raw)
+            continue
+        target = os.path.realpath(os.path.join(base, *item.split("/")))
+        if target != base and not target.startswith(base + os.sep):
+            problems.append("路径越出案例目录：%s" % raw)
+            continue
+        dirs.append(item)
+    return dirs, problems
+
+
 def scan_materials(case_dir, src_dirs, only=None):
     if only:
         # `--only` 是审核侧兜底清单的入口：只认清单里的文件，不扫目录。
         return sorted(only), []
+    base = os.path.realpath(case_dir)
     found = []
     skipped = []
     for src in src_dirs:
-        root = os.path.join(case_dir, src)
+        root = os.path.join(base, *src.split("/"))
         if not os.path.isdir(root):
             continue
-        for current, _dirs, files in os.walk(root):
+        for current, dirs, files in os.walk(root, followlinks=False):
+            # 目录软链不跟（walk 自己也不会进），但"没进"必须留下记录：
+            # 否则漏扫与"目录为空"在结果里无法区分。
+            for name in sorted(dirs):
+                link = os.path.join(current, name)
+                if os.path.islink(link):
+                    skipped.append({"relativePath": ocr_runtime.relpath(base, link),
+                                    "reason": "symlink-not-followed"})
+            dirs[:] = sorted(name for name in dirs
+                             if not os.path.islink(os.path.join(current, name)))
             for name in sorted(files):
                 absolute = os.path.join(current, name)
-                relative = ocr_runtime.relpath(case_dir, absolute)
+                relative = ocr_runtime.relpath(base, absolute)
                 extension = os.path.splitext(name)[1].lower()
-                if extension in PDF_EXTS or extension in IMAGE_EXTS:
-                    found.append(relative)
-                else:
+                if extension not in PDF_EXTS and extension not in IMAGE_EXTS:
                     skipped.append({"relativePath": relative, "reason": "not-an-ocr-source"})
+                    continue
+                # 文件软链同样不跟：一条案例内的链接就足以把案例外的文档读进来。
+                if os.path.islink(absolute):
+                    skipped.append({"relativePath": relative, "reason": "symlink-not-followed"})
+                    continue
+                resolved = os.path.realpath(absolute)
+                if resolved != base and not resolved.startswith(base + os.sep):
+                    skipped.append({"relativePath": name, "reason": "escapes-case-directory"})
+                    continue
+                found.append(relative)
     return sorted(found), skipped
 
 
@@ -643,20 +746,23 @@ def resolve_only(case_dir, values):
         if ".." in item.split("/"):
             problems.append("路径不能含 ..：%s" % raw)
             continue
-        extension = os.path.splitext(item)[1].lower()
-        if extension not in PDF_EXTS and extension not in IMAGE_EXTS:
-            problems.append("不是 OCR 源（只接受 PDF/图片）：%s" % raw)
-            continue
         absolute = os.path.join(case_dir, *item.split("/"))
         if not os.path.isfile(absolute):
             problems.append("文件不存在：%s" % raw)
+            continue
+        extension = os.path.splitext(item)[1].lower()
+        # 扩展名不是判据：盘点按 magic 把它放进了 ocrRequired，这里再按文件名卡一遍，
+        # 等于让「清单里有、索引里没有」成为必然。内容认不出时才退回扩展名。
+        if (extension not in PDF_EXTS and extension not in IMAGE_EXTS
+                and sniff_ocr_kind(absolute) == ""):
+            problems.append("不是 OCR 源（只接受 PDF/图片）：%s" % raw)
             continue
         resolved.append(item)
     return resolved, problems
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Render OCR sources and index their pages")
+    parser = argparse.ArgumentParser(allow_abbrev=False, description="Render OCR sources and index their pages")
     parser.add_argument("--case", required=True, help="case directory (absolute path)")
     parser.add_argument("--src", action="append", default=None, help="source subdirectory, repeatable")
     parser.add_argument("--dpi", type=int, default=None, help="base DPI for first-pass rendering")
@@ -683,6 +789,10 @@ def main(argv=None) -> int:
     case_dir = os.path.abspath(args.case)
     if not os.path.isdir(case_dir):
         ocr_runtime.emit(ocr_runtime.fail("input", "案例目录不存在：%s" % args.case))
+        return ocr_runtime.EXIT_USAGE
+    staged_problem = ocr_runtime.staged_case_problem(case_dir, __file__)
+    if staged_problem:
+        ocr_runtime.emit(ocr_runtime.fail("input", staged_problem))
         return ocr_runtime.EXIT_USAGE
     try:
         args.visual, args.visual_pages = parse_visual(args.visual)
@@ -748,6 +858,13 @@ def main(argv=None) -> int:
                 "input", "--only 的路径不合法：" + "；".join(problems),
                 action="只提交材料盘点 ocrRequired[].path 里的案例内相对路径（PDF/图片）"))
             return ocr_runtime.EXIT_USAGE
+
+    src_dirs, src_problems = resolve_srcs(case_dir, args.src or list(DEFAULT_SRC))
+    if src_problems:
+        ocr_runtime.emit(ocr_runtime.fail(
+            "input", "--src 的路径不合法：" + "；".join(src_problems),
+            action="只提交案例目录内的相对子目录，例如 材料-源 或 复核-人工"))
+        return ocr_runtime.EXIT_USAGE
 
     if args.force_budget and not args.re_render_pages and not args.force:
         ocr_runtime.emit(ocr_runtime.fail(
@@ -821,8 +938,10 @@ def main(argv=None) -> int:
     import pypdf
 
     engine, engine_notes = ocr_engines.select_pdf_engine()
-    materials, skipped = scan_materials(case_dir, args.src or list(DEFAULT_SRC), only)
-    has_pdf = any(os.path.splitext(item)[1].lower() in PDF_EXTS for item in materials)
+    materials, skipped = scan_materials(case_dir, src_dirs, only)
+    has_pdf = any(ocr_source_kind(os.path.join(case_dir, item),
+                                  os.path.splitext(item)[1].lower()) == "pdf"
+                  for item in materials)
     if has_pdf and engine is None:
         ocr_runtime.emit(ocr_runtime.fail(
             "capability-gap",
@@ -876,7 +995,7 @@ def main(argv=None) -> int:
             })
             continue
         extension = os.path.splitext(relative)[1].lower()
-        kind = "pdf" if extension in PDF_EXTS else "image"
+        kind = ocr_source_kind(absolute, extension)
         source_id = source_id_for(relative, digest)
         stem = ocr_runtime.safe_source_id(relative)
         prev = previous_pages(previous, relative)

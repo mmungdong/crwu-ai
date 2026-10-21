@@ -42,9 +42,13 @@ crwu_run_python_script({
 页面图与识别记录不被覆盖；只有显式 `--reset` 才丢弃旧来源。
 
 `--only` 是审核侧的唯一兜底入口：清单来自 `材料盘点.json` 的 `ocrRequired[].path`，只接受
-**案例内相对路径**（`材料-源/报告.pdf` 这种写法）。绝对路径、含 `..`、非 PDF/图片扩展名、
-文件不存在，一律按参数错误拒绝（退出码 `2`，`errorKind=input`），并且**不改写**既有索引。
+**案例内相对路径**（`材料-源/报告.pdf` 这种写法）。绝对路径、含 `..`、文件不存在，一律按参数错误
+拒绝（退出码 `2`，`errorKind=input`），并且**不改写**既有索引。
 它与 `--reset`、`--src` 都不能同用（前者会丢清单外来源，后者与案例内路径定位重叠）。
+
+- 一份文件算不算 OCR 源按**内容**判定（PDF 头 / PNG、JPEG、GIF、BMP、TIFF、WEBP 的 magic），
+  扩展名只作回退：盘点本来就把「扩展名不认识但内容是图片」的文件放进了 `ocrRequired[]`，
+  这里再按文件名卡一遍会让清单与索引永远对不上。内容也认不出时仍按参数错误拒绝。
 
 - 支持的输入：`.pdf`，以及 `.png .jpg .jpeg .webp .gif .bmp .tif .tiff`。
   其它扩展名只记入 `skipped`，不猜测内容。
@@ -150,9 +154,11 @@ exhausted`，越权时另有 `exceededBy`。`maxDoubleReads` 缺省为
 --case <绝对路径>
 ```
 
-输出 `coverage / pending[] / unreadable[] / failedSources[] / conflictPages[] /
-budgetExhausted / notVerified[] / actions[]`。
+输出 `coverage / pending[] / unreadable[] / failedSources[] / needsPassword[] /
+conflictPages[] / budgetExhausted / notVerified[] / actions[]`。
 `pending` 表示"页图在、但还没识别"；`unreadable` 表示"读不了，必须登记未核"；
+`needsPassword` 表示"加密 PDF、本机没有口令通道"——它是**可接受终态**，但整份来源必须
+登记进审核结论的 `scope.notCheckedItems`（`reasonCode=needs-password`）并给出员工动作；
 `notVerified[]` 每页只出现一次，`reason` 取 `conflict / unreadable / pending`。
 
 ## 7. 错误分类与处置

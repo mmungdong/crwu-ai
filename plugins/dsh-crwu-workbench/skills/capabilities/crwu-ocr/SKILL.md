@@ -113,6 +113,7 @@ description: Use when audit materials include PDFs, scans, or images whose pages
 - `ocr/index.json` 覆盖全部目标源；每页有页号、页图路径（或明确的不可读原因）、状态；
 - `ocr/merged/<sourceId>.txt` 已产出且页序与 `index.json` 一致（`mergedDigest` 可复核）；
 - `ocr_status.py` 的 `pending` 为空，或每个 pending/unreadable 都已在审核结论里登记为未核；
+- `needsPassword`（加密 PDF）是可接受终态：整份来源登记为未核，并给员工"提供口令或解密版"的动作；
 - 识别记录与页图指纹一致，批次可追溯（`recognition/<sourceId>.json`）；
 - 报告中引用页码时，页码与 `index.json` 的 `page` 一致。
 

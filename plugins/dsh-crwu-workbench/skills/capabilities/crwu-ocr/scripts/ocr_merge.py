@@ -153,7 +153,7 @@ def merge_source(case_dir: str, source: dict, recognition: dict,
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Merge recognised OCR pages into one continuous text")
+    parser = argparse.ArgumentParser(allow_abbrev=False, description="Merge recognised OCR pages into one continuous text")
     parser.add_argument("--case", required=True, help="case directory (absolute path)")
     parser.add_argument("--source", action="append", default=None,
                         help="sourceId to merge (repeatable; default: every indexed source)")
@@ -164,6 +164,10 @@ def main(argv=None) -> int:
     case_dir = os.path.abspath(args.case)
     if not os.path.isdir(case_dir):
         ocr_runtime.emit(ocr_runtime.fail("input", "案例目录不存在：%s" % args.case))
+        return ocr_runtime.EXIT_USAGE
+    staged_problem = ocr_runtime.staged_case_problem(case_dir, __file__)
+    if staged_problem:
+        ocr_runtime.emit(ocr_runtime.fail("input", staged_problem))
         return ocr_runtime.EXIT_USAGE
     if args.split_pages < 0:
         ocr_runtime.emit(ocr_runtime.fail("input", "--split-pages 只能是非负整数"))

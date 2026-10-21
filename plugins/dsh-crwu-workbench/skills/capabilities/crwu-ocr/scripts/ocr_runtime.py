@@ -103,6 +103,28 @@ def relpath(case_dir: str, path: str) -> str:
     return os.path.relpath(path, case_dir).replace(os.sep, "/")
 
 
+def staged_case_problem(case_dir: str, script_file: str) -> str:
+    """Refuse a --case that is not the case this staged copy belongs to.
+
+    The scripts are staged to ``<case>/ocr-skill/scripts/``. When that layout is
+    present the case is not a caller choice: it is where the copy lives. This is the
+    authoritative check — the Host's argument check is a diagnostic, and any spelling
+    it misses (an argparse abbreviation, a duplicated --case) still lands here.
+    """
+    scripts_dir = os.path.dirname(os.path.abspath(script_file))
+    if os.path.basename(scripts_dir) != "scripts":
+        return ""
+    stage_dir = os.path.dirname(scripts_dir)
+    if os.path.basename(stage_dir) != "ocr-skill":
+        return ""
+    expected = os.path.realpath(os.path.dirname(stage_dir))
+    actual = os.path.realpath(case_dir)
+    if expected != actual:
+        return ("案例目录与本轮暂存位置不一致：--case %s，暂存位置 %s；"
+                "OCR 脚本只能处理本轮案例" % (actual, expected))
+    return ""
+
+
 def normalize_text(value: str) -> str:
     """NFKC plus whitespace removal: layout changes must not break quote matching."""
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value or ""))

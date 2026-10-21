@@ -84,11 +84,15 @@ def not_verified_pages(index: dict, conflicts: list) -> list:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Report OCR page coverage and pending work")
+    parser = argparse.ArgumentParser(allow_abbrev=False, description="Report OCR page coverage and pending work")
     parser.add_argument("--case", required=True)
     args = parser.parse_args(argv)
 
     case_dir = os.path.abspath(args.case)
+    staged_problem = ocr_runtime.staged_case_problem(case_dir, __file__)
+    if staged_problem:
+        ocr_runtime.emit(ocr_runtime.fail("input", staged_problem))
+        return ocr_runtime.EXIT_USAGE
     index = ocr_runtime.read_json(os.path.join(case_dir, "ocr", "index.json"))
     if not isinstance(index, dict):
         ocr_runtime.emit(ocr_runtime.fail("input", "ocr/index.json 不存在或不可读：先运行 ocr_prepare.py"))
@@ -97,6 +101,7 @@ def main(argv=None) -> int:
     pending = []
     unreadable = []
     failed_sources = []
+    password_sources = []
     for source in index.get("sources", []):
         waiting = [page["page"] for page in source.get("pages", []) if page.get("visualStatus") == "pending"]
         if waiting:
@@ -119,6 +124,12 @@ def main(argv=None) -> int:
                 "relativePath": source.get("relativePath", ""),
                 "errors": source.get("errors", []),
             })
+        if source.get("status") == "needs-password":
+            password_sources.append({
+                "sourceId": source.get("sourceId", ""),
+                "relativePath": source.get("relativePath", ""),
+                "reasonCode": source.get("reasonCode", "") or "pdf-password-required",
+            })
 
     actions = []
     conflicts = load_conflicts(case_dir)
@@ -139,6 +150,8 @@ def main(argv=None) -> int:
             actions.append("本次未做双读（预算已用尽）：交付说明写清单次判读，不得写已双读")
     if failed_sources:
         actions.append("整份来源不可读：保持其页面范围为未核，并在报告里写明原因")
+    if password_sources:
+        actions.append("加密 PDF 需要员工提供口令或解密版：整份登记为未核，不得判成缺失或通过")
     if not actions:
         actions.append("无需继续处理")
 
@@ -151,6 +164,7 @@ def main(argv=None) -> int:
         "pending": pending,
         "unreadable": unreadable,
         "failedSources": failed_sources,
+        "needsPassword": password_sources,
         "conflictPages": conflicts,
         "budgetExhausted": budget_exhausted,
         "notVerified": not_verified,

@@ -888,5 +888,126 @@ class OcrFlowTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.case, "ocr", "pages")),
                          "a rejected re-render must not write page images")
 
+class SourceScopeTest(unittest.TestCase):
+    """`--src` / `--case` 的边界：这两个参数是「把哪个目录带进审核」的唯一入口。
+
+    不依赖渲染引擎：参数被判非法时命令必须在**读材料之前**退出，所以这些用例
+    故意不建 PDF，也不跑依赖解包。
+    """
+
+    def setUp(self):
+        self.case = tempfile.mkdtemp(prefix="crwu-ocr-scope-")
+        self.outside = tempfile.mkdtemp(prefix="crwu-ocr-outside-")
+        os.makedirs(os.path.join(self.case, "材料-源"))
+
+    def tearDown(self):
+        shutil.rmtree(self.case, ignore_errors=True)
+        shutil.rmtree(self.outside, ignore_errors=True)
+
+    def test_src_must_stay_inside_the_case(self):
+        for bad in ("..", "../..", self.outside, "/etc", "材料-源/../.."):
+            code, payload = run(PREPARE, ["--case", self.case, "--src", bad], self.case)
+            self.assertEqual(2, code, payload)
+            self.assertEqual("input", payload.get("errorKind"), payload)
+            self.assertIn("--src", payload.get("error", ""))
+        self.assertFalse(os.path.exists(os.path.join(self.case, "ocr", "index.json")),
+                         "被拒的 --src 不得留下索引")
+
+    def test_src_rejects_a_symlink_that_leaks_outside(self):
+        os.makedirs(os.path.join(self.outside, "机密"))
+        link = os.path.join(self.case, "外链")
+        try:
+            os.symlink(os.path.join(self.outside, "机密"), link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        resolved, problems = ocr_prepare.resolve_srcs(self.case, ["外链"])
+        self.assertEqual([], resolved)
+        self.assertTrue(problems, "指向案例外的软链必须被拒")
+
+    def test_scan_skips_symlinked_files_instead_of_reading_them(self):
+        inside = os.path.join(self.case, "材料-源", "内部.png")
+        with open(inside, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n")
+        secret = os.path.join(self.outside, "机密.png")
+        with open(secret, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n")
+        link = os.path.join(self.case, "材料-源", "外链.png")
+        try:
+            os.symlink(secret, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+
+        found, skipped = ocr_prepare.scan_materials(self.case, ["材料-源"])
+        self.assertEqual(["材料-源/内部.png"], found)
+        reasons = {item["relativePath"]: item["reason"] for item in skipped}
+        self.assertEqual("symlink-not-followed", reasons.get("材料-源/外链.png"))
+
+    def test_only_accepts_an_image_whose_extension_is_unknown(self):
+        # 盘点按 magic 把它放进 ocrRequired；`--only` 只认扩展名就会整体拒绝，
+        # 结果是「清单里有、索引里没有」，门禁永远过不去。
+        path = os.path.join(self.case, "材料-源", "scan.dat")
+        with open(path, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        resolved, problems = ocr_prepare.resolve_only(self.case, ["材料-源/scan.dat"])
+        self.assertEqual([], problems)
+        self.assertEqual(["材料-源/scan.dat"], resolved)
+        self.assertEqual("image", ocr_prepare.ocr_source_kind(path, ".dat"))
+
+    def test_only_still_rejects_content_that_is_not_an_ocr_source(self):
+        path = os.path.join(self.case, "材料-源", "notes.dat")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("这不是 PDF 也不是图片")
+        resolved, problems = ocr_prepare.resolve_only(self.case, ["材料-源/notes.dat"])
+        self.assertEqual([], resolved)
+        self.assertTrue(problems)
+
+    def test_encrypted_pdf_is_reported_as_needs_password(self):
+        runtime = ocr_runtime.ensure_dependencies(HERE, self.case)
+        if not runtime["ok"]:
+            self.skipTest("packaged OCR dependencies unavailable")
+        try:
+            # 解包后 pypdf 才在 sys.path 上（随包 wheel，不靠系统环境）。
+            from pypdf import PdfWriter
+        except ImportError:
+            self.skipTest("pypdf unavailable")
+        if ocr_engines.select_pdf_engine()[0] is None:
+            self.skipTest("no PDF renderer available")
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.encrypt(user_password="secret")
+        with open(os.path.join(self.case, "材料-源", "加密.pdf"), "wb") as handle:
+            writer.write(handle)
+
+        code, payload = run(PREPARE, ["--case", self.case], self.case)
+        self.assertEqual(0, code, payload)
+        index = load(os.path.join(self.case, "ocr", "index.json"))
+        entry = next(item for item in index["sources"]
+                     if item["relativePath"] == "材料-源/加密.pdf")
+        self.assertEqual("needs-password", entry["status"],
+                         "加密件必须是可接受终态，不能报 failed（否则门禁永远过不去）")
+
+    def test_case_must_match_the_staged_location(self):
+        other = tempfile.mkdtemp(prefix="crwu-ocr-other-")
+        try:
+            staged = os.path.join(self.case, "ocr-skill", "scripts")
+            os.makedirs(staged)
+            for name in ("ocr_runtime.py", "ocr_engines.py", "ocr_quartz.py", "ocr_prepare.py"):
+                shutil.copy2(os.path.join(HERE, name), os.path.join(staged, name))
+            # 暂存副本只认它所在的那个案例。
+            code, payload = run(os.path.join(staged, "ocr_prepare.py"),
+                                ["--case", other], self.case)
+            self.assertEqual(2, code, payload)
+            self.assertIn("暂存位置", payload.get("error", ""))
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+    def test_abbreviated_option_is_not_accepted(self):
+        # argparse 默认把 `--cas` 当成 `--case`：命令行的边界不能由这个缩写规则决定。
+        code, payload = run(PREPARE, ["--case", self.case, "--cas", self.outside], self.case)
+        self.assertNotEqual(0, code, payload)
+        self.assertIn("unrecognized arguments", payload.get("stderr", ""),
+                      "缩写的长选项必须在 argparse 层就被拒，而不是被当成 --case")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
