@@ -43,7 +43,7 @@ H3YUN_BUNDLE  := $(DIST_DIR)/crwu-h3yun-bundle-$(VERSION).zip
         h3yun-bundle h3yun-bundle-check \
         plugin-deps plugin-python plugin-skills plugin-dws plugin-bin plugin-bin-check plugin-check plugin-ocr-check plugin-pack plugin-clean \
         plugin-version plugin-version-set plugin-npm-login plugin-npm-whoami \
-        plugin-publish-dry-run plugin-publish
+        plugin-publish-dry-run plugin-publish plugin-local-install plugin-local-verify
 
 build: build-mac build-win
 
@@ -233,6 +233,37 @@ plugin-publish:
 	@$(MAKE) --no-print-directory plugin-bin
 	cd "$(PLUGIN_DIR)" && $(NPM) publish --dry-run --registry="$(NPM_REGISTRY)"
 	cd "$(PLUGIN_DIR)" && $(NPM) publish --registry="$(NPM_REGISTRY)"
+
+# 本地自测安装：现打当前代码的包 → 清干净 desktop profile → 装进去 → 校验自洽。
+#
+# 为什么要先「清」：profile 里上一次安装留下的 node_modules 会让缺失的 peer 看起来能解析。
+# 0.0.43 在 macOS 上就是这么被掩盖的 —— 残留的 @langchain/core 落在解析不到的层级、
+# zod 由另一个插件顺带带入，于是本机「能跑」，干净机器装完直接 ERR_MODULE_NOT_FOUND。
+# 这里只删 node_modules（不动 package.json / lockfile / 其它插件条目），装完由
+# `plugin-local-verify` 把「还有哪些包可能掩盖问题」一并提示出来。
+#
+# 用的是 `npm pack`，它会跑 prepack（config:check + skills:sync + dws:check + build:lib），
+# 所以打进 tarball 的 lib/ 一定是当前源码构建的，而不是上一次的产物。
+DSH         ?= dsh
+DSH_PROFILE ?= desktop
+PROFILE_DIR := $(HOME)/.dsh/profiles/$(DSH_PROFILE)
+
+plugin-local-install: plugin-deps
+	@test -n "$(HOME)" || { echo "HOME 未设置，拒绝清理 profile"; exit 1; }
+	@test -d "$(PROFILE_DIR)" || { echo "profile 不存在: $(PROFILE_DIR)（不自动创建）"; exit 1; }
+	mkdir -p "$(DIST_DIR)"
+	cd "$(PLUGIN_DIR)" && $(NPM) pack --pack-destination "$(DIST_DIR)"
+	@echo "==> tarball: $(PLUGIN_TGZ)"
+	@echo "==> 清理 $(PROFILE_DIR)/node_modules（上一次安装的全部依赖副本）"
+	rm -rf -- "$(PROFILE_DIR)/node_modules"
+	-$(DSH) plugin --profile $(DSH_PROFILE) remove $(PLUGIN_PKG_NAME)
+	$(DSH) plugin --profile $(DSH_PROFILE) add "$(PLUGIN_TGZ)"
+	@$(MAKE) --no-print-directory plugin-local-verify
+	@echo "==> 完成：重启 DSH 生效（--profile $(DSH_PROFILE)）"
+
+# 只读校验：安装是否自洽（依赖、入口 import、依赖自带的必需 peer 都要能从本插件位置解析）。
+plugin-local-verify:
+	@cd "$(PLUGIN_DIR)" && node scripts/verify-installed.mjs "$(PROFILE_DIR)" "$(PLUGIN_PKG_NAME)"
 
 # 插件侧的构建产物：分发包（dist/）、装配好的二进制（bin/）与它的下载缓存（.cache/）。
 # `.npm-cache/` 是包内 `.npmrc` 锚定的 npm 缓存：每次 `npm pack` 都会缓存一份 ~40MB 的 tarball，
