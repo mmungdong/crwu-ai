@@ -10,6 +10,7 @@ This repository contains the `crwu` CLI, reusable Skills, and the DeepSeek Harne
 - Treat CLI and MCP as transports, integrations as providers, and application services as their shared orchestration boundary. Provider integrations do not import one another.
 - Keep WorkBuddy and DeepSeek Harness integrations as outer adapters. Do not branch core behavior by host.
 - Prefer focused modules and existing repository patterns over new abstractions or dependencies.
+- For Workbench architecture refactoring or shared UI/style extraction, read [`docs/architecture-refactoring-guide.md`](docs/architecture-refactoring-guide.md) for the target design and incremental migration criteria; it does not describe fully implemented behavior or expand the current task scope.
 
 ## Credentials and employee identity
 
