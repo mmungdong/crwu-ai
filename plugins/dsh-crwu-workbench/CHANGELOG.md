@@ -9,28 +9,29 @@
 
 ## package · 0.0.44 · 2026-10-22 · fix · 补上 langgraph 的必需 peer，修干净 profile 上的依赖错误
 
-0.0.43 在 Windows 首次安装后即报依赖错误；macOS 上靠历史残留侥幸没暴露，实测同一路径也已经坏。
+0.0.43 在 Windows 首次安装后即报依赖错误；macOS 上靠历史残留侥幸没暴露，同一路径实测也已经坏。
 
-- **症状**：`ERR_MODULE_NOT_FOUND: Cannot find package '@langchain/core' imported from
-  .../@langchain/langgraph/dist/node.js`。本包在 `lib/index.js` 顶层静态 import langgraph，
-  所以是**插件加载阶段**就失败，不是某个功能不可用。
-- **根因**：`@langchain/langgraph` 把 `@langchain/core`、`zod` 声明为**必需 peer**
-  （无 `peerDependenciesMeta` optional），而接收方 profile 的解析配置是
-  `autoInstallPeers: false`（宿主有意如此：`@deepseek-ai/dsh-*` 由运行时提供，不能由包管理器安装），
-  这两个 peer 因此永远装不到可解析的位置。
-- **为什么 macOS 看起来没事**：`@langchain/core` 确实存在，但落在
-  `node_modules/dsh-crwu-workbench/node_modules/`，而 `@langchain/langgraph` 被提升到顶层
-  `node_modules/` —— 从 langgraph 的位置向上解析**看不到**它；`zod` 则只是 `dsh-plugin-hub`
-  顺带带进来的。两者都不是本包的依赖，换一台机器就没了。
-- **修复**：`@langchain/core`、`zod` 写进本包 `dependencies`；`devDependencies` 同步一份，
-  但那只覆盖本仓开发，**不参与接收方装配**。
-- **回归测试**：`tests/unit/host/host-package.test.mjs` 新增断言——本包每个运行时依赖的
-  非 optional peer 都必须出现在本包 `dependencies` 里。补依赖前该断言失败，失败项正是
-  `@langchain/langgraph → @langchain/core`、`@langchain/langgraph → zod`。
-- **规则**：`plugins/AGENTS.md` 与工作台 `AGENTS.md` 写明这条边界，避免下次再加依赖时重犯。
-- **验证**：干净目录按 `nodeLinker: hoisted` + `autoInstallPeers: false` 复现原报错；把新的
-  依赖块打成 tarball 装进同款干净目录后，`@langchain/core`、`zod` 落在顶层且
-  `import('@langchain/langgraph')` 通过；`npm test`、`make docs-check`、`git diff --check`。
+### 新增功能
+
+● 本地自测安装 **make plugin-local-install** 现打当前代码的 tarball（`npm pack` 会跑 prepack，打进包的 `lib/` 一定是当前源码构建的），删掉 profile 的 `node_modules` 后把包装进 DSH，再用 **make plugin-local-verify** 校验：声明的依赖、入口的每个非宿主 import、以及依赖自带的必需 peer 都必须能从插件自己的位置解析；profile 里若还有别的包，会提示它可能在替本包兜底 peer。这两个目标只存在于源码仓库，不随 npm 包发布。
+
+### 修复
+
+● 补齐 langgraph 的必需 peer `@langchain/langgraph@1.5.1` 把 `@langchain/core@^1.1.48`、`zod@^3.25.32 || ^4.2.0` 声明为必需 peer（无 `peerDependenciesMeta` optional），而接收方 profile 用 `autoInstallPeers: false` 解析（宿主有意如此：`@deepseek-ai/dsh-*` 由运行时提供，不由包管理器安装），这两个 peer 因此永远装不到可解析的位置；本包 `lib/index.js` 顶层静态 import langgraph，于是加载阶段直接 `ERR_MODULE_NOT_FOUND: Cannot find package '@langchain/core'`，不是某个功能不可用。修法是把两者写进本包 `dependencies`，`devDependencies` 同步一份但那只覆盖本仓开发、不参与接收方装配。
+
+● macOS「看起来没事」的假象 残留的 `@langchain/core` 落在 `node_modules/dsh-crwu-workbench/node_modules/`（从提升到顶层的 langgraph 位置向上解析看不到），`zod` 只是 `dsh-plugin-hub` 顺带带进来的 —— 两者都不是本包的依赖，换一台干净机器就暴露。
+
+### 约束
+
+● 包形状契约测试 `tests/unit/host/host-package.test.mjs` 新增断言：本包每个运行时依赖的非 optional peer 都必须出现在本包 `dependencies` 里（宿主提供的 `@deepseek-ai/*`、`react` 豁免）。补依赖前该断言失败，失败项正是 `@langchain/langgraph → @langchain/core`、`@langchain/langgraph → zod`。
+
+● 规则沉淀 `plugins/AGENTS.md` 与工作台 `AGENTS.md` 写明这条边界，避免下次加依赖时重犯。
+
+### 验证
+
+● 干净目录复现 按 `nodeLinker: hoisted` + `autoInstallPeers: false` 装 0.0.43，原样复现上述报错；换成 0.0.44 的依赖块后 `@langchain/core`、`zod` 落在顶层，`import('@langchain/langgraph')` 通过。
+
+● 发布前门禁 `npm test`（3263 项，3259 通过 / 4 跳过）、`version:check`、`make docs-check`、`git diff --check` 全部通过。0.0.44 于 2026-10-22T05:10:52Z 发布到 npm。
 
 ## package · 0.0.43 · 2026-10-21 · feat · 估值开发预览、OCR 兜底与审核安全收口（合并未发布的 0.0.44–0.0.53）
 
