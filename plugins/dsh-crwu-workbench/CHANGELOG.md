@@ -7,6 +7,31 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.44 · 2026-10-22 · fix · 补上 langgraph 的必需 peer，修干净 profile 上的依赖错误
+
+0.0.43 在 Windows 首次安装后即报依赖错误；macOS 上靠历史残留侥幸没暴露，实测同一路径也已经坏。
+
+- **症状**：`ERR_MODULE_NOT_FOUND: Cannot find package '@langchain/core' imported from
+  .../@langchain/langgraph/dist/node.js`。本包在 `lib/index.js` 顶层静态 import langgraph，
+  所以是**插件加载阶段**就失败，不是某个功能不可用。
+- **根因**：`@langchain/langgraph` 把 `@langchain/core`、`zod` 声明为**必需 peer**
+  （无 `peerDependenciesMeta` optional），而接收方 profile 的解析配置是
+  `autoInstallPeers: false`（宿主有意如此：`@deepseek-ai/dsh-*` 由运行时提供，不能由包管理器安装），
+  这两个 peer 因此永远装不到可解析的位置。
+- **为什么 macOS 看起来没事**：`@langchain/core` 确实存在，但落在
+  `node_modules/dsh-crwu-workbench/node_modules/`，而 `@langchain/langgraph` 被提升到顶层
+  `node_modules/` —— 从 langgraph 的位置向上解析**看不到**它；`zod` 则只是 `dsh-plugin-hub`
+  顺带带进来的。两者都不是本包的依赖，换一台机器就没了。
+- **修复**：`@langchain/core`、`zod` 写进本包 `dependencies`；`devDependencies` 同步一份，
+  但那只覆盖本仓开发，**不参与接收方装配**。
+- **回归测试**：`tests/unit/host/host-package.test.mjs` 新增断言——本包每个运行时依赖的
+  非 optional peer 都必须出现在本包 `dependencies` 里。补依赖前该断言失败，失败项正是
+  `@langchain/langgraph → @langchain/core`、`@langchain/langgraph → zod`。
+- **规则**：`plugins/AGENTS.md` 与工作台 `AGENTS.md` 写明这条边界，避免下次再加依赖时重犯。
+- **验证**：干净目录按 `nodeLinker: hoisted` + `autoInstallPeers: false` 复现原报错；把新的
+  依赖块打成 tarball 装进同款干净目录后，`@langchain/core`、`zod` 落在顶层且
+  `import('@langchain/langgraph')` 通过；`npm test`、`make docs-check`、`git diff --check`。
+
 ## package · 0.0.43 · 2026-10-21 · feat · 估值开发预览、OCR 兜底与审核安全收口（合并未发布的 0.0.44–0.0.53）
 
 0.0.43 是 npm 上 0.0.42 之后的下一个发布版本。此前仓库内的 0.0.44–0.0.53 均为内部排期、

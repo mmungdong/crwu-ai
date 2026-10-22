@@ -24,6 +24,7 @@ Dated acceptance, review, handoff, plan, and spec files are historical evidence,
 - Host and Client build separately to `lib/index.js` and `lib/client.js`.
 - Client output registers through `window.__ModuleLoader__` with the package name as module ID and may require only `react` and `react/jsx-runtime`.
 - Resolve packaged paths from the installed package, never from the profile `baseUrl`. Register one Skill root per layer because DSH discovery is not recursive.
+- A runtime dependency's non-optional `peerDependencies` must also be declared in this package's `dependencies`; `devDependencies` does not reach receiving profiles, which resolve with `autoInstallPeers: false`. See [`../AGENTS.md`](../AGENTS.md) package rules.
 - Deployment-variable values belong in `config/crwu-workbench.yml`; package/version/wire constants belong in their focused source modules.
 
 ## Host, Client, and lifecycle

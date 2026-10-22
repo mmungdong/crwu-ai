@@ -1,6 +1,6 @@
 {
   "name": "dsh-crwu-workbench",
-  "version": "0.0.43",
+  "version": "0.0.44",
   "description": "中瑞世联工作台 / CRWU audit workbench for DeepSeek Harness: pick a pending audit report, dispatch one AI audit subagent, watch and stop/restart it, auto-upload deliverables to Aliyun OSS.",
   "keywords": [
     "deepseek-harness",
@@ -108,9 +108,11 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4",
+    "@langchain/core": "^1.2.18",
     "@langchain/langgraph": "^1.5.1",
     "semver": "^7.8.5",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
@@ -128,11 +130,13 @@
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
     "@deepseek-ai/dsh-user-approval": "0.2.1-rc.2",
     "@deepseek-ai/dsh-util-values": "0.2.1-rc.2",
+    "@langchain/core": "^1.2.18",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "@types/semver": "^7.8.0",
     "react": "^18.3.1",
     "tsdown": "^0.22.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "zod": "^4.6.7"
   }
 }

@@ -48,6 +48,7 @@ For changes to the audit family, read the current contracts before editing:
 - The package uses npm distribution. Keep the removed public/read-only OSS distribution path removed; OSS configuration is for private audit delivery.
 - Package configuration and tarballs never contain AK/SK values, STS tokens, signed URLs, or employee credentials.
 - Preserve installed-package behavior: package paths resolve from the package name, packaged configuration is present, and `prepare` skips rebuilding when source files are absent.
+- Every non-optional `peerDependencies` entry of a package this package imports at runtime must also be declared in this package's `dependencies`. Receiving profiles resolve with `autoInstallPeers: false`, so a dependency's required peers are never installed on their own: `@langchain/langgraph` needs `@langchain/core` and `zod`, and declaring them only in `devDependencies` still leaves every profile failing with `ERR_MODULE_NOT_FOUND` at load. Host-provided packages (`@deepseek-ai/*`, `react`) stay peers and are exempt. `tests/unit/host/host-package.test.mjs` enforces this.
 - Changing configuration schema or delivery shape requires synchronized parser/schema, package assertions, tests, plugin README, plugin changelog, and version updates.
 
 Read focused Workbench documents only when their branch applies:
