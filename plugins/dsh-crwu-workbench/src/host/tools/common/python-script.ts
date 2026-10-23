@@ -3,6 +3,8 @@ import { text } from '../../../shared/utils/value.ts'
 import { isAbsoluteLocalPath, joinLocalPath } from '../../../shared/utils/local-path.ts'
 import { requireCaseAccess } from '../../domains/report-audit/case-access.ts'
 import { isOcrSkillScript, ocrCaseArgumentProblem, stageOcrSkill } from '../../domains/report-audit/ocr-skill.ts'
+import { isAuditScript } from '../../domains/report-audit/audit-scripts.ts'
+import { writeAuditRuntimeQuietly } from './audit-runtime.ts'
 import { shellInvoke } from '../../core/platform/shell.ts'
 import { PYTHON_RUNTIME_SOURCE } from '../../core/runtime/python.ts'
 import { TOOL_NAMES, type ToolErrorKind } from '../report-audit/consts.ts'
@@ -211,13 +213,32 @@ export function pythonScriptTools(deps: ToolDeps) {
       if (deps.python === undefined) {
         return { ...base, ...failure('capability-gap', 'DSH 自带 Python 解析器没有装配：本插件实例不能执行技能脚本') }
       }
-      const runtime = await deps.python.check({ agent: exec.agent })
+      const runtime = await deps.python.check({
+        agent: exec.agent,
+        ...(session === undefined ? {} : { session }),
+      })
       if (!runtime.ok) {
         return {
           ...base,
           ...failure('capability-gap', `DSH 自带 Python 不可用（${runtime.state}）：${runtime.error}`),
           python: { path: runtime.path, versionText: runtime.versionText, source: runtime.source },
         }
+      }
+
+      if (isAuditScript(raw)) {
+        // 审核技能脚本要 `pypdf`，而 DSH 运行时不一定有：把随包 wheel 的**绝对路径**写进
+        // `<案例>/scripts/runtime.json`（wheel 不落案例）。脚本侧按 sha256 校验后 zipimport。
+        // 与认领/建档时的那次写入同一份实现，且同样是**尽力而为**：写不出来只意味着脚本退回
+        // "缺依赖、如实记账"（盘点里的 `vendoredPython.activated=false` 会把降级暴露出来），
+        // 不该把一次可执行的降级变成"工具不可用"。
+        await writeAuditRuntimeQuietly({
+          ctx,
+          access: deps.access,
+          world: deps.world,
+          casePath: caseCheck.casePath,
+          ...(session === undefined ? {} : { session }),
+          ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+        })
       }
 
       // ④ 执行：经 Broker 的 `python.script.run`（不提权）走到与其它命令同一条 seam。

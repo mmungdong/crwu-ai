@@ -76,6 +76,8 @@ const REQUIRED = [
   'skills/capabilities/crwu-ocr/scripts/ocr_record.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_status.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_merge.py',
+  // 覆盖率快照是交付门禁的事实源：缺了它 `audit_delivery validate --case` 只能报"缺少快照"。
+  'skills/capabilities/crwu-ocr/scripts/ocr_coverage.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_bench.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_engines.py',
   'skills/capabilities/crwu-ocr/scripts/ocr_quartz.py',
@@ -84,6 +86,12 @@ const REQUIRED = [
   'skills/capabilities/crwu-ocr/vendor/wheels/manifest.json',
   'skills/capabilities/crwu-ocr/vendor/wheels/pypdf-6.21.1-py3-none-any.whl',
   'skills/capabilities/crwu-ocr/vendor/wheels/pypdfium2-5.14.0-py3-none-win_amd64.whl',
+  // 审核技能自带同一份 pypdf：`prepare_materials.py` 必须有文本通道，否则每个 PDF 都会被
+  // 记成 `pypdf-error` 整类推给视觉判读（2026-10-22 现场）。副本由 `npm run vendor:check` 断言一致。
+  'skills/crwu/crwu-audit/vendor/wheels/manifest.json',
+  'skills/crwu/crwu-audit/vendor/wheels/pypdf-6.21.1-py3-none-any.whl',
+  // `xlrd` 只随审核技能：DSH 运行时没有它，`.xls`（评估明细表常见格式）会整类读不出。
+  'skills/crwu/crwu-audit/vendor/wheels/xlrd-2.0.2-py2.py3-none-any.whl',
   // 通用填表 / 校验脚本与报告模板随包发布：模板与它自己的填写说明是唯一入口，
   // 缺了脚本就只剩"手改单元格"（输入 / 公式区不被覆盖便无从保证）。
   'skills/biz/crwu-biz-valuation-realestate/scripts/check_workbook_contract.py',

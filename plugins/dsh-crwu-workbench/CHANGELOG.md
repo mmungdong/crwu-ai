@@ -7,6 +7,70 @@
 `cordis_define` + `cordis_run` 装配，版本号用 DSH 的 `pkg-N`）；它已在本仓收尾时删除
 （见 `0.0.1` 一节），下面 `legacy · pkg-43` 及更早的记录是它的历史。
 
+## package · 0.0.45 · 2026-10-23 · fix · OCR 覆盖率门禁、文本通道兜底与页图判读落盘（未发布）
+
+2026-10-22 本地审核 `la-1792650417169-c1024edd` 交付了 54 条"未审核"：其中 34 条是**已读未落盘**（子代理读完 32 张照片后被终止，`ocr_record.py` 一次没调），18 条是 1171 页扫描件从未进入 `ocr_prepare`；而"已审核 30/84"这个数字由父会话在交付脚本里**即席折算**。根因有四层，本节逐条修。
+
+### 新增功能
+
+● **OCR 覆盖率快照 `ocr_coverage.py`（crwu-ocr 技能）** 把 `ocr/index.json` 与 `ocr/recognition/*.json` 折算成逐来源 verdict：`complete` / `partial`（已读但含不可读页）/ `pending`（仍有待判读页）/ `skippedBudget`。判定是纯函数、`indexDigest` 可复核，模型只消费事实、不再自拟 `done >= total` 这类规则。产出 `ocr/coverage.json`，同时给出 `budget`（默认上限 5000 页）与 `gate`（过期记录、预算超限直接 blocked）。
+
+● **交付覆盖率门禁 `audit_delivery.py validate|render --case <案例目录>`** 按 `ocr/coverage.json` 对账：`scope.inputs[].readable` 必须与 verdict 一致（`complete`/`partial` → true，`pending`/`skippedBudget` → false）、每个未判读来源必须进 `scope.notCheckedItems`、快照 `indexDigest` 不得过期；`render` 同样前置执行。**未判读本身不阻断交付**（未核 ≠ 缺失），对不上才阻断。
+
+● **技能依赖覆盖门禁** `scripts/check_skill_python_deps.py`：遍历各技能层的运行时脚本，按 AST 取 import，逐个判定来源（同目录 / 该技能 `vendor/wheels` / DSH 运行时白名单），判定不了即失败并打印 `模块 ← 文件`；`try` / `if` 内的可选 import 单独列出、不判失败。接进 `make plugin-check`，且**用 DSH 自带 Python 跑** —— 系统 `python3` 恰好装了包，会把这个缺口全判绿。
+
+● **审核脚本随包依赖通道** `crwu-audit/vendor/wheels/pypdf`（与 `crwu-ocr` 逐字节同版本），Host 把 wheel 目录的绝对路径写进 `<案例>/scripts/runtime.json`，`prepare_materials.py` 校验 sha256 后 zipimport。写入点从"第一次执行脚本"前移到 **认领 / 建档**（`crwu_audit_local_claim`、`crwu_audit_case_bootstrap`），因为模型实际会用 `pwsh` 直接跑脚本、那条路径不经过 `crwu_run_python_script`。
+
+### 修复
+
+● **DSH 运行时没有 pypdf 时，全部 PDF 被记成 `pypdf-error`** 28 个 PDF 连页数都是 0，整批材料被推给视觉判读。现在盘点顶层写 `vendoredPython`（`activated / wheel / source / reason`），接上以后 `ocrRequired[]` 只剩真正没有文本的页。
+
+● **文本层判据落在逐页原文** 旧判据拿**拼好的 `提取/*.txt`** 比 50 字符，而它带 `===== 第 N 页 =====` 分隔符，8 页以上任何文件都"够长"；配合只认 `strip()==""` 的 `emptyPages`，扫描件每页带几个水印残字（现场 80–351 页的工商资料每 5 页约 40 个残字）就既不进 OCR 队列、也不进未核清单——**被静默当成正文读**。现在用不含分隔符的原始文本判 50 字符阈值，单页 `strip()` 少于 20 字符算薄文本页，占比 ≥50% 即按"扫描件带残字"进 `ocrRequired[]`（单页封面/隔页不会触发整份）。
+
+● **`crwu_run_python_script` 的探测与执行策略不一致** 探测不带会话策略时落到部署默认 `workspace-write`，在 ACL restricted-token runner 起不来的机器上回 `0xC0000142`，而脚本真正执行那一步经 Broker 本来会用会话策略——同一个会话两条路径两个结论。现在两次探测（版本 + 控制）都带调用方会话策略。**边界**：托管审核会话按 `policy.ts` 永远 `workspace-write`，本修复只覆盖本地/手动会话，托管侧的沙箱 runner 问题仍归部署方。
+
+● **页图判读的委派规则自相矛盾** "单个子代理最多 12 页"与"同一份来源不许拆给多个子代理"无法同时满足（现场有 72/85/107/245/351 页的单份扫描件）。改为"同一份来源只交一个子代理；一个子代理一次最多接 12 页，单份超 12 页整份交给一个、靠 8–10 页落盘压损失窗口"，并明确终止子代理前先要求落盘。
+
+● **整份打不开的件被洗成"已审核"** `ocr_coverage` 的 `required == 0` 判定会把 `needs-password`（加密 PDF）与 `failed`（整份渲染失败）算成 `complete`，交付门禁进而**要求**模型把它们标成 `readable=true`——比不判读更糟。现在这两种状态落 `pending`，`reasonCode` 分别为 `pdf-password-required` / `source-failed`，披露里带各自员工动作（提供口令/重送可读件）。
+
+● **从未进入 `ocr_prepare` 的文件不在门禁覆盖面内** 事故里 1171 页扫描件从未进过 `ocr_prepare`，因此不在 `ocr/index.json`、旧门禁只读 `coverage.json` 完全看不见它们。现在 `audit_delivery --case` 用 `材料盘点.json.ocrRequired[].path` 逐条对账：既不在快照、也没进 `scope.notCheckedItems` 的，报缺项；盘点文件缺失同样失败。
+
+● **预算量错了口径** `budget.used` 原取"总必读页数"，导致 6000 页全部读完仍被判 `budget-exceeded`。改为量**本轮待判读页数**，并新增 `requiredPages` 作信息字段。
+
+● **整批拒绝没有写入通道** 提示词要求模型"记 `budget-refused`"，但 `derive_status` 只产 `prepared/partial/failed`，这条承诺无法落地。新增 `ocr/refusal.json`（逐来源 `relativePath / reason / pages`）：`ocr_coverage.py` 校验路径、理由、来源归属与页数，**只在批次确实超预算时生效**（否则报 `refusal-not-justified` 并阻断），生效来源判 `skippedBudget` 并从预算扣除、逐条披露。拒绝不写 `ocr/index.json`、不删材料。
+
+● **同名文件按 basename 对账会误配** `材料-源/A/营业执照.pdf` 与 `材料-源/B/营业执照.pdf` 共用一个 basename：verdict 不一致时旧逻辑会替调用方挑一份来比。现在报"同名歧义，请在 `displayName` / `relatedFiles` 里带上子目录"；披露侧优先按完整相对路径匹配。
+
+● **`runtime.json` 写失败会阻断脚本执行** 与"尽力而为"的既有口径不一致。执行入口同样改为 warn + 继续，降级由盘点里的 `vendoredPython.activated=false` 暴露。
+
+● **`.xls` 在用户环境读不出** `crwu-audit` 的 `.xls` 读取依赖 `xlrd`，DSH 自带解释器没有它、任何技能也没随包 —— `.xls` 明细表/测算表会整类只记能力缺口。现随包 `xlrd 2.0.2`（纯 Python wheel），与 pypdf 同一套 `runtime.json` 通道；`assert-pack` 同步断言。
+
+● **随包依赖只激活了 `pypdf` 一个包** `activate_vendored_python` 写死了 `packages.get("pypdf")`：manifest 里再加包也永远不会进 `sys.path`。改为**按 manifest 全量校验后统一插入**，任一个 wheel 缺失或 sha256 不符则整份不激活（不留"pypdf 可用、xlrd 静默缺失"的半激活状态）。
+
+### 约束
+
+● `ocr_coverage.py` 由 Host 暂存进案例（`OCR_RUNTIME_FILES` / `OCR_SCRIPT_NAMES`），模型可用 `crwu_run_python_script` 提交 `ocr-skill/scripts/ocr_coverage.py`；`--case` 仍是唯一允许的案例参数。
+
+● `runtime.json` 写入是**尽力而为**：写不出来只退回"缺依赖、如实记账"，不让认领或建档失败；`crwu_run_python_script` 仍保留一次写入，兼容本变更之前已存在的案例目录。
+
+● `npm run vendor:check` 断言两个技能里的同名随包依赖版本/wheel/sha256 一致（输出区分"跨技能已比对"与"单技能"）；`pack:assert` 增加两条新路径，xlrd 只随审核技能。
+
+● `fetch_wheels.py`（源仓维护工具）支持 `--vendor-dir / --only`：登记表新增 `xlrd`，换目录时必须显式指定包，避免把别的技能的 manifest 覆盖错；既有 `note` 字段会保留。
+
+● `vendoredPython`（盘点顶层）形状改为 `activated / packages / source / reason`（`packages` 为 name→version），`00` 与单测同步。
+
+### 验证
+
+● 新增用例 `test_ocr_coverage.py`（25 项：verdict 表、26 页 1 页不可读判 `partial`、加密/坏件判 `pending`、预算按待判读页、拒绝生效与不被受理、过期记录、CLI）、`test_audit_delivery.py::CoverageGateTest`（16 项：缺快照/过期 digest/blocked gate/readable 冲突/未判读未披露/未判读已披露放行/`ocrRequired` 缺项/盘点缺失/同名歧义/CLI 有无 `--case`）、`test_prepare_materials.py` 新增薄文本页两项（残字扫描件必进清单、短封面不误伤）、`host-audit-runtime.test.mjs`（4 项：写入内容与目录、缺依赖跳过、写失败不抛）。
+
+● 变异验证 把 `ocr_coverage` 的 `partial` 改成 `pending`、把 `THIN_PAGE_RATIO` 调到 1.1，对应用例分别变红，确认断言咬得住。
+
+● 新增/加强用例 `test_prepare_materials_deps.py` 增加"xlrd 激活后必须在干净子进程里可 import"（证明通道有用，而不是本进程碰巧有包）；`test_prepare_materials.py` 的随包测试改为断言**全量包**，并新增"一个 wheel 坏掉时整份不激活"。
+
+● 门禁 `scripts/check_skill_python_deps.py` 由红转绿：唯一缺口 `xlrd` 已随包；可选 import（`pdfminer`、`requests`）仍按设计降级。
+
+● 门禁 `npm run typecheck`、`npm test`、`make plugin-check`、`make docs-check`、`git diff --check`（结果见交付说明）。
+
 ## package · 0.0.44 · 2026-10-22 · fix · 补上 langgraph 的必需 peer，修干净 profile 上的依赖错误
 
 0.0.43 在 Windows 首次安装后即报依赖错误；macOS 上靠历史残留侥幸没暴露，同一路径实测也已经坏。

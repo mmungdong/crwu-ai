@@ -389,7 +389,8 @@ for (const mode of ['audit', 'manual', 'discussion']) {
     assert.equal(result.value.scriptPath, `${CASE_DIR}/scripts/review.py`)
     assert.deepEqual(result.value.argv, [`${CASE_DIR}/scripts/review.py`, '--case', CASE_DIR, tricky])
     // 参数只走 argv：命令里那个形状奇怪的值必须被**引用成字面量**，不许变成命令替换。
-    const command = String(shell.commands[0] ?? '')
+    // 执行前会先建 `<案例>/scripts` 并写 `runtime.json`（随包依赖位置），所以按解释器挑那条命令。
+    const command = String(shell.commands.find((item) => String(item).includes('/dsh/python/bin/python3')) ?? '')
     assert.equal(command.includes(`'${tricky}'`), true, command)
     assert.equal(command.includes('/dsh/python/bin/python3'), true, '必须用解析出来的 DSH Python')
     // **不提权**：脚本在案例目录内，边界由调用方会话给出。

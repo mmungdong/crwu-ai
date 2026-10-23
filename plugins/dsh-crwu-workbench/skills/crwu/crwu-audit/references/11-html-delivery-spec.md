@@ -870,8 +870,8 @@ renderer 只能按上表映射展示，不能新增业务字段或另造统计�
 | 编排阶段（router 步骤） | 调用 | 输入 | 输出 | 失败处理 |
 | --- | --- | --- | --- | --- |
 | 阶段一冻结（步骤 11） | `audit_delivery.py digest <冻结快照.json>` | 阶段一定稿产物快照（AI 意见、route_profile、命中轴、规则/模块清单） | stdout：规范化 JSON 的 sha256（写入 `phaseControl.phase1Digest`；同时记 `phase1FrozenAt`） | 计算失败 → 停止进入阶段二，记 capability gap |
-| 阶段二收口 · 交付校验（步骤 14 ①） | `audit_delivery.py validate 审核意见.<项目ID>.json` | 汇总后的 AuditResult JSON | stdout 通过信息；非 0 退出 | **失败即停止交付**，逐条报错；禁止人工绕过、删检查或手改 HTML |
-| 阶段二收口 · 渲染（步骤 14 ②） | `audit_delivery.py render 审核意见.<项目ID>.json --out 审核意见.<项目ID>.html --json-out 审核结果.<项目ID>.json` | 已通过上一步 JSON 校验的同一份 AuditResult | 自包含单文件 HTML + 最终渲染态配套 JSON；脚本仍先独立执行 JSON 校验，再在内存渲染并做 `--rendered` 自检，最后成对落盘 | JSON 校验、自检或成对写出任一步失败 → HTML 与配套 JSON 均不作为本次产物；JSON 业务校验失败时二者均不得创建；已存在的旧文件不得充当本次交付 |
+| 阶段二收口 · 交付校验（步骤 14 ①） | `audit_delivery.py validate 审核意见.<项目ID>.json --case <案例目录>` | 汇总后的 AuditResult JSON + `ocr/coverage.json` | stdout 通过信息；非 0 退出 | **失败即停止交付**，逐条报错；禁止人工绕过、删检查或手改 HTML。`--case` 触发**OCR 覆盖率门禁**：`readable` 与逐来源 verdict 必须一致、未判读来源必须进 `notCheckedItems`、快照 `indexDigest` 不得过期 |
+| 阶段二收口 · 渲染（步骤 14 ②） | `audit_delivery.py render 审核意见.<项目ID>.json --case <案例目录> --out 审核意见.<项目ID>.html --json-out 审核结果.<项目ID>.json` | 已通过上一步 JSON 校验的同一份 AuditResult | 自包含单文件 HTML + 最终渲染态配套 JSON；脚本仍先独立执行 JSON 校验，再在内存渲染并做 `--rendered` 自检，最后成对落盘 | JSON 校验、自检或成对写出任一步失败 → HTML 与配套 JSON 均不作为本次产物；JSON 业务校验失败时二者均不得创建；已存在的旧文件不得充当本次交付 |
 | 交付（步骤 14 ③） | 无（文件交付） | `审核意见.<项目ID>.html` + `审核结果.<项目ID>.json` | 员工侧只交付 HTML；内部审核监控/统计读取配套 JSON，且其解析对象与 HTML 内嵌 AuditResult 完全一致 | 渲染不可得 → 记 capability gap，只保留输入 JSON 与校验错误报告，**不得跳过 JSON 校验直接出 HTML** |
 
 约定：`digest` 与 `render` 使用同一规范化序列化（排序键、UTF-8、无多余空白），因此冻结指纹可复现、`fileTrace.sourceDigest` 可与冻结摘要互校；脚本仅依赖 Python 标准库，退出码 `0` 通过 / `1` 失败。`render` 的执行顺序固定为：载入输入 → **JSON 校验** → 内存渲染 → 提取 HTML 内嵌对象 → 渲染态校验 → 成对写出；禁止在 JSON 合规前进入 HTML 渲染逻辑。

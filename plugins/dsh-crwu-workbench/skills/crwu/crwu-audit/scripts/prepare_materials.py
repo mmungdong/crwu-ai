@@ -40,12 +40,116 @@ H0 人工隐藏区**整体排除审核范围**：sheet / 行 / 列 / 折叠分�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+
+# 随包纯 Python 依赖的激活结果（写进盘点，供交付披露"PDF/.xls 到底走没走文本通道"）。
+VENDORED_PYTHON: dict = {"activated": False, "source": "", "reason": "not-attempted",
+                         "packages": {}, "wheels": []}
+
+
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _vendor_candidates(script_dir: str, explicit: str) -> list:
+    """随包 wheel 目录的候选，按优先级：`--vendor` → `runtime.json`。
+
+    `runtime.json` 由 Host 在**案例认领/建档时**写入（`{"pythonVendor": "<绝对路径>"}`），
+    执行脚本时再兜底写一次；wheel 本身**不落案例目录**：脚本只读安装包里那一份，
+    插件升级后自动指向新包。
+    """
+    out = []
+    if explicit:
+        out.append((explicit, "--vendor"))
+    try:
+        with open(os.path.join(script_dir, "runtime.json"), encoding="utf-8") as handle:
+            config = json.load(handle)
+    except (OSError, ValueError):
+        config = {}
+    configured = config.get("pythonVendor") if isinstance(config, dict) else ""
+    if isinstance(configured, str) and configured:
+        out.append((configured, "runtime.json"))
+    return out
+
+
+def activate_vendored_python(script_dir: str, explicit: str = "") -> dict:
+    """把随包纯 Python wheel（`pypdf`、`xlrd` 等，以 manifest 为准）接进 `sys.path`。
+
+    纯 Python 包用 zipimport 直接引用 wheel，不解包、不装进 DSH 运行时。**先逐个校验 sha256**：
+    任何一个字节不符就整份不激活（退回既有的"缺依赖、如实记账"），绝不加载可疑文件。
+
+    解析优先级为 `--vendor` → `runtime.json.pythonVendor`；谁先给出可用且校验通过的
+    manifest 就用谁。**不猜技能目录**：脚本从技能目录直接运行时没有案例上下文，
+    静默使用安装包里的 wheel 会让"缺依赖"的契约测试失效（也掩盖部署问题）。
+
+    **按 manifest 全量激活**，不写死包名：2026-10-23 只认 `pypdf` 时，`xlrd`（`.xls`）
+    虽然进了 manifest 也永远不会被插进 `sys.path`。
+    """
+    global VENDORED_PYTHON
+    for root, source in _vendor_candidates(script_dir, explicit):
+        manifest_path = os.path.join(root, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError) as error:
+            VENDORED_PYTHON = {"activated": False, "source": source, "reason": f"manifest 读不出来：{error}"}
+            continue
+        packages = manifest.get("packages") if isinstance(manifest, dict) else None
+        if not isinstance(packages, dict) or not packages:
+            VENDORED_PYTHON = {"activated": False, "source": source, "reason": "manifest 未声明任何随包依赖"}
+            continue
+        # 先全部校验，再统一插入：避免"pypdf 装上了、xlrd 坏了"的半激活状态。
+        verified = []
+        failure = ""
+        for name in sorted(packages):
+            entry = packages[name]
+            if not isinstance(entry, dict):
+                failure = f"{name} 的 manifest 条目格式不对"
+                break
+            wheel_path = os.path.join(root, str(entry.get("wheel") or ""))
+            if not os.path.isfile(wheel_path):
+                failure = f"随包 wheel 不存在：{name}（{wheel_path}）"
+                break
+            try:
+                actual = _sha256(wheel_path)
+            except OSError as error:
+                failure = f"{name} 的 wheel 读不出来：{error}"
+                break
+            if actual != str(entry.get("sha256") or ""):
+                failure = f"随包 wheel sha256 不符：{name}"
+                break
+            verified.append((wheel_path, name, str(entry.get("version") or "")))
+        if failure:
+            VENDORED_PYTHON = {"activated": False, "source": source, "reason": failure}
+            continue
+        for wheel_path, _name, _version in verified:
+            if wheel_path not in sys.path:
+                sys.path.insert(0, wheel_path)
+        VENDORED_PYTHON = {
+            "activated": True,
+            "source": source,
+            "reason": "",
+            "wheels": [item[0] for item in verified],
+            "packages": {item[1]: item[2] for item in verified},
+        }
+        return VENDORED_PYTHON
+    if VENDORED_PYTHON.get("reason") in ("", "not-attempted"):
+        VENDORED_PYTHON = {"activated": False, "source": "", "reason": "找不到随包 manifest"}
+    return VENDORED_PYTHON
+
 
 def _import_media_extract():
     """按文件位置加载同目录的 `media_extract.py`。
@@ -87,6 +191,16 @@ ORPHAN_SPAN_ROWS = 1000
 ORPHAN_SPAN_COLS = 1000
 
 MAX_SHEET_CELLS = 2_000_000
+
+
+# **文本层判据**：`ocrRequired[]` 只回答"哪些页没有可读正文"，所以判据必须落在**原始逐页文本**上。
+# 拼好的 `提取/*.txt` 带 `===== 第 N 页 =====` 分隔符，8 页以上任何文件都"超过 50 字符"；
+# 用拼接文本判会把扫描件整份静默当成正文读（2026-10-22：28 个 PDF 全被判可读的前置条件之一）。
+MIN_TEXT_CHARS = 50
+# 单页"有字但极少"：扫描件残留的水印/页眉/半 OCR 通常每页个位数到十几个字符。
+MIN_PAGE_TEXT_CHARS = 20
+# 薄文本页占比达到这个水平就按"整份扫描件（带残字）"处理；单页封面/隔页不会触发。
+THIN_PAGE_RATIO = 0.5
 
 
 # **格式级依赖边界**（2026-09-26 · R2）：顶层依赖固定到格式，绝不由 `e.name` 推导 ——
@@ -423,15 +537,25 @@ def pdf_pages_and_text(p: str):
 
 
 def pdf_page_stats(pages) -> dict:
-    """逐页有字/空页统计：`empty` 判据是 `strip() == ""`（空白页不算有字）。"""
+    """逐页有字/空页/薄文本页统计。
+
+    `empty`：`strip() == ""`；`thin`：有字但 `strip()` 少于 `MIN_PAGE_TEXT_CHARS` 个字符。
+
+    为什么需要 `thin`：扫描件常带一点残留文本（水印、扫描仪页眉、半 OCR），这类页**既不空**，
+    整份拼接后又远超"无文本层"阈值 —— 只按 `empty` 判会把整份扫描件静默当成正文读
+    （2026-10-22 现场：80–351 页的工商资料扫描件每 5 页只有约 40 个残字，`emptyPages` 为空）。
+    """
     empty = [i for i, t in enumerate(pages, 1) if t.strip() == ""]
+    thin = [i for i, t in enumerate(pages, 1)
+            if t.strip() != "" and len(t.strip()) < MIN_PAGE_TEXT_CHARS]
     return {"total": len(pages), "withText": len(pages) - len(empty),
-            "empty": len(empty), "emptyPages": empty}
+            "empty": len(empty), "emptyPages": empty,
+            "thin": len(thin), "thinPages": thin}
 
 
 def pdf_to_text(p: str):
     pages, txt = pdf_pages_and_text(p)
-    if len(txt.strip()) < 50:
+    if len(txt.strip()) < MIN_TEXT_CHARS:
         return txt, "PDF 无文本层或内容极少（疑扫描件）"
     return txt, None
 
@@ -1051,8 +1175,19 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                 else:
                     txt = _join_pages(pages)
                     stats = pdf_page_stats(pages)
-                    err = ("PDF 无文本层或内容极少（疑扫描件）"
-                           if len(txt.strip()) < 50 else None)
+                    # 判据落在**原始逐页文本**（不含页分隔符）：扫描件带一点残字时，
+                    # 拼接文本永远"够长"，只有逐页看才发现它没有正文。
+                    raw_text = "".join(pages).strip()
+                    textless = sorted(set(stats["emptyPages"]) | set(stats["thinPages"]))
+                    thin_ratio = (stats["thin"] / stats["total"]) if stats["total"] else 0.0
+                    err = None
+                    if len(raw_text) < MIN_TEXT_CHARS:
+                        err = "PDF 无文本层或内容极少（疑扫描件）"
+                    elif stats["empty"]:
+                        err = "PDF 存在无文本层页（疑扫描件）：已进 OCR 兜底清单"
+                    elif thin_ratio >= THIN_PAGE_RATIO:
+                        err = ("PDF 多数页只有零星字符（疑扫描件残字，如第 %s 页）：已进 OCR 兜底清单"
+                               % ",".join(str(n) for n in textless[:10]))
                     rec["textPages"] = stats
                     rec["readable"] = not err
                     with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
@@ -1062,13 +1197,13 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                     reason = ""
                     if err:
                         rec["note"] = err
-                        reason = "no-text-layer"
-                    elif stats["empty"]:
-                        reason = "empty-pages"
+                        # 整份一页正文都没有 → no-text-layer；只有部分页没字 → empty-pages（页号更精确）。
+                        fully_textless = bool(stats["total"]) and stats["empty"] == stats["total"]
+                        reason = "empty-pages" if stats["empty"] and not fully_textless else "no-text-layer"
                     rec["textSource"] = "ocr-required" if reason else "pypdf"
                     if reason:
                         ocr_required.append(ocr_required_entry(
-                            rec, rel, "pdf", reason, stats["emptyPages"], stats["total"]))
+                            rec, rel, "pdf", reason, textless, stats["total"]))
             elif ext == ".xlsx":
                 out_name = os.path.basename(p)
                 if out_name in seen_xlsx:
@@ -1240,6 +1375,8 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                "sheetAnomalies": sheet_anomalies,
                # pypdf 读不到的页与独立图片：由 crwu-ocr 兜底，清单只写事实（路径/页号/原因）
                "ocrRequired": ocr_required,
+               # 随包纯 Python 依赖是否生效：决定"PDF 走文本通道还是被整类推给 OCR"
+               "vendoredPython": dict(VENDORED_PYTHON),
                "nonCellEvidence": non_cell_summary}
     inv_path = os.path.join(case, inventory_name)
     with open(inv_path, "w", encoding="utf-8") as fh:
@@ -1274,12 +1411,25 @@ def main() -> int:
     ap.add_argument("--media", default=None, help="媒体证据目录（默认 <案例>/媒体证据）")
     ap.add_argument("--extract", default=None, help="归档解压目录（默认 <案例>/解压）")
     ap.add_argument("--inventory", default=None, help="盘点文件名（默认 材料盘点.json）")
+    ap.add_argument("--vendor", default="",
+                    help="维护/测试用：随包 wheel 目录（默认只认 <案例>/scripts/runtime.json，"
+                         "不猜技能目录；审核提示词不提交这个参数）")
     ap.add_argument("--label", default=None,
                     help="阶段标签（如 复核）：各产物名加后缀（提取-复核/工作版-复核/…），"
                          "避免阶段二复跑覆盖阶段一冻结产物；须与 --src 一起指向复核件目录")
     args = ap.parse_args()
 
     case = os.path.abspath(args.case)
+
+    # 先把随包纯 Python 依赖接进 sys.path：否则 DSH 运行时没有 pypdf，
+    # 每一个 PDF 都会被记成 `pypdf-error` 而整类推给视觉通道。
+    vendored = activate_vendored_python(os.path.dirname(os.path.abspath(__file__)), args.vendor)
+    if vendored["activated"]:
+        loaded = "、".join(f"{name} {version}".strip()
+                           for name, version in (vendored.get("packages") or {}).items())
+        print(f"随包依赖：{loaded}（{vendored['source']}）")
+    else:
+        print(f"随包依赖：未启用（{vendored['reason']}）——缺 pypdf/xlrd 的 PDF 与 .xls 会记能力缺口")
 
     def _under_case(value, default_name):
         """相对路径一律相对 `--case` 解析（否则 `--src 复核-人工` 会落到当前工作目录）。"""

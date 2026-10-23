@@ -912,7 +912,8 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual([], self._payload()["ocrRequired"])
         item = self._inventory()[0]
         self.assertEqual("pypdf", item["textSource"])
-        self.assertEqual({"total": 2, "withText": 2, "empty": 0, "emptyPages": []},
+        self.assertEqual({"total": 2, "withText": 2, "empty": 0, "emptyPages": [],
+                          "thin": 0, "thinPages": []},
                          item["textPages"])
 
     def test_pdf_with_blank_page_is_flagged_with_exact_pages(self):
@@ -948,6 +949,38 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual("no-text-layer", entry["reason"])
         self.assertEqual(2, entry["pageCount"])
         self.assertEqual(2, self._inventory()[0]["textPages"]["empty"])
+
+    def test_scan_with_residual_text_is_flagged(self):
+        """扫描件每页带几个残字：既不空、拼接后又"够长"，也必须进兜底清单。
+
+        2026-10-22 现场：80–351 页的工商资料扫描件，每 5 页只有约 40 个残字
+        （`first5pgText=40`）。旧判据只看 `strip()==""`，这类页一页都不空，
+        又因为拼接文本带页分隔符而"超过 50 字符"——扫描件被静默当成正文读，
+        既没进 OCR 队列，也不会出现在"未核"里。
+        """
+        self._write_pdf("工商业扫描件.pdf", ["SCAN%03d" % no for no in range(10)])
+        self._run()
+
+        required = self._payload()["ocrRequired"]
+        self.assertEqual(1, len(required), required)
+        entry = required[0]
+        self.assertEqual("no-text-layer", entry["reason"])
+        self.assertEqual(list(range(1, 11)), entry["emptyPages"])
+        item = self._inventory()[0]
+        self.assertFalse(item["readable"])
+        self.assertEqual("ocr-required", item["textSource"])
+        self.assertEqual(10, item["textPages"]["thin"])
+
+    def test_short_cover_page_does_not_flag_the_whole_document(self):
+        """正常文档里有一个短封面（如只有标题）：薄文本页占比低，不整份推给 OCR。"""
+        self._write_pdf("报告.pdf", ["Cover", "A" * 70, "B" * 70, "C" * 70])
+        self._run()
+
+        self.assertEqual([], self._payload()["ocrRequired"])
+        item = self._inventory()[0]
+        self.assertTrue(item["readable"])
+        self.assertEqual("pypdf", item["textSource"])
+        self.assertEqual(1, item["textPages"]["thin"])
 
     def test_pdf_error_is_flagged_not_fatal(self):
         """坏 PDF 进清单，但不许让整个盘点崩掉。"""
@@ -1212,6 +1245,91 @@ class DependencyStateBoundaryTest(unittest.TestCase):
             dict(module.FORMAT_DEPENDENCIES),
             "格式 → 顶层依赖必须是固定表（.docx 保留 textutil 回退，不入表）",
         )
+
+
+class VendoredPythonTest(unittest.TestCase):
+    """随包依赖：DSH 运行时没有这些包时，盘点要能自己接上。
+
+    2026-10-22 现场：DSH 自带 Python 没有 pypdf → 28 个 PDF 全被记成 `pypdf-error`，
+    连页数都是 0，整个 PDF 集合被推给视觉通道（1171 页扫描件因此只能判"未核"）。
+    2026-10-23 复查又发现 `xlrd`（`.xls`）同样没随包；这一次把激活改成**按 manifest 全量**，
+    不再写死包名。
+    """
+
+    VENDOR = SCRIPTS_DIR.parent / "vendor" / "wheels"
+
+    def test_activates_every_package_declared_in_the_manifest(self):
+        module = _load_module()
+        result = module.activate_vendored_python(str(SCRIPTS_DIR), str(self.VENDOR))
+        self.assertTrue(result["activated"], result)
+        self.assertEqual("--vendor", module._vendor_candidates(str(SCRIPTS_DIR), str(self.VENDOR))[0][1],
+                         "显式 --vendor 必须排第一")
+        self.assertIn("pypdf", result["packages"])
+        self.assertIn("xlrd", result["packages"], "xlrd 是 .xls 的硬依赖，必须一起激活")
+        for wheel in result["wheels"]:
+            self.assertIn(wheel, sys.path, f"校验通过的 wheel 必须真的进 sys.path：{wheel}")
+
+    def test_a_bad_wheel_blocks_the_whole_manifest(self):
+        """一个包损坏就不许半激活：否则 pypdf 可用、xlrd 静默缺失，比整体失败更难查。"""
+        module = _load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = root / "pypdf-6.21.1-py3-none-any.whl"
+            good.write_bytes((self.VENDOR / "pypdf-6.21.1-py3-none-any.whl").read_bytes())
+            bad = root / "xlrd-2.0.2-py2.py3-none-any.whl"
+            bad.write_bytes(b"not-a-wheel")
+            import hashlib
+            (root / "manifest.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "packages": {
+                    "pypdf": {"version": "6.21.1", "wheel": good.name,
+                              "sha256": hashlib.sha256(good.read_bytes()).hexdigest()},
+                    "xlrd": {"version": "2.0.2", "wheel": bad.name, "sha256": "0" * 64},
+                },
+            }), encoding="utf-8")
+            isolated = root / "scripts"
+            isolated.mkdir()
+            result = module.activate_vendored_python(str(isolated), str(root))
+            self.assertFalse(result["activated"], result)
+            self.assertIn("xlrd", result["reason"])
+            self.assertNotIn(str(good), sys.path, "整份校验失败时不许把好的那个也插进去")
+
+    def test_rejects_a_tampered_wheel(self):
+        module = _load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wheel = root / "pypdf-6.21.1-py3-none-any.whl"
+            wheel.write_bytes(b"not-a-wheel")
+            (root / "manifest.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "packages": {"pypdf": {
+                    "version": "6.21.1", "wheel": wheel.name,
+                    "sha256": "0" * 64, "bytes": wheel.stat().st_size,
+                }},
+            }), encoding="utf-8")
+            isolated = root / "scripts"
+            isolated.mkdir()
+            result = module.activate_vendored_python(str(isolated), str(root))
+            self.assertFalse(result["activated"])
+            self.assertIn("sha256", result["reason"], "字节不符必须拒绝加载")
+
+    def test_runtime_json_points_at_the_installed_wheel(self):
+        module = _load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            script_dir = Path(tmp) / "scripts"
+            script_dir.mkdir()
+            (script_dir / "runtime.json").write_text(
+                json.dumps({"schemaVersion": 1, "pythonVendor": str(self.VENDOR)}), encoding="utf-8")
+            result = module.activate_vendored_python(str(script_dir), "")
+            self.assertTrue(result["activated"], result)
+            self.assertEqual("runtime.json", result["source"])
+
+    def test_missing_manifest_degrades_without_crashing(self):
+        module = _load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            result = module.activate_vendored_python(str(tmp), "")
+            self.assertFalse(result["activated"])
+            self.assertIn("manifest", result["reason"])
 
 
 if __name__ == "__main__":

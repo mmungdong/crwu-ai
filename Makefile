@@ -168,12 +168,21 @@ plugin-check: plugin-deps plugin-python
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/biz
 	# 共享能力层（skills/capabilities）：OCR 技能同样必须能作为副本独立工作。
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/capabilities
+	# 技能脚本的 Python 依赖覆盖：每个非标准库 import 都必须由**该技能的** vendor/wheels 或
+	# DSH 运行时白名单满足，否则用户环境里就是缺的（2026-10-22 pypdf、随后 xlrd 都漏过这里）。
+	# 必须用 DSH 自带 Python 跑：它才是用户环境里的解释器；系统 python3 恰好装了包，会漏判。
+	cd "$(CURDIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" scripts/check_skill_python_deps.py --plugin "$(PLUGIN_DIR)"
 	# 门禁只读源码：`PYTHONDONTWRITEBYTECODE=1` 保证不在包目录留下 `__pycache__/*.pyc`
 	# —— `files` 里有 `skills/crwu/`，残留会被 `pack:assert` 判成「打进了不该发布的东西」。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
 	# 阶段一材料盘点契约（H0 隔离 / 工作版重建 / 媒体证据 / OCR 兜底清单 ocrRequired）。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_prepare_materials.py
+	# 随包依赖通道：DSH 自带 Python **没有 pypdf**，文本通道只能靠随包 wheel。
+	# 这条用例必须在**无 pypdf 的运行时**上跑一次，否则"有文本层就走文本"只在开发机成立
+	# （2026-10-22 现场：28 个 PDF 全被记成 pypdf-error，整件推给视觉判读）。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/crwu/crwu-audit/scripts/test_prepare_materials_deps.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_prepare_materials_deps.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 	# 业务层（skills/biz）：报告评估的多类型资料提取脚本契约。缺 openpyxl / python-docx / Pillow
 	# 时对应用例**跳过**（那是运行时能力差异，不是脚本缺陷），缺口分支照常断言。
@@ -193,6 +202,8 @@ plugin-check: plugin-deps plugin-python
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_bench.py
+	# 覆盖率快照：verdict 表、预算边界、整批拒绝、过期记录 —— 交付门禁的事实源，无需真实渲染。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_coverage.py
 
 # OCR 能力的**真实渲染**门禁（`plugin-check` 里那两条的聚焦入口）：解释器自动取 DSH 自带
 # Python（macOS 走系统 CoreGraphics、Windows 走随包 pypdfium2），一般不需要传参。

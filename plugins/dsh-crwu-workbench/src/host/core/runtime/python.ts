@@ -1,5 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { Session } from '@deepseek-ai/dsh-session'
+// 只为类型增强：`Context.sandboxPolicy`。
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import { text } from '../../../shared/utils/value.ts'
+import { callerSessionPolicy } from '../access/caller-policy.ts'
 import { fileSystem, resolveTarget } from '../fs/paths.ts'
 import { shellInvoke } from '../platform/shell.ts'
 import { runShell } from '../shell/run.ts'
@@ -98,6 +102,18 @@ export interface PythonRuntimeResolver {
     refresh?: boolean
     agent?: unknown
     execution?: PythonRuntimeExecution
+    /**
+     * 调用方会话：**探测按它的沙箱策略执行**。
+     *
+     * 不传就会落到部署默认（`workspace-write` + 兜底根）：DSH 的执行器不持有会话，
+     * 请求里不带 `sandboxPolicy` 时它只认配置默认。于是"在完全权限会话里跑技能脚本"
+     * 会先在探测这一步被受限沙箱拦住（`0xC0000142`），而真正执行脚本那一步（经 Broker）
+     * 本来会用会话策略 —— 两条路径同一个会话得出两样结论，2026-10-22 真机就是这么失败的。
+     *
+     * 省略时回落到 `agent.session`（与 `callerSession(exec)` 同一条口径）；
+     * 两者都没有才交给执行器默认。
+     */
+    session?: Session
   }): Promise<PythonRuntimeView>
   /** 已缓存的值（测试与诊断用）。 */
   cached(): PythonRuntimeView | null
@@ -175,9 +191,9 @@ export function pythonStartFailureReason(
       + '**不是「DSH Python 不可用」**，换运行时 / 重装包都没有用。'
   return `进程在能跑起来之前就退出了（exitCode ${code} = 0xC0000142 STATUS_DLL_INIT_FAILED · ${mode}）。`
     + `${controlText}：${verdict}`
-    + '处置：这是**部署侧**的问题（DSH 版本 / 沙箱 runner / ACL 授权），不是插件能绕的 —— '
-    + '插件把审核根钉死在 `workspace-write` + `approval: never`（无人值守审核没有审批通道），'
-    + '并且在 auto / 完全权限的父会话下**拒绝**发起审核，所以"切完全权限"不是可用退路。'
+    + '处置：探测与执行都按**调用方会话的策略**跑（`danger-full-access` 不套捕获、不进受限令牌），'
+    + '所以这一支说明本次探测实际落在 `workspace-write` —— 要么会话本身被钉在这个模式（审核根固定如此），'
+    + '要么调用方没把自己的策略带下来。会话确是完全权限仍复现，才轮得到部署侧：'
     + '把上面这行结构化事实交给部署方核对受限沙箱后端即可（DSH 本该报沙箱不可用，而不是把它当普通非零退出）。'
 }
 
@@ -222,6 +238,16 @@ export function distributionsOf(raw: unknown): Record<string, string> {
   return out
 }
 
+/**
+ * 从调用方 agent 上取会话（`callerSession(exec)` 的同一形状）。
+ *
+ * 探测要用的就是"这次调用属于谁"，agent 是调用方唯一稳定带下来的东西；
+ * 显式给了 `session` 时以显式为准。
+ */
+function agentSession(agent: unknown): Session | undefined {
+  return (agent as { session?: Session } | undefined)?.session
+}
+
 export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFacts }): PythonRuntimeResolver {
   let cache: PythonRuntimeView | null = null
 
@@ -236,6 +262,12 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
     async check(options = {}) {
       if (options.refresh !== true && cache !== null) return cache
       const ctx = deps.ctx
+      // 探测和真跑脚本必须落在**同一个策略**里：不带会话就只会落到部署默认，
+      // 于是完全权限会话里的探测被受限沙箱拦住，而脚本本身其实跑得起来。
+      // 调用方没显式给会话时从它给的 agent 上取 —— 与 `callerSession(exec)` 同一条口径。
+      const session = options.session ?? agentSession(options.agent)
+      const sessionPolicy = callerSessionPolicy(ctx, session)
+      const policyOption = sessionPolicy === undefined ? {} : { sandboxPolicy: sessionPolicy }
       const registry = ctx.get('tools') as ToolsRuntimeLike | undefined
       if (registry === undefined || typeof registry.execute !== 'function') {
         return failed('capability-gap', 'Host tools 服务不可用，无法解析 DSH 自带 Python', true)
@@ -305,10 +337,11 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
         return failed('failed', `无法访问 DSH Python 路径：${python}（${error instanceof Error ? error.message : String(error)}）`)
       }
 
-      // ③ 跑一次版本探测：既拿到版本，也证明它真的能执行（只读命令，走默认沙箱）。
+      // ③ 跑一次版本探测：既拿到版本，也证明它真的能执行（只读命令，**用调用方会话的策略**）。
       const probe = await runShell(ctx, shellInvoke(python, ['-c', 'import sys;print(sys.version.split()[0])'], platform), {
         workdir: await deps.world.workdir(),
         timeoutMs: 30_000,
+        ...policyOption,
       })
       const versionText = pythonVersionOf(`${text(probe.stdout)}\n${text(probe.stderr)}`)
       if (!probe.ok || versionText === '') {
@@ -327,6 +360,7 @@ export function createPythonRuntimeResolver(deps: { ctx: Context; world: WorldFa
         const control = await runShell(ctx, "Write-Output 'crwu-python-probe'", {
           workdir: await deps.world.workdir(),
           timeoutMs: 20_000,
+          ...policyOption,
         })
         ctx.logger?.warn?.('crwu-workbench: DSH Python 探测在受限沙箱里起不来 %o', {
           exitCode: probe.exitCode, mode, denied: facts.denied, runnerFailed: facts.runnerFailed,

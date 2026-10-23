@@ -2,11 +2,12 @@
  * DSH 自带 Python 解析器（`src/host/core/runtime/python.ts`）的测试。
  *
  * 用户口径：**技能脚本用 DSH 自带的运行时，不再把系统 `python3` 当依赖**。所以这里钉的是
- * 四条不能回退的规则：
+ * 五条不能回退的规则：
  * 1. `load_workspace_dependencies` **只调一次**，成功结果缓存（失败不缓存，可显式刷新重试）；
  * 2. 拿到的路径必须**真的是可执行文件**，并且真的能跑出版本 —— 工具返回的字符串本身不是证据；
  * 3. 关键包（`openpyxl`）缺失 → 明确 capability gap / missing-package，绝不静默换系统 Python；
- * 4. 源码里**没有**硬编码的 DSH 安装路径，也**不改 PATH**。
+ * 4. 源码里**没有**硬编码的 DSH 安装路径，也**不改 PATH**；
+ * 5. 两次探测（版本 + 控制）都带**调用方会话的策略**，否则完全权限会话会被部署默认拖进受限沙箱。
  *
  * 全部替身都在内存里：不跑真实 shell、不碰真实运行时。
  */
@@ -24,6 +25,7 @@ const PYTHON = '/dsh/runtimes/primary/dependencies/python/bin/python3'
 function makeHarness(options = {}) {
   const toolCalls = []
   const shellCommands = []
+  const shellSpecs = []
   const stats = options.stats ?? { [PYTHON]: { type: 'file' } }
   const ctx = {
     get(name) {
@@ -56,11 +58,20 @@ function makeHarness(options = {}) {
           async stat(target) { return stats[target.targetKey] },
         }
       }
+      if (name === 'sandboxPolicy') {
+        // 会话策略服务：没有会话时 `resolve()` 回 `{}`（模式不合法 → 调用方拿不到策略）。
+        const mode = options.sessionMode
+        if (mode === undefined) return undefined
+        return {
+          resolve: ({ session }) => (session === undefined ? {} : { mode, workspaceRoot: '/cases/session' }),
+        }
+      }
       if (name === 'shell') {
         return {
           resolve: (request) => request,
           async execute(spec) {
             shellCommands.push(spec.command)
+            shellSpecs.push(spec)
             // 版本探测是唯一一条带 python 路径的命令；其余（控制探测）走 `control*` 那一组。
             const isVersionProbe = String(spec.command).includes(PYTHON)
             return {
@@ -93,7 +104,7 @@ function makeHarness(options = {}) {
       cached: () => ({ platform: 'darwin-arm64', home: '/Users/x' }),
     },
   })
-  return { resolver, toolCalls, shellCommands }
+  return { resolver, toolCalls, shellCommands, shellSpecs }
 }
 
 test('只解析一次：第二次直接读缓存，显式 refresh 才重问 DSH', async () => {
@@ -112,6 +123,51 @@ test('只解析一次：第二次直接读缓存，显式 refresh 才重问 DSH'
   await resolver.check({ refresh: true })
   assert.equal(toolCalls.length, 2, '显式刷新要重新解析（员工现场升了运行时）')
   assert.equal(shellCommands.length, 2, '每次解析都跑一次版本探测，证明它真能执行')
+})
+
+test('探测按调用方会话的策略执行：完全权限会话不能被部署默认拖进受限沙箱', async () => {
+  // 2026-10-22 真机：会话是 `danger-full-access`，探测没带策略 → 落到部署默认 workspace-write
+  // → 受限 runner 起不来 → `0xC0000142`，而脚本真正执行那一步（经 Broker）本来会用会话策略。
+  // 两条路径同一个会话必须得出同一个结论。
+  const session = { id: 'session-full-access' }
+  const harness = makeHarness({ sessionMode: 'danger-full-access' })
+  const view = await harness.resolver.check({ session })
+  assert.equal(view.ok, true)
+  assert.deepEqual(harness.shellSpecs[0].sandboxPolicy, {
+    mode: 'danger-full-access',
+    workspaceRoot: '/cases/session',
+  })
+})
+
+test('没有会话时不擅自声明策略：仍然交给执行器默认', async () => {
+  const harness = makeHarness({ sessionMode: 'danger-full-access' })
+  await harness.resolver.check()
+  assert.equal(harness.shellSpecs[0].sandboxPolicy, undefined, '拿不到会话就不能猜一个策略')
+})
+
+test('没显式给会话时从调用方 agent 上取（两个入口同一条口径）', async () => {
+  const session = { id: 'session-from-agent' }
+  const harness = makeHarness({ sessionMode: 'danger-full-access' })
+  await harness.resolver.check({ agent: { id: 'agent-1', session } })
+  assert.deepEqual(harness.shellSpecs[0].sandboxPolicy, {
+    mode: 'danger-full-access',
+    workspaceRoot: '/cases/session',
+  })
+})
+
+test('控制探测与版本探测用同一条策略（否则归因会被策略差异带偏）', async () => {
+  const session = { id: 'session-full-access' }
+  const harness = makeHarness({
+    sessionMode: 'danger-full-access',
+    versionExit: DLL_INIT_FAILED, versionStdout: '',
+    controlExit: DLL_INIT_FAILED, controlStdout: '',
+  })
+  const view = await harness.resolver.check({ session })
+  assert.equal(view.blockedBySandbox, true)
+  assert.equal(harness.shellSpecs.length, 2, '版本探测 + 一次控制探测')
+  for (const spec of harness.shellSpecs) {
+    assert.deepEqual(spec.sandboxPolicy, { mode: 'danger-full-access', workspaceRoot: '/cases/session' })
+  }
 })
 
 test('caller 的 agent scope 一路传进工具调用（走完整 policy pipeline）', async () => {

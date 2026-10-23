@@ -2,8 +2,9 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { text } from '../../../shared/utils/value.ts'
 import { callerIdentity } from '../../domains/report-audit/scope.ts'
 import { failure, renderJson } from '../common/outcome.ts'
+import { writeAuditRuntimeQuietly } from '../common/audit-runtime.ts'
 import { TOOL_NAMES } from './consts.ts'
-import type { ToolDeps } from '../common/types.ts'
+import { callerSession, type ToolDeps } from '../common/types.ts'
 
 /**
  * `crwu_audit_local_claim`：本地审核的**一次性交接认领**（协议 28）。
@@ -119,6 +120,19 @@ export function localClaimTools(deps: ToolDeps) {
         return { ...base, ...failure('policy', '无法确认调用者的会话身份：本地审核必须绑定到具体对话') }
       }
       const outcome = await registry.claim(handoffId, childId, io)
+      if (outcome.ok && outcome.casePath !== '') {
+        // 认领成功就把审核脚本的随包依赖位置写进案例：模型随后可能用 `pwsh` 直接跑
+        // `scripts/prepare_materials.py`（2026-10-22 真机就是这条路径），那条路径不经过
+        // `crwu_run_python_script`，等它来写 runtime.json 已经太晚。
+        await writeAuditRuntimeQuietly({
+          ctx: deps.ctx,
+          access: deps.access,
+          world: deps.world,
+          casePath: outcome.casePath,
+          ...(callerSession(exec) === undefined ? {} : { session: callerSession(exec) }),
+          ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+        })
+      }
       return {
         ...base,
         ok: outcome.ok,

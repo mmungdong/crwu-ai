@@ -618,7 +618,7 @@ def validate_problem_description(where: str, issue: dict) -> list:
     return errors
 
 
-def validate(result: dict, rendered: bool = False, expect_renderer: bool = False):
+def validate(result: dict, rendered: bool = False, expect_renderer: bool = False, case_dir=None):
     errors = []
     for key in REQUIRED_TOP_LEVEL:
         if key not in result:
@@ -1378,6 +1378,209 @@ def validate(result: dict, rendered: bool = False, expect_renderer: bool = False
             errors.append(
                 "{0} 已关闭假阳性不得仍保留在 issues；请撤回对应问题项或改正错误记录".format(where)
             )
+
+    # OCR 覆盖率快照（§6）：给了案例目录就必须对账，不给则保持既有行为。
+    if case_dir is not None:
+        errors.extend(coverage_gate(case_dir, result))
+
+    return errors
+
+
+# --------------------------------------------------------------------------- #
+# OCR 覆盖率门禁（交付规范 §6）
+#
+# 事故形状（2026-10-22）：54 条"未审核"里 34 条其实已经读过页图，只是没落盘；
+# 而"已审核 30/84"这个数字由父会话在交付脚本里**即席折算**，换一条会话就换一个口径。
+# 这里只做一件事：让交付件里的 readable / notCheckedItems 与 `ocr/coverage.json`
+# 的 verdict **对得上**。未判读本身不是阻断理由（未核 ≠ 缺失），但对不上就是硬失败。
+# --------------------------------------------------------------------------- #
+COVERAGE_RELATIVE = "ocr/coverage.json"
+OCR_INDEX_RELATIVE = "ocr/index.json"
+INVENTORY_RELATIVE = "材料盘点.json"
+COVERAGE_VERDICTS_READABLE = ("complete", "partial")
+COVERAGE_VERDICTS_DISCLOSED = ("pending", "skippedBudget")
+
+
+def _read_json(path: Path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _norm_path(value) -> str:
+    """案例内相对路径的统一形状：反斜杠归一、去 `./`、小写（Windows 口径）。"""
+    raw = str(value or "").strip().replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw.lower()
+
+
+def _base_name(value) -> str:
+    return _norm_path(value).rsplit("/", 1)[-1]
+
+
+def _coverage_not_required(case: Path) -> bool:
+    """本轮确实不需要 OCR：没有 `ocr/` 目录，且盘点里 `ocrRequired[]` 为空。"""
+    if (case / "ocr").is_dir():
+        return False
+    inventory = case / INVENTORY_RELATIVE
+    if not inventory.is_file():
+        return True
+    try:
+        data = _read_json(inventory)
+    except (OSError, ValueError):
+        return False
+    required = data.get("ocrRequired") if isinstance(data, dict) else None
+    return not (isinstance(required, list) and required)
+
+
+def coverage_gate(case_dir, result: dict) -> list:
+    """按 `ocr/coverage.json` 对账；返回错误串（空 = 通过）。"""
+    case = Path(str(case_dir))
+    if not case.is_dir():
+        return ["--case 指向的案例目录不存在：{0}".format(case_dir)]
+    coverage_path = case / COVERAGE_RELATIVE
+    index_path = case / OCR_INDEX_RELATIVE
+
+    if not coverage_path.is_file():
+        if _coverage_not_required(case):
+            return []
+        return [
+            "缺少 OCR 覆盖率快照 {0}：先跑 `ocr-skill/scripts/ocr_coverage.py --case <案例目录>`".format(
+                COVERAGE_RELATIVE)
+        ]
+
+    try:
+        coverage = _read_json(coverage_path)
+    except (OSError, ValueError) as error:
+        return ["OCR 覆盖率快照读不出来：{0}（{1}）".format(COVERAGE_RELATIVE, error)]
+    if not isinstance(coverage, dict):
+        return ["OCR 覆盖率快照必须是对象：{0}".format(COVERAGE_RELATIVE)]
+
+    errors = []
+    if not index_path.is_file():
+        errors.append("覆盖率快照存在但 {0} 已不在：快照已过期".format(OCR_INDEX_RELATIVE))
+    else:
+        try:
+            actual = sha256_hex(canonical_json(_read_json(index_path)))
+        except (OSError, ValueError) as error:
+            errors.append("{0} 读不出来：{1}".format(OCR_INDEX_RELATIVE, error))
+            actual = ""
+        if actual and coverage.get("indexDigest") != actual:
+            errors.append(
+                "OCR 覆盖率快照已过期：indexDigest 与当前 {0} 不一致（重跑 ocr_coverage.py）".format(
+                    OCR_INDEX_RELATIVE)
+            )
+
+    gate = coverage.get("gate") if isinstance(coverage.get("gate"), dict) else {}
+    if gate.get("status") != "pass":
+        blocks = gate.get("blocks") or []
+        if not blocks:
+            errors.append("OCR 覆盖率门禁未通过（gate.status={0}）".format(gate.get("status") or "（空）"))
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            where = block.get("relativePath") or block.get("reason") or ""
+            errors.append("OCR 覆盖率门禁未通过：{0}{1}".format(
+                block.get("kind") or "block", "（{0}）".format(where) if where else ""))
+
+    sources = [item for item in coverage.get("sources") or [] if isinstance(item, dict)]
+    inputs_by_name = {}
+    for item in (result.get("scope") or {}).get("inputs") or []:
+        if isinstance(item, dict):
+            inputs_by_name.setdefault(
+                _base_name(item.get("displayName") or item.get("fileId")), []).append(item)
+
+    # 同名文件（不同子目录）共用一个 basename：verdict 不一致时只报"歧义"，
+    # 不按其中一份判 readable 对错 —— 那等于替调用方挑了一份来比。
+    sources_by_name = {}
+    for source in sources:
+        sources_by_name.setdefault(_base_name(source.get("relativePath")), []).append(source)
+    for base, group in sources_by_name.items():
+        matched = inputs_by_name.get(base, [])
+        if not matched:
+            continue
+        verdicts = {str(item.get("verdict") or "") for item in group}
+        if len(group) > 1 and len(verdicts) > 1:
+            errors.append(
+                "同名文件歧义：scope.inputs 里的 {0} 对应 {1} 份来源且 verdict 不一致（{2}）；"
+                "请在 displayName 里带上子目录后再交付".format(
+                    base, len(group), "、".join(sorted(verdicts))))
+            continue
+        expected = next(iter(verdicts)) in COVERAGE_VERDICTS_READABLE
+        for item in matched:
+            # 没有 `readable` 字段的输入不在这里判：那是另一条契约的事，本门禁只查"标了却标反"。
+            if "readable" not in item:
+                continue
+            if item.get("readable") is not expected:
+                errors.append(
+                    "scope.inputs[{0}] 的 readable={1} 与 OCR 覆盖率 verdict={2} 不一致（应为 {3}）".format(
+                        item.get("displayName") or "", item.get("readable"),
+                        "、".join(sorted(verdicts)) or "（空）", expected)
+                )
+
+    not_checked = (result.get("scope") or {}).get("notCheckedItems") or []
+    disclosed_paths = set()
+    disclosed_names = set()
+    disclosed_text = []
+    for item in not_checked:
+        if not isinstance(item, dict):
+            continue
+        for related in item.get("relatedFiles") or []:
+            norm = _norm_path(related)
+            if norm:
+                disclosed_paths.add(norm)
+                disclosed_names.add(_base_name(norm))
+        disclosed_text.append(_norm_path(item.get("item")))
+
+    disclosed_sources = [item for item in sources
+                         if str(item.get("verdict") or "") in COVERAGE_VERDICTS_DISCLOSED]
+    disclosed_by_name = {}
+    for source in disclosed_sources:
+        base = _base_name(source.get("relativePath"))
+        disclosed_by_name[base] = disclosed_by_name.get(base, 0) + 1
+
+    for source in disclosed_sources:
+        rel = _norm_path(source.get("relativePath"))
+        base = _base_name(rel)
+        if rel and rel in disclosed_paths:
+            continue
+        if disclosed_by_name.get(base, 0) > 1:
+            errors.append(
+                "同名文件歧义：{0} 未判读，但快照里还有 {1} 份同名来源；"
+                "notCheckedItems.relatedFiles 必须写完整相对路径以区分".format(
+                    rel or base, disclosed_by_name[base]))
+            continue
+        if base in disclosed_names or any(base and base in text for text in disclosed_text):
+            continue
+        errors.append(
+            "未判读来源没有进 scope.notCheckedItems：{0}（verdict={1}，待判读 {2} 页）".format(
+                source.get("relativePath") or base, source.get("verdict"), source.get("pending")))
+
+    # 存量 OCR 清单对账：`ocrRequired[]` 里的文件可能**从未进入** ocr_prepare，
+    # 因此不在覆盖率快照里。这类文件要么在快照里出现，要么必须进 notCheckedItems。
+    inventory_path = case / INVENTORY_RELATIVE
+    if not inventory_path.is_file():
+        errors.append("缺少 {0}：无法核对 ocrRequired 与覆盖率快照".format(INVENTORY_RELATIVE))
+        return errors
+    try:
+        inventory = _read_json(inventory_path)
+    except (OSError, ValueError) as error:
+        errors.append("{0} 读不出来：{1}".format(INVENTORY_RELATIVE, error))
+        return errors
+    required_paths = []
+    if isinstance(inventory, dict):
+        for item in inventory.get("ocrRequired") or []:
+            if isinstance(item, dict) and item.get("path"):
+                required_paths.append(_norm_path(item["path"]))
+    covered = {_norm_path(source.get("relativePath")) for source in sources}
+    missing = [rel for rel in required_paths
+               if rel not in covered and rel not in disclosed_paths
+               and _base_name(rel) not in disclosed_names]
+    if missing:
+        listed = "、".join(missing[:10]) + ("…" if len(missing) > 10 else "")
+        errors.append(
+            "材料盘点要求 OCR、但既不在覆盖率快照、也没有进 scope.notCheckedItems 的 {0} 件：{1}".format(
+                len(missing), listed))
 
     return errors
 
@@ -2684,7 +2887,8 @@ def _write_render_pair(html_path: Path, json_path: Path, document: str, rendered
 
 def _cmd_validate(args) -> int:
     result = load_result(Path(args.path))
-    errors = validate(result, rendered=args.rendered, expect_renderer=args.rendered)
+    errors = validate(result, rendered=args.rendered, expect_renderer=args.rendered,
+                      case_dir=getattr(args, "case", None))
     if errors:
         for error in errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
@@ -2703,7 +2907,7 @@ def _cmd_digest(args) -> int:
 
 def _cmd_render(args) -> int:
     result = load_result(Path(args.path))
-    errors = validate(result, rendered=False)
+    errors = validate(result, rendered=False, case_dir=getattr(args, "case", None))
     if errors:
         for error in errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
@@ -2711,7 +2915,8 @@ def _cmd_render(args) -> int:
         return 1
     document = render(result)
     rendered = embedded_result_from_document(document)
-    post_errors = validate(rendered, rendered=True, expect_renderer=True)
+    post_errors = validate(rendered, rendered=True, expect_renderer=True,
+                           case_dir=getattr(args, "case", None))
     if post_errors:
         for error in post_errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
@@ -2732,6 +2937,8 @@ def main(argv=None) -> int:
     validate_parser = subparsers.add_parser("validate", help="校验 AuditResult JSON")
     validate_parser.add_argument("path", help="AuditResult JSON 路径")
     validate_parser.add_argument("--rendered", action="store_true", help="按渲染后状态校验（要求摘要已回填）")
+    validate_parser.add_argument("--case", default=None,
+                                 help="案例目录：给了就按 ocr/coverage.json 对账（OCR 覆盖率门禁）")
     validate_parser.set_defaults(func=_cmd_validate)
 
     digest_parser = subparsers.add_parser("digest", help="计算阶段一冻结指纹（规范化 JSON 的 sha256）")
@@ -2742,6 +2949,8 @@ def main(argv=None) -> int:
     render_parser.add_argument("path", help="AuditResult JSON 路径")
     render_parser.add_argument("--out", required=True, help="输出 HTML 路径")
     render_parser.add_argument("--json-out", required=True, help="输出与 HTML 内嵌对象完全一致的 AuditResult JSON")
+    render_parser.add_argument("--case", default=None,
+                               help="案例目录：给了就先过 OCR 覆盖率门禁（与 validate 同一口径）")
     render_parser.set_defaults(func=_cmd_render)
 
     args = parser.parse_args(argv)

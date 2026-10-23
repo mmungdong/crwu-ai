@@ -40,6 +40,8 @@ description: Use when audit materials include PDFs, scans, or images whose pages
 | `ocr/text/<sourceId>/pageNNNN.txt` | 该页文本层（存在时） |
 | `ocr/recognition/<sourceId>.json` | 逐页识别记录，绑定页图 sha256 |
 | `ocr/merged/<sourceId>.txt` | **按页序合并的连贯文本**（`--split-pages N` 时为 `…partNN.txt`） |
+| `ocr/coverage.json` | **交付门禁用**的覆盖率快照：逐来源 verdict（`complete`/`partial`/`pending`/`skippedBudget`）、预算与 `indexDigest` |
+| `ocr/refusal.json` | 整批拒绝的显式声明（仅当本轮必须判读页数 > 5000）：逐来源 `relativePath / reason / pages` |
 | `ocr/.deps/` | 随包依赖的解包缓存（可删，会重建） |
 
 不同来源或同名不同版本使用各自的 `sourceId` 子目录，互不覆盖。
@@ -62,10 +64,12 @@ description: Use when audit materials include PDFs, scans, or images whose pages
    （`value` 必须能在本页 `text` 的逐字 `quote` 里找到）。
    需要补判印章/签名/勾选/版式的页，先以
    `--visual pages:1,3-5` 重跑准备，再读对应页图。
-3. **记录识别结果**（每批一次，不要只在脑子里过）：
+3. **记录识别结果**（每 8–10 页一次，不要只在脑子里过）：
    把本批结果写成案例内 JSON（例如 `ocr/recognition-input.json`），字段见
    [03-recognition-record.md](references/03-recognition-record.md)，然后
    `script=ocr-skill/scripts/ocr_record.py`，参数 `--case <案例目录> --input <案例内 JSON>`。
+   **不许攒到全部读完再写**：判读结果只活在上下文里，子任务被终止时没落盘的页就是全丢
+   （2026-10-22 现场：子代理读完 32 张照片后被终止，一条记录都没有）。
    记录会校验页号、页图指纹与 `keyValues` 的 quote；图变了就必须重读，不能沿用旧结果。
    返回 `escalate[]` 时，按建议用 `ocr_prepare.py --re-render pages:<页号> --dpi <更高>`（不给 `--dpi` 时自动取更高一档）
    （`--mode tile` 用于表格页）重渲再读一遍；预算耗尽时不再升级。
@@ -81,7 +85,17 @@ description: Use when audit materials include PDFs, scans, or images whose pages
    默认一份到底，不建议分卷；确需分卷才用 `--split-pages N`。
 5. **核对覆盖**：`script=ocr-skill/scripts/ocr_status.py --case <案例目录>`。
    `pending` 未清零、`unreadable` 未登记前，不得把相关检查项写成"已核"。
-6. **交回审核**：在审核结论里引用页图页码与识别记录；未读页逐条登记为"未核"，给出员工可执行动作。
+6. **产出覆盖率快照（交付前**最后一步**）**：`script=ocr-skill/scripts/ocr_coverage.py --case <案例目录>`，
+   产出 `ocr/coverage.json`：逐来源 verdict + `indexDigest` + `gate`。交付时
+   `audit_delivery.py validate|render ... --case <案例目录>` 按它逐条对账——`readable` 与 verdict
+   必须一致、未判读来源必须进 `scope.notCheckedItems`、快照过期直接失败。
+   **未判读不阻断交付**（未核 ≠ 缺失），对不上才阻断；`pending` 页永远写成"未核"，不许折算成已核。
+   **跑完不要再 `ocr_record`**：补记会重写 `ocr/index.json`，快照立即过期；确需补记就重跑本步。
+7. **整批拒绝（仅超出预算时）**：本轮必须判读页数 **> 5000** 才允许整批拒绝——写
+   `ocr/refusal.json`：`{"schemaVersion":1,"sources":[{"relativePath":"材料-源/…","reason":"…","pages":351}]}`。
+   快照只在批次确实超预算时才认这份声明；低于阈值会被判 `refusal-not-justified` 并阻断。
+   拒绝**不删除**材料、不改 `ocr/index.json`，它是"本轮不判读"的显式声明，交付时必须逐条披露。
+8. **交回审核**：在审核结论里引用页图页码与识别记录；未读页逐条登记为"未核"，给出员工可执行动作。
 
 ## 硬规则
 
@@ -91,6 +105,9 @@ description: Use when audit materials include PDFs, scans, or images whose pages
 - **有效分辨率有上限**：会话读图约 1721 px 宽，超过该宽度的 DPI 只增磁盘不增信息；`--re-render` 计入双读预算，非必要不重渲（重渲会让该页记录失效）。
 - **不能因为有文本层就跳过必要视觉核验**：印章、签名、勾选、横竖版式、表格结构必须看页图。
 - **未核 ≠ 缺失，也 ≠ 通过**：图片读不出、页图损坏、模型无图片能力时，只能登记未核与原因。
+- **整份打不开 ≠ 已审核**：`needs-password` / `failed` 的来源 verdict 是 `pending`
+  （`reasonCode` 分别是 `pdf-password-required` / `source-failed`），交付必须 `readable=false`
+  并进 `notCheckedItems`；不许因为它们"没有页"就算成 `complete`。
 - **单页失败继续**：某页渲染/读取失败时保留该页与页号，继续其余材料；依赖该页的检查项标未核。
 - **整类环境失败立即停**：渲染引擎不可用、依赖缺失、模型没有图片能力时，停止该类剩余调用，
   报告可恢复动作，不逐页空转、不重复重试。

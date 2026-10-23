@@ -88,6 +88,37 @@ Invoke-DshPython '<load_workspace_dependencies 返回的绝对 Python 路径>' @
 这条兼容层只针对 Windows 子代理脚本；macOS / Linux 仍按上面的 POSIX 命令直接执行。
 不能因为包装器失败就改用系统解释器、搜索 PATH 或取消 `workspace-write`。
 
+### 1.3 页图判读的委派粒度与落盘
+
+判读结果只活在上下文里：**没写进 `ocr/recognition/` 就等于没读**。2026-10-22 现场，
+一个子代理读完 32 张车辆照片后被父会话终止，`ocr_record.py` 一次没调，34 页证据全部作废，
+交付里只能记"已渲染但未识别"。三条硬要求：
+
+- **落盘节奏**：每读完 **8–10 页**就写一次 `recognition-input-<n>.json` 并跑 `ocr_record.py`，
+   不许攒到全部读完再写。记录幂等，重跑只覆盖同一页。
+- **委派粒度**：**同一份来源只交给一个子代理**——`ocr_record` 是读-改-写，并发写同一份记录会丢更新。
+  一个子代理一次最多接 **12 页**；单份超过 12 页（本案例有 72/85/107/245/351 页的扫描件）时
+  **整份交给一个子代理**，不许按页拆给多个，靠落盘节奏把损失窗口压到 ≤10 页。任务书里必须写明落盘节奏。
+- **终止协议**：终止仍在读图的子代理之前，先 `send_message` 要求"把已读页立即落盘并回报
+  已记录页码"，收到回执或等待 60 秒后再 `interrupt_agent`。终止是为了交付一致性，但
+  `ocr_record` 晚落盘不会破坏已冻结的交付件——**没落盘才是不可恢复的损失**。
+
+- **页数不是放弃的理由**：生产级审核页多是常态，只有本轮必须判读的页数 **> 5000** 才算异常量级，
+  才允许整批拒绝；5000 以内必须读完，可跨轮次续跑。实测成本：渲染 91 ms/页、磁盘 1.24 MB/页、
+  读图约 2–4 s/页——5000 页约 7.6 分钟渲染、6.1 GB 磁盘、2.8–5.8 小时判读，所以**按文件分批**渲染
+  （单批 ≤ 3000 页，避开 10 分钟脚本超时）。
+- **整批拒绝要留声明**：拒绝时写 `ocr/refusal.json`
+  （`{"schemaVersion":1,"sources":[{"relativePath","reason","pages"}]}`），`ocr_coverage.py` 据此把来源
+  判成 `skippedBudget` 并逐条披露。快照会校验它：批次未超预算时这份声明**不生效**并报
+  `refusal-not-justified`；不在索引里的来源必须给 `pages`。没有声明的文件一律进
+  `scope.notCheckedItems`（`ocrRequired[]` 里的存量条目由交付门禁逐条对账）。
+
+收尾时（**最后一步，之后不要再 `ocr_record`**）跑 `ocr-skill/scripts/ocr_coverage.py --case <案例目录>`
+产出 `ocr/coverage.json`，
+**再用 `audit_delivery.py validate <结果.json> --case <案例目录>` 过覆盖率门禁**：门禁校验
+`scope.inputs[].readable` 与逐来源 verdict 一致、每个未判读来源都进了 `scope.notCheckedItems`、
+快照 `indexDigest` 未过期。未判读本身不阻断交付（未核 ≠ 缺失），**对不上才阻断**。
+
 ## 2. 路由流程（步骤 1–16）
 
 1. **消费 Host 已准备的输入快照（不要再定位、不要重复取数）**：报告已由 Host 按精确 ObjectId 定位并取数一次，结果落在案例目录的 `输入快照/` 下——完整记录 `报告记录.json`、附件清单 `附件清单.json`、元数据 `快照元数据.json`。`schemaCode` 是 Host 的基础设施状态：**核验记录事实一律以 `报告记录.json` 为准**，不要提交、不要猜测 `schemaCode`，也不要再调 `records list` / 搜表单 / 重新取记录。仅在启动指令明确说明「输入快照缺失」时，才允许**一次**兜底：调 `crwu_h3yun_record_get({objectId,caseDir})`（它由 Host 自己解析 `schemaCode`）。附件元数据直接读 `附件清单.json`（字段：附件字段、文件名、类型、大小、`fileId`）并分类；只有快照缺失时才对同一 `objectId` 调一次 `crwu_h3yun_files_list({objectId,caseDir})`；附件名只用于隔离决策和待抽验提示。（工具**不返回**带会话鉴权的下载 URL，也不需要。）
