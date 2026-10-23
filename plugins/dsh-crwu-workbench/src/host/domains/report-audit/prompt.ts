@@ -286,6 +286,9 @@ function ocrSection(): string[] {
       + '才允许整批拒绝——拒绝要写 `ocr/refusal.json`（逐来源 `relativePath / reason / pages`），'
       + '覆盖率快照据此判 `skippedBudget` 并逐条披露；批次未超预算时这份声明**不生效**并报 `refusal-not-justified`。'
       + '5000 以内**必须读完**，可跨轮次续跑（`ocr_status` 的 `pending` 就是续跑入口）。'
+      + '**交付阻断**：**只要还有待判读页就不许交付**——5000 页以内必须读完，读完或把读不出的页登记'
+      + '`unreadable` 才放行，**没有比例容忍**（`pending-pages` 会列出未读完的来源）；不接受 `refusal` 豁免。'
+      + '分母把"从未进过 `ocr_prepare` 的盘点件"也算进去，不 prepare 不会让结论变好。'
       + '实操：渲染按文件分批（单批 ≤ 3000 页，避开 10 分钟脚本超时）、开跑前按 1.24 MB/页核磁盘，'
       + '每约 500 页汇报一次「已记录 / 剩余」。',
     '4. 全部页记录后跑 `ocr-skill/scripts/ocr_merge.py --case <案例目录>`：产出 `ocr/merged/<sourceId>.txt`，'
@@ -295,13 +298,13 @@ function ocrSection(): string[] {
       + '`unreadable` 未登记、`conflictPages` 未处理前，相关检查项只能写「未核」；'
       + '`budgetExhausted=true` 只说明没做双读，不说明页面没读。',
     '6. **覆盖率快照（交付前**最后一步**）**：`ocr-skill/scripts/ocr_coverage.py --case <案例目录>` 产出 '
-      + '`ocr/coverage.json`；随后 `audit_delivery.py validate <结果.json> --case <案例目录>` 与 '
-      + '`render ... --case <案例目录>` 会按它逐条对账——`scope.inputs[].readable` 必须与 verdict 一致'
+      + '`ocr/coverage.json`；随后 `audit_delivery.py validate <结果.json>`（`--case` 可省，会按结果文件'
+      + '所在目录自动推导）按它逐条对账——`scope.inputs[].readable` 必须与 verdict 一致'
       + '（`complete`/`partial` 为 true，`pending`/`skippedBudget` 为 false），每个未判读来源都必须进 '
-      + '`scope.notCheckedItems`，快照过期（`indexDigest` 不符）直接失败；'
+      + '`scope.notCheckedItems`，快照过期（`indexDigest` 不符）或 `gate.status != pass` 直接失败；'
       + '`材料盘点.json` 的 `ocrRequired[]` 里"从未进过 ocr_prepare"的文件也必须进 `scope.notCheckedItems`，'
-      + '否则门禁报缺项。**跑完不要再 `ocr_record`**：补记会重写 `ocr/index.json`，快照立即过期。'
-      + '未判读本身不阻断交付（未核 ≠ 缺失），**对不上才阻断**。',
+      + '否则门禁报缺项。**跑完不要再 `ocr_record` 或 `ocr_merge`**：两者都会重写 `ocr/index.json`，'
+      + '快照立即过期。发布侧（OSS / 钉钉归档）同样拒绝缺快照或门禁未过的送件。',
     '',
     '硬口径：**已生成页图 ≠ 已识别**；**未核 ≠ 缺失，也 ≠ 通过**。页面图由当前会话的 DSH 模型判读'
       + '（不是独立的离线上传服务）；模型没有图片能力或页图不可读时按能力缺口登记，不猜内容。',

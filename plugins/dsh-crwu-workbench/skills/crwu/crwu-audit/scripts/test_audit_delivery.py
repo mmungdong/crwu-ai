@@ -1786,6 +1786,27 @@ class CoverageGateTest(unittest.TestCase):
         self._write_inventory([])
         self.assertEqual([], self._errors())
 
+    def test_sources_without_inventory_fail_closed(self):
+        """有源材料却连盘点都没有：材料准备没跑，不许静默通过（2026-10-23）。"""
+        import shutil
+        shutil.rmtree(self.case / "ocr")
+        (self.case / "材料盘点.json").unlink()
+        source = self.case / "材料-源"
+        source.mkdir()
+        (source / "报告.pdf").write_bytes(b"%PDF-1.4\n")
+        errors = self._errors()
+        self.assertEqual(1, len(errors), errors)
+        self.assertIn("材料准备这一步没跑", errors[0])
+        self.assertIn("prepare_materials.py", errors[0])
+
+    def test_empty_source_dir_still_passes_as_not_required(self):
+        """空的 `材料-源/` 不构成"有材料"：目录脚手架不该把门禁弄红。"""
+        import shutil
+        shutil.rmtree(self.case / "ocr")
+        (self.case / "材料盘点.json").unlink()
+        (self.case / "材料-源").mkdir()
+        self.assertEqual([], self._errors())
+
     def test_stale_digest_fails(self):
         self._write_coverage(self._entries("complete"), digest="0" * 64)
         errors = self._errors()
@@ -1799,6 +1820,57 @@ class CoverageGateTest(unittest.TestCase):
         })
         errors = self._errors()
         self.assertTrue(any("budget-exceeded" in item for item in errors), errors)
+
+    # -- ①b 待判读是否阻断：由审核类型（gate.policy）决定 ------------------ #
+    def _policy_gate(self, policy, strict="blocked"):
+        block = {"kind": "pending-pages", "pendingPages": 2, "requiredPages": 2, "sources": []}
+        return {
+            "policy": policy,
+            "status": strict,
+            "effectiveStatus": "pass" if policy == "disclose" else strict,
+            "blocks": [block],
+            "warnings": [block] if policy == "disclose" else [],
+            "disclosures": [],
+        }
+
+    def _disclose_source(self):
+        self.result["scope"]["notCheckedItems"].append({
+            "itemId": "NC-201",
+            "item": "13张车行驶证扫描件.pdf 的页图未判读",
+            "reasonCode": "unreadable",
+            "reason": "页图未判读（示意）",
+            "impact": "证照信息无法确认（示意）",
+            "requiredAction": "按页图逐页判读后落盘（示意）",
+            "relatedFiles": ["13张车行驶证扫描件.pdf"],
+        })
+
+    def test_managed_strict_policy_blocks_pending(self):
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("strict"))
+        errors = self._errors()
+        self.assertTrue(any("pending-pages" in item for item in errors), errors)
+
+    def test_local_disclose_policy_delivers_with_disclosure(self):
+        """本地审核：未核不阻断交付，但必须逐条披露（用户 2026-10-23 口径）。"""
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._disclose_source()
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("disclose"))
+        self.assertEqual([], self._errors())
+
+    def test_local_disclose_still_requires_disclosure(self):
+        """允许带未核交付 ≠ 允许不说：漏披露照样失败。"""
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("disclose"))
+        errors = self._errors()
+        self.assertTrue(any("notCheckedItems" in item for item in errors), errors)
+
+    def test_local_disclose_still_checks_readable(self):
+        """披露不等于可以把未读文件标成 readable=true。"""
+        self.result["scope"]["inputs"][0]["readable"] = True
+        self._disclose_source()
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("disclose"))
+        errors = self._errors()
+        self.assertTrue(any("readable" in item for item in errors), errors)
 
     # -- ② readable 与 verdict 一致 --------------------------------------- #
     def test_readable_true_with_pending_fails(self):
@@ -1912,12 +1984,24 @@ class CoverageGateTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("readable", stderr.getvalue())
 
-    def test_cli_without_case_keeps_existing_behavior(self):
+    def test_cli_derives_the_case_from_the_result_directory(self):
+        """不传 `--case`，结果文件在案例目录里：门禁照样生效（不能靠模型记得传）。"""
         payload = self.case / "result.json"
+        payload.write_text(json.dumps(self.result, ensure_ascii=False), encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = delivery.main(["validate", str(payload)])
+        self.assertEqual(1, code)
+        self.assertIn("覆盖率快照", stderr.getvalue(),
+                      "结果文件落在案例目录里却没跑覆盖率门禁")
+
+    def test_cli_outside_a_case_directory_keeps_existing_behavior(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, True))
+        payload = outside / "result.json"
         payload.write_text(json.dumps(self.result, ensure_ascii=False), encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()):
             code = delivery.main(["validate", str(payload)])
-        self.assertEqual(0, code)
+        self.assertEqual(0, code, "不在案例目录里的交付校验不该被覆盖率门禁拦下")
 
 
 if __name__ == "__main__":

@@ -92,7 +92,7 @@ Invoke-DshPython '<load_workspace_dependencies 返回的绝对 Python 路径>' @
 
 判读结果只活在上下文里：**没写进 `ocr/recognition/` 就等于没读**。2026-10-22 现场，
 一个子代理读完 32 张车辆照片后被父会话终止，`ocr_record.py` 一次没调，34 页证据全部作废，
-交付里只能记"已渲染但未识别"。三条硬要求：
+交付里只能记"已渲染但未识别"。以下硬要求：
 
 - **落盘节奏**：每读完 **8–10 页**就写一次 `recognition-input-<n>.json` 并跑 `ocr_record.py`，
    不许攒到全部读完再写。记录幂等，重跑只覆盖同一页。
@@ -107,17 +107,23 @@ Invoke-DshPython '<load_workspace_dependencies 返回的绝对 Python 路径>' @
   才允许整批拒绝；5000 以内必须读完，可跨轮次续跑。实测成本：渲染 91 ms/页、磁盘 1.24 MB/页、
   读图约 2–4 s/页——5000 页约 7.6 分钟渲染、6.1 GB 磁盘、2.8–5.8 小时判读，所以**按文件分批**渲染
   （单批 ≤ 3000 页，避开 10 分钟脚本超时）。
+- **交付阻断（2026-10-23 收紧）**：**只要还有待判读页（`pending > 0`）就不许交付**——
+  5000 页以内必须读完，读完或把读不出的页登记 `unreadable` 才放行，**没有比例容忍**，
+  也不接受 `ocr/refusal.json` 豁免（那是 > 5000 页异常量级的通道）。未读完的来源由
+  `pending-pages` 逐条列出；"从未进过 `ocr_prepare` 的盘点件"同样计入 `pending`，
+  所以不 prepare 不会让结论变好。
 - **整批拒绝要留声明**：拒绝时写 `ocr/refusal.json`
   （`{"schemaVersion":1,"sources":[{"relativePath","reason","pages"}]}`），`ocr_coverage.py` 据此把来源
   判成 `skippedBudget` 并逐条披露。快照会校验它：批次未超预算时这份声明**不生效**并报
   `refusal-not-justified`；不在索引里的来源必须给 `pages`。没有声明的文件一律进
   `scope.notCheckedItems`（`ocrRequired[]` 里的存量条目由交付门禁逐条对账）。
 
-收尾时（**最后一步，之后不要再 `ocr_record`**）跑 `ocr-skill/scripts/ocr_coverage.py --case <案例目录>`
-产出 `ocr/coverage.json`，
-**再用 `audit_delivery.py validate <结果.json> --case <案例目录>` 过覆盖率门禁**：门禁校验
-`scope.inputs[].readable` 与逐来源 verdict 一致、每个未判读来源都进了 `scope.notCheckedItems`、
-快照 `indexDigest` 未过期。未判读本身不阻断交付（未核 ≠ 缺失），**对不上才阻断**。
+收尾时（**最后一步，之后不要再 `ocr_record`，也不要再 `ocr_merge`**——两者都会重写 `ocr/index.json`）
+跑 `ocr-skill/scripts/ocr_coverage.py --case <案例目录>` 产出 `ocr/coverage.json`，
+**再用 `audit_delivery.py validate <结果.json>` 过覆盖率门禁**（`--case` 可省：结果文件落在案例目录里
+就自动推导）。门禁校验 `scope.inputs[].readable` 与逐来源 verdict 一致、每个未判读来源都进了
+`scope.notCheckedItems`、快照 `indexDigest` 未过期。**发布侧（OSS / 钉钉归档）同样会拒绝**
+缺快照或 `gate.status != pass` 的送件。
 
 ## 2. 路由流程（步骤 1–16）
 

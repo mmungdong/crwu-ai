@@ -929,7 +929,12 @@ class PrepareMaterialsContractTest(unittest.TestCase):
         self.assertEqual("empty-pages", entry["reason"])
         self.assertEqual([2], entry["emptyPages"])
         self.assertEqual(3, entry["pageCount"])
-        self.assertEqual("ocr-required", self._inventory()[0]["textSource"])
+        item = self._inventory()[0]
+        self.assertEqual("ocr-required", item["textSource"])
+        # 只有个别空白页：整份**仍然可读**（2026-10-23 口径）。把它判成不可读会让
+        # 每一份带空白分隔页的正常报告都变成"未审核"，正是本次要消灭的症状。
+        self.assertTrue(item["readable"], "个别空白页不该把整份材料判成不可读")
+        self.assertEqual(2, item["textPages"]["withText"])
 
     def test_whitespace_only_page_counts_as_empty(self):
         """只有空白字符的页算空页，不能算 withText。"""

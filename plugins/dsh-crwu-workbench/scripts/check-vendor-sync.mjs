@@ -7,7 +7,7 @@
  * 这里把「统一清单 + 各自副本」落成一条可执行检查，而不是靠人记得同步。
  */
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -72,6 +72,35 @@ for (const vendor of VENDORS) {
 if (problems.length > 0) {
   for (const problem of problems) console.error(`vendor:check ✗ ${problem}`)
   console.error(`\nvendor:check 失败（${problems.length} 项）：随包依赖必须逐字节一致`)
+  process.exit(1)
+}
+
+// 孤儿 wheel：目录里有、manifest 没登记的文件会被原样打进包，加载却永远轮不到它。
+// 设计口径是"统一清单 + 各自副本"，所以清单之外的 wheel 一律算错。
+for (const vendor of VENDORS) {
+  let manifest
+  try {
+    manifest = readJson(join(ROOT, vendor, 'manifest.json'))
+  } catch {
+    continue
+  }
+  const declared = new Set(
+    Object.values(manifest?.packages ?? {}).map((entry) => String(entry?.wheel ?? '')),
+  )
+  let wheels = []
+  try {
+    wheels = readdirSync(join(ROOT, vendor)).filter((name) => name.endsWith('.whl'))
+  } catch {
+    wheels = []
+  }
+  for (const wheel of wheels) {
+    if (!declared.has(wheel)) problems.push(`${vendor}：${wheel} 未在 manifest 里登记（孤儿 wheel）`)
+  }
+}
+
+if (problems.length > 0) {
+  for (const problem of problems) console.error(`vendor:check ✗ ${problem}`)
+  console.error(`\nvendor:check 失败（${problems.length} 项）：随包依赖与 manifest 必须一致`)
   process.exit(1)
 }
 

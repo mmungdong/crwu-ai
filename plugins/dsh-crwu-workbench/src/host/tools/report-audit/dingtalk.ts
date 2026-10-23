@@ -16,6 +16,7 @@ import { TOOL_NAMES, type ToolErrorKind } from './consts.ts'
 import { failure, jsonObject, renderJson } from '../common/outcome.ts'
 import { callerSession, toolContext, type ToolDeps } from '../common/types.ts'
 import { caseScopes } from './case-scopes.ts'
+import { requireCoveragePass } from './coverage-snapshot.ts'
 
 /**
  * 钉钉回传 Tool：团队空间归档 + 把 HTML 发给自己并 DING。
@@ -182,6 +183,11 @@ export function dingtalkTools(deps: ToolDeps) {
       // 本地审核的产物不回传（协议 28）。
       const localRefused = localDeliveryRefused(caseCheck)
       if (localRefused !== null) return { ...localRefused, ...empty }
+      // 归档是"送件"：覆盖率快照缺失或门禁未过就拒绝（设计 §6·发布侧）。
+      const coverage = await requireCoveragePass(ctx, caseCheck.casePath)
+      if (!coverage.ok) {
+        return { ...failure(coverage.errorKind === '' ? 'policy' : coverage.errorKind, coverage.error), ...empty }
+      }
       const seqNo = text(args.seqNo).trim()
       const requested = text(args.fileName).trim() || `审核结果.${seqNo}.json`
       const inside = await requireInsideCase(ctx, caseCheck.casePath, requested)

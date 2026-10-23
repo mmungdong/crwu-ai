@@ -87,10 +87,14 @@ description: Use when audit materials include PDFs, scans, or images whose pages
    `pending` 未清零、`unreadable` 未登记前，不得把相关检查项写成"已核"。
 6. **产出覆盖率快照（交付前**最后一步**）**：`script=ocr-skill/scripts/ocr_coverage.py --case <案例目录>`，
    产出 `ocr/coverage.json`：逐来源 verdict + `indexDigest` + `gate`。交付时
-   `audit_delivery.py validate|render ... --case <案例目录>` 按它逐条对账——`readable` 与 verdict
-   必须一致、未判读来源必须进 `scope.notCheckedItems`、快照过期直接失败。
-   **未判读不阻断交付**（未核 ≠ 缺失），对不上才阻断；`pending` 页永远写成"未核"，不许折算成已核。
-   **跑完不要再 `ocr_record`**：补记会重写 `ocr/index.json`，快照立即过期；确需补记就重跑本步。
+   `audit_delivery.py validate|render <结果.json>` 按它逐条对账（`--case` 省略时会从结果文件所在目录推导）——
+   `readable` 与 verdict 必须一致、未判读来源必须进 `scope.notCheckedItems`、快照过期直接失败。
+   **唯一阻断口径**：**只要还有待判读页（`pending > 0`）就不许交付**——5000 页以内必须读完，
+   读完或把读不出的页登记 `unreadable` 才放行，**没有任何比例容忍**（`pending-pages` 会列出未读完的来源）。
+   不许用 `ocr/refusal.json` 绕（那只给 > 5000 页的异常量级）。
+   **分母包含"从未进过 `ocr_prepare` 的盘点件"**：不 prepare 不会让结论变好，只会换成
+   `index-missing` / `inventory-page-count-missing` 两种阻断。
+   **跑完不要再 `ocr_record` 或 `ocr_merge`**：两者都会重写 `ocr/index.json`，快照立即过期。
 7. **整批拒绝（仅超出预算时）**：本轮必须判读页数 **> 5000** 才允许整批拒绝——写
    `ocr/refusal.json`：`{"schemaVersion":1,"sources":[{"relativePath":"材料-源/…","reason":"…","pages":351}]}`。
    快照只在批次确实超预算时才认这份声明；低于阈值会被判 `refusal-not-justified` 并阻断。

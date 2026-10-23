@@ -1180,26 +1180,31 @@ def prepare(case: str, src_dir: str, txt_dir: str, work_dir: str,
                     raw_text = "".join(pages).strip()
                     textless = sorted(set(stats["emptyPages"]) | set(stats["thinPages"]))
                     thin_ratio = (stats["thin"] / stats["total"]) if stats["total"] else 0.0
-                    err = None
-                    if len(raw_text) < MIN_TEXT_CHARS:
-                        err = "PDF 无文本层或内容极少（疑扫描件）"
-                    elif stats["empty"]:
-                        err = "PDF 存在无文本层页（疑扫描件）：已进 OCR 兜底清单"
-                    elif thin_ratio >= THIN_PAGE_RATIO:
-                        err = ("PDF 多数页只有零星字符（疑扫描件残字，如第 %s 页）：已进 OCR 兜底清单"
-                               % ",".join(str(n) for n in textless[:10]))
+                    fully_textless = len(raw_text) < MIN_TEXT_CHARS
+                    mostly_thin = thin_ratio >= THIN_PAGE_RATIO
+                    # `readable` 只回答"这份材料能不能读"：整份没有正文、或多数页只剩零星残字，
+                    # 才算读不出来。**个别空白页/短页不改变整份的可读性** —— 它们照旧进
+                    # `ocrRequired[]` 等页图判读，但不许把一份 300 页的报告整份记成"未审核"
+                    # （2026-10-23：这条一度把"含空白分隔页"的正常报告全部判成不可读，
+                    # 叠加交付门禁后等于要求整份重渲）。
                     rec["textPages"] = stats
-                    rec["readable"] = not err
+                    rec["readable"] = not (fully_textless or mostly_thin)
                     with open(os.path.join(txt_dir, os.path.basename(p) + ".txt"), "w",
                               encoding="utf-8") as fh:
                         fh.write(txt)
                     rec["chars"] = len(txt)
                     reason = ""
-                    if err:
-                        rec["note"] = err
-                        # 整份一页正文都没有 → no-text-layer；只有部分页没字 → empty-pages（页号更精确）。
-                        fully_textless = bool(stats["total"]) and stats["empty"] == stats["total"]
-                        reason = "empty-pages" if stats["empty"] and not fully_textless else "no-text-layer"
+                    if fully_textless or mostly_thin:
+                        if mostly_thin:
+                            rec["note"] = ("PDF 多数页只有零星残字（疑扫描件，如第 %s 页）："
+                                           "已进 OCR 兜底清单"
+                                           % ",".join(str(n) for n in textless[:10]))
+                        else:
+                            rec["note"] = "PDF 无文本层或内容极少（疑扫描件）：已进 OCR 兜底清单"
+                        reason = "no-text-layer"
+                    elif stats["empty"]:
+                        rec["note"] = "PDF 存在无文本层页（疑扫描件）：已进 OCR 兜底清单"
+                        reason = "empty-pages"
                     rec["textSource"] = "ocr-required" if reason else "pypdf"
                     if reason:
                         ocr_required.append(ocr_required_entry(

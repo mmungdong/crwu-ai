@@ -15,7 +15,7 @@
 
 ● **OCR 覆盖率快照 `ocr_coverage.py`（crwu-ocr 技能）** 把 `ocr/index.json` 与 `ocr/recognition/*.json` 折算成逐来源 verdict：`complete` / `partial`（已读但含不可读页）/ `pending`（仍有待判读页）/ `skippedBudget`。判定是纯函数、`indexDigest` 可复核，模型只消费事实、不再自拟 `done >= total` 这类规则。产出 `ocr/coverage.json`，同时给出 `budget`（默认上限 5000 页）与 `gate`（过期记录、预算超限直接 blocked）。
 
-● **交付覆盖率门禁 `audit_delivery.py validate|render --case <案例目录>`** 按 `ocr/coverage.json` 对账：`scope.inputs[].readable` 必须与 verdict 一致（`complete`/`partial` → true，`pending`/`skippedBudget` → false）、每个未判读来源必须进 `scope.notCheckedItems`、快照 `indexDigest` 不得过期；`render` 同样前置执行。**未判读本身不阻断交付**（未核 ≠ 缺失），对不上才阻断。
+● **交付覆盖率门禁 `audit_delivery.py validate|render --case <案例目录>`** 按 `ocr/coverage.json` 对账：`scope.inputs[].readable` 必须与 verdict 一致（`complete`/`partial` → true，`pending`/`skippedBudget` → false）、每个未判读来源必须进 `scope.notCheckedItems`、快照 `indexDigest` 不得过期；`render` 同样前置执行。未判读本身不阻断交付（未核 ≠ 缺失），对不上才阻断；**2026-10-23 起收紧**：还有待判读页就不许交付（5000 页以内必须读完，无比例容忍，见本节末「复核补丁」）。
 
 ● **技能依赖覆盖门禁** `scripts/check_skill_python_deps.py`：遍历各技能层的运行时脚本，按 AST 取 import，逐个判定来源（同目录 / 该技能 `vendor/wheels` / DSH 运行时白名单），判定不了即失败并打印 `模块 ← 文件`；`try` / `if` 内的可选 import 单独列出、不判失败。接进 `make plugin-check`，且**用 DSH 自带 Python 跑** —— 系统 `python3` 恰好装了包，会把这个缺口全判绿。
 
@@ -70,6 +70,39 @@
 ● 门禁 `scripts/check_skill_python_deps.py` 由红转绿：唯一缺口 `xlrd` 已随包；可选 import（`pdfminer`、`requests`）仍按设计降级。
 
 ● 门禁 `npm run typecheck`、`npm test`、`make plugin-check`、`make docs-check`、`git diff --check`（结果见交付说明）。
+
+### 复核补丁 · 2026-10-23（同一 0.0.45）
+
+● **待判读页即阻断（`pending-pages`，无比例容忍）** 5000 页以内**必须读完**：`pending > 0` 即 `gate.blocked`，`pending-pages` 逐条列出未读完的来源与页号，**没有比例豁免**；`--max-pending-ratio` 与 `DEFAULT_MAX_PENDING_RATIO` 已删除（宽不了任何批次），`budget.pendingRatio` 只作汇报、不再参与判定。分子分母都并入 `材料盘点.json.ocrRequired[]` 里"从未进过 `ocr_prepare`"的件——否则不 prepare 就能把比值压到 0，正是 1171 页扫描件消失的方式；这些件的 `pageCount` 为 0 时报 `inventory-page-count-missing` 并阻断。唯一放行通道是必须判读页数 > 5000 时的整批拒绝。
+
+● **已读到内容就必须读完** 某来源 `recognized > 0` 且 `pending > 0` 时，`pending-pages` 会把该来源的 `recognized / pending / 待判读页号` 一并列出：读到一半的来源要么读完，要么把读不出的页登记 `unreadable`。2026-10-22 现场被终止的 34 页正是这种形状。
+
+● **缺索引不再自称 `not-required`** 盘点要求 OCR 但 `ocr/index.json` 不存在时，快照产出 `status=index-missing` + `gate.blocked`（指向 `ocr_prepare.py`），不再写一份 `passed` 的空快照；此前只有交付侧 digest 检查会报一句误导性的"快照已过期"。
+
+● **`readable` 回退：个别空白页不再把整份判成不可读** 上一版把任何 `empty` 页都算进 `err`，于是一份 300 页报告只要有空白分隔页就 `readable=false`，叠加交付门禁等于要求整份重渲。现在只有"整份无文本（原始逐页文本 < 50 字符）"或"薄文本页占比 ≥50%"才判不可读；`empty-pages` 恢复 `readable=true`，仍进 `ocrRequired[]` 带页号。
+
+● **`--case` 从结果文件目录自动推导** 门禁不再依赖"模型记得传 `--case`"：`validate`/`render` 省略时，结果文件所在目录若有 `ocr/` 或 `材料盘点.json` 就按案例目录对账，否则保持既有行为（单测夹具、临时文件不受影响）。
+
+● **发布侧闸门** 新增 `coverage-snapshot.ts`：`crwu_audit_oss_publish` 与 `crwu_audit_dingtalk_archive` 在送件前读 `ocr/coverage.json`，缺快照、`status=index-missing`、或 `gate.status != pass` 一律拒绝并带回阻断项（设计 §6 承诺过、此前未实现）。`indexDigest` 的权威校验仍留在 `audit_delivery validate`（JS 复刻 Python 规范化序列化会因浮点/转义产生假过期）。
+
+● **`vendor:check` 补孤儿 wheel 检查** 目录里有、manifest 没登记的 wheel 会被打进包却永远加载不到；现在直接判失败（已用假 wheel 验证会红）。
+
+● **文档同步** `crwu-ocr/SKILL.md`、`references/00`、`14 §1.3`、`11` 与 Host 提示词（`prompt.ts` 3d/6）改为同一口径：还有待判读页即阻断（无比例容忍）、已读必读完、分母含未入索引件、`--case` 可省、跑完不许再 `ocr_record` / `ocr_merge`。
+
+● **验证** `test_ocr_coverage.py` 36 项（新增一页未读即阻断、`pending-pages` 逐来源明细、未入索引分母、缺页数、index-missing、`--max-pending-ratio` 已删除）、`test_audit_delivery.py` 132 项（新增自动推导与"不在案例目录不拦"）、`test_prepare_materials.py` 51 项（空白页 `readable=true`）、`host-coverage-snapshot.test.mjs` 6 项；`vendor:check` 孤儿用例实跑为红。
+
+### 复核补丁 2 · 2026-10-23（同一 0.0.45）
+
+● **拒绝清单的页数不再信任模型声明（门禁绕过）** 不在 `ocr/index.json` 里的来源，页数**只认 `材料盘点.json` 的 `pageCount`**：声明值与盘点不一致报 `refusal-pages-mismatch` 并阻断，盘点没有页数报 `refusal-pages-missing`。此前实测 1086 页的件声明 6000 页即可让 `gate.status=pass`、`skippedPages=6000`，同时也把 `totals.required` 污染成 6010。
+
+● **发布侧门禁 fail-closed** `requireCoveragePass` 改为三态读文件（`content` / `missing` / `unreadable`）：文件服务不可用、权限拒绝、盘点损坏、索引读不出来一律 `errorKind=infrastructure` 并拒绝发布，不再折成空串当作"本轮不需要 OCR"。错误文案明确写"这是发布闸门的基础设施故障、可重试，不是没做 OCR"，避免被误读成审核失败。
+
+● **本地审核允许带未核交付（`policy=disclose`）** `ocr_coverage.py` 新增 `gate.policy`：案例目录有 `本地审核清单.json` 即本地审核（`auto` 判定，**不是模型可提交的参数**），**只有"还没读完"这一类**不阻断交付（`pending-pages` / `budget-exceeded` / `index-missing`）——它们进 `warnings` 与 `disclosures`；`refusal-*`、`stale-recognition`、`inventory-page-count-missing` 这类**数据完整性**问题在两种 policy 下都阻断（本地审核允许"没读"，不允许"说假话/用过期记录"）。`gate.status` 仍如实记 `blocked`，`gate.effectiveStatus` 才决定能不能交付。托管审核保持 `strict`：还有待判读页就不许交付。两条硬检查在两种 policy 下都不放宽——`readable` 不许标反、每个未核来源必须进 `notCheckedItems`（漏披露照样失败）。
+
+● **`--pending-policy` 只给维护与测试** `auto|strict|disclose`，默认 `auto`；审核提示词不提交该参数，`resolve_pending_policy` 的判定依据是案例里的本地审核交接清单。
+
+● **验证** `test_ocr_coverage.py` 42 项（新增：拒绝页数取自盘点、盘点无页数与虚报分别被拒、`policy` 四态）、`test_audit_delivery.py` 136 项（新增：strict 阻断 / disclose 放行 / disclose 仍查披露 / disclose 仍查 `readable`）、`host-coverage-snapshot.test.mjs` 11 项（新增：权限拒绝、无 fs、盘点损坏、索引读不出来、disclose 放行）。`make plugin-check` 绿。
+
 
 ## package · 0.0.44 · 2026-10-22 · fix · 补上 langgraph 的必需 peer，修干净 profile 上的依赖错误
 

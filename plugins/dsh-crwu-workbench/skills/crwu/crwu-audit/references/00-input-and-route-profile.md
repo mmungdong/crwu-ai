@@ -236,12 +236,21 @@ router 只负责把五轴画像映射成轴标签并选出 available 叶子；�
   （`reasonCode=needs-password`）并给出员工动作（提供口令或解密版），不得判成缺失或通过。
   `ocrRequired[]` **只回答"哪些页没有文本"**：需要核验印章、签名、证照、勾选或版式的页，即使有文本层
   也必须 `ocr_prepare.py --only <该文件> --visual pages:<页号>` 渲成页图再判读，不得以"清单里没有"为由跳过。
-- **覆盖率快照与交付门禁**：交付前（**最后一步，之后不要再 `ocr_record`**）跑
+- **覆盖率快照与交付门禁**：交付前（**最后一步，之后不要再 `ocr_record` / `ocr_merge`**）跑
   `ocr_coverage.py --case <案例目录>` 产出 `ocr/coverage.json`，再以
-  `audit_delivery.py validate|render ... --case <案例目录>` 对账：`scope.inputs[].readable` 必须与
-  逐来源 verdict 一致，未判读来源与 `ocrRequired[]` 里"从未进过 `ocr_prepare`"的文件都必须进
-  `scope.notCheckedItems`，快照过期直接失败。`needs-password` / `failed` 的 verdict 是 `pending`
-  （不是"已审核"）；整批拒绝只在必须判读页数 > 5000 时写 `ocr/refusal.json` 生效。
+  `audit_delivery.py validate|render <结果.json>` 对账（`--case` 省略时从结果文件所在目录自动推导）：
+  `scope.inputs[].readable` 必须与逐来源 verdict 一致，未判读来源与 `ocrRequired[]` 里"从未进过
+  `ocr_prepare`"的文件都必须进 `scope.notCheckedItems`，快照过期直接失败。`needs-password` / `failed`
+  的 verdict 是 `pending`（不是"已审核"）。
+  **阻断强度由审核类型决定**（快照里 `gate.policy`，由案例目录是否有 `本地审核清单.json` 自动判定，
+  不是模型可提交的参数）：
+  - **托管审核（strict）**：只要还有待判读页就不许交付——5000 页以内必须读完，读完或把读不出的页
+    登记 `unreadable` 才放行，没有比例容忍。整批拒绝只在必须判读页数 > 5000 时写 `ocr/refusal.json`
+    生效，且拒绝条目的页数**必须与 `材料盘点.json` 的 `pageCount` 一致**（虚报即 `refusal-pages-mismatch`）。
+  - **本地审核（disclose）**：**允许带未核交付**，未核项只做披露；但两条硬检查照旧——`readable`
+    不许标反、每个未核来源必须进 `notCheckedItems`，漏披露依然失败。交付件与最终答复须逐条写明
+    未核来源与员工动作。发布侧（OSS / 钉钉归档）
+  同样拒绝缺快照或 `gate.status != pass` 的送件。
 - **压缩包必须先解压再审核**：盘点时遇 `.zip/.tar/.tar.gz/.tar.bz2/.tar.xz/.tgz` 等归档，**必须先解压，再对解压产物实施审核**——归档内的测算底稿、明细表与源材料同等对待（同样提取文本、重建工作版、执行隐藏区隔离）。**不得把归档登记为"未解压"就跳过**（真实案例中一个归档内的"土地使用权-工业拟变更住宅-测算底稿"因此长期未被审核，属潜在漏检）。
   - **落点**：解压到 `<案例目录>/解压/<归档名>/`，**源材料目录零写入**；盘点记录 `originArchive` 指向来源归档，可追溯，避免"解压产物来源不明"。
   - **阶段一隔离门禁优先于解压**：归档内含复核记录类文件（复核/质控/外审/答复/审核意见等）时**不解压该条目**，只记名字，不得让其内容进入阶段一工作集。

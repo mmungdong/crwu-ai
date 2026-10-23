@@ -1418,13 +1418,29 @@ def _base_name(value) -> str:
     return _norm_path(value).rsplit("/", 1)[-1]
 
 
+def _source_materials_present(case: Path) -> bool:
+    """案例里是否真的有源材料（只看一层，足够判断"这轮到底有没有东西要审"）。"""
+    source_dir = case / "材料-源"
+    if not source_dir.is_dir():
+        return False
+    try:
+        return any(source_dir.iterdir())
+    except OSError:
+        return True  # 读不出来就按"有材料"处理，交给门禁 fail-closed
+
+
 def _coverage_not_required(case: Path) -> bool:
-    """本轮确实不需要 OCR：没有 `ocr/` 目录，且盘点里 `ocrRequired[]` 为空。"""
+    """本轮确实不需要 OCR：没有 `ocr/` 目录，且盘点里 `ocrRequired[]` 为空。
+
+    **没有盘点时不再一律放行**（2026-10-23）：案例里真有一堆源材料、却连
+    `材料盘点.json` 都没生成，说明材料准备这一步根本没跑 —— 那不是"不需要 OCR"，
+    是"没有任何证据"。只有连源材料都没有时才允许静默通过。
+    """
     if (case / "ocr").is_dir():
         return False
     inventory = case / INVENTORY_RELATIVE
     if not inventory.is_file():
-        return True
+        return not _source_materials_present(case)
     try:
         data = _read_json(inventory)
     except (OSError, ValueError):
@@ -1444,6 +1460,13 @@ def coverage_gate(case_dir, result: dict) -> list:
     if not coverage_path.is_file():
         if _coverage_not_required(case):
             return []
+        if not (case / INVENTORY_RELATIVE).is_file():
+            return [
+                "案例里有源材料，但既没有 {0} 也没有 OCR 覆盖率快照 {1}：材料准备这一步没跑。"
+                "先跑 `scripts/prepare_materials.py --case <案例目录>`，再跑 "
+                "`ocr-skill/scripts/ocr_coverage.py --case <案例目录>`".format(
+                    INVENTORY_RELATIVE, COVERAGE_RELATIVE)
+            ]
         return [
             "缺少 OCR 覆盖率快照 {0}：先跑 `ocr-skill/scripts/ocr_coverage.py --case <案例目录>`".format(
                 COVERAGE_RELATIVE)
@@ -1472,16 +1495,36 @@ def coverage_gate(case_dir, result: dict) -> list:
             )
 
     gate = coverage.get("gate") if isinstance(coverage.get("gate"), dict) else {}
-    if gate.get("status") != "pass":
+    # `effectiveStatus` 已按 policy 折算：本地审核（disclose）的未核**不阻断交付**，
+    # 但下面两条硬检查照旧生效（readable 不许标反、每个未核来源必须逐条披露）。
+    effective = str(gate.get("effectiveStatus") or gate.get("status") or "")
+    strict_status = str(gate.get("status") or "")
+    policy = str(gate.get("policy") or "strict")
+    if effective != "pass":
         blocks = gate.get("blocks") or []
         if not blocks:
-            errors.append("OCR 覆盖率门禁未通过（gate.status={0}）".format(gate.get("status") or "（空）"))
+            errors.append("OCR 覆盖率门禁未通过（gate.status={0}）".format(strict_status or "（空）"))
         for block in blocks:
             if not isinstance(block, dict):
                 continue
+            kind = block.get("kind") or "block"
             where = block.get("relativePath") or block.get("reason") or ""
-            errors.append("OCR 覆盖率门禁未通过：{0}{1}".format(
-                block.get("kind") or "block", "（{0}）".format(where) if where else ""))
+            detail = "（{0}）".format(where) if where else ""
+            if kind == "pending-pages":
+                # 只报 kind 不告诉调用方还差多少页，等于把门禁做成谜语。
+                detail = "（待判读 {0} / 必判读 {1} 页，未读完来源 {2} 件）".format(
+                    block.get("pendingPages"), block.get("requiredPages"),
+                    len(block.get("sources") or []))
+            errors.append("OCR 覆盖率门禁未通过：{0}{1}".format(kind, detail))
+    elif strict_status == "blocked":
+        # 本地审核（policy=disclose）：未核允许随件交付，但必须让调用方看见还差什么。
+        print("WARN: 本地审核按“带未核交付”处理（OCR 覆盖率尚有未核项，交付件须逐条披露）：",
+              file=sys.stdout)
+        for block in gate.get("warnings") or []:
+            if isinstance(block, dict):
+                print("  - {0}：{1}".format(block.get("kind") or "block",
+                                            block.get("relativePath") or block.get("reason") or ""),
+                      file=sys.stdout)
 
     sources = [item for item in coverage.get("sources") or [] if isinstance(item, dict)]
     inputs_by_name = {}
@@ -2885,10 +2928,29 @@ def _write_render_pair(html_path: Path, json_path: Path, document: str, rendered
                 path.unlink()
 
 
+def _resolve_case_dir(result_path, explicit):
+    """`--case` 省略时，从结果文件所在目录推导案例目录。
+
+    审核交付件本来就落在案例目录里（`审核意见.<项目ID>.json`）。只要那个目录有
+    `ocr/` 或 `材料盘点.json`，它就是本轮案例——门禁不能靠"模型记得传 `--case`"才生效，
+    2026-10-22 的事故正是纪律在压力下被跳过的结果。不在案例目录里（单测夹具、临时文件）
+    就退回既有行为，不查覆盖率。
+    """
+    if explicit:
+        return explicit
+    try:
+        candidate = Path(str(result_path)).resolve().parent
+    except OSError:
+        return None
+    if (candidate / "ocr").is_dir() or (candidate / INVENTORY_RELATIVE).is_file():
+        return str(candidate)
+    return None
+
+
 def _cmd_validate(args) -> int:
     result = load_result(Path(args.path))
     errors = validate(result, rendered=args.rendered, expect_renderer=args.rendered,
-                      case_dir=getattr(args, "case", None))
+                      case_dir=_resolve_case_dir(args.path, getattr(args, "case", None)))
     if errors:
         for error in errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
@@ -2907,7 +2969,8 @@ def _cmd_digest(args) -> int:
 
 def _cmd_render(args) -> int:
     result = load_result(Path(args.path))
-    errors = validate(result, rendered=False, case_dir=getattr(args, "case", None))
+    case_dir = _resolve_case_dir(args.path, getattr(args, "case", None))
+    errors = validate(result, rendered=False, case_dir=case_dir)
     if errors:
         for error in errors:
             print("ERROR: {0}".format(error), file=sys.stderr)
@@ -2915,8 +2978,7 @@ def _cmd_render(args) -> int:
         return 1
     document = render(result)
     rendered = embedded_result_from_document(document)
-    post_errors = validate(rendered, rendered=True, expect_renderer=True,
-                           case_dir=getattr(args, "case", None))
+    post_errors = validate(rendered, rendered=True, expect_renderer=True, case_dir=case_dir)
     if post_errors:
         for error in post_errors:
             print("ERROR: {0}".format(error), file=sys.stderr)

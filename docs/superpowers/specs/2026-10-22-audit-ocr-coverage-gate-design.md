@@ -156,6 +156,23 @@
 
 发布侧（OSS / 钉钉归档 / 本地面板）在打包上传前校验 `coverage.json` 存在、`indexDigest` 匹配且 `gate.status == "pass"`，避免绕过 `validate` 直接送件。
 
+### 6.1 阻断强度由审核类型决定（2026-10-23 增补）
+
+快照新增 `gate.policy`，`auto` 判据是案例目录是否存在 `本地审核清单.json`（模型提交不了）：
+
+| policy | 场景 | 待判读页的处置 |
+| --- | --- | --- |
+| `strict` | 托管审核 | 阻断交付（5000 页以内必须读完） |
+| `disclose` | 本地审核 | **允许带未核交付**：`pending-pages` / `budget-exceeded` / `index-missing` 进 `warnings` 与 `disclosures`；`refusal-*`、`stale-recognition`、`inventory-page-count-missing` 这类数据完整性问题仍阻断 |
+
+`gate.status` 仍是严格视图（`blocked` / `pass`），`gate.effectiveStatus` 才是交付判据。
+两种 policy 都不放宽的两条硬检查：`scope.inputs[].readable` 必须与 verdict 一致；每个未核来源必须进 `scope.notCheckedItems`。
+
+### 6.2 两处门禁可信性修复（2026-10-23）
+
+- **拒绝页数只认盘点**：`ocr/refusal.json` 里不在索引中的来源，`pages` 必须等于 `材料盘点.json.ocrRequired[].pageCount`；不一致 `refusal-pages-mismatch`、盘点无页数 `refusal-pages-missing`。此前虚报页数即可整批绕过门禁。
+- **发布侧 fail-closed**：`requireCoveragePass` 三态读文件（`content` / `missing` / `unreadable`），读不出来一律 `infrastructure` 拒绝，不再把故障折成"本轮不需要 OCR"。
+
 ## 7. 变更清单
 
 | 文件 | 变更 |
