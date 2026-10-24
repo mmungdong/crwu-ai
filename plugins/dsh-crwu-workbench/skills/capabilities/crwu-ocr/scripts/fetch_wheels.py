@@ -23,13 +23,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WHEEL_DIR = os.path.join(os.path.dirname(HERE), "vendor", "wheels")
 MANIFEST = os.path.join(WHEEL_DIR, "manifest.json")
 
-# Version pins are part of the shipped artifact: bump them together with the
-# manifest and the changelog entry.
-PACKAGES = (
-    {"name": "pypdf", "version": "6.21.1", "module": "pypdf", "platforms": ["any"], "target": "any"},
-    {"name": "pypdfium2", "version": "5.14.0", "module": "pypdfium2",
-     "platforms": ["win32-x64"], "target": "win_amd64"},
-)
+# 版本号属于随包发布的产物：改它要同批改 manifest、`vendor:check` 与 changelog。
+# 目录是**跨技能共用的登记表**：本脚本默认服务 crwu-ocr，`--vendor-dir` 可指向别的技能
+# （例如 `crwu-audit` 需要 pypdf + xlrd）。登记表里放全部候选包，实际下载哪些由 `--only` 决定。
+CATALOG = {
+    "pypdf": {"name": "pypdf", "version": "6.21.1", "module": "pypdf",
+              "platforms": ["any"], "target": "any"},
+    "pypdfium2": {"name": "pypdfium2", "version": "5.14.0", "module": "pypdfium2",
+                  "platforms": ["win32-x64"], "target": "win_amd64"},
+    "xlrd": {"name": "xlrd", "version": "2.0.2", "module": "xlrd",
+             "platforms": ["any"], "target": "any"},
+}
+# crwu-ocr 自己的那份（页面渲染 + 文本层）。
+OCR_PACKAGES = ("pypdf", "pypdfium2")
 
 RUNTIME_PROVIDED = {"Pillow": {"module": "PIL", "version": "runtime"}}
 
@@ -58,23 +64,44 @@ def download(package, destination: str) -> str:
     return os.path.join(destination, wheels[0])
 
 
+def resolve_packages(vendor_dir: str, only: str) -> tuple:
+    """→ 要下载的包登记项。换目录时必须显式给 `--only`，避免把别的技能的 manifest 覆盖错。"""
+    if only:
+        names = tuple(item.strip() for item in only.split(",") if item.strip())
+    elif os.path.abspath(vendor_dir) == os.path.abspath(WHEEL_DIR):
+        names = OCR_PACKAGES
+    else:
+        raise SystemExit("--vendor-dir 指向别的技能时必须用 --only 指定要下载的包")
+    unknown = [name for name in names if name not in CATALOG]
+    if unknown:
+        raise SystemExit("登记表里没有这些包：%s" % unknown)
+    return tuple(CATALOG[name] for name in names)
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Fetch and register packaged OCR wheels")
+    parser = argparse.ArgumentParser(description="Fetch and register packaged skill wheels")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--vendor-dir", default=WHEEL_DIR,
+                        help="目标技能的 vendor/wheels 目录（默认 crwu-ocr 自己的）")
+    parser.add_argument("--only", default="",
+                        help="要下载的包名，逗号分隔；换目录时必填（如 pypdf,xlrd）")
     args = parser.parse_args(argv)
 
-    os.makedirs(WHEEL_DIR, exist_ok=True)
+    vendor_dir = os.path.abspath(args.vendor_dir)
+    manifest_path = os.path.join(vendor_dir, "manifest.json")
+    packages = resolve_packages(vendor_dir, args.only)
+    os.makedirs(vendor_dir, exist_ok=True)
     if args.dry_run:
-        for package in PACKAGES:
+        for package in packages:
             print("%s==%s -> %s" % (package["name"], package["version"], ",".join(package["platforms"])))
         return 0
 
     staged = {}
-    for package in PACKAGES:
+    for package in packages:
         workdir = tempfile.mkdtemp(prefix="crwu-ocr-wheel-")
         try:
             wheel = download(package, workdir)
-            target = os.path.join(WHEEL_DIR, os.path.basename(wheel))
+            target = os.path.join(vendor_dir, os.path.basename(wheel))
             shutil.copyfile(wheel, target)
             staged[package["name"]] = (target, package)
         finally:
@@ -82,11 +109,20 @@ def main(argv=None) -> int:
 
     # Drop stale wheels that are no longer registered.
     keep = {os.path.basename(path) for path, _ in staged.values()}
-    for name in os.listdir(WHEEL_DIR):
+    for name in os.listdir(vendor_dir):
         if name.endswith(".whl") and name not in keep:
-            os.remove(os.path.join(WHEEL_DIR, name))
+            os.remove(os.path.join(vendor_dir, name))
 
+    # 保留既有 manifest 的说明字段（`note`）：它是人写的，脚本不该抹掉。
+    existing = {}
+    if os.path.isfile(manifest_path):
+        try:
+            existing = json.loads(open(manifest_path, encoding="utf-8").read())
+        except ValueError:
+            existing = {}
     manifest = {"schemaVersion": 1, "python": "3.12", "packages": {}, "runtimeProvided": RUNTIME_PROVIDED}
+    if isinstance(existing, dict) and existing.get("note"):
+        manifest["note"] = existing["note"]
     for name, (path, package) in staged.items():
         manifest["packages"][name] = {
             "module": package["module"],
@@ -96,10 +132,10 @@ def main(argv=None) -> int:
             "bytes": os.path.getsize(path),
             "platforms": package["platforms"],
         }
-    with open(MANIFEST, "w", encoding="utf-8", newline="\n") as handle:
+    with open(manifest_path, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
-    print("[fetch] wrote %s" % MANIFEST)
+    print("[fetch] wrote %s" % manifest_path)
     return 0
 
 

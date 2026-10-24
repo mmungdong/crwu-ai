@@ -16,6 +16,7 @@ import { localDeliveryRefused, requireCaseAccess } from '../../domains/report-au
 import { failure, renderJson } from '../common/outcome.ts'
 import { toolContext, type ToolDeps } from '../common/types.ts'
 import { caseScopes } from './case-scopes.ts'
+import { requireCoveragePass } from './coverage-snapshot.ts'
 
 /**
  * OSS 交付件发布 Tool。
@@ -112,6 +113,11 @@ export function ossTools(deps: ToolDeps) {
       // 本地审核的产物不上传（协议 28）：提示词里写了不许调用，这里才是门禁。
       const localRefused = localDeliveryRefused(caseCheck)
       if (localRefused !== null) return { ...localRefused, ...empty }
+      // 送件前的最后一道闸门：覆盖率快照缺失或门禁未过就拒绝上传（设计 §6·发布侧）。
+      const coverage = await requireCoveragePass(ctx, caseCheck.casePath)
+      if (!coverage.ok) {
+        return { ...failure(coverage.errorKind === '' ? 'policy' : coverage.errorKind, coverage.error), ...empty }
+      }
 
       const oss = normalizeOss(deps.state.manifest.oss, deps.state.manifest.oss)
       if (!oss.enabled) return { ...failure('policy', 'OSS 回传未启用（受信配置里 oss.enabled 不是 true）'), ...empty }

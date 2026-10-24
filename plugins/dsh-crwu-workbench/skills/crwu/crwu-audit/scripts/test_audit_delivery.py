@@ -1702,5 +1702,307 @@ class DeliveryContractDocumentationTest(unittest.TestCase):
 
 
 
+# --------------------------------------------------------------------------- #
+# OCR 覆盖率门禁（交付规范 §6）
+#
+# 事故形状（2026-10-22）：交付件里的"已审核 30/84"由父会话即席折算，
+# 与 `ocr/coverage.json` 的 verdict 没有任何对账。这里钉住四条：
+#   ① 快照缺失/过期 → 失败；② readable 必须与 verdict 一致；
+#   ③ 未判读来源必须进 notCheckedItems；④ 未判读本身不阻断（未核 ≠ 缺失）。
+# --------------------------------------------------------------------------- #
+class CoverageGateTest(unittest.TestCase):
+    """`validate(..., case_dir=...)` 的覆盖率对账。"""
+
+    def setUp(self):
+        self.case = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.case, True))
+        self.result = load_sample()
+        self.result["scope"]["inputs"] = [{
+            "fileId": "F-001", "displayName": "13张车行驶证扫描件.pdf",
+            "version": "v1.0", "readable": True,
+        }]
+        # 保留样例自带的 NC-001（权属附件扫描件.pdf）：`summary.counts.notChecked` 要能重算。
+        self._write_inventory([])
+        self._write_index([self._source("材料-源/车辆/13张车行驶证扫描件.pdf",
+                                        [self._page(1, "recognized"), self._page(2, "recognized")])])
+
+    # -- fixtures --------------------------------------------------------- #
+    def _page(self, no, status):
+        entry = {"page": no, "visualRequired": True, "visualStatus": status}
+        if status in ("recognized", "partial", "unreadable"):
+            entry["recognitionStatus"] = status
+        return entry
+
+    def _source(self, relative, pages, status="prepared", source_id="s1"):
+        return {"sourceId": source_id, "kind": "pdf", "relativePath": relative,
+                "pageCount": len(pages), "status": status, "pages": pages}
+
+    def _write_inventory(self, required):
+        (self.case / "材料盘点.json").write_text(
+            json.dumps({"ocrRequired": required}, ensure_ascii=False), encoding="utf-8")
+
+    def _write_index(self, sources):
+        path = self.case / "ocr" / "index.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        index = {"schemaVersion": 1, "sources": sources, "skipped": []}
+        path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+        return index
+
+    def _write_coverage(self, sources, digest=None, gate=None):
+        path = self.case / "ocr" / "coverage.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        coverage = {
+            "schemaVersion": 1,
+            "status": "computed",
+            "indexDigest": digest if digest is not None else delivery.sha256_hex(
+                delivery.canonical_json(json.loads((self.case / "ocr" / "index.json").read_text(encoding="utf-8")))),
+            "sources": sources,
+            "gate": gate or {"status": "pass", "blocks": [], "disclosures": []},
+        }
+        path.write_text(json.dumps(coverage, ensure_ascii=False), encoding="utf-8")
+
+    def _entries(self, verdict, pending=0, relative="材料-源/车辆/13张车行驶证扫描件.pdf"):
+        return [{"sourceId": "s1", "relativePath": relative, "kind": "pdf",
+                 "pageCount": 2, "required": 2, "recognized": 2 - pending,
+                 "unreadable": 0, "pending": pending, "verdict": verdict,
+                 "reasonCode": ""}]
+
+    def _errors(self):
+        return delivery.coverage_gate(self.case, self.result)
+
+    # -- ① 快照存在性与新鲜度 --------------------------------------------- #
+    def test_passes_when_snapshot_matches(self):
+        self._write_coverage(self._entries("complete"))
+        self.assertEqual([], self._errors())
+
+    def test_missing_snapshot_fails_when_ocr_was_required(self):
+        errors = self._errors()
+        self.assertEqual(1, len(errors))
+        self.assertIn("缺少 OCR 覆盖率快照", errors[0])
+
+    def test_not_required_case_passes_without_snapshot(self):
+        import shutil
+        shutil.rmtree(self.case / "ocr")
+        self._write_inventory([])
+        self.assertEqual([], self._errors())
+
+    def test_sources_without_inventory_fail_closed(self):
+        """有源材料却连盘点都没有：材料准备没跑，不许静默通过（2026-10-23）。"""
+        import shutil
+        shutil.rmtree(self.case / "ocr")
+        (self.case / "材料盘点.json").unlink()
+        source = self.case / "材料-源"
+        source.mkdir()
+        (source / "报告.pdf").write_bytes(b"%PDF-1.4\n")
+        errors = self._errors()
+        self.assertEqual(1, len(errors), errors)
+        self.assertIn("材料准备这一步没跑", errors[0])
+        self.assertIn("prepare_materials.py", errors[0])
+
+    def test_empty_source_dir_still_passes_as_not_required(self):
+        """空的 `材料-源/` 不构成"有材料"：目录脚手架不该把门禁弄红。"""
+        import shutil
+        shutil.rmtree(self.case / "ocr")
+        (self.case / "材料盘点.json").unlink()
+        (self.case / "材料-源").mkdir()
+        self.assertEqual([], self._errors())
+
+    def test_stale_digest_fails(self):
+        self._write_coverage(self._entries("complete"), digest="0" * 64)
+        errors = self._errors()
+        self.assertTrue(any("已过期" in item for item in errors), errors)
+
+    def test_blocked_gate_fails(self):
+        self._write_coverage(self._entries("complete"), gate={
+            "status": "blocked",
+            "blocks": [{"kind": "budget-exceeded", "required": 6000, "maxVisualPages": 5000}],
+            "disclosures": [],
+        })
+        errors = self._errors()
+        self.assertTrue(any("budget-exceeded" in item for item in errors), errors)
+
+    # -- ①b 待判读是否阻断：由审核类型（gate.policy）决定 ------------------ #
+    def _policy_gate(self, policy, strict="blocked"):
+        block = {"kind": "pending-pages", "pendingPages": 2, "requiredPages": 2, "sources": []}
+        return {
+            "policy": policy,
+            "status": strict,
+            "effectiveStatus": "pass" if policy == "disclose" else strict,
+            "blocks": [block],
+            "warnings": [block] if policy == "disclose" else [],
+            "disclosures": [],
+        }
+
+    def _disclose_source(self):
+        self.result["scope"]["notCheckedItems"].append({
+            "itemId": "NC-201",
+            "item": "13张车行驶证扫描件.pdf 的页图未判读",
+            "reasonCode": "unreadable",
+            "reason": "页图未判读（示意）",
+            "impact": "证照信息无法确认（示意）",
+            "requiredAction": "按页图逐页判读后落盘（示意）",
+            "relatedFiles": ["13张车行驶证扫描件.pdf"],
+        })
+
+    def test_managed_strict_policy_blocks_pending(self):
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("strict"))
+        errors = self._errors()
+        self.assertTrue(any("pending-pages" in item for item in errors), errors)
+
+    def test_local_disclose_policy_delivers_with_disclosure(self):
+        """本地审核：未核不阻断交付，但必须逐条披露（用户 2026-10-23 口径）。"""
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._disclose_source()
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("disclose"))
+        self.assertEqual([], self._errors())
+
+    def test_local_disclose_still_requires_disclosure(self):
+        """允许带未核交付 ≠ 允许不说：漏披露照样失败。"""
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("disclose"))
+        errors = self._errors()
+        self.assertTrue(any("notCheckedItems" in item for item in errors), errors)
+
+    def test_local_disclose_still_checks_readable(self):
+        """披露不等于可以把未读文件标成 readable=true。"""
+        self.result["scope"]["inputs"][0]["readable"] = True
+        self._disclose_source()
+        self._write_coverage(self._entries("pending", pending=2), gate=self._policy_gate("disclose"))
+        errors = self._errors()
+        self.assertTrue(any("readable" in item for item in errors), errors)
+
+    # -- ② readable 与 verdict 一致 --------------------------------------- #
+    def test_readable_true_with_pending_fails(self):
+        self.result["scope"]["inputs"][0]["readable"] = True
+        self._write_coverage(self._entries("pending", pending=2))
+        errors = self._errors()
+        self.assertTrue(any("readable" in item for item in errors), errors)
+
+    def test_partial_counts_as_readable(self):
+        self.result["scope"]["inputs"][0]["readable"] = True
+        self._write_coverage(self._entries("partial"))
+        self.assertEqual([], self._errors())
+
+    # -- ③ 未判读必须披露 ------------------------------------------------- #
+    def test_pending_source_must_be_disclosed(self):
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self._write_coverage(self._entries("pending", pending=2))
+        errors = self._errors()
+        self.assertTrue(any("notCheckedItems" in item for item in errors), errors)
+
+    def test_pending_source_disclosed_passes(self):
+        self.result["scope"]["inputs"][0]["readable"] = False
+        self.result["scope"]["notCheckedItems"] = self.result["scope"]["notCheckedItems"] + [{
+            "itemId": "NC-002",
+            "item": "13张车行驶证扫描件.pdf 的页图未判读",
+            "reasonCode": "unreadable",
+            "reason": "页图未判读（示意）",
+            "impact": "证照信息无法确认（示意）",
+            "requiredAction": "按页图逐页判读后落盘（示意）",
+            "relatedFiles": ["13张车行驶证扫描件.pdf"],
+        }]
+        self._write_coverage(self._entries("pending", pending=2))
+        self.assertEqual([], self._errors(), "未判读本身不阻断交付，只要如实披露")
+
+    # -- ③b 存量 OCR 清单必须被交代 --------------------------------------- #
+    def test_inventory_source_missing_from_snapshot_fails(self):
+        """盘点里要求 OCR、却从没进过 ocr_prepare 的文件：既不在快照、也没披露 → 失败。
+
+        2026-10-22 现场：1171 页扫描件从未进入 ocr_prepare，因此不在 index 里，
+        旧门禁只读 coverage.json，完全看不见它们；模型把它们标 readable=true 也不报错。
+        """
+        self._write_coverage(self._entries("complete"))
+        self._write_inventory([{"path": "材料\\源\\工商资料.pdf", "reason": "no-text-layer",
+                                "pageCount": 80}])
+        errors = self._errors()
+        self.assertTrue(any("工商资料.pdf" in item for item in errors), errors)
+        self.assertTrue(any("notCheckedItems" in item for item in errors), errors)
+
+    def test_inventory_source_disclosed_is_accepted(self):
+        self._write_coverage(self._entries("complete"))
+        self._write_inventory([{"path": "材料\\源\\工商资料.pdf", "reason": "no-text-layer",
+                                "pageCount": 80}])
+        self.result["scope"]["notCheckedItems"] = self.result["scope"]["notCheckedItems"] + [{
+            "itemId": "NC-101",
+            "item": "工商资料.pdf 未判读",
+            "reasonCode": "unreadable",
+            "reason": "85 页扫描件（示意）",
+            "impact": "历史沿革无法确认（示意）",
+            "requiredAction": "分批送审（示意）",
+            "relatedFiles": ["材料-源/工商资料.pdf"],
+        }]
+        self.result["summary"]["counts"]["notChecked"] = len(self.result["scope"]["notCheckedItems"])
+        self.assertEqual([], self._errors())
+
+    def test_missing_inventory_with_snapshot_fails(self):
+        self._write_coverage(self._entries("complete"))
+        (self.case / "材料盘点.json").unlink()
+        errors = self._errors()
+        self.assertTrue(any("材料盘点" in item for item in errors), errors)
+
+    # -- ③c 同名文件必须消歧 ----------------------------------------------- #
+    def _two_sources_same_name(self, first_status, second_status):
+        index = self._write_index([
+            self._source("材料-源/A/营业执照.pdf", [self._page(1, first_status)]),
+            self._source("材料-源/B/营业执照.pdf", [self._page(1, second_status)], source_id="s2"),
+        ])
+        self._write_coverage([
+            {"sourceId": "s1", "relativePath": "材料-源/A/营业执照.pdf", "kind": "pdf", "pageCount": 1,
+             "required": 1, "recognized": 1 if first_status == "recognized" else 0,
+             "unreadable": 0, "pending": 0 if first_status == "recognized" else 1,
+             "verdict": "complete" if first_status == "recognized" else "pending",
+             "reasonCode": "" if first_status == "recognized" else "pages-pending"},
+            {"sourceId": "s2", "relativePath": "材料-源/B/营业执照.pdf", "kind": "pdf", "pageCount": 1,
+             "required": 1, "recognized": 1 if second_status == "recognized" else 0,
+             "unreadable": 0, "pending": 0 if second_status == "recognized" else 1,
+             "verdict": "complete" if second_status == "recognized" else "pending",
+             "reasonCode": "" if second_status == "recognized" else "pages-pending"},
+        ])
+        self.result["scope"]["inputs"] = [{
+            "fileId": "F-001", "displayName": "营业执照.pdf", "version": "v1.0", "readable": True,
+        }]
+
+    def test_ambiguous_same_name_must_be_disambiguated(self):
+        self._two_sources_same_name("pending", "recognized")
+        errors = self._errors()
+        self.assertTrue(any("同名" in item for item in errors), errors)
+        self.assertFalse(any("readable" in item for item in errors),
+                         "同名时不该按其中一份报 readable 冲突，而要报歧义")
+
+    def test_ambiguous_same_name_with_same_verdict_is_fine(self):
+        self._two_sources_same_name("recognized", "recognized")
+        self.assertEqual([], self._errors())
+
+    # -- ④ 命令行入口 ----------------------------------------------------- #
+    def test_cli_rejects_when_readable_disagrees(self):
+        self._write_coverage(self._entries("pending", pending=2))
+        payload = self.case / "result.json"
+        payload.write_text(json.dumps(self.result, ensure_ascii=False), encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = delivery.main(["validate", str(payload), "--case", str(self.case)])
+        self.assertEqual(1, code)
+        self.assertIn("readable", stderr.getvalue())
+
+    def test_cli_derives_the_case_from_the_result_directory(self):
+        """不传 `--case`，结果文件在案例目录里：门禁照样生效（不能靠模型记得传）。"""
+        payload = self.case / "result.json"
+        payload.write_text(json.dumps(self.result, ensure_ascii=False), encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = delivery.main(["validate", str(payload)])
+        self.assertEqual(1, code)
+        self.assertIn("覆盖率快照", stderr.getvalue(),
+                      "结果文件落在案例目录里却没跑覆盖率门禁")
+
+    def test_cli_outside_a_case_directory_keeps_existing_behavior(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, True))
+        payload = outside / "result.json"
+        payload.write_text(json.dumps(self.result, ensure_ascii=False), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = delivery.main(["validate", str(payload)])
+        self.assertEqual(0, code, "不在案例目录里的交付校验不该被覆盖率门禁拦下")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

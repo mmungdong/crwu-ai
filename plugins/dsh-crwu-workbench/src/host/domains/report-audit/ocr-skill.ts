@@ -35,10 +35,13 @@ export const OCR_RUNTIME_FILES = [
   'ocr_record.py',
   'ocr_merge.py',
   'ocr_status.py',
+  'ocr_coverage.py',
 ] as const
 
 /** 模型可以提交的 OCR 脚本（案例内相对路径）。 */
-const OCR_SCRIPT_NAMES = new Set(['ocr_prepare.py', 'ocr_record.py', 'ocr_merge.py', 'ocr_status.py'])
+const OCR_SCRIPT_NAMES = new Set([
+  'ocr_prepare.py', 'ocr_record.py', 'ocr_merge.py', 'ocr_status.py', 'ocr_coverage.py',
+])
 
 /**
  * 是否是 Host 暂存的 OCR 运行时脚本。

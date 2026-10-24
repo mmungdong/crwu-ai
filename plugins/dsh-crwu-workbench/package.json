@@ -1,6 +1,6 @@
 {
   "name": "dsh-crwu-workbench",
-  "version": "0.0.47",
+  "version": "0.0.48",
   "description": "中瑞世联工作台 / CRWU audit workbench for DeepSeek Harness: pick a pending audit report, dispatch one AI audit subagent, watch and stop/restart it, auto-upload deliverables to Aliyun OSS.",
   "keywords": [
     "deepseek-harness",
@@ -65,7 +65,7 @@
     "typecheck": "tsc --noEmit",
     "version:check": "node scripts/sync-version.mjs --check",
     "version:set": "node scripts/sync-version.mjs",
-    "check": "npm run version:check && npm run config:check && npm run skills:check && npm run skills:cli-guard && npm run dws:check && npm run typecheck && npm test && npm run build && npm run smoke:built",
+    "check": "npm run version:check && npm run config:check && npm run skills:check && npm run vendor:check && npm run skills:cli-guard && npm run dws:check && npm run typecheck && npm test && npm run build && npm run smoke:built",
     "config:check": "node scripts/check-config.mjs",
     "pack:assert": "node scripts/assert-pack.mjs",
     "compat:dsh": "node scripts/check-dsh-compat.mjs",
@@ -78,7 +78,8 @@
     "bin:check": "node scripts/sync-binaries.mjs --check",
     "bin:smoke": "node scripts/smoke-windows-binaries.mjs",
     "dws:sync": "node scripts/sync-dws-skills.mjs",
-    "dws:check": "node scripts/sync-dws-skills.mjs --check"
+    "dws:check": "node scripts/sync-dws-skills.mjs --check",
+    "vendor:check": "node scripts/check-vendor-sync.mjs"
   },
   "dsh": {
     "bundle": {

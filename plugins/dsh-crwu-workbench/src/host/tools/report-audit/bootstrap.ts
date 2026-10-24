@@ -18,6 +18,7 @@ import { clampText, failure, jsonObject, reasonOf, renderJson, type ToolFailure 
 import { canonicalJson, digestOf, digestOnly } from '../common/snapshot.ts'
 import { callerSession, toolContext, type ToolDeps } from '../common/types.ts'
 import { writeCaseText } from '../common/case-files.ts'
+import { writeAuditRuntimeQuietly } from '../common/audit-runtime.ts'
 import { PLUGIN_REV } from '../../consts.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 
@@ -378,6 +379,17 @@ export function bootstrapTools(deps: ToolDeps) {
       if (failedWrite !== undefined) {
         return { ...failure('infrastructure', `写输入快照失败：${failedWrite.error}`), ...summary }
       }
+
+      // 建档即写审核脚本的随包依赖位置：脚本可能在模型手上用 `pwsh` 直接执行，
+      // 那条路径不经过 `crwu_run_python_script`（2026-10-22 真机），等它来写就太晚。
+      await writeAuditRuntimeQuietly({
+        ctx,
+        access: deps.access,
+        world: deps.world,
+        casePath: caseCheck.path,
+        ...(callerSession(exec) === undefined ? {} : { session: callerSession(exec) }),
+        ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+      })
 
       if (attemptId !== '') {
         cache.set(attemptId, summary)

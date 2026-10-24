@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "python": "3.12",
+  "packages": {
+    "pypdf": {
+      "module": "pypdf",
+      "version": "6.21.1",
+      "wheel": "pypdf-6.21.1-py3-none-any.whl",
+      "sha256": "553e2d42f5bb3bb2a785a7d3de8ef90bb7df74b5413eff5a7b4388007ea9254b",
+      "bytes": 405134,
+      "platforms": [
+        "any"
+      ]
+    },
+    "xlrd": {
+      "module": "xlrd",
+      "version": "2.0.2",
+      "wheel": "xlrd-2.0.2-py2.py3-none-any.whl",
+      "sha256": "ea762c3d29f4cca48d82df517b6d89fbce4db3107f9d78713e48cd321d5c9aa9",
+      "bytes": 96555,
+      "platforms": [
+        "any"
+      ]
+    }
+  },
+  "runtimeProvided": {
+    "Pillow": {
+      "module": "PIL",
+      "version": "runtime"
+    }
+  },
+  "note": "crwu-audit 的随包纯 Python 依赖：pypdf（与 crwu-ocr 的副本由 npm run vendor:check 断言同版本同 sha256）与 xlrd（仅本技能需要，.xls 读取）。运行期只读本目录。"
+}

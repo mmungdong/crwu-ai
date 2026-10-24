@@ -43,7 +43,7 @@ H3YUN_BUNDLE  := $(DIST_DIR)/crwu-h3yun-bundle-$(VERSION).zip
         h3yun-bundle h3yun-bundle-check \
         plugin-deps plugin-python plugin-skills plugin-dws plugin-bin plugin-bin-check plugin-check plugin-ocr-check plugin-pack plugin-clean \
         plugin-version plugin-version-set plugin-npm-login plugin-npm-whoami \
-        plugin-publish-dry-run plugin-publish
+        plugin-publish-dry-run plugin-publish plugin-local-install plugin-local-verify
 
 build: build-mac build-win
 
@@ -168,12 +168,21 @@ plugin-check: plugin-deps plugin-python
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/biz
 	# 共享能力层（skills/capabilities）：OCR 技能同样必须能作为副本独立工作。
 	cd "$(PLUGIN_DIR)" && python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/kb_tool.py validate --skill-root skills/capabilities
+	# 技能脚本的 Python 依赖覆盖：每个非标准库 import 都必须由**该技能的** vendor/wheels 或
+	# DSH 运行时白名单满足，否则用户环境里就是缺的（2026-10-22 pypdf、随后 xlrd 都漏过这里）。
+	# 必须用 DSH 自带 Python 跑：它才是用户环境里的解释器；系统 python3 恰好装了包，会漏判。
+	cd "$(CURDIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" scripts/check_skill_python_deps.py --plugin "$(PLUGIN_DIR)"
 	# 门禁只读源码：`PYTHONDONTWRITEBYTECODE=1` 保证不在包目录留下 `__pycache__/*.pyc`
 	# —— `files` 里有 `skills/crwu/`，残留会被 `pack:assert` 判成「打进了不该发布的东西」。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-dev-audit-skill-maintainer/scripts/test_audit_skill_maintainer.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_audit_multiaxis_router.py
 	# 阶段一材料盘点契约（H0 隔离 / 工作版重建 / 媒体证据 / OCR 兜底清单 ocrRequired）。
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_prepare_materials.py
+	# 随包依赖通道：DSH 自带 Python **没有 pypdf**，文本通道只能靠随包 wheel。
+	# 这条用例必须在**无 pypdf 的运行时**上跑一次，否则"有文本层就走文本"只在开发机成立
+	# （2026-10-22 现场：28 个 PDF 全被记成 pypdf-error，整件推给视觉判读）。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/crwu/crwu-audit/scripts/test_prepare_materials_deps.py
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 skills/crwu/crwu-audit/scripts/test_prepare_materials_deps.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 python3 common/skills/crwu-dws/scripts/test_dws_source_contract.py
 	# 业务层（skills/biz）：报告评估的多类型资料提取脚本契约。缺 openpyxl / python-docx / Pillow
 	# 时对应用例**跳过**（那是运行时能力差异，不是脚本缺陷），缺口分支照常断言。
@@ -193,6 +202,8 @@ plugin-check: plugin-deps plugin-python
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_runtime.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_flow.py
 	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_bench.py
+	# 覆盖率快照：verdict 表、预算边界、整批拒绝、过期记录 —— 交付门禁的事实源，无需真实渲染。
+	cd "$(PLUGIN_DIR)" && PYTHONDONTWRITEBYTECODE=1 "$(DSH_PYTHON)" skills/capabilities/crwu-ocr/scripts/test_ocr_coverage.py
 
 # OCR 能力的**真实渲染**门禁（`plugin-check` 里那两条的聚焦入口）：解释器自动取 DSH 自带
 # Python（macOS 走系统 CoreGraphics、Windows 走随包 pypdfium2），一般不需要传参。
@@ -233,6 +244,37 @@ plugin-publish:
 	@$(MAKE) --no-print-directory plugin-bin
 	cd "$(PLUGIN_DIR)" && $(NPM) publish --dry-run --registry="$(NPM_REGISTRY)"
 	cd "$(PLUGIN_DIR)" && $(NPM) publish --registry="$(NPM_REGISTRY)"
+
+# 本地自测安装：现打当前代码的包 → 清干净 desktop profile → 装进去 → 校验自洽。
+#
+# 为什么要先「清」：profile 里上一次安装留下的 node_modules 会让缺失的 peer 看起来能解析。
+# 0.0.43 在 macOS 上就是这么被掩盖的 —— 残留的 @langchain/core 落在解析不到的层级、
+# zod 由另一个插件顺带带入，于是本机「能跑」，干净机器装完直接 ERR_MODULE_NOT_FOUND。
+# 这里只删 node_modules（不动 package.json / lockfile / 其它插件条目），装完由
+# `plugin-local-verify` 把「还有哪些包可能掩盖问题」一并提示出来。
+#
+# 用的是 `npm pack`，它会跑 prepack（config:check + skills:sync + dws:check + build:lib），
+# 所以打进 tarball 的 lib/ 一定是当前源码构建的，而不是上一次的产物。
+DSH         ?= dsh
+DSH_PROFILE ?= desktop
+PROFILE_DIR := $(HOME)/.dsh/profiles/$(DSH_PROFILE)
+
+plugin-local-install: plugin-deps
+	@test -n "$(HOME)" || { echo "HOME 未设置，拒绝清理 profile"; exit 1; }
+	@test -d "$(PROFILE_DIR)" || { echo "profile 不存在: $(PROFILE_DIR)（不自动创建）"; exit 1; }
+	mkdir -p "$(DIST_DIR)"
+	cd "$(PLUGIN_DIR)" && $(NPM) pack --pack-destination "$(DIST_DIR)"
+	@echo "==> tarball: $(PLUGIN_TGZ)"
+	@echo "==> 清理 $(PROFILE_DIR)/node_modules（上一次安装的全部依赖副本）"
+	rm -rf -- "$(PROFILE_DIR)/node_modules"
+	-$(DSH) plugin --profile $(DSH_PROFILE) remove $(PLUGIN_PKG_NAME)
+	$(DSH) plugin --profile $(DSH_PROFILE) add "$(PLUGIN_TGZ)"
+	@$(MAKE) --no-print-directory plugin-local-verify
+	@echo "==> 完成：重启 DSH 生效（--profile $(DSH_PROFILE)）"
+
+# 只读校验：安装是否自洽（依赖、入口 import、依赖自带的必需 peer 都要能从本插件位置解析）。
+plugin-local-verify:
+	@cd "$(PLUGIN_DIR)" && node scripts/verify-installed.mjs "$(PROFILE_DIR)" "$(PLUGIN_PKG_NAME)"
 
 # 插件侧的构建产物：分发包（dist/）、装配好的二进制（bin/）与它的下载缓存（.cache/）。
 # `.npm-cache/` 是包内 `.npmrc` 锚定的 npm 缓存：每次 `npm pack` 都会缓存一份 ~40MB 的 tarball，

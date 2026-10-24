@@ -43,6 +43,10 @@ crwu_audit_local_claim({ handoffId: "<提示词里的 handoffId>" })
 - 项目 ID 用 `handoffId`（形如 `la-<时间戳>-<随机段>`，本身就是安全的文件名）。
 - 成对落盘：`审核结果.<项目ID>.json` 与 `审核意见.<项目ID>.html`，调用序列与校验口径
   仍以 `11-html-delivery-spec.md` 为唯一权威（`validate` 先行，通过后 `render --json-out`）。
+- **带未核交付**：本地审核的 OCR 覆盖率按 `policy=disclose` 处理——**未判读不阻断交付**，
+  但 `readable` 不许标反、每个未核来源必须进 `scope.notCheckedItems`，且交付件与最终答复
+  要逐条写明未核了什么、员工下一步做什么（漏披露照样失败）。托管审核仍是 `strict`：
+  还有待判读页就不许交付。
 - **不许**调用 `crwu_audit_oss_publish` / `crwu_audit_dingtalk_archive` /
   `crwu_audit_dingtalk_notify_self`：本地审核没有云端交付这一层。Host 侧对这三条**真的拒绝**
   （返回 `policy` 失败并说明"本地审核的产物只留在本机案例目录里"）——

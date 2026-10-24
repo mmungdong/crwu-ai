@@ -47,6 +47,11 @@ python3 scripts/audit_delivery.py render scripts/examples/audit-result.sample.js
 # 校验渲染后状态（要求 fileTrace 摘要已回填）
 python3 scripts/audit_delivery.py validate <rendered.json> --rendered
 
+# 带 OCR 覆盖率门禁的校验/渲染（给了 --case 就按 ocr/coverage.json 对账，见 §6）
+python3 scripts/audit_delivery.py validate <audit-result.json> --case <案例目录>
+python3 scripts/audit_delivery.py render <audit-result.json> --case <案例目录> \
+  --out 审核意见.PRJ-2026-0001.html --json-out 审核结果.PRJ-2026-0001.json
+
 # 最终态监控 JSON 回传钉钉：**只能**用结构化 Tool，本目录不提供 CLI 回传脚本
 #   crwu_audit_dingtalk_archive({ caseDir, seqNo })     → 归档（契约见 references/13-dingtalk-result-publish.md）
 #   crwu_audit_dingtalk_notify_self({ caseDir, seqNo }) → 发给自己并转应用内 DING
@@ -65,7 +70,7 @@ python3 scripts/test_audit_delivery.py
 | --- | --- | --- |
 | `prepare_materials.py` | 材料盘点 + 隐藏区隔离（工作版重建）+ 归档解压 + **媒体证据导出与放行清单** + **`ocrRequired[]` 兜底清单** | `references/00-input-and-route-profile.md` §Excel 隐藏数据隔离 |
 | `media_extract.py` | 媒体抽取库：xlsx 绘图锚点 / docx·doc 正文图（段落序）/ PDF 内嵌图 / 独立图片；H0 与 fail-closed | 同上 §非单元格证据 |
-| `test_prepare_materials.py`、`test_media_extract.py` | 上述两脚本的契约测试 | — |
+| `test_prepare_materials.py`、`test_media_extract.py`、`test_prepare_materials_deps.py` | 上述两脚本的契约测试；`test_prepare_materials_deps.py` 专测**随包依赖通道**（不猜技能目录、`--vendor` 恢复文本通道、篡改 wheel 被拒），由 `make plugin-check` 用 `python3` 与 DSH 自带 Python 各跑一次 | — |
 
 ```text
 # 阶段一：盘点 + 工作版 + 媒体证据（产出 材料盘点.json〔含 ocrRequired[]〕/ 媒体索引.json / 提取/ / 工作版/ / 媒体证据/）
