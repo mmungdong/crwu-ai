@@ -372,6 +372,18 @@ async function main() {
     await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
 
     // ── Valuation page and drawer ───────────────────────────────────────────
+    // 2026-10-23: the default valuation page is now the redesigned experience
+    // (`src/client/modules/report-evaluation/valuation/`). The checks below target the
+    // retired intake/graph harness; keep them for historical branches, but do not run
+    // them against the new page. New-page screenshots live in
+    // docs/evidence/2026-10-23-valuation-experience/ and come from
+    // install/valuation-experience-preview.mjs.
+    await goto('valuation.html')
+    const legacyValuationPage = await page.locator('.ve-experience-root').count() === 0
+    if (!legacyValuationPage) {
+      checks.that('valuation: legacy browser checks retired with the new experience', true,
+        'use install/valuation-experience-preview.mjs for the redesigned page')
+    } else {
     for (const dark of [false, true]) {
       for (const width of [375, 500, 768, 1024, 1440]) {
         await page.setViewportSize({ width, height: 600 })
@@ -682,6 +694,8 @@ async function main() {
         }
       }
     }
+    }
+
     // ── Audit navigation + search geometry ───────────────────────────────────
     // Screenshot-feedback polish, test-first: the red set below is intentional and must
     // stay red until the audit navigation flattens and the shared search inset lands.

@@ -1,0 +1,184 @@
+{
+  "platform": "darwin",
+  "node": "v24.19.0",
+  "browser": "155.0.4283.62",
+  "results": [
+    {
+      "name": "market workface light-390",
+      "ok": true
+    },
+    {
+      "name": "market workface light-900",
+      "ok": true
+    },
+    {
+      "name": "market workface light-1440",
+      "ok": true
+    },
+    {
+      "name": "market workface dark-390",
+      "ok": true
+    },
+    {
+      "name": "market workface dark-900",
+      "ok": true
+    },
+    {
+      "name": "market workface dark-1440",
+      "ok": true
+    },
+    {
+      "name": "closed drawer leaves the full eleven-node graph visible",
+      "ok": true
+    },
+    {
+      "name": "drawer body scrolls independently and footer stays visible",
+      "ok": true
+    },
+    {
+      "name": "case selection is not prechecked and other is exclusive with draft retention",
+      "ok": true
+    },
+    {
+      "name": "submit is disabled until required questions are answered",
+      "ok": true
+    },
+    {
+      "name": "escape closes the drawer and focus returns to the triggering node",
+      "ok": true
+    },
+    {
+      "name": "fixture state executing",
+      "ok": true
+    },
+    {
+      "name": "fixture state done",
+      "ok": true
+    },
+    {
+      "name": "fixture state restricted",
+      "ok": true
+    },
+    {
+      "name": "fixture state failed",
+      "ok": true
+    },
+    {
+      "name": "state matrix awaiting light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix awaiting light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix awaiting dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix awaiting dark 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix submitting light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix submitting light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix submitting dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix submitting dark 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix queued light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix queued light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix queued dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix queued dark 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix executing light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix executing light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix executing dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix executing dark 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix done light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix done light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix done dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix done dark 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix restricted light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix restricted light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix restricted dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix restricted dark 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix failed light 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix failed light 390",
+      "ok": true
+    },
+    {
+      "name": "state matrix failed dark 1440",
+      "ok": true
+    },
+    {
+      "name": "state matrix failed dark 390",
+      "ok": true
+    },
+    {
+      "name": "no browser exceptions",
+      "ok": true,
+      "errors": []
+    }
+  ]
+}

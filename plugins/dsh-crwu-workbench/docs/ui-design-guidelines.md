@@ -698,6 +698,13 @@ loopback 在跑时界面禁用设备流按钮（都要抢同一把 `.dws` 锁）
 
 ### 6.10 房地产估值启动页（协议 37，2026-10-14）
 
+> **历史实现说明（2026-10-23）**：默认估值页面已按新原型重写，组件位于
+> `src/client/modules/report-evaluation/valuation/`。本节与 §6.9 中涉及旧估值图、市场法工作面、
+> 旧确认抽屉的尺寸与交互只用于理解旧实现；新页面验收以
+> [`handoffs/2026-10-23-valuation-experience-pages.md`](handoffs/2026-10-23-valuation-experience-pages.md)
+> 与 `docs/evidence/2026-10-23-valuation-experience/` 为准。
+
+
 页面结构没变：**门禁 → 单层工作面 → 只读核对抽屉 → 交接父会话 → 跳原生会话**。这一节的
 每条口径都对应一次真实缺陷，改这一页之前先读。
 

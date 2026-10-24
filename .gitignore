@@ -13,3 +13,8 @@
 
 /configs/workbuddy/*.json
 !/configs/workbuddy/*.example.json
+
+.cache
+
+# Local browser-check output (screenshots and run logs)
+plugins/dsh-crwu-workbench/.browser-market/

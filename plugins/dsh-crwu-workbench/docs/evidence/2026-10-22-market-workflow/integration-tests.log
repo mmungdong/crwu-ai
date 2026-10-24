@@ -1,0 +1,27 @@
+✔ fill mapping distinguishes subject and case fields and never substitutes missing values or formulas (64.989917ms)
+✔ explicit scoped user assumptions stay assumed in the fill trace and expire with changed conditions (0.37925ms)
+✔ case assumptions never fill unoccupied template columns (0.653042ms)
+✔ list acquisition never captures details and detail acquisition only uses the selected current IDs (52.078083ms)
+✔ failed page report stops its source despite successful envelope and cumulative old rows (1.404ms)
+✔ v2 real graph uses the supplied durable saver and persists its waiting boundary (20.383041ms)
+✔ changed business input revokes old approval and keeps original input and amendment provenance (18.133375ms)
+✔ two confirmations carry scoped limits to delivery and only chosen cases reach details (25.529916ms)
+✔ real Host runtime accepts v2 drafts, queued answers and explicit retry intents (24.897ms)
+✔ panel resolves only registered v2 node identities and current workbook artifacts (10.913291ms)
+✔ drafts saved during a long detail call survive the remaining node receipts (20.855ms)
+✔ all candidates within the approved 200-row budget remain selectable (25.194292ms)
+✔ assumptions require confirmation against the actual selected cases and survive history restore (26.070542ms)
+✔ changing collection conditions through Other clears old search and pagination before new approval (21.585542ms)
+✔ employee may defer case adoption with a reason and still receive an explicitly limited workpaper (18.272375ms)
+✔ initial purpose and date reach template facts and v2 retains real global revision owners (5.059416ms)
+✔ saved supplemental notes and choice explanations remain effective during replanning (5.824041ms)
+✔ global current values show adopted material facts when the entry object was incomplete (2.970541ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 548.832042
+
