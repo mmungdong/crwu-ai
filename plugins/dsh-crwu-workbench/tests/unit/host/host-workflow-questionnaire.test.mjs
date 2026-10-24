@@ -9,6 +9,63 @@ const edit = (state, answers, patch = {}) => ({ nodeId: 'elements', expectedRevi
 const submit = (model, state, answers, patch = {}) => model.submitQuestionAnswers(state,
   { ...edit(state, answers), submissionId: `submit-${state.version}`, ...patch })
 
+const modernQuestion = (patch = {}) => question('collection', { answerProtocol: 2, control: 'radio',
+  required: true, version: 1, applicable: true, reason: '确定案例口径', allowDefer: true,
+  options: [{ value: 'listing', label: '二手房挂牌价' }, { value: 'transaction', label: '成交价' }], ...patch })
+
+test('protocol 2 distinguishes choices, other, free value and permitted deferral without guessing legacy strings', async () => {
+  const loaded = await import('../../../src/shared/contracts/valuation-question-answer.ts').catch(() => null)
+  assert.equal(typeof loaded?.validateQuestionAnswer, 'function')
+  const valid = loaded.validateQuestionAnswer
+  assert.equal(valid(modernQuestion(), { kind: 'choice', values: ['listing'], supplement: '仅住宅' }), true)
+  assert.equal(valid(modernQuestion(), { kind: 'other', text: '仅整理已有底稿' }), true)
+  assert.equal(valid(modernQuestion(), { kind: 'defer', reason: '本轮先留空' }), true)
+  for (const answer of [{ value: 'listing' }, { kind: 'other', text: '' },
+    { kind: 'choice', values: ['listing', 'transaction'], supplement: '' },
+    { kind: 'choice', values: ['foreign'], supplement: '' }, { kind: 'defer', reason: '' }]) {
+    assert.equal(valid(modernQuestion(), answer), false)
+  }
+  assert.equal(valid(modernQuestion({ allowDefer: false }), { kind: 'defer', reason: 'later' }), false)
+  const many = modernQuestion({ control: 'multiselect' })
+  assert.equal(valid(many, { kind: 'choice', values: ['listing', 'transaction'], supplement: '' }), true)
+  assert.equal(valid(many, { kind: 'choice', values: ['listing', 'listing'], supplement: '' }), false)
+  assert.equal(valid(many, { kind: 'choice', values: ['__other__'], supplement: '' }), false)
+  for (const [control, value, expected] of [['number', '0', true], ['number', '0x10', false],
+    ['date', '2024-02-29', true], ['date', '2023-02-29', false], ['textarea', '具体补充', true]]) {
+    const q = modernQuestion({ control }); delete q.options
+    assert.equal(valid(q, { kind: 'value', value, supplement: '' }), expected)
+    assert.equal(valid(q, { kind: 'other', text: '说明' }), false)
+  }
+})
+
+test('modern answers survive draft, idempotent submission, deferral and cosmetic labels with historical Chinese echo', async () => {
+  const m = await load()
+  const state = m.admitQuestions(m.emptyQuestionnaire(), 'confirm-plan', [modernQuestion()])
+  const answers = { 'q-collection': { kind: 'choice', values: ['listing'], supplement: '仅住宅' } }
+  const request = { ...edit(state, answers), nodeId: 'confirm-plan', submissionId: 'modern-submit' }
+  const draft = m.saveQuestionDraft(state, request)
+  assert.equal(draft.ok, true)
+  assert.deepEqual(m.effectiveQuestionAnswers(draft.state), {})
+  const accepted = m.submitQuestionAnswers(state, request)
+  assert.equal(accepted.ok, true, accepted.error)
+  assert.equal(m.submitQuestionAnswers(accepted.state, request).changed, false)
+  assert.equal(m.submitQuestionAnswers(accepted.state, { ...request,
+    answers: { 'q-collection': { kind: 'other', text: 'changed' } } }).ok, false)
+  const cosmetic = m.admitQuestions(accepted.state, 'confirm-plan', [modernQuestion({ prompt: '请确认价格口径',
+    options: [{ value: 'listing', label: '住宅挂牌价' }, { value: 'transaction', label: '成交价' }] })])
+  assert.equal(cosmetic.questions[0].needsConfirmation, false)
+  const { formatQuestionAnswer } = await import('../../../src/shared/contracts/valuation-question-answer.ts')
+  assert.equal(formatQuestionAnswer(cosmetic.submissions[0].questions[0], cosmetic.submissions[0].answers['q-collection']), '二手房挂牌价；仅住宅')
+  assert.deepEqual(m.restoreQuestionnaire(JSON.parse(JSON.stringify(cosmetic))), cosmetic)
+  const semantic = m.admitQuestions(cosmetic, 'confirm-plan', [modernQuestion({ version: 2 })])
+  assert.equal(semantic.questions[0].needsConfirmation, true)
+  const deferred = m.submitQuestionAnswers(semantic, { ...edit(semantic, { 'q-collection': { kind: 'defer', reason: '先留空' } }),
+    nodeId: 'confirm-plan', submissionId: 'deferred' })
+  assert.equal(deferred.ok, true, deferred.error)
+  assert.equal(deferred.unknown, false)
+  assert.equal(m.effectiveQuestionAnswers(deferred.state)['q-collection'].kind, 'defer')
+})
+
 test('submitted history keeps the original question definition after later semantic changes', async () => {
   const m = await load()
   const state = m.admitQuestions(m.emptyQuestionnaire(), 'elements', [question('a', { prompt: '是否包含土地？', version: 1 })])

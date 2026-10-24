@@ -215,6 +215,8 @@ export type ValuationWorkflowNodePhase = 'boundary' | 'preparation' | 'execution
 /** Coarse visual band derived from the Host node identity, never a business step. */
 export function phaseOfNode(node: ValuationWorkflowGraphNodeView): ValuationWorkflowNodePhase {
   if (node.nodeId === '__start__' || node.nodeId === '__end__') return 'boundary'
+  if (node.templateMarketNodeId === 'validate-delivery') return 'delivery'
+  if (node.templateMarketNodeId) return ['templates', 'materials', 'collection-plan', 'confirm-plan'].includes(node.templateMarketNodeId) ? 'preparation' : 'execution'
   if (node.stage === 'delivery') return 'delivery'
   if (node.stage === undefined) return 'preparation'
   return 'execution'

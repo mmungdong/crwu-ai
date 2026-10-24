@@ -1,4 +1,6 @@
 import type { ValuationWorkflowQuestion } from '../../../../shared/contracts/valuation-workflow.ts'
+import { TEMPLATE_MARKET_NODES } from '../../../../shared/contracts/valuation-template-market.ts'
+import { isQuestionAnswerShape, isUnknownQuestionAnswer, normalizeQuestionAnswer, validateQuestionAnswer } from '../../../../shared/contracts/valuation-question-answer.ts'
 import type {
   ValuationQuestionAnswer, ValuationQuestionEdit, ValuationQuestionNote, ValuationQuestionSubmit,
   ValuationStoredQuestion, ValuationWorkflowQuestionnaire,
@@ -7,7 +9,7 @@ import type {
 const BAD_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 const CONTROLS = new Set(['text', 'textarea', 'number', 'date', 'select', 'radio', 'multiselect', 'boolean'])
 const CHOICES = new Set(['select', 'radio', 'multiselect'])
-const NODES = new Set(['intent', 'elements', 'rights', 'plan', 'evidence', 'calculation', 'review', 'delivery'])
+const NODES = new Set<string>(['intent', 'elements', 'rights', 'plan', 'evidence', 'calculation', 'review', 'delivery', ...TEMPLATE_MARKET_NODES])
 const MAX_ITEMS = 10000
 const MAX_TEXT = 100000
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -37,15 +39,18 @@ function safeJson(value: unknown, seen = new Set<object>(), depth = 0): boolean 
 }
 
 function answerShape(value: unknown): value is ValuationQuestionAnswer {
-  return record(value) && keys(value, ['value', 'unknown', 'reason']) && text(value.value)
-    && (value.unknown === undefined || typeof value.unknown === 'boolean')
-    && (value.reason === undefined || text(value.reason))
+  return isQuestionAnswerShape(value)
 }
 
 export function validateWorkflowQuestion(value: unknown): value is ValuationWorkflowQuestion {
   if (!record(value) || !safeJson(value)) return false
   if (!keys(value, ['questionId', 'field', 'prompt', 'knownValue', 'source', 'control', 'options',
-    'required', 'nodeId', 'version', 'applicable', 'inapplicabilityReason', 'reason'])) return false
+    'required', 'nodeId', 'version', 'applicable', 'inapplicabilityReason', 'reason', 'answerProtocol', 'allowDefer'])) return false
+  if (value.answerProtocol !== undefined && value.answerProtocol !== 2) return false
+  if (value.allowDefer !== undefined && typeof value.allowDefer !== 'boolean') return false
+  if (value.answerProtocol === 2 && (typeof value.control !== 'string' || typeof value.required !== 'boolean'
+    || typeof value.applicable !== 'boolean' || !integer(value.version) || value.version === 0
+    || typeof value.reason !== 'string' || !value.reason.trim() || typeof value.allowDefer !== 'boolean')) return false
   if (!id(value.questionId) || !id(value.field) || !text(value.prompt) || !text(value.knownValue) || !text(value.source)) return false
   if (value.control !== undefined && (typeof value.control !== 'string' || !CONTROLS.has(value.control))) return false
   if (value.required !== undefined && typeof value.required !== 'boolean') return false
@@ -57,9 +62,9 @@ export function validateWorkflowQuestion(value: unknown): value is ValuationWork
   if (value.applicable === false && (typeof value.inapplicabilityReason !== 'string' || value.inapplicabilityReason.trim() === '')) return false
   const choice = CHOICES.has(String(value.control))
   if (value.options !== undefined) {
-    if (!choice || !list(value.options) || value.options.length > 50 || value.options.length === 0) return false
+    if (!choice || !list(value.options) || value.options.length > (value.answerProtocol === 2 ? 200 : 50) || value.options.length === 0) return false
     if (!value.options.every(option => record(option) && keys(option, ['value', 'label'])
-      && id(option.value) && text(option.label) && option.label.trim() !== '' && option.label.length <= 200)) return false
+      && id(option.value) && option.value !== '__other__' && text(option.label) && option.label.trim() !== '' && option.label.length <= 200)) return false
     if (new Set(value.options.map(option => (option as Record<string, unknown>).value)).size !== value.options.length) return false
   } else if (choice) return false
   return true
@@ -71,11 +76,12 @@ export function emptyQuestionnaire(): ValuationWorkflowQuestionnaire {
 
 function semantic(question: ValuationWorkflowQuestion): string {
   return JSON.stringify([question.control ?? 'text', question.required !== false,
-    question.options?.map(option => [option.value, option.label]) ?? []])
+    question.answerProtocol ?? 1, question.allowDefer === true,
+    question.options?.map(option => question.answerProtocol === 2 ? option.value : [option.value, option.label]) ?? []])
 }
 
 function answerMapIdentity(answers: Record<string, ValuationQuestionAnswer>): string {
-  return JSON.stringify(Object.keys(answers).sort().map(key => [key, answers[key].value, answers[key].unknown === true, answers[key].reason ?? '']))
+  return JSON.stringify(Object.keys(answers).sort().map(key => [key, normalizeQuestionAnswer(answers[key], false)]))
 }
 
 export function admitQuestions(
@@ -108,30 +114,7 @@ export function admitQuestions(
   return next
 }
 
-function validAnswer(question: ValuationWorkflowQuestion, answer: ValuationQuestionAnswer): boolean {
-  if (answer.unknown === true) return Boolean(answer.reason?.trim())
-  const value = answer.value.trim()
-  if (value === '') return question.required === false
-  switch (question.control) {
-    case 'number': return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) && Number.isFinite(Number(value))
-    case 'boolean': return value === 'true' || value === 'false'
-    case 'date': {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
-      const date = new Date(`${value}T00:00:00.000Z`)
-      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
-    }
-    case 'select': case 'radio': return question.options?.some(option => option.value === answer.value) === true
-    case 'multiselect': {
-      try {
-        const selected: unknown = JSON.parse(answer.value)
-        return list(selected) && (question.required === false || selected.length > 0)
-          && selected.every(item => typeof item === 'string' && question.options?.some(option => option.value === item))
-          && new Set(selected).size === selected.length
-      } catch { return false }
-    }
-    default: return true
-  }
-}
+const validAnswer = validateQuestionAnswer
 
 function validateEdit(state: ValuationWorkflowQuestionnaire, input: ValuationQuestionEdit): string {
   if (!safeJson(input) || !id(input.nodeId) || !integer(input.expectedRevision) || !integer(input.expectedQuestionVersion)
@@ -186,7 +169,7 @@ export function submitQuestionAnswers(state: ValuationWorkflowQuestionnaire, inp
       || input.supplement === ''
     if (!sameAnswers || !editedNotesMatch || !supplementMatches || previousSubmission.nodeId !== input.nodeId) return { ok: false, error: '提交标识已用于其他内容' }
     return { ok: true, state: clone(state), answers: clone(previousSubmission.answers), changed: false,
-      unknown: Object.values(previousSubmission.answers).some(answer => answer.unknown === true) }
+      unknown: Object.values(previousSubmission.answers).some(isUnknownQuestionAnswer) }
   }
   const error = validateEdit(state, input)
   if (error) return { ok: false, error }
@@ -217,7 +200,7 @@ export function submitQuestionAnswers(state: ValuationWorkflowQuestionnaire, inp
     }), updatedAt: new Date().toISOString() })
   next.drafts = next.drafts.filter(draft => draft.nodeId !== input.nodeId)
   return { ok: true, state: next, answers, changed: answerMapIdentity(before) !== answerMapIdentity(answers)
-    || JSON.stringify(state.notes) !== JSON.stringify(next.notes), unknown: Object.values(answers).some(answer => answer.unknown === true) }
+    || JSON.stringify(state.notes) !== JSON.stringify(next.notes), unknown: Object.values(answers).some(isUnknownQuestionAnswer) }
 }
 
 function noteShape(value: unknown): value is ValuationQuestionNote {

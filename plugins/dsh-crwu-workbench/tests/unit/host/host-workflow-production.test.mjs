@@ -53,7 +53,7 @@ test('the shipped Host registers the graph control tool and passes the same runt
   assert.match(handoff, /prepareHandoff/, 'the actual dispatch must use the opaque graph command prompt')
 })
 
-async function persistedFixture(t) {
+async function persistedFixture(t, { legacyRun = false } = {}) {
   const { createValuationWorkflowHost } = await import('../../../src/host/integrations/valuation-workflow/host.ts')
   const root = await mkdtemp(join(tmpdir(), 'crwu-production-store-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -106,9 +106,25 @@ async function persistedFixture(t) {
     access: { authorize(call) { calls.push(call.operation); return { ok: granted, error: granted ? '' : '合成授权已撤销' } }, note() {} } }
   const host = createValuationWorkflowHost(options)
   t.after(() => host.dispose())
+  if (legacyRun) {
+    const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
+    const { createValuationWorkflowService } = await loadWorkflowService()
+    const service = createValuationWorkflowService(createFixturePorts().ports)
+    await service.start(createStartInput({ runId: projectId }))
+    const dto = await service.exportRun(projectId)
+    service.dispose()
+    const { openWorkflowStoreSession } = await import('../../../src/host/integrations/valuation-workflow/production/store.ts')
+    const seed = await openWorkflowStoreSession({ workspaceId: scope.workspaceId,
+      storePath: join(root, '.crwu/workflows.sqlite'), authorize: () => ({ ok: true }) })
+    await seed.saveInitial({ projectId, parentSessionId, workspaceId: scope.workspaceId, workspacePath: root, casePath,
+      runId: projectId, frozen, planIds: [], phase: dto.status, errorKind: '', error: '', dto,
+      prepared: null, calculationReceipt: null, journal: [], stopUnknown: null, preparing: false })
+    await seed.close()
+  }
   return { host, options, root, casePath, materialPath, projectId, parentSessionId, frozen, scope, calls, parent, workspaces,
     createHost: () => createValuationWorkflowHost({ ...options, valuationScopes: new ValuationScopes() }),
-    revoke: () => { granted = false }, receipt: { projectId, parentSessionId, dispatchAccepted: false, reused: false } }
+    revoke: () => { granted = false }, grant: () => { granted = true },
+    receipt: { projectId, parentSessionId, dispatchAccepted: false, reused: false } }
 }
 
 test('a prepared graph survives Host reconstruction and export-clear-load without starting any model', async (t) => {
@@ -299,7 +315,7 @@ test('a real preparation child retains occupancy before the first DTO and settle
 })
 
 test('the journal cannot substitute a helper or earlier revision conversation for the actual node attempt', async (t) => {
-  const f = await persistedFixture(t)
+  const f = await persistedFixture(t, { legacyRun: true })
   assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
   const session = await openTechnicalStore(f, t)
   const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
@@ -342,7 +358,7 @@ test('saved evidence validation uses registered case-relative template and plan-
 })
 
 test('live native progress stays running while the same persisted mid-flight image needs reconciliation after Host reconstruction', async (t) => {
-  const f = await persistedFixture(t)
+  const f = await persistedFixture(t, { legacyRun: true })
   assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
   const session = await openTechnicalStore(f, t)
   const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
@@ -376,7 +392,7 @@ test('live native progress stays running while the same persisted mid-flight ima
 
 
 test('panel revision validates the compiled node id and dispatches only its opaque command to the recorded parent', async (t) => {
-  const f = await persistedFixture(t)
+  const f = await persistedFixture(t, { legacyRun: true })
   assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
   const session = await openTechnicalStore(f, t)
   const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
@@ -466,7 +482,7 @@ test('an unobservable old child cannot be reconciled as stopped or replaced by a
 
 
 test('a live decision revalidates frozen material bytes before entering the native command queue', async (t) => {
-  const f = await persistedFixture(t)
+  const f = await persistedFixture(t, { legacyRun: true })
   assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
   const session = await openTechnicalStore(f, t)
   const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
@@ -508,7 +524,7 @@ test('a loaded task cannot substitute stored workspace and case paths while keep
 
 
 test('an explicit decision on a valid cold stopped graph restores it without rerunning material preparation', async (t) => {
-  const f = await persistedFixture(t)
+  const f = await persistedFixture(t, { legacyRun: true })
   assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
   const technical = await openTechnicalStore(f, t)
   const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
@@ -545,7 +561,7 @@ test('a resident parent moved outside the selected workspace cannot receive an e
 })
 
 test('reconcile dispatches only an eligible stopped router retry under the same parent', async (t) => {
-  const f = await persistedFixture(t)
+  const f = await persistedFixture(t, { legacyRun: true })
   assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
   const technical = await openTechnicalStore(f, t)
   const { createFixturePorts, createStartInput, loadWorkflowService } = await import('../../helpers/valuation-workflow-fixture.mjs')
@@ -576,7 +592,7 @@ test('reconcile dispatches only an eligible stopped router retry under the same 
 })
 
 test('the current protocol reads exact graph generations 43 through 47 without admitting other generations', async (t) => {
-  assert.equal(WORKBENCH_PROTOCOL, 49)
+  assert.equal(WORKBENCH_PROTOCOL, 52)
   const f = await persistedFixture(t)
   const { verifyProtectedProject } = await import('../../../src/host/integrations/valuation-workflow/production/project.ts')
   const path = join(f.casePath, PROJECT_RECORD_FILE)
@@ -665,25 +681,19 @@ test('a failed preparation with an unsettled native child cannot release writer 
 })
 
 
-test('explicit retry after a settled resident pregraph failure sends a fresh command to the same parent', async (t) => {
+test('v2 template-market preparation failures are observable node failures, not a pregraph success', async (t) => {
   const f = await persistedFixture(t)
   const prepared = await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })
   assert.equal(prepared.ok, true)
   const commandId = /commandId=([^。]+)/.exec(prepared.prompt)[1]
   const result = await f.host.runtime.execute(commandId, { agent: f.parent, token: Symbol('control'), rootCallId: 'root-control', signal: new AbortController().signal })
-  assert.equal(result.ok, false)
-  assert.equal((await f.host.runtime.status(f.projectId)).phase, 'failed')
-  const messages = []
-  f.parent.inbox = { nextTurn: [], nextStep: [] }
-  f.parent.followup = (message) => messages.push(message)
-  f.parent.runMaintenance = async (task) => await task(new AbortController().signal)
-  const retry = await f.host.operations['valuation-workflow-reconcile']({ projectId: f.projectId })
-  assert.equal(retry.ok, true, retry.error)
-  assert.notEqual(retry.commandId, commandId, 'a settled failed command result cannot become a new attempt')
-  assert.equal(messages.length, 1)
+  // The command itself is accepted; the business state carries the failed preparation.
+  assert.equal(result.ok, true)
+  const status = await f.host.runtime.status(f.projectId)
+  assert.equal(status.phase, 'failed')
   assert.equal((await f.host.operations['valuation-workflow-current']({ projectId: f.projectId })).parentSessionId, f.parentSessionId)
+  assert.notEqual(status.projectId, '', 'the same project identity is retained instead of creating a replacement round')
 })
-
 
 test('an aborted idle maintenance claim does not repair or dispatch the old graph', async (t) => {
   const f = await persistedFixture(t)
@@ -726,4 +736,49 @@ test('clear refuses a replaced task identity after awaiting stop', async (t) => 
       assert.equal(retained[field], replacement)
     })
   }
+})
+
+test('before the first business snapshot, confirmed market input previews the same eleven-node v2 graph after cold restore', async t => {
+  const f = await persistedFixture(t)
+  assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
+  const initial = await f.host.operations['valuation-workflow-current']({})
+  assert.equal(initial.snapshot, null)
+  assert.equal(initial.graph.version, '2')
+  assert.ok(initial.graph.nodes.some(n => n.nodeId === 'templates'))
+  assert.ok(initial.graph.nodes.some(n => n.nodeId === 'select-cases'))
+  assert.equal(initial.graph.nodes.some(n => n.nodeId === 'valuation:intent-router'), false)
+  await f.host.dispose()
+  const reopened = f.createHost(); t.after(() => reopened.dispose())
+  const restored = await reopened.operations['valuation-workflow-current']({})
+  assert.equal(restored.graph.version, '2')
+  const exported = await reopened.operations['valuation-workflow-export']({ projectId: f.projectId })
+  assert.equal(JSON.parse(exported.serialized).graphVersion, '2')
+})
+
+test('an existing market v1 run keeps its graph generation even though new entry uses v2', async t => {
+  const f = await persistedFixture(t, { legacyRun: true })
+  assert.equal((await f.host.prepareHandoff({ receipt: f.receipt, frozen: f.frozen })).ok, true)
+  const current = await f.host.operations['valuation-workflow-current']({})
+  assert.equal(current.graph.version, '1')
+  assert.ok(current.graph.nodes.some(n => n.nodeId === 'valuation:intent-router'))
+  assert.equal(current.graph.nodes.some(n => n.nodeId === 'templates'), false)
+})
+
+test('a registered pre-snapshot v1 task can still settle preparation and clear after upgrade', async t => {
+  const f = await persistedFixture(t, { legacyRun: true })
+  const legacy = await f.host.operations['valuation-workflow-export']({ projectId: f.projectId })
+  const bundle = JSON.parse(legacy.serialized)
+  bundle.current.state.dto = null
+  bundle.current.state.phase = 'preparing'
+  bundle.current.state.preparing = false
+  bundle.current.status = 'preparing'
+  assert.equal((await f.host.operations['valuation-workflow-clear']({ projectId: f.projectId })).ok, true)
+  assert.equal((await f.host.operations['valuation-workflow-load']({ serialized: JSON.stringify(bundle) })).ok, true)
+  const session = await openTechnicalStore(f, t)
+  await session.beginPreparation()
+  assert.equal((await session.read()).graphVersion, '1')
+  await session.recordStartFailure(Object.assign(new Error('员工停止资料准备'), { errorKind: 'cancelled' }))
+  const current = await f.host.operations['valuation-workflow-current']({})
+  assert.equal(current.graph.version, '1')
+  assert.equal((await f.host.operations['valuation-workflow-clear']({ projectId: f.projectId })).ok, true)
 })

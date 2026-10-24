@@ -13,9 +13,25 @@ import type {
   ValuationWorkflowStage,
 } from '../../../../shared/contracts/valuation-workflow.ts'
 import type { ValuationWorkflowQuestionControl, ValuationWorkflowQuestionOption } from '../../../../shared/contracts/valuation-workflow.ts'
+import type { TemplateMarketNodeId, TemplateMarketNodeInput, TemplateMarketNodeOutput } from '../../../../shared/contracts/valuation-template-market.ts'
+
+export type TemplateMarketPort<N extends TemplateMarketNodeId> = (input: TemplateMarketNodeInput<N>, signal?: AbortSignal) => Promise<TemplateMarketNodeOutput<N>>
+export class TemplateMarketPortError extends Error {}
+export interface TemplateMarketPorts {
+  readTemplates: TemplateMarketPort<'templates'>
+  readMaterials: TemplateMarketPort<'materials'>
+  plan: TemplateMarketPort<'collection-plan'>
+  search: TemplateMarketPort<'search-listings'>
+  writeCandidates: TemplateMarketPort<'candidate-workbook'>
+  inspectDetails: TemplateMarketPort<'inspect-details'>
+  fillTemplate: TemplateMarketPort<'fill-template'>
+  verifyDelivery: TemplateMarketPort<'validate-delivery'>
+}
 
 /** Untrusted typed blocker candidate; the domain admits it before business outputs. */
 export interface ValuationInferenceQuestion {
+  answerProtocol?: 2
+  allowDefer?: boolean
   questionId: string
   field: string
   prompt: string
@@ -83,7 +99,7 @@ export interface ValuationInferenceRequest {
    * `planning-selection` runs the isolated market planning-selection contract.
    * `template-analysis` proposes requirements from an inspected workbook and knowledge.
    */
-  operation?: 'knowledge-selection' | 'page-reading' | 'planning-selection' | 'template-analysis'
+  operation?: 'knowledge-selection' | 'page-reading' | 'planning-selection' | 'template-analysis' | 'template-market'
   /** Admitted page images; only meaningful for the `page-reading` operation. */
   images?: ValuationImageAttachmentRef[]
   /** Confirmed materials; the elements stage inspects these before asking for facts. */
@@ -342,6 +358,7 @@ export interface ValuationPlanningPort {
 }
 
 export interface ValuationWorkflowPorts {
+  templateMarket?: TemplateMarketPorts
   inference: ValuationInferencePort
   knowledge: ValuationKnowledgePort
   /** Optional real observed-case acquisition; legacy fixtures run without it. */

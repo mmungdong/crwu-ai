@@ -4,6 +4,17 @@ import { ValuationScopes } from '../../../src/host/domains/report-evaluation/sco
 import { parseWorkflowAction } from '../../../src/host/integrations/valuation-workflow/production/operations.ts'
 import { createValuationWorkflowRuntime } from '../../../src/host/integrations/valuation-workflow/runtime.ts'
 import { createDeferred } from '../../helpers/valuation-workflow-fixture.mjs'
+import { parseQuestionEdit } from '../../../src/host/integrations/valuation-workflow/production/operations.ts'
+
+test('typed answer transport preserves discriminators and refuses mixed or injected shapes', () => {
+  const request = { nodeId: 'confirm-plan', expectedRevision: 1, expectedQuestionVersion: 1,
+    answers: { q1: { kind: 'other', text: '补充一个具体方案' } }, supplement: '', noteEdits: {}, submissionId: 'typed-1' }
+  assert.deepEqual(parseQuestionEdit(request, true), request)
+  for (const answer of [{ kind: 'other', text: '说明', value: 'injected' }, { kind: 'choice', values: ['x'], supplement: '', command: 'exec' },
+    { kind: 'defer', reason: 'later', unknown: true }, { kind: 'value', value: 'x', supplement: '', toolName: 'shell' }]) {
+    assert.equal(parseQuestionEdit({ ...request, answers: { q1: answer } }, true), null)
+  }
+})
 
 const graph = { nodes: [
   { nodeId: 'valuation:realestate:rights', stage: 'rights' },

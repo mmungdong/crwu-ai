@@ -1,3 +1,5 @@
+import { parseTemplateMarketState } from './template-market-flow.ts'
+import { TEMPLATE_MARKET_NODES, type TemplateMarketState } from '../../../../shared/contracts/valuation-template-market.ts'
 /**
  * Durable image of one valuation workflow run.
  *
@@ -37,6 +39,7 @@ import type { ValuationWorkflowQuestionnaire } from '../../../../shared/contract
 import { legacyQuestionnaire, restoreQuestionnaire, validateWorkflowQuestion } from './questionnaire.ts'
 
 export const VALUATION_RUN_FORMAT = 'crwu.valuation.run.v1'
+export const TEMPLATE_MARKET_RUN_FORMAT = 'crwu.valuation.run.v2'
 
 /** Verified knowledge body image bound into the durable record. */
 export interface ValuationWorkflowKnowledgeSourceImage {
@@ -60,7 +63,8 @@ export interface ValuationWorkflowEvidencePoolImage {
 }
 
 export interface ValuationWorkflowRunDTO {
-  format: typeof VALUATION_RUN_FORMAT
+  templateMarket?: TemplateMarketState
+  format: typeof VALUATION_RUN_FORMAT | typeof TEMPLATE_MARKET_RUN_FORMAT
   runId: string
   revision: number
   status: ValuationWorkflowStatus
@@ -110,7 +114,7 @@ const MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 /** Field names a durable image may carry; anything else is an unknown shape. */
 const RUN_KEYS = new Set<string>([
-  'format', 'runId', 'revision', 'status', 'outcome', 'object', 'decision', 'clarification',
+  'templateMarket', 'format', 'runId', 'revision', 'status', 'outcome', 'object', 'decision', 'clarification',
   'stages', 'plan', 'result', 'delivery', 'revisions', 'error', 'errorKind', 'purpose', 'baseDate',
   'userInput', 'materials', 'initialInput', 'routing', 'knowledgeSources', 'knownSamples', 'observedSamples',
   'evidencePool', 'evidenceSamples', 'acceptedRequirements', 'calculation', 'nodePrompts',
@@ -401,7 +405,7 @@ function isValidRequirement(value: unknown): boolean {
 
 function isValidChange(value: unknown): boolean {
   if (!isRecord(value)) return false
-  return isStage(value.nodeId)
+  return (isStage(value.nodeId) || (TEMPLATE_MARKET_NODES as readonly unknown[]).includes(value.nodeId))
     && typeof value.field === 'string' && value.field !== ''
     && value.sourceKind === 'user'
     && typeof value.source === 'string'
@@ -418,6 +422,7 @@ function isValidRevision(value: unknown): boolean {
   if (!isPlainStringArray(value.supersededNodeIds)) return false
   if (value.stages !== undefined && !isValidStages(value.stages)) return false
   if (value.plan !== undefined && value.plan !== null && !isValidPlan(value.plan)) return false
+  if (value.templateMarket !== undefined && parseTemplateMarketState(value.templateMarket) === null) return false
   if (value.changes !== undefined
     && (!Array.isArray(value.changes) || !value.changes.every(isValidChange))) return false
   return true
@@ -482,7 +487,8 @@ function copyStages(
 /** Project the live run record into an independent, JSON-safe image. */
 export function serializeRunRecord(record: RunRecord): ValuationWorkflowRunDTO {
   const image: ValuationWorkflowRunDTO = {
-    format: VALUATION_RUN_FORMAT,
+    format: record.templateMarket ? TEMPLATE_MARKET_RUN_FORMAT : VALUATION_RUN_FORMAT,
+    ...(record.templateMarket ? { templateMarket: cloneJson(record.templateMarket) } : {}),
     runId: record.runId,
     revision: record.revision,
     status: record.status,
@@ -568,7 +574,10 @@ export function parseRunRecord(input: unknown): RunRestoreResult {
   if (!isRecord(input)) return fail('恢复数据必须是对象')
   if (!pollutionFree(input)) return fail('恢复数据包含不安全的字段名')
   if (!Object.keys(input).every((key) => RUN_KEYS.has(key))) return fail('恢复数据包含未知字段')
-  if (input.format !== VALUATION_RUN_FORMAT) return fail('恢复数据格式不受支持')
+  if (input.format !== VALUATION_RUN_FORMAT && input.format !== TEMPLATE_MARKET_RUN_FORMAT) return fail('恢复数据格式不受支持')
+  const marketImage = input.format === TEMPLATE_MARKET_RUN_FORMAT ? parseTemplateMarketState(input.templateMarket) : null
+  if (input.format === TEMPLATE_MARKET_RUN_FORMAT && (!marketImage || marketImage.runId !== input.runId)) return fail('恢复数据的新估值图状态无效')
+  if (input.format === VALUATION_RUN_FORMAT && input.templateMarket !== undefined) return fail('旧运行不能携带新估值图状态')
   if (!finiteNumbers(input)) return fail('恢复数据包含无效数值')
   if (!withinBounds(input)) return fail('恢复数据超出大小上限')
   if (!withinPayloadSize(input)) return fail('恢复数据超出大小上限')
@@ -764,6 +773,8 @@ export function parseRunRecord(input: unknown): RunRestoreResult {
     ? legacyQuestionnaire(input)
     : restoreQuestionnaire(input.questionnaire)
   if (questionnaireImage === null) return fail('恢复数据的节点问卷无效')
+  if (marketImage && (JSON.stringify(marketImage.questionnaire) !== JSON.stringify(questionnaireImage)
+    || JSON.stringify(marketImage.initialInput) !== JSON.stringify(initialInputImage))) return fail('新估值图的问卷或原始输入与运行镜像不一致')
 
   const stages = cloneJson<Record<ValuationWorkflowStage, ValuationWorkflowStageReceipt>>(input.stages)
   const nodePrompts = emptyPrompts()
@@ -784,6 +795,7 @@ export function parseRunRecord(input: unknown): RunRestoreResult {
   }))
 
   const record: RunRecord = {
+    ...(marketImage ? { templateMarket: marketImage } : {}),
     runId,
     revision,
     status: wasActive ? 'failed' : status,

@@ -1688,6 +1688,24 @@ test('详情取证：重定向到另一条房源时不得当成原案例证据',
 
 // ── List snapshot/ledger integrity and fail-fast environment writes ──
 
+test('explicit page continuation requests page two without re-fetching or screenshotting page one', async () => {
+  const ctx = makeCtx(), shots = makePageScreenshot(ctx)
+  const { deps } = makeDeps({ ctx, screenshot: shots.capability })
+  const sessionId = openValuation(deps), fetched = []
+  const tool = valuationMarketSearchTools(deps, async url => {
+    fetched.push(url)
+    return url.includes('search.fang.com/house/?') ? okResult(url, LISTING_HTML) : okResult(url, '<html>公开页</html>')
+  })[0]
+  const args = { caseDir: CASE_DIR, planId: PLAN_ID, keyword: 'k', city: 'beijing', providers: ['fang'], maxPages: 1, screenshotRequired: false }
+  await tool.execute(args, execOf(sessionId, VALUATION_TOOL_NAMES.marketSearch))
+  fetched.length = 0
+  const continued = await tool.execute({ ...args, startPage: 2 }, execOf(sessionId, VALUATION_TOOL_NAMES.marketSearch))
+  assert.ok(fetched.some(url => url.includes('page=2')))
+  assert.equal(fetched.some(url => url.includes('page=1')), false)
+  assert.equal(continued.providers[0].budget.pagesUsed, 2)
+  assert.equal(shots.calls.length, 0)
+})
+
 test('列表快照分账：sale 2页 → rent 1页 → sale 恢复原2页，新轮次不复用', async () => {
   const ctx = makeCtx()
   const shots = makePageScreenshot(ctx)
@@ -2021,4 +2039,20 @@ test('损坏的取数预算镜像显式失败，零出站', async () => {
   assert.equal(result.ok, false, '损坏的预算镜像必须显式失败')
   assert.equal(['file', 'infrastructure'].includes(result.errorKind), true, `errorKind=${result.errorKind}`)
   assert.equal(calls, 0, '预算损坏时不得发任何请求')
+})
+
+test('template market requests a single attempt for list and detail failures', async () => {
+  const { deps } = makeDeps(), sessionId = openValuation(deps)
+  let pages = 0, details = 0
+  const tools = valuationMarketSearchTools(deps, async url => {
+    if (url.includes('/house/?')) { pages += 1; return failResult(url, '请求失败：网络不可达') }
+    if (url.includes('/chushou/')) { details += 1; return failResult(url, '请求失败：网络不可达') }
+    return okResult(url, '<html>公开页</html>')
+  })
+  const searched = await tools[0].execute({ caseDir: CASE_DIR, planId: PLAN_ID, keyword: 'k', city: 'beijing',
+    providers: ['fang'], maxPages: 1, maxAttempts: 1, screenshotRequired: false }, execOf(sessionId, VALUATION_TOOL_NAMES.marketSearch))
+  assert.equal(pages, 1)
+  assert.equal(searched.providers[0].attemptLimit, 1)
+  await tools[1].execute({ caseDir: CASE_DIR, planId: PLAN_ID, source: 'fang', url: 'https://esf.fang.com/chushou/3_1.htm', maxAttempts: 1 }, execOf(sessionId, VALUATION_TOOL_NAMES.marketCapture))
+  assert.equal(details, 1)
 })

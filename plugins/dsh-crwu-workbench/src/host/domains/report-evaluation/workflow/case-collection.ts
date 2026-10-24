@@ -1,36 +1,7 @@
-export interface TemplateCellRef { sheet: string; cell: string }
-
-export interface TemplateProfile {
-  templateId: string
-  digest: string
-  relativePath: string
-  sheets: Array<{ name: string; rows: number; columns: number; mergedRanges: string[] }>
-  cells: Array<TemplateCellRef & { value: string | number | boolean | null; formula: string }>
-  definedNames: Array<{ name: string; ref: string }>
-  coverage: { complete: boolean; issues: string[] }
-}
-
-export const TEMPLATE_FIELD_CATEGORIES = ['source-fact', 'shared-fact', 'judgment', 'derived', 'calculation'] as const
-export const TEMPLATE_FIELD_APPLICABILITY = ['applicable', 'not-applicable', 'pending'] as const
-
-export interface TemplateRequirement {
-  fieldId: string
-  label: string
-  labelRef: TemplateCellRef
-  targetRefs: TemplateCellRef[]
-  category: typeof TEMPLATE_FIELD_CATEGORIES[number]
-  applicability: typeof TEMPLATE_FIELD_APPLICABILITY[number]
-  criticalFor: Array<'eligibility' | 'calculation'>
-  basis: Array<{ sourceId: string; quote: string }>
-}
-
-export interface TemplateRequirements {
-  templateId: string
-  templateDigest: string
-  version: number
-  fields: TemplateRequirement[]
-  questions: Array<{ field: string; prompt: string }>
-}
+import type { TemplateCellRef, TemplateProfile, TemplateRequirements } from '../../../../shared/contracts/valuation-template.ts'
+import { TEMPLATE_FIELD_APPLICABILITY, TEMPLATE_FIELD_CATEGORIES } from '../../../../shared/contracts/valuation-template.ts'
+export type { TemplateCellRef, TemplateProfile, TemplateRequirement, TemplateRequirements } from '../../../../shared/contracts/valuation-template.ts'
+export { TEMPLATE_FIELD_APPLICABILITY, TEMPLATE_FIELD_CATEGORIES } from '../../../../shared/contracts/valuation-template.ts'
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null
   && typeof value === 'object' && !Array.isArray(value)
@@ -97,7 +68,8 @@ export function isTemplateRequirements(value: unknown): value is TemplateRequire
     || !Array.isArray(value.questions) || value.questions.length > 64) return false
   const fields = new Set<string>()
   for (const field of value.fields) {
-    if (!exact(field, ['fieldId', 'label', 'labelRef', 'targetRefs', 'category', 'applicability', 'criticalFor', 'basis'])
+    if (!record(field) || !exact(field, ['fieldId', 'label', 'labelRef', 'targetRefs', 'category', 'applicability', 'criticalFor', 'basis', ...(Object.hasOwn(field, 'owner') ? ['owner'] : []), ...(Object.hasOwn(field, 'unit') ? ['unit'] : [])])
+      || (field.owner !== undefined && !['subject', 'case', 'shared'].includes(String(field.owner))) || (field.unit !== undefined && typeof field.unit !== 'string')
       || !nonempty(field.fieldId) || fields.has(field.fieldId) || !nonempty(field.label) || !isCellRef(field.labelRef)
       || !Array.isArray(field.targetRefs) || field.targetRefs.length === 0 || !field.targetRefs.every(isCellRef)
       || !TEMPLATE_FIELD_CATEGORIES.some((item) => item === field.category)
@@ -116,12 +88,14 @@ export function bindTemplateRequirements(
   candidate: unknown,
   profile: TemplateProfile,
   knowledge: ReadonlyArray<{ sourceId: string; body?: string }>,
-): { ok: boolean; requirements?: TemplateRequirements; gaps: string[] } {
+  options: { allowUnresolved?: boolean } = {},
+): { ok: boolean; requirements?: TemplateRequirements; gaps: string[]; limitations?: string[] } {
   const gaps: string[] = []
+  const limitations: string[] = []
   if (!isTemplateRequirements(candidate)) return { ok: false, gaps: ['模板需求结构无效：请重新分析字段、分类与依据，禁止默认系数或额外字段。'] }
   if (!isTemplateProfile(profile)) return { ok: false, gaps: ['模板检查结果无效：请重新检查所选模板。'] }
   if (candidate.templateId !== profile.templateId || candidate.templateDigest !== profile.digest) gaps.push('模板身份或摘要已改变：请重新解读模板。')
-  if (!profile.coverage.complete || profile.coverage.issues.length > 0) gaps.push('模板检查覆盖不完整：请补全检查后重新分析。')
+  if (!profile.coverage.complete || profile.coverage.issues.length > 0) limitations.push('模板检查覆盖不完整：仅填充已核对位置，计算前须补全检查。')
   const targets = new Set<string>()
   for (const field of candidate.fields) {
     const label = profile.cells.find((cell) => cell.sheet === field.labelRef.sheet && cell.cell === field.labelRef.cell)
@@ -133,8 +107,9 @@ export function bindTemplateRequirements(
     }
     if (!field.basis.every((basis) => knowledge.some((source) => source.sourceId === basis.sourceId
       && typeof source.body === 'string' && source.body.includes(basis.quote)))) gaps.push(`字段 ${field.fieldId} 的方法依据无法在已验真知识中核对。`)
-    if (field.applicability === 'pending') gaps.push(`字段 ${field.fieldId} 的适用性尚未确认。`)
+    if (field.applicability === 'pending') limitations.push(`字段 ${field.label} 的适用性尚未确认。`)
   }
-  gaps.push(...candidate.questions.map((question) => question.prompt))
-  return gaps.length > 0 ? { ok: false, gaps } : { ok: true, requirements: structuredClone(candidate), gaps: [] }
+  limitations.push(...candidate.questions.map((question) => question.prompt))
+  if (!options.allowUnresolved) gaps.push(...limitations)
+  return gaps.length > 0 ? { ok: false, gaps } : { ok: true, requirements: structuredClone(candidate), gaps: [], limitations }
 }

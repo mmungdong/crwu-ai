@@ -1,3 +1,4 @@
+import { createProductionTemplateMarketPorts } from './template-market.ts'
 /**
  * Production composition for the embedded valuation workflow runner.
  *
@@ -435,6 +436,11 @@ export async function createWorkflowProductionRunner(
     verification: calculationPorts.verification,
     intent,
     planning: planningPorts.planning,
+    ...(options.graphVersion === '1' ? {} : { templateMarket: createProductionTemplateMarketPorts({ deps: options.deps, frozenInput, planId,
+      casePath: () => boundCasePath, principal: () => { const live = liveExecution(); return live ? principalOf(live) : undefined },
+      currentExecution: () => liveExecution()?.exec, inference, knowledge,
+      materials: async () => { const live = liveExecution(); if (!live) throw new Error('没有当前执行'); return subjectMaterials(await preparedFor(live), templateArchive()) ?? [] },
+    }) }),
   }
 
   const service = createValuationWorkflowService(ports, {
@@ -593,7 +599,10 @@ export async function createWorkflowProductionRunner(
       )
     }
     const template = templateArchive()
-    const prepared = await preparedFor(live)
+    // v2 template-market runs do material reading inside the observable `materials` node.
+    // Legacy v1 keeps the documented pre-drive preparation for its own graph.
+    const defer = options.deferMaterialsToGraph === true
+    const prepared = defer ? null : await preparedFor(live)
     // The confirmed frozen choices must reach the real intent router and planning task.
     const confirmed: string[] = []
     {
@@ -646,8 +655,8 @@ export async function createWorkflowProductionRunner(
     return {
       // Stable Host run identity: derived from the project, never from a session.
       runId: projectId,
-      object: { objectId: '', useLabel: '', areaSqm: null },
-      materials: subjectMaterials(prepared, template),
+      object: { objectId: defer ? projectId : '', useLabel: '', areaSqm: null },
+      materials: defer ? [] : subjectMaterials(prepared!, template),
       userInput,
       purpose: frozenInput.purpose ?? null,
       baseDate: frozenInput.baseDate ?? null,

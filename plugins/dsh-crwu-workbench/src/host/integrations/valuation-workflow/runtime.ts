@@ -32,6 +32,7 @@ import { parseRunRecord } from '../../domains/report-evaluation/workflow/persist
 import { canRetryWorkflowIntent } from '../../domains/report-evaluation/workflow/intent-retry.ts'
 import type { ValuationQuestionEdit, ValuationQuestionSubmit } from '../../../shared/contracts/valuation-questionnaire.ts'
 import { parseQuestionEdit } from './production/operations.ts'
+import { TEMPLATE_MARKET_NODES, type TemplateMarketNodeId } from '../../../shared/contracts/valuation-template-market.ts'
 
 const MAX_PROJECTS = 64
 const MAX_COMMANDS_PER_PROJECT = 64
@@ -138,8 +139,8 @@ export interface ValuationWorkflowRuntimePreview {
   projectId: string
   nodeId: string
   expectedRevision: number
-  supersededNodeIds: ValuationWorkflowStage[]
-  changes: Array<{ field: string; owner: ValuationWorkflowStage }>
+  supersededNodeIds: Array<ValuationWorkflowStage | TemplateMarketNodeId>
+  changes: Array<{ field: string; owner: ValuationWorkflowStage | TemplateMarketNodeId }>
   error?: string
 }
 
@@ -340,6 +341,16 @@ export function previewValuationWorkflowRevision(
   }
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
     return previewError(projectId, nodeId, expectedRevision, '修订必须基于有效版本')
+  }
+  if ((TEMPLATE_MARKET_NODES as readonly string[]).includes(nodeId)) {
+    if (changes.some(c => !['areaSqm', 'useLabel', 'purpose', 'baseDate', 'promptSupplement'].includes(c.field))) return previewError(projectId, nodeId, expectedRevision, '字段不属于本轮可修订输入')
+    const validated = previewValuationWorkflowRevision(projectId, 'rights', changes, expectedRevision)
+    if (!validated.ok) return { ...validated, nodeId }
+    const from = changes.some(c => ['areaSqm', 'useLabel'].includes(c.field)) ? 'materials'
+      : changes.every(c => c.field === 'promptSupplement') ? nodeId as TemplateMarketNodeId : 'collection-plan'
+    return { ok: true, projectId, nodeId, expectedRevision,
+      supersededNodeIds: [...TEMPLATE_MARKET_NODES.slice(TEMPLATE_MARKET_NODES.indexOf(from))],
+      changes: changes.map(c => ({ field: c.field, owner: c.field === 'promptSupplement' ? nodeId as TemplateMarketNodeId : from })) }
   }
   const nodeIndex = (VALUATION_WORKFLOW_STAGES as readonly string[]).indexOf(nodeId)
   if (nodeIndex < 0) {
@@ -946,7 +957,8 @@ export function createValuationWorkflowRuntime(
   const questionnaireProblem = (snapshot: ValuationWorkflowSnapshot, input: ValuationQuestionEdit): string => {
     if (snapshot.revision !== input.expectedRevision) return '命令基于的版本已经过期'
     if ((snapshot.questionnaire?.version ?? 0) !== input.expectedQuestionVersion) return '问卷版本已经过期，请核对当前问题后重试'
-    if (input.nodeId !== 'intent' && !(VALUATION_WORKFLOW_STAGES as readonly string[]).includes(input.nodeId)) {
+    if (input.nodeId !== 'intent' && !(snapshot.templateMarket && (TEMPLATE_MARKET_NODES as readonly string[]).includes(input.nodeId))
+      && !(VALUATION_WORKFLOW_STAGES as readonly string[]).includes(input.nodeId)) {
       return '问卷节点无效'
     }
     const questions = snapshot.questionnaire?.questions ?? []
@@ -1103,7 +1115,9 @@ export function createValuationWorkflowRuntime(
       return { ok: false, commandId: '', error: '命令基于的版本已经过期' }
     }
     if (intent.kind === 'approve-plan') {
-      const plan = snapshot.plan
+      const market = snapshot.templateMarket
+      const plan = market ? { ready: market.currentNode === 'confirm-plan', accepted: market.approvedPlanDigest === market.plan?.digest,
+        revision: snapshot.revision, digest: market.plan?.digest } : snapshot.plan
       if (plan === null || !plan.ready || plan.accepted || plan.revision !== snapshot.revision) {
         return { ok: false, commandId: '', error: '当前版本没有可确认的完整方案' }
       }

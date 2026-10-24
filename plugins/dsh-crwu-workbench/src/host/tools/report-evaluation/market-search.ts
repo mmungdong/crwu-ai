@@ -84,6 +84,8 @@ interface SearchArgs {
   city?: unknown
   providers?: unknown
   maxPages?: unknown
+  startPage?: unknown
+  maxAttempts?: unknown
   /** 样本分组（按估值对象与样本用途分；出售与租金分开）。预算按它分账。 */
   group?: unknown
   /** 择优规则（名额 / 优先级 / 渠道顺序全部来自知识正文）。 */
@@ -447,12 +449,14 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
         type: 'array', items: { type: 'string' },
         description: '知识声明本方案需要的能力 ID（如 market.residential.detail、browser.page.screenshot）：取数前逐项核对，缺一项就阻断。',
       },
-      screenshotRequired: { type: 'boolean', description: '本轮知识是否要求页面截图；缺省 false。' },
+      screenshotRequired: { type: 'boolean', description: '显式 false 跳过列表截图；未提供时保留旧任务截图行为。' },
       propertyType: { type: 'string', description: '物业类型（能力门禁的报告用；缺省 residential）。' },
       method: { type: 'string', description: '采用的方法（能力门禁的报告用；缺省 market）。' },
       keyword: { type: 'string', required: true, description: '检索关键字（小区名或地址）。' },
       city: { type: 'string', required: true, description: '城市（站点侧标识，如 beijing / 北京）。' },
       providers: { type: 'array', items: { type: 'string' }, description: '来源 id 清单；缺省全部三家。' },
+      startPage: { type: 'integer', description: '本轮开始读取的实际页码，缺省1；继续检索时保留原分组与轮次的累计预算。' },
+      maxAttempts: { type: 'integer', description: '每页最多尝试次数，仅1或2；缺省2。模板工作流指定1，故障后由员工显式恢复。' },
       maxPages: {
         type: 'integer',
         description: `本轮最多再翻几页（上限 ${MARKET_PAGE_LIMIT}）。真正的停止判据是 Host 持有的预算`
@@ -665,6 +669,9 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
     async execute(args: SearchArgs, exec): Promise<SearchResult> {
       const ctx = toolContext(deps.ctx, exec)
       const base = idleResult()
+      if (args.maxAttempts !== undefined && args.maxAttempts !== 1 && args.maxAttempts !== MARKET_ATTEMPTS) return { ...base, ...failure('input', 'maxAttempts 必须是1或2') }
+      const attemptLimit = args.maxAttempts === 1 ? 1 : MARKET_ATTEMPTS
+      if (args.startPage !== undefined && (typeof args.startPage !== 'number' || !Number.isSafeInteger(args.startPage) || args.startPage < 1 || args.startPage > MARKET_PAGE_LIMIT)) return { ...base, ...failure('input', 'startPage 必须是技术页数上限内的正整数') }
       const keyword = text(args.keyword).trim()
       const city = text(args.city).trim()
       if (keyword === '' || city === '') {
@@ -731,6 +738,9 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
       const requestedPages = typeof args.maxPages === 'number' && Number.isFinite(args.maxPages)
         ? Math.max(1, Math.min(Math.trunc(args.maxPages), MARKET_PAGE_LIMIT))
         : 1
+
+      const startPage = typeof args.startPage === 'number' ? args.startPage : 1
+      const endPage = Math.min(MARKET_PAGE_LIMIT, startPage + requestedPages - 1)
 
       // 项目归属只从 Host 的 scope 取（模型提交不了它）：取数任务的预算与断点挂在它上面。
       const valuationScope = deps.valuationScopes?.scopeOf(callerIdentity(exec).childId)
@@ -1034,7 +1044,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
           gaps.push(gap)
           reports.push({
             id, label, login: 'unknown', fetchedPages: 0, failedPages: 0, caseCount: 0,
-            attemptLimit: MARKET_ATTEMPTS, detail: cityState.reason, urls: [], notes: [cityState.reason],
+            attemptLimit, detail: cityState.reason, urls: [], notes: [cityState.reason],
             retrievalTaskId: '', retrievalTasks: [], nextAction: '',
             evidence: siteOf(id as MarketProviderId).evidence,
             cityStatus: cityState.status === 'not-covered' ? 'not-covered' : 'unresolved',
@@ -1068,7 +1078,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
         // Replay known successful pages BEFORE budget limits or preflight network.
         const cachedPages = new Map<number, ListPageSnapshot>()
         let snapshotProblem = ''
-        for (let pageNo = 1; pageNo <= requestedPages; pageNo += 1) {
+        for (let pageNo = startPage; pageNo <= endPage; pageNo += 1) {
           const { taskId, path } = pageSnapshotPathOf(provider.id, pageNo)
           const mirrorRead = await durableRead(path)
           if (mirrorRead.state === 'error') {
@@ -1116,7 +1126,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
         if (snapshotProblem !== '') {
           return { ...base, ...failure('file', snapshotProblem), caseDir }
         }
-        const fullyCached = cachedPages.size >= requestedPages
+        const fullyCached = cachedPages.size >= endPage - startPage + 1
         const verdict = fullyCached
           ? { state: 'unknown' as const, detail: '本轮全部命中已成功落盘的列表快照：未访问站点，登录状态未重新探测' }
           : await provider.preflight()
@@ -1126,7 +1136,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
         let stoppedBy = ''
         let stopReason = ''
 
-        for (let pageNo = 1; pageNo <= requestedPages; pageNo += 1) {
+        for (let pageNo = startPage; pageNo <= endPage; pageNo += 1) {
           const retrievalTaskId = taskIdOf(provider.id, pageNo)
 
           // Replay: no budget page increment, no transport, no screenshot.
@@ -1169,7 +1179,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
           const outcome = await withAttempts(async () => await pageProvider.searchPage(
             { keyword, city: siteCity, maxPages: requestedPages }, pageNo, signal,
           ), {
-            attempts: MARKET_ATTEMPTS,
+            attempts: attemptLimit,
             onFailure: (attempt, error) => { notes.push(`第 ${pageNo} 页第 ${attempt} 次失败：${error}`) },
           })
           if (!outcome.ok) {
@@ -1204,7 +1214,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
           }
           // **页面级截图**（§7.4）：每成功列表页一次，图里是这一页的列表，供该页每条引用；
           // 它不是逐套房源的详情页证据，不能当成交证明。正常取数不抢前台。
-          const shot: ValuationScreenshotResult = await captureScreenshot(
+          const shot: ValuationScreenshotResult = args.screenshotRequired === false ? { ok: false, error: '本轮列表不要求截图', file: '', digest: '', bytes: 0, capturedAt: '' } : await captureScreenshot(
             deps.screenshot,
             {
               url: pageUrl, casePath: planRoot, source: provider.id,
@@ -1214,7 +1224,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
             },
             async (file) => await evidenceExists(ctx, planRoot, file),
           )
-          if (!shot.ok && deps.screenshot !== undefined) {
+          if (args.screenshotRequired !== false && !shot.ok && deps.screenshot !== undefined) {
             gaps.push(`${providerLabel(provider.id)} 第 ${pageNo} 页列表截图未成功`
               + `（${shot.error}）：该页案例已标 \`screenshot_missing\`，不得当作已取证`)
           }
@@ -1292,7 +1302,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
           failedPages,
           fetchedPages,
           caseCount: cases.length,
-          attemptLimit: MARKET_ATTEMPTS,
+          attemptLimit,
           detail: verdict.detail,
         }
         runs.push(run)
@@ -1314,7 +1324,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
           fetchedPages,
           failedPages,
           caseCount: cases.length,
-          attemptLimit: MARKET_ATTEMPTS,
+          attemptLimit,
           detail: verdict.detail,
           urls,
           notes,
@@ -1477,6 +1487,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
       url: { type: 'string', required: true, description: '要留证的完整 URL（必须属于该来源的白名单站点）。' },
       caseId: { type: 'string', description: '稳定的案例 id：给了就把详情页截图与该案例关联；缺省只留 HTML 证据。' },
       displayName: { type: 'string', description: '人可读案例名称（只作目录标签与清单展示，不参与身份）。' },
+      maxAttempts: { type: 'integer', description: '详情最多尝试次数，仅1或2；缺省2。模板工作流指定1，故障后由员工显式恢复。' },
     },
     output: {
       schema: {
@@ -1501,7 +1512,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
       render: (_args, value) => renderJson(value),
     },
     async execute(
-      args: { caseDir?: unknown; planId?: unknown; source?: unknown; url?: unknown; caseId?: unknown; displayName?: unknown },
+      args: { caseDir?: unknown; planId?: unknown; source?: unknown; url?: unknown; caseId?: unknown; displayName?: unknown; maxAttempts?: unknown },
       exec,
     ) {
       const ctx = toolContext(deps.ctx, exec)
@@ -1515,6 +1526,8 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
         // 有注入的截图通道时不再写"本部署没有截图能力"（那句会与事实相反）。
         capabilityGaps: deps.screenshot === undefined ? [SCREENSHOT_GAP] as string[] : [] as string[],
       }
+      if (args.maxAttempts !== undefined && args.maxAttempts !== 1 && args.maxAttempts !== MARKET_ATTEMPTS) return { ...empty, ...failure('input', 'maxAttempts 必须是1或2') }
+      const attemptLimit = args.maxAttempts === 1 ? 1 : MARKET_ATTEMPTS
       if (canonicalListingUrl(url) === '') {
         return { ...empty, ...failure('input', `不是有效的 http/https 详情页地址：「${url}」`) }
       }
@@ -1633,7 +1646,7 @@ export function valuationMarketSearchTools(deps: ToolDeps, transport?: MarketTra
           .includes(text(result.failureKind))
         if (!result.ok && !finalKind) throw new Error(result.error || `HTTP ${result.status}`)
         return result
-      }, { attempts: MARKET_ATTEMPTS })
+      }, { attempts: attemptLimit })
       if (!outcome.ok) {
         return {
           ...empty, ...failure('cli', `${providerLabel(picked.ids[0])} 页面取不到（已尝试 ${outcome.attempts} 次）：${outcome.errors.join('；')}`),

@@ -770,7 +770,7 @@ test('20. 协议号覆盖当前页批量 OSS 查询、请求取消与工作空�
   // 41 adds assessments / canonical-URL identity / durable list snapshots;
   // 42 adds detail capture (actual URL + immutable PNG + manifest) and the background browser flow.
   // Protocol 44 adds explicit same-parent recovery for stopped intent-only runs.
-  assert.equal(WORKBENCH_PROTOCOL, 49)
+  assert.equal(WORKBENCH_PROTOCOL, 52)
 })
 
 test('21. 四个操作名与冻结清单一致（boot 的声明由真实操作表推导）', async () => {

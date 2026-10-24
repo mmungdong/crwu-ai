@@ -232,7 +232,7 @@ export async function verifyProtectedProject(
   if (record.schemaVersion !== PROJECT_RECORD_SCHEMA_VERSION) return fail('项目记录的 Schema 版本不受支持', casePath)
   // Current protocol plus the exact prior graph generations whose input schema and
   // identity checks are unchanged. Reads never rewrite the protected record.
-  const READABLE_PROTOCOLS = new Set([WORKBENCH_PROTOCOL, 43, 44, 45, 46, 47])
+  const READABLE_PROTOCOLS = new Set([WORKBENCH_PROTOCOL, 43, 44, 45, 46, 47, 48, 49])
   if (!READABLE_PROTOCOLS.has(record.protocolVersion)) return fail('项目记录的协议代不匹配', casePath)
   if (record.inputSchemaVersion !== VALUATION_INPUT_SCHEMA_VERSION) return fail('项目记录的输入 Schema 不匹配', casePath)
   if (record.projectId !== projectId) return fail('项目记录的项目归属不一致', casePath)
@@ -402,6 +402,12 @@ export function evidenceFilesOf(
     if (!found.has(key)) {
       found.set(key, bytes === undefined ? { relativePath: path, digest: sha } : { relativePath: path, digest: sha, sizeBytes: bytes })
     }
+  }
+  if (dto.templateMarket) {
+    const market = dto.templateMarket
+    if (market.plan) add(market.plan.template.relativePath, market.plan.template.digest)
+    for (const artifact of market.artifacts) add(artifact.relativePath, artifact.digest, artifact.bytes)
+    for (const candidate of market.candidates) for (const source of candidate.sourceRefs) add(source.location, source.digest)
   }
   if (template !== undefined) add(template.relativePath, template.digest)
   for (const sample of [...(dto.observedSamples ?? []), ...(dto.evidencePool?.samples ?? [])]) {

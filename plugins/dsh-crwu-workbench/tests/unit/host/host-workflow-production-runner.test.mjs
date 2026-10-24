@@ -171,3 +171,42 @@ test('production preserves every frozen entry choice in an independent structure
   input.initialInput.files[0].fileName = 'changed by caller'
   assert.equal((await runner.startInput()).initialInput.files[0].fileName, '合成权证.txt')
 })
+
+test('the real production start input enters template market v2 with the canonical entry asset type', async t => {
+  const { createWorkflowProductionRunner } = await import('../../../src/host/integrations/valuation-workflow/production/runner.ts')
+  const f = await preparedFixture(t)
+  const runner = await createWorkflowProductionRunner(f.options)
+  t.after(() => runner.service.dispose())
+  const input = await runner.startInput()
+  assert.equal(input.initialInput.assetType, 'real-estate')
+  const result = await runner.service.start(input)
+  assert.equal(result.snapshot.flowVersion, 'template-market-v2')
+  assert.ok(result.snapshot.templateMarket?.receipts.templates)
+  assert.ok(result.snapshot.templateMarket?.receipts.materials)
+  assert.equal(result.snapshot.routing, null, 'explicit market entry does not fall back to the legacy intent router')
+})
+
+test('a production runner pinned to a registered legacy graph preserves its generation', async t => {
+  const { createWorkflowProductionRunner } = await import('../../../src/host/integrations/valuation-workflow/production/runner.ts')
+  const f = await preparedFixture(t)
+  const runner = await createWorkflowProductionRunner({ ...f.options, graphVersion: '1' })
+  t.after(() => runner.service.dispose())
+  const result = await runner.service.start(await runner.startInput())
+  assert.equal(result.snapshot.flowVersion, 'legacy-v1')
+})
+
+test('v2 template-market runs defer material reading to the observable materials node', async (t) => {
+  const { createWorkflowProductionRunner } = await import('../../../src/host/integrations/valuation-workflow/production/runner.ts')
+  const f = await preparedFixture(t)
+  let cacheReads = 0
+  f.options.deferMaterialsToGraph = true
+  f.options.graphVersion = '2'
+  f.options.getPrepared = async () => { cacheReads += 1; return structuredClone(f.prepared) }
+  const runner = await createWorkflowProductionRunner(f.options)
+  t.after(() => runner.service.dispose())
+  const input = await runner.startInput()
+  assert.equal(cacheReads, 0, 'the start command must not read materials outside the graph')
+  assert.deepEqual(input.materials, [])
+  assert.equal(input.object.objectId, 'project-cache')
+  assert.equal(input.object.areaSqm, null)
+})

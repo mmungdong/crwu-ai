@@ -74,7 +74,7 @@ export interface DshWorkflowVisualReaderOptions {
 /** Constant public error: raw infrastructure text never leaves the Host boundary. */
 const PUBLIC_VISUAL_ERROR = '视觉判读子会话执行失败：详情已省略'
 
-/** Distinct controlled states; unknown modality is `missing`, a failed probe is `probe-failed`. */
+/** Keep unavailable services and failed probes distinct from inference failures. */
 function failed(errorKind: string, error: string, extra?: Partial<WorkflowVisualReading>): WorkflowVisualReadResult {
   return {
     ok: false,
@@ -251,8 +251,9 @@ async function admitPages(
 }
 
 /**
- * Resolve real page images, confirm the current model accepts them, and transcribe
- * them through the page-reading operation. Fails closed on an unverifiable route,
+ * Resolve real page images and transcribe through the native page-reading operation.
+ * Undisclosed modalities follow the native runtime contract; explicit text-only
+ * models are refused. Fails closed on an unverifiable route,
  * an unverified locator, or a child that returned no readable page text.
  */
 export function createDshWorkflowVisualReader(options: DshWorkflowVisualReaderOptions): WorkflowVisualReader {
@@ -286,11 +287,18 @@ export function createDshWorkflowVisualReader(options: DshWorkflowVisualReaderOp
       const modalities = info !== null && typeof info === 'object'
         ? (info as { inputModalities?: unknown }).inputModalities
         : undefined
-      if (!Array.isArray(modalities) || !modalities.includes('image')) {
-        return failed('missing', '当前模型没有声明图像输入能力：请切换到多模态模型后重试')
+      if (info === null || typeof info !== 'object' || Array.isArray(info)
+        || (modalities !== undefined && (!Array.isArray(modalities)
+          || modalities.some(value => value !== 'text' && value !== 'image')))) {
+        return failed('probe-failed', '模型图像能力信息格式异常：请检查模型配置后重试')
+      }
+      if (Array.isArray(modalities) && !modalities.includes('image')) {
+        return failed('missing', '当前模型明确不支持图像输入：请切换到支持图像的模型，或补充可读文字资料后重试')
       }
 
-      const uncertainties: string[] = []
+      const uncertainties: string[] = modalities === undefined
+        ? ['模型目录未披露输入模态；仅按实际页面判读结果记录已读范围']
+        : []
       let outputRoot: string
       try {
         const caseRoot = await realpath(text(input.casePath))

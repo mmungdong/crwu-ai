@@ -1,3 +1,4 @@
+import { workflowGraphVersionFor } from '../../domains/report-evaluation/workflow/flow-version.ts'
 /**
  * Real Host factory for the embedded valuation workflow, storage stage.
  *
@@ -316,6 +317,8 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
       }
       const projectId = text(scope.projectId) || text(scope.valuationId)
       const runner = await createWorkflowProductionRunner({
+        graphVersion: workflowGraphVersionFor(stored),
+        deferMaterialsToGraph: workflowGraphVersionFor(stored) === '2',
         deps: {
           ctx,
           config: options.config,
@@ -548,6 +551,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
     }
 
     const initial: WorkflowHostState = {
+      graphVersion: existing?.graphVersion,
       projectId,
       parentSessionId,
       workspaceId: selected.workspace.id,
@@ -615,7 +619,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
     if (requestedProject !== '' && requestedProject !== stored.projectId) {
       return { ok: false, empty: false, errorKind: 'not-found', error: '当前工作流不属于这个项目' }
     }
-    const graph = await workflowGraphView().catch(() => null)
+    const graph = await workflowGraphView(workflowGraphVersionFor(stored)).catch(() => null)
     const resolution = await resolveProjection(stored)
     if (resolution.snapshot === null) {
       return {
@@ -679,7 +683,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
         error: resolution.error || '这一轮还没有可查看的运行状态',
       }
     }
-    const graph = await workflowGraphView()
+    const graph = await workflowGraphView(workflowGraphVersionFor(stored))
     const snapshot = resolution.snapshot
     const inputContext = inputContextOf(stored)
     const projected = projectStoredWorkflow({
@@ -757,7 +761,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
     if (bundle.workspaceId !== identity.workspaceId || bundle.stepId !== identity.stepId) {
       return { ok: false, errorKind: 'conflict', error: '导入任务不属于当前工作区或步骤' }
     }
-    if (bundle.graphId !== WORKFLOW_GRAPH_ID || bundle.graphVersion !== WORKFLOW_GRAPH_VERSION) {
+    if (bundle.graphId !== WORKFLOW_GRAPH_ID || !['1', '2'].includes(text(bundle.graphVersion))) {
       return { ok: false, errorKind: 'conflict', error: '导入任务不属于受支持的估值图版本' }
     }
     const record = isRecord(bundle.current) ? bundle.current as unknown as Parameters<typeof hostStateOf>[0] : null
@@ -816,7 +820,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
         workspaceId: requirement.workspace.id,
         stepId: WORKFLOW_STEP_ID,
         graphId: WORKFLOW_GRAPH_ID,
-        graphVersion: WORKFLOW_GRAPH_VERSION,
+        graphVersion: text(bundle.graphVersion),
       })
     } catch {
       return { ok: false, errorKind: 'input-invalid', error: '导入内容未通过完整校验：当前任务保持不变' }
@@ -1108,7 +1112,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
     const task = await requireStoredTask('valuation workflow action', args)
     if (!task.ok) return task.result
     const { requirement, record, stored } = task
-    const graph = await workflowGraphView().catch(() => null)
+    const graph = await workflowGraphView(workflowGraphVersionFor(stored)).catch(() => null)
     const parsed = parseWorkflowAction(args, graph)
     if (!parsed.ok || parsed.payload === null) {
       return { ok: false, errorKind: 'input-invalid', error: parsed.error }
@@ -1162,7 +1166,7 @@ export function createValuationWorkflowHost(options: ValuationWorkflowHostOption
     const task = await requireStoredTask('valuation workflow preview', args)
     if (!task.ok) return task.result
     const { stored } = task
-    const graph = await workflowGraphView().catch(() => null)
+    const graph = await workflowGraphView(workflowGraphVersionFor(stored)).catch(() => null)
     // A client may send the preview intent flat or nested under `payload`; both are
     // reduced to the same closed shape before parsing.
     const previewSource = isRecord(args.payload)

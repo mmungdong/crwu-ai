@@ -109,6 +109,10 @@ export const WorkflowState = Annotation.Root({
     reducer: (left, right) => ({ ...left, ...right }),
     default: () => ({}),
   }),
+  marketOutcomes: Annotation<Record<string, GraphDriveStatus>>({
+    reducer: (left, right) => ({ ...left, ...right }), default: () => ({}),
+  }),
+  marketNext: Annotation<string>({ reducer: (_left, right) => right, default: () => '' }),
   error: Annotation<string>({
     reducer: (_left, right) => right,
     default: () => '',

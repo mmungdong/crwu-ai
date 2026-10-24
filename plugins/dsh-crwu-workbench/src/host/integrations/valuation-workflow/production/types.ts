@@ -56,7 +56,7 @@ export interface WorkflowJournalStartedEvent {
   kind: 'stage' | 'intent'
   nodeId: string
   stage?: ValuationWorkflowStage
-  operation?: 'knowledge-selection' | 'page-reading' | 'planning-selection' | 'template-analysis'
+  operation?: 'knowledge-selection' | 'page-reading' | 'planning-selection' | 'template-analysis' | 'template-market'
   runId: string
   revision: number
   correlationId: string
@@ -94,6 +94,9 @@ export interface WorkflowCalculationReceipt {
 }
 
 export interface WorkflowProductionRunnerOptions {
+  graphVersion?: '1' | '2'
+  /** v2 template-market runs read materials inside the observable `materials` node. */
+  deferMaterialsToGraph?: boolean
   deps: HostWorkflowServiceDeps
   /** Live registered scope this runner is bound to. */
   scope: ValuationScope

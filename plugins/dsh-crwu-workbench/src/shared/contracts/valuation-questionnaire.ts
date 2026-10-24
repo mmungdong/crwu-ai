@@ -1,10 +1,17 @@
 import type { ValuationWorkflowQuestion } from './valuation-workflow.ts'
 
-export interface ValuationQuestionAnswer {
+export interface ValuationLegacyQuestionAnswer {
+  kind?: undefined
   value: string
   unknown?: boolean
   reason?: string
 }
+export type ValuationTypedQuestionAnswer =
+  | { kind: 'choice'; values: string[]; supplement: string }
+  | { kind: 'other'; text: string }
+  | { kind: 'value'; value: string; supplement: string }
+  | { kind: 'defer'; reason: string }
+export type ValuationQuestionAnswer = ValuationLegacyQuestionAnswer | ValuationTypedQuestionAnswer
 
 export interface ValuationStoredQuestion extends ValuationWorkflowQuestion {
   nodeId: string

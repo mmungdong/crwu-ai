@@ -1,3 +1,4 @@
+import { workflowGraphVersionFor } from '../../../domains/report-evaluation/workflow/flow-version.ts'
 /**
  * Durable single-current-task session for one valuation workflow Host.
  *
@@ -56,6 +57,7 @@ export interface WorkflowChildJournalEntry {
  * store occupancy guard refuses replacement and import until it is resolved.
  */
 export interface WorkflowHostState {
+  graphVersion?: '1' | '2'
   projectId: string
   parentSessionId: string
   workspaceId: string
@@ -124,6 +126,7 @@ function journalOf(value: unknown): WorkflowChildJournalEntry[] {
 export function hostStateOf(record: WorkflowCurrentRecord): WorkflowHostState | null {
   const raw = record.state
   if (!isRecord(raw)) return null
+  if (record.graphVersion !== '1' && record.graphVersion !== '2') return null
   const projectId = text(raw.projectId)
   if (projectId === '') return null
   const stopRaw = raw.stopUnknown
@@ -137,6 +140,7 @@ export function hostStateOf(record: WorkflowCurrentRecord): WorkflowHostState | 
   if (dtoRaw !== null && dtoRaw !== undefined) {
     if (!isRecord(dtoRaw) || !parseRunRecord(dtoRaw).ok) return null
     dto = dtoRaw as unknown as ValuationWorkflowRunDTO
+    if (workflowGraphVersionFor({ dto, frozen: null }) !== record.graphVersion) return null
   }
   const preparing = raw.preparing === true
   const recordedPhase = text(raw.phase)
@@ -145,6 +149,7 @@ export function hostStateOf(record: WorkflowCurrentRecord): WorkflowHostState | 
   // the phase, so a settled child can release occupancy on the next update.
   const phase = recordedPhase || text(record.status) || 'preparing'
   return {
+    graphVersion: record.graphVersion,
     projectId,
     parentSessionId: text(raw.parentSessionId),
     workspaceId: text(raw.workspaceId) || text(record.workspaceId),
@@ -278,7 +283,7 @@ function recordFromState(state: WorkflowHostState, revision: number): WorkflowCu
     stepId: WORKFLOW_STEP_ID,
     runId: state.runId,
     graphId: WORKFLOW_GRAPH_ID,
-    graphVersion: WORKFLOW_GRAPH_VERSION,
+    graphVersion: workflowGraphVersionFor(state),
     revision,
     status: occupied ? 'running' : (state.phase === '' ? 'preparing' : state.phase),
     state: cloneJson(state) as unknown as Record<string, unknown>,

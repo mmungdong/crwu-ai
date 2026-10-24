@@ -1,3 +1,4 @@
+import { TEMPLATE_MARKET_NODES, type TemplateMarketNodeId } from '../../shared/contracts/valuation-template-market.ts'
 /**
  * Plain serializable projection of the actual compiled workflow graph.
  *
@@ -24,6 +25,8 @@ const BUSINESS_LABELS: Record<ValuationWorkflowStage, string> = {
   review: '成果复核',
   delivery: '成果验收与交付',
 }
+
+const MARKET_LABELS: Record<TemplateMarketNodeId, string> = { templates: '计算表模板', materials: '上传资料', 'collection-plan': '制定采集方案', 'confirm-plan': '确认采集方案', 'search-listings': '检索案例列表', 'candidate-workbook': '生成候选案例表', 'select-cases': '选择案例', 'inspect-details': '核实详情与截图', 'check-inputs': '检查填表条件', 'fill-template': '回填计算表', 'validate-delivery': '校验与交付' }
 
 const ROUTER_LABEL = '意图识别与路由'
 const START_LABEL = '开始'
@@ -80,9 +83,11 @@ function presentNode(nodeId: string, nativeName: string): { label: string; stage
 function toNodeView(node: NativeDrawableNode): ValuationWorkflowGraphNodeView {
   const nodeId = String(node.id)
   const nativeName = typeof node.name === 'string' ? node.name : ''
-  const presented = presentNode(nodeId, nativeName)
+  const marketId = (TEMPLATE_MARKET_NODES as readonly string[]).includes(nativeName) ? nativeName as TemplateMarketNodeId : undefined
+  const presented = marketId ? { label: MARKET_LABELS[marketId] } : presentNode(nodeId, nativeName)
   const view: ValuationWorkflowGraphNodeView = {
     nodeId,
+    ...(marketId ? { templateMarketNodeId: marketId } : {}),
     label: presented.label,
     state: 'pending',
     gaps: [],

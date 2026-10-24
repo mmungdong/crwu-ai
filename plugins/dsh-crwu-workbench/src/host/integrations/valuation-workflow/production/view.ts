@@ -1,3 +1,4 @@
+import { compileTemplateMarketGraph } from '../../../graph/valuation/realestate/template-market.ts'
 /**
  * Read-only projection of the actual compiled valuation workflow graph.
  *
@@ -29,6 +30,7 @@ const inertRunner: WorkflowStageRunner = async () => ({ status: 'blocked' })
 /** An intent port that is never called by an xray metadata read. */
 const inertIntent: InferIntent = async () => ({ ok: false, errorKind: 'blocked', error: 'inert' })
 
+let marketCached: Promise<ValuationWorkflowGraphView> | null = null
 let cached: Promise<ValuationWorkflowGraphView> | null = null
 
 async function buildGraphView(): Promise<ValuationWorkflowGraphView> {
@@ -43,7 +45,11 @@ async function buildGraphView(): Promise<ValuationWorkflowGraphView> {
 }
 
 /** The actual native descriptor; a failed build is not cached. */
-export function workflowGraphView(): Promise<ValuationWorkflowGraphView> {
+export function workflowGraphView(version = '1'): Promise<ValuationWorkflowGraphView> {
+  if (version === '2') {
+    marketCached ??= describeWorkflowGraph(compileTemplateMarketGraph(async () => ({ status: 'blocked' })), { graphId: WORKFLOW_GRAPH_ID, version: '2' }).catch(error => { marketCached = null; throw error })
+    return marketCached
+  }
   if (cached === null) {
     cached = buildGraphView().catch((error: unknown) => {
       cached = null

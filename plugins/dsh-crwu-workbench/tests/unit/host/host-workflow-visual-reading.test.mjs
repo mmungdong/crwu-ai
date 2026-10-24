@@ -14,7 +14,7 @@ async function fixture(t, modalities = ['text', 'image']) {
   const calls = { admissions: [], inference: [], probes: [] }
   const parentAgent = { id: 'parent', options: { provider: 'fixture', model: 'vision' } }
   const ctx = { get: (name) => name === 'llm' ? {
-    resolveModelInfo: async (...args) => { calls.probes.push(args); return { provider: 'fixture', id: 'vision', inputModalities: modalities } },
+    resolveModelInfo: async (...args) => { calls.probes.push(args); return { provider: 'fixture', id: 'vision', ...(modalities === null ? {} : { inputModalities: modalities }) } },
   } : name === 'attachments' ? {
     saveImage: async (input) => { calls.admissions.push(input); return { attachmentId: 'actual-image', mediaType: 'image/png', bytes: input.data.length, width: 1, height: 1 } },
   } : undefined }
@@ -48,6 +48,27 @@ test('explicitly text-only models stop before attachment admission or visual inf
   assert.equal(result.ok, false)
   assert.equal(f.calls.admissions.length, 0)
   assert.equal(f.calls.inference.length, 0)
+})
+
+test('undisclosed model modalities use actual page reading rather than being treated as text-only', async (t) => {
+  const f = await fixture(t, null)
+  const result = await f.reader.read(f.input)
+  assert.equal(result.ok, true, result.error)
+  assert.deepEqual(result.readPages, [1])
+  assert.match(result.text, /建筑面积：86.4平方米/)
+  assert.equal(f.calls.inference.length, 1)
+  assert.equal(f.calls.inference[0].images[0].attachmentId, 'actual-image')
+  assert.ok(result.uncertainties.some(item => item.includes('未披露')))
+})
+
+test('an undisclosed model with no actual reading never receives page coverage', async (t) => {
+  const f = await fixture(t, null)
+  f.inference.infer = async input => { f.calls.inference.push(input); return { ok: false, errorKind: 'failed' } }
+  const result = await f.reader.read(f.input)
+  assert.equal(f.calls.inference.length, 1)
+  assert.equal(result.ok, false)
+  assert.equal(result.text, '')
+  assert.deepEqual(result.readPages, [])
 })
 
 test('an image locator cannot escape the case or substitute an external symlink', async (t) => {

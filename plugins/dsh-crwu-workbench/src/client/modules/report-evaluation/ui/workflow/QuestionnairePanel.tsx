@@ -1,9 +1,12 @@
+import { formatQuestionAnswer, parseLegacyQuestionAnswer, questionAnswerValue, validateQuestionAnswer } from '../../../../../shared/contracts/valuation-question-answer.ts'
 import * as React from 'react'
 import type {
   ValuationQuestionAnswer, ValuationQuestionEdit, ValuationStoredQuestion, ValuationWorkflowQuestionnaire,
 } from '../../../../../shared/contracts/valuation-questionnaire.ts'
 import type { ValuationLocalQuestionDraft } from '../../workflow-controller.ts'
 import { VALUATION_WORKFLOW_CLASSES as W } from '../../styles/workflow.ts'
+import { QuestionAnswerEditor } from './QuestionAnswerEditor.tsx'
+import type { TemplateMarketCandidate } from '../../../../../shared/contracts/valuation-template-market.ts'
 
 export interface QuestionnairePanelProps {
   questionnaire: ValuationWorkflowQuestionnaire
@@ -17,6 +20,11 @@ export interface QuestionnairePanelProps {
   onSave: (edit: ValuationQuestionEdit) => unknown
   onSubmit: (edit: ValuationQuestionEdit) => unknown
   onReconcile?: () => unknown
+  candidates?: TemplateMarketCandidate[]
+  candidateVersion?: number
+  contained?: boolean
+  before?: React.ReactNode
+  after?: React.ReactNode
 }
 
 function valuesOf(raw: string): string[] {
@@ -27,25 +35,7 @@ function valuesOf(raw: string): string[] {
 }
 
 function validAnswer(question: ValuationStoredQuestion, answer?: ValuationQuestionAnswer): boolean {
-  if (!question.applicable) return true
-  if (answer?.unknown) return (answer.reason ?? '').trim() !== ''
-  const value = (answer?.value ?? '').trim()
-  if (value === '') return question.required === false
-  const options = question.options ?? []
-  switch (question.control) {
-    case 'boolean': return value === 'true' || value === 'false'
-    case 'number': return Number.isFinite(Number(value))
-    case 'date': {
-      const date = new Date(`${value}T00:00:00Z`)
-      return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
-    }
-    case 'radio': case 'select': return options.some((option) => option.value === value)
-    case 'multiselect': {
-      const values = valuesOf(value)
-      return (question.required === false || values.length > 0) && new Set(values).size === values.length && values.every((item) => options.some((option) => option.value === item))
-    }
-    default: return true
-  }
+  return !question.applicable || (answer ? validateQuestionAnswer(question, answer) : question.required === false)
 }
 
 function restoredEdit(props: QuestionnairePanelProps): ValuationQuestionEdit {
@@ -104,11 +94,13 @@ export function QuestionnairePanel(props: QuestionnairePanelProps): React.ReactE
     change({ answers: { ...edit.answers, [question.questionId]: answer } })
   }
 
-  return <section className={W.clarify} data-workflow-questionnaire={props.nodeId}>
+  return <section className={W.clarify} data-workflow-questionnaire={props.nodeId} data-workflow-questionnaire-modern={props.contained ? 'true' : undefined}>
+    <div className={W.questionBody}>
+    {props.before}
     <h3 className={W.panelTitle}>节点问题与补充记录</h3>
     <ul className={W.clarifyList}>
       {questions.map((question) => {
-        const answer = edit.answers[question.questionId] ?? { value: '' }
+        const answer = parseLegacyQuestionAnswer(edit.answers[question.questionId]) ?? { value: '' }
         const id = `crwu-question-${props.nodeId}-${question.questionId}`
         const label = `${id}-label`
         const control = question.control ?? 'text'
@@ -123,18 +115,21 @@ export function QuestionnairePanel(props: QuestionnairePanelProps): React.ReactE
           <label className={W.clarifyPrompt} htmlFor={id} id={label}>{question.prompt}</label>
           <span className={W.fieldSource}>{question.source} · {question.required === false ? '选填' : '必填'}</span>
           {question.answer === null ? null : <p className={W.hint} data-workflow-saved-answer={question.questionId}>
-            已提交答案：{question.answer.unknown ? `无法确认（${question.answer.reason ?? ''}）` : question.answer.value}
+            已提交答案：{formatQuestionAnswer(question, question.answer)}
             {question.needsConfirmation ? ' · 需要按新定义重新确认' : ' · 是否通过以节点核验结果为准'}
           </p>}
           {!question.applicable
-            ? <p className={W.hint}>不适用：{question.inapplicabilityReason ?? question.reason ?? '请查看节点记录'}{question.answer ? ` · 此前答案：${question.answer.value}` : ''}</p>
+            ? <p className={W.hint}>不适用：{question.inapplicabilityReason ?? question.reason ?? '请查看节点记录'}{question.answer ? ` · 此前答案：${formatQuestionAnswer(question, question.answer)}` : ''}</p>
             : <>
               {question.needsConfirmation && edit.answers[question.questionId] === undefined
                 ? <p className={W.stale} data-workflow-question-reconfirm={question.questionId}>
-                  问题已更新，请按当前定义重新确认。{question.answer === null ? '' : `此前答案：${question.answer.unknown ? '未知' : question.answer.value}`}
+                  问题已更新，请按当前定义重新确认。{question.answer === null ? '' : `此前答案：${formatQuestionAnswer(question, question.answer)}`}
                   {question.answer === null ? null : <button type="button" className="crwu-ui-btn crwu-ui-btn-secondary crwu-ui-btn-sm"
                     disabled={disabled} onClick={() => { changeAnswer(question, question.answer!) }}>确认此前答案</button>}
                 </p> : null}
+              {question.answerProtocol === 2 ? <QuestionAnswerEditor question={question} answer={edit.answers[question.questionId]}
+                disabled={disabled} candidates={props.candidates} candidateVersion={props.candidateVersion}
+                onChange={next => changeAnswer(question, next)} /> : <>
               {control === 'textarea' ? <textarea {...inputProps} rows={3} />
                 : control === 'select' || control === 'boolean' ? <select {...inputProps} className={W.answerSelect}>
                   <option value="">请选择</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -161,6 +156,7 @@ export function QuestionnairePanel(props: QuestionnairePanelProps): React.ReactE
               {answer.unknown ? <textarea rows={2} className={W.answerInput} aria-label={`${question.prompt}：未知原因`}
                 data-workflow-question-reason={question.questionId} value={answer.reason ?? ''} disabled={disabled}
                 onChange={(event) => { changeAnswer(question, { ...answer, reason: event.currentTarget.value }) }} /> : null}
+              </>}
             </>}
         </li>
       })}
@@ -179,11 +175,14 @@ export function QuestionnairePanel(props: QuestionnairePanelProps): React.ReactE
       {submissions.map((submission) => <div key={submission.submissionId} className={W.block}>
         <p className={W.hint}>问卷版本 {submission.version} · {submission.updatedAt}</p>
         {Object.entries(submission.answers).map(([id, answer]) => <p key={id} className={W.hint}>
-          {(submission.questions ?? questions).find((question) => question.questionId === id)?.prompt ?? id}：{answer.unknown ? `未知：${answer.reason ?? ''}` : answer.value}
+          {(submission.questions ?? questions).find((question) => question.questionId === id)?.prompt ?? id}：{((submission.questions ?? questions).find(question => question.questionId === id) ? formatQuestionAnswer((submission.questions ?? questions).find(question => question.questionId === id)!, answer) : questionAnswerValue(answer))}
         </p>)}
         {submission.notes.map((note) => <p key={note.noteId} className={W.hint}>{note.text}</p>)}
       </div>)}
     </details> : null}
+    {props.after}
+    </div>
+    <div className={W.questionFooter}>
     <p className={props.localDraft?.error ? W.stale : W.hint} role="status" data-workflow-draft-status={props.localDraft?.status ?? 'restored'}>
       {props.localDraft?.error || (props.localDraft?.status === 'saving' ? '正在保存草稿…'
         : props.localDraft?.status === 'saved' ? '草稿已保存，尚未提交执行。'
@@ -196,11 +195,12 @@ export function QuestionnairePanel(props: QuestionnairePanelProps): React.ReactE
     {props.localDraft?.status === 'error' ? <button type="button" className="crwu-ui-btn crwu-ui-btn-secondary crwu-ui-btn-sm"
       data-workflow-draft-retry="true" onClick={() => { props.onSave(edit) }}>重试保存草稿</button> : null}
     {props.running ? <p className={W.hint}>节点正在执行，可以编辑并保存草稿；执行结束后才能正式提交。</p> : null}
-    {missing ? <p className={W.hint}>请完整填写全部必填项，并核对数值、日期和选项；未知答案需说明原因。</p> : null}
+    {missing ? <p className={W.hint}>还有 {questions.filter(question => !validAnswer(question, edit.answers[question.questionId])).length} 项待答，请核对选项和补充说明。</p> : null}
     {props.stale ? <p className={W.stale}>节点版本已更新，请刷新后核对。</p> : null}
     {props.executionBlocked ? <p className={W.hint}>当前为执行故障。已保留问答，可继续保存草稿；请先按上方恢复要求处理。</p>
       : <button type="button" className={`${W.answerSubmit} crwu-ui-btn crwu-ui-btn-primary crwu-ui-btn-sm`}
         data-workflow-questions-submit="true" disabled={!canSubmit} onClick={() => { if (canSubmit) props.onSubmit(edit) }}>
-        {questions.some((question) => question.applicable) ? '提交全部答案并执行' : '提交补充并执行'}</button>}
+        {props.busy ? '正在提交…' : questions.some((question) => question.applicable) ? '确认并继续' : '提交补充并执行'}</button>}
+    </div>
   </section>
 }

@@ -1,3 +1,6 @@
+import { createTemplateMarketFlow, createTemplateMarketState } from './template-market-flow.ts'
+import { usesTemplateMarketFlow } from './flow-version.ts'
+import { TEMPLATE_MARKET_NODES, type TemplateMarketState, type TemplateMarketNodeId, type TemplateMarketNodeData } from '../../../../shared/contracts/valuation-template-market.ts'
 /**
  * Application service for the embedded valuation workflow.
  *
@@ -8,6 +11,7 @@
  * is treated as candidates: source IDs and prices must resolve to the Host-observed
  * pool before they can reach the controlled calculator.
  */
+import { formatQuestionAnswer, isUnknownQuestionAnswer, questionAnswerValue } from '../../../../shared/contracts/valuation-question-answer.ts'
 import type { BaseCheckpointSaver } from '@langchain/langgraph'
 import type {
   ValuationQuestionEdit,
@@ -187,6 +191,7 @@ interface StoredSource {
 }
 
 export interface RunRecord {
+  templateMarket?: TemplateMarketState
   runId: string
   revision: number
   status: ValuationWorkflowStatus
@@ -270,8 +275,7 @@ function submittedQuestionContext(record: RunRecord, nodeId?: string): string {
   const notes = record.questionnaire.notes.filter((note) => nodeId === undefined || note.nodeId === nodeId)
   const legacy = record.questionnaire.legacy.filter((note) => nodeId === undefined || note.nodeId === nodeId)
   return [
-    ...questions.map((question) => `${question.prompt}\n${question.answer?.unknown === true
-      ? `无法确认：${question.answer.reason ?? ''}` : question.answer?.value ?? ''}`),
+    ...questions.map((question) => `${question.prompt}\n${question.answer ? formatQuestionAnswer(question, question.answer) : ''}`),
     ...notes.map((note) => `用户补充：${note.text}`),
     ...legacy.map((note) => `历史补充（原文）：${note.text}`),
   ].join('\n\n')
@@ -387,6 +391,7 @@ function newRecord(input: ValuationWorkflowStartInput): RunRecord {
 
 function snapshotOf(record: RunRecord): ValuationWorkflowSnapshot {
   return {
+    ...(record.templateMarket ? { templateMarket: clonePlainJson(record.templateMarket), flowVersion: 'template-market-v2' as const } : { flowVersion: 'legacy-v1' as const }),
     runId: record.runId,
     revision: record.revision,
     status: record.status,
@@ -1485,7 +1490,7 @@ export function createValuationWorkflowService(
     }
     if (modelFailure !== null) return block(record, receipt, modelFailure.requirements, modelFailure)
     const unknown = record.questionnaire.questions.filter((question) => question.nodeId === stage
-      && question.applicable && question.required !== false && question.answer?.unknown === true)
+      && question.applicable && question.required !== false && isUnknownQuestionAnswer(question.answer))
     if (unknown.length > 0) return block(record, receipt, unknown.map((question) => `仍无法确认：${question.prompt}`))
     receipt.state = 'passed'
     touch(record)
@@ -1874,6 +1879,71 @@ export function createValuationWorkflowService(
     }
   }
 
+  const adoptMarket = (record: RunRecord, state: TemplateMarketState): void => {
+    const previous = record.templateMarket
+    if (previous?.receipts['search-listings'] && !state.receipts['search-listings']) {
+      record.revisions.push({ revision: record.revision, status: record.status, outcome: record.outcome, result: null,
+        reason: '采集方案重规划，原候选和取证保留为历史', source: '员工节点选择', changes: [], supersededNodeIds: [],
+        templateMarket: clonePlainJson(previous), updatedAt: record.updatedAt })
+      record.revision += 1
+    }
+    record.templateMarket = clonePlainJson(state)
+    const area = state.facts.areaSqm, use = state.facts.useLabel
+    if (area?.status === 'verified' && typeof area.value === 'number') record.object.areaSqm = area.value
+    if (use?.status === 'verified' && typeof use.value === 'string') record.object.useLabel = use.value
+    for (const field of ['purpose', 'baseDate'] as const) {
+      const fact = state.facts[field]
+      if (fact?.status === 'verified' && typeof fact.value === 'string') record[field] = fact.value
+    }
+    record.questionnaire = clonePlainJson(state.questionnaire)
+    record.status = state.status
+    record.outcome = state.status === 'running' || state.status === 'waiting-user' ? null : state.status
+    record.error = state.error
+    record.errorKind = state.status === 'failed' ? 'failed' : ''
+    const delivery = state.receipts['validate-delivery']?.output?.data as TemplateMarketNodeData['validate-delivery'] | null | undefined
+    if (delivery) record.delivery = { kind: 'listing-reference', artifacts: delivery.verifiedArtifacts.map(a => a.relativePath),
+      referenceDelivered: delivery.verifiedArtifacts.length > 0, formalComplete: false }
+    else record.delivery = null
+    touch(record)
+  }
+
+  const runMarket = async (record: RunRecord, entry: TemplateMarketNodeId): Promise<void> => {
+    if (!ports.templateMarket || !record.templateMarket) return
+    record.active = true
+    record.controller = new AbortController()
+    let settled = false
+    const flow = createTemplateMarketFlow(ports.templateMarket, { questionnaire: () => record.questionnaire, save: async state => {
+      if (settled) return
+      adoptMarket(record, state)
+      await persistOrThrow(record)
+    } }, checkpointer)
+    try { adoptMarket(record, await flow.drive(record.templateMarket, entry, record.controller.signal)) }
+    catch (error) {
+      settled = true
+      if (error && typeof error === 'object' && 'errorKind' in error && error.errorKind === 'stop-unknown') {
+        record.stopUnknown = { sessionId: 'sessionId' in error ? String(error.sessionId ?? '') : '', error: '子会话停止状态尚未确认，请保留当前任务等待对账' }
+        record.status = 'failed'; record.outcome = 'failed'; record.errorKind = 'stop-unknown'; record.error = record.stopUnknown.error
+      } else if (!record.storeFailed) {
+        record.status = 'failed'; record.outcome = 'failed'; record.errorKind = 'failed'
+        record.error = '本轮节点执行中断，已保留资料和回答，请核对原因后重试当前节点'
+      }
+      record.controller?.abort()
+      if (record.templateMarket) {
+        record.templateMarket.status = 'failed'
+        record.templateMarket.error = record.error
+        for (const receipt of Object.values(record.templateMarket.receipts)) {
+          if (receipt.state !== 'running') continue
+          receipt.state = 'failed'
+          receipt.output = { outcome: 'failed', summary: record.error, data: null, questions: [], limitations: [],
+            failure: { kind: 'system', reason: record.error, requirements: [record.error],
+              actions: [record.stopUnknown ? '核对子会话停止状态后恢复，暂不能重试' : '保留当前任务，核对原因后重试'] } }
+          receipt.updatedAt = record.updatedAt
+        }
+      }
+    }
+    finally { settled = true; record.active = false; record.controller = null }
+  }
+
   const start = async (input: ValuationWorkflowStartInput): Promise<ValuationWorkflowOperationOutcome> => {
     const runId = String(input.runId ?? '').trim()
     if (runId === '') return outcomeOf(newRecord(input), 'invalid-input', '缺少运行标识')
@@ -1882,7 +1952,7 @@ export function createValuationWorkflowService(
 
     // Blank is a valid choice; a provided date must still be a real calendar day.
     const providedBaseDate = input.baseDate === null || input.baseDate === undefined
-      ? ''
+      ? input.initialInput?.baseDate ?? ''
       : String(input.baseDate)
     if (providedBaseDate !== '' && !isRealCalendarDate(providedBaseDate)) {
       return outcomeOf(newRecord(input), 'invalid-input', '基准日必须是真实存在的 YYYY-MM-DD 日期')
@@ -1890,6 +1960,19 @@ export function createValuationWorkflowService(
 
     const record = newRecord(input)
     runs.set(runId, record)
+    if (ports.templateMarket && usesTemplateMarketFlow(record.initialInput) && record.initialInput !== null) {
+      record.templateMarket = createTemplateMarketState({ runId, initialInput: record.initialInput })
+      record.templateMarket.facts.objectId = { value: record.object.objectId, unit: '', status: 'verified', evidenceRefs: [] }
+      if (record.object.areaSqm !== null) record.templateMarket.facts.areaSqm = { value: record.object.areaSqm, unit: '㎡', status: 'verified', evidenceRefs: [] }
+      if (record.object.useLabel) record.templateMarket.facts.useLabel = { value: record.object.useLabel, unit: '', status: 'verified', evidenceRefs: [] }
+      record.purpose = record.purpose || record.initialInput.purpose || ''
+      record.baseDate = record.baseDate || record.initialInput.baseDate || ''
+      for (const [field, value] of Object.entries({ purpose: record.purpose, baseDate: record.baseDate, valueType: record.initialInput.valueType })) {
+        if (value) record.templateMarket.facts[field] = { value, unit: '', status: 'verified', evidenceRefs: [] }
+      }
+      await runMarket(record, 'templates')
+      return await finish(record)
+    }
 
     if (record.decision.mode !== null && record.decision.mode !== 'listing-reference') {
       record.status = 'blocked'
@@ -1923,6 +2006,7 @@ export function createValuationWorkflowService(
     const saved = saveQuestionDraft(record.questionnaire, input)
     if (!saved.ok) return outcomeOf(record, 'stale-revision', saved.error)
     record.questionnaire = saved.state
+    if (record.templateMarket) record.templateMarket.questionnaire = clonePlainJson(saved.state)
     touch(record)
     return await finish(record)
   }
@@ -1938,23 +2022,30 @@ export function createValuationWorkflowService(
       return duplicate.ok ? outcomeOf(record) : outcomeOf(record, 'invalid-input', duplicate.error)
     }
     if (input.expectedRevision !== record.revision) return outcomeOf(record, 'stale-revision', '回答基于的节点版本已经变化，请保留草稿并重新核对')
-    if (input.nodeId !== 'intent' && !(VALUATION_WORKFLOW_STAGES as readonly string[]).includes(input.nodeId)) {
+    if (record.templateMarket && record.templateMarket.currentNode !== input.nodeId) return outcomeOf(record, 'stale-revision', '当前执行节点已变化，请保留草稿并回答当前节点')
+    if (input.nodeId !== 'intent' && !(record.templateMarket && (TEMPLATE_MARKET_NODES as readonly string[]).includes(input.nodeId)) && !(VALUATION_WORKFLOW_STAGES as readonly string[]).includes(input.nodeId)) {
       return outcomeOf(record, 'invalid-input', '问题不属于当前流程节点')
     }
     const submitted = submitQuestionAnswers(record.questionnaire, input)
     if (!submitted.ok) return outcomeOf(record, input.expectedQuestionVersion !== record.questionnaire.version
       ? 'stale-revision' : 'invalid-input', submitted.error)
     record.questionnaire = submitted.state
+    if (record.templateMarket) record.templateMarket.questionnaire = clonePlainJson(submitted.state)
     touch(record)
     if (!(await persist(record))) {
       markStoreFailure(record)
       return outcomeOf(record)
     }
+    if (record.templateMarket) {
+      if (record.templateMarket.currentNode !== input.nodeId) return await finish(record, 'stale-revision', '回答已保存，当前执行节点已变化')
+      await runMarket(record, input.nodeId as TemplateMarketNodeId)
+      return await finish(record)
+    }
     const applicable = record.questionnaire.questions.filter((question) => question.nodeId === input.nodeId && question.applicable)
     const conflicts: string[] = []
     const changes: Array<{ field: string; value: unknown }> = []
     for (const question of applicable) {
-      if (FIELD_OWNER[question.field] === undefined || question.answer === null || question.answer.unknown) continue
+      if (FIELD_OWNER[question.field] === undefined || question.answer === null || question.answer.kind !== undefined || question.answer.unknown) continue
       const proposed = question.field === 'areaSqm' ? Number(question.answer.value) : question.answer.value
       const adopted = Object.values(record.stages).flatMap((receipt) => Array.isArray(receipt.outputs.adoptedFacts)
         ? receipt.outputs.adoptedFacts as Array<{ field?: string; value?: unknown }> : [])
@@ -2027,7 +2118,7 @@ export function createValuationWorkflowService(
     for (const nodeId of owners) {
       const answers: ValuationQuestionSubmit['answers'] = {}
       for (const question of questionnaire.questions.filter((question) => question.nodeId === nodeId && question.applicable)) {
-        const value = input.answers[question.field] ?? question.answer?.value
+        const value = input.answers[question.field] ?? (question.answer?.kind === undefined ? question.answer?.value : undefined)
         if (value !== undefined) answers[question.questionId] = { value }
       }
       const submitted = submitQuestionAnswers(questionnaire, { nodeId, answers, expectedRevision: record.revision,
@@ -2151,8 +2242,54 @@ export function createValuationWorkflowService(
       return outcomeOf(record, 'invalid-input', '修订必须说明理由与来源')
     }
     const changes = Array.isArray(input.changes) ? input.changes : []
-    if (changes.length === 0) return outcomeOf(record, 'invalid-input', '修订没有要更改的字段')
     if (record.active) return outcomeOf(record, 'duplicate', '当前仍在执行，暂不能接受新修订')
+    if (changes.length === 0) {
+      const market = record.templateMarket
+      if (!market || !ports.templateMarket || record.status !== 'failed' || record.storeFailed
+        || input.nodeId !== market.currentNode
+        || !['failed', 'running'].includes(market.receipts[market.currentNode]?.state ?? '')) {
+        return outcomeOf(record, 'invalid-input', '仅当前失败的市场法节点可在不修改业务输入时重试；保存故障须先重新加载已保存任务')
+      }
+      record.usedSubmissions.add(input.submissionId)
+      record.revisions.push({ revision: record.revision, status: record.status, outcome: record.outcome, result: null,
+        reason, source, changes: [], supersededNodeIds: [], templateMarket: clonePlainJson(market), updatedAt: record.updatedAt })
+      record.revision += 1
+      await runMarket(record, market.currentNode)
+      return await finish(record)
+    }
+
+    if (record.templateMarket && ports.templateMarket) {
+      if (!(TEMPLATE_MARKET_NODES as readonly string[]).includes(input.nodeId)) return outcomeOf(record, 'invalid-input', '未知的估值节点')
+      const allowed = new Set(['areaSqm', 'useLabel', 'purpose', 'baseDate', 'promptSupplement'])
+      if (new Set(changes.map(c => c.field)).size !== changes.length || changes.some(c => !allowed.has(c.field)
+        || (c.field === 'areaSqm' ? !Number.isFinite(Number(c.value)) || Number(c.value) <= 0 : typeof c.value !== 'string' || c.value.length > SUPPLEMENTAL_PROMPT_MAX_LENGTH
+          || (c.field !== 'baseDate' && !c.value.trim())))) return outcomeOf(record, 'invalid-input', '修订字段或值不合法')
+      if (changes.some(c => c.field === 'baseDate' && c.value !== '' && !isRealCalendarDate(String(c.value)))) return outcomeOf(record, 'invalid-input', '基准日必须是真实日期')
+      const previous = record.revisions.find(r => r.revision === record.revision)
+      if (previous) previous.templateMarket = clonePlainJson(record.templateMarket)
+      else record.revisions.push({ revision: record.revision, status: record.status, outcome: record.outcome, result: null,
+        reason: '', source: '', supersededNodeIds: [], templateMarket: clonePlainJson(record.templateMarket), updatedAt: record.updatedAt })
+      record.usedSubmissions.add(input.submissionId)
+      const flow = createTemplateMarketFlow(ports.templateMarket, { save: async () => {} })
+      record.templateMarket = flow.invalidate(record.templateMarket, changes.map(c => c.field))
+      const recorded: ValuationWorkflowRevisionChange[] = []
+      for (const c of changes) {
+        const value = c.field === 'areaSqm' ? Number(c.value) : c.value
+        const before = c.field === 'areaSqm' || c.field === 'useLabel' ? record.object[c.field]
+          : c.field === 'purpose' ? record.purpose : c.field === 'baseDate' ? record.baseDate : record.templateMarket.facts.promptSupplement?.value ?? ''
+        recorded.push({ nodeId: input.nodeId as TemplateMarketNodeId, field: c.field, before, after: value, sourceKind: 'user', source, reason })
+        if (c.field === 'areaSqm' || c.field === 'useLabel') {
+          Object.assign(record.object, { [c.field]: value })
+        } else if (c.field === 'purpose') record.purpose = String(c.value)
+        else if (c.field === 'baseDate') record.baseDate = String(c.value)
+        record.templateMarket.facts[c.field] = { value: value as string | number, unit: c.field === 'areaSqm' ? '㎡' : '', status: 'verified', evidenceRefs: [] }
+      }
+      record.revision += 1
+      record.revisions.push({ revision: record.revision, status: 'running', outcome: null, result: null, reason, source,
+        supersededNodeIds: TEMPLATE_MARKET_NODES.filter(id => !record.templateMarket!.receipts[id]), changes: recorded })
+      await runMarket(record, record.templateMarket.currentNode)
+      return await finish(record)
+    }
 
     // A correction is only meaningful against one of the seven real business nodes.
     const nodeId = String(input.nodeId ?? '')
@@ -2337,6 +2474,13 @@ export function createValuationWorkflowService(
       return outcomeOf(record, 'stale-revision', '方案确认基于的版本已经过期')
     }
     if (record.active) return outcomeOf(record, 'duplicate', '当前仍在执行，暂不能确认方案')
+    if (record.templateMarket) {
+      const market = record.templateMarket
+      if (market.currentNode !== 'confirm-plan' || market.plan?.digest !== input.planDigest) return outcomeOf(record, 'stale-revision', '采集方案已变化')
+      return await submitQuestions({ runId: record.runId, nodeId: 'confirm-plan', expectedRevision: record.revision,
+        expectedQuestionVersion: record.questionnaire.version, submissionId: input.submissionId, supplement: '', noteEdits: {},
+        answers: { 'confirm-plan:approval': { kind: 'choice', values: ['accept'], supplement: '' } } })
+    }
     const plan = record.plan
     if (plan === null || !plan.ready) {
       return outcomeOf(record, 'invalid-input', '当前版本没有可确认的完整方案')
@@ -2387,6 +2531,7 @@ export function createValuationWorkflowService(
     record.errorKind = ''
     record.error = ''
     record.controller?.abort()
+    if (record.templateMarket) record.templateMarket.status = 'cancelled'
     touch(record)
     return await finish(record)
   }

@@ -1,3 +1,6 @@
+import { templateMarketInferenceSchema, TEMPLATE_MARKET_INSTRUCTION } from './template-market-schema.ts'
+import { TEMPLATE_MARKET_NODES, type TemplateMarketNodeId } from '../../../shared/contracts/valuation-template-market.ts'
+import { validateTemplateMarketOutput } from '../../domains/report-evaluation/workflow/template-market-contracts.ts'
 /**
  * DSH inference adapter for the valuation workflow.
  *
@@ -210,6 +213,7 @@ const QUESTIONS_SCHEMA: JsonSchemaNode = {
       questionId: { type: 'string' }, field: { type: 'string' }, prompt: { type: 'string' },
       control: { type: 'string', enum: ['text', 'textarea', 'number', 'date', 'select', 'radio', 'multiselect', 'boolean'] },
       required: { type: 'boolean' }, version: { type: 'number' }, applicable: { type: 'boolean' },
+      answerProtocol: { type: 'number', enum: [2] }, allowDefer: { type: 'boolean' },
       reason: { type: 'string' },
       options: { type: 'array', items: { type: 'object', additionalProperties: false,
         properties: { value: { type: 'string' }, label: { type: 'string' } }, required: ['value', 'label'] } },
@@ -503,6 +507,7 @@ function validQuestions(value: unknown): boolean {
   const boundedText = (input: unknown, max: number): input is string => typeof input === 'string'
     && input.trim() !== '' && input.length <= max
   return value.every((question: Record<string, unknown>) => {
+    if (question.answerProtocol === 2 && typeof question.allowDefer !== 'boolean') return false
     if (!boundedText(question.questionId, 256) || !boundedText(question.field, 256)
       || !boundedText(question.prompt, 4_000) || !boundedText(question.reason, 4_000)
       || !Number.isSafeInteger(question.version) || Number(question.version) < 1
@@ -513,7 +518,7 @@ function validQuestions(value: unknown): boolean {
     if (!Array.isArray(question.options) || question.options.length === 0 || question.options.length > 50) return false
     const options = new Set<string>()
     return question.options.every((option: Record<string, unknown>) => {
-      if (!boundedText(option.value, 256) || !boundedText(option.label, 200) || options.has(option.value)) return false
+      if (!boundedText(option.value, 256) || option.value === '__other__' || !boundedText(option.label, 200) || options.has(option.value)) return false
       options.add(option.value)
       return true
     })
@@ -535,6 +540,7 @@ function isAcceptableKnowledgeSelection(value: unknown): value is Record<string,
 }
 
 function outputSchemaFor(request: ValuationInferenceRequest): JsonSchemaNode | null {
+  if (request.operation === 'template-market') return (TEMPLATE_MARKET_NODES as readonly string[]).includes(request.nodeId) ? templateMarketInferenceSchema(request.nodeId as TemplateMarketNodeId) : null
   if (request.operation === 'template-analysis') return TEMPLATE_ANALYSIS_SCHEMA
   if (request.operation === 'knowledge-selection') return KNOWLEDGE_SELECTION_SCHEMA
   if (request.operation === 'page-reading') return PAGE_READING_SCHEMA
@@ -589,6 +595,7 @@ function isAcceptablePlanningSelection(value: unknown): value is Record<string, 
 }
 
 function isAcceptableOutput(request: ValuationInferenceRequest, value: unknown): value is Record<string, unknown> {
+  if (request.operation === 'template-market') return validateTemplateMarketOutput(request.nodeId as TemplateMarketNodeId, value).ok
   if (request.operation === 'template-analysis') return isTemplateRequirements(value)
     && validateJsonSchemaValue(TEMPLATE_ANALYSIS_SCHEMA, value).length === 0
   if (request.operation === 'knowledge-selection') return isAcceptableKnowledgeSelection(value)
@@ -638,7 +645,7 @@ function taskPrompt(request: ValuationInferenceRequest): string {
   const pageReading = request.operation === 'page-reading'
   const planningSelection = request.operation === 'planning-selection'
   const templateAnalysis = request.operation === 'template-analysis'
-  const instruction = selection
+  const instruction = request.operation === 'template-market' ? TEMPLATE_MARKET_INSTRUCTION : selection
     ? KNOWLEDGE_SELECTION_INSTRUCTION
     : pageReading ? PAGE_READING_INSTRUCTION
       : planningSelection ? PLANNING_SELECTION_INSTRUCTION

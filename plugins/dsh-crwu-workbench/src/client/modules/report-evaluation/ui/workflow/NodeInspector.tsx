@@ -11,6 +11,8 @@ import { sourceKindLabelOf } from './model.ts'
 import { StructuredValue } from '../../../../ui/workflow/StructuredValue.tsx'
 import { ClarificationPanel } from './ClarificationPanel.tsx'
 import { QuestionnairePanel, type QuestionnairePanelProps } from './QuestionnairePanel.tsx'
+import type { ValuationWorkflowProgressView } from '../../../../../shared/contracts/valuation-workflow.ts'
+import { MarketPlanSummary } from './MarketPlanSummary.tsx'
 
 export interface NodeInspectorProps {
   detail: ValuationWorkflowNodeView
@@ -28,6 +30,9 @@ export interface NodeInspectorProps {
   onAnswerChange?: (field: string, value: string) => void
   onSubmitClarification?: (clarificationId: string, answers: Record<string, string>) => void
   questionnaireProps?: QuestionnairePanelProps
+  market?: ValuationWorkflowProgressView['market']
+  revisions?: ValuationWorkflowProgressView['revisions']
+  onOpenArtifact?: (kind: string) => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,8 +120,9 @@ export function NodeInspector(props: NodeInspectorProps): React.ReactElement {
   const failure = detail.failure
   const executionFault = failure !== undefined && failure.kind !== 'business'
 
-  return <section className={W.detail} data-workflow-node-detail={detail.nodeId}
-    data-workflow-node-current={String(detail.current !== false)}>
+  const before = <>
+    {props.market?.artifacts.some(a => a.kind === 'candidates') && props.onOpenArtifact ? <Button variant="secondary" size="sm"
+      data-workflow-open-candidates="true" onClick={() => props.onOpenArtifact?.('candidates')}>打开本轮候选案例 Excel</Button> : null}
     {showSession
       ? <div className={W.session} data-workflow-node-session={sessionId}>
         <span className={W.fieldLabel}>当前节点会话</span>
@@ -140,7 +146,11 @@ export function NodeInspector(props: NodeInspectorProps): React.ReactElement {
         onClick={() => { props.onRetryNode?.() }}>重新执行该节点</Button> : null}
     </div>}
 
-    {props.questionnaireProps === undefined ? null : <QuestionnairePanel {...props.questionnaireProps} executionBlocked={executionFault} />}
+    {props.market?.plan && ['collection-plan', 'confirm-plan'].includes(props.market.currentNode) && detail.current !== false
+      ? <MarketPlanSummary plan={props.market.plan} /> : null}
+  </>
+
+  const after = <>
 
     {props.questionnaireProps !== undefined || clarification === null || typeof props.onSubmitClarification !== 'function'
       ? null
@@ -199,5 +209,23 @@ export function NodeInspector(props: NodeInspectorProps): React.ReactElement {
       <summary className={W.blockTitle}>本次输出（只读）</summary>
       {outputOpen ? <ReadOnlyFields fields={displayFieldsOf(outputs, detail.rawOutputs)} /> : null}
     </details>
+    {props.market === undefined ? null : <details className={W.block} data-workflow-detail="knowledge">
+      <summary className={W.blockTitle}>采用知识与出处（{detail.knowledge.length}）</summary>
+      {detail.knowledge.map((ref, index) => <div className={W.block} key={index}>
+        <p className={W.hint}>{ref.section} · {ref.path}</p><p className={W.hint}>{ref.quote}</p>
+      </div>)}
+    </details>}
+    {props.market === undefined ? null : <details className={W.block} data-workflow-detail="history">
+      <summary className={W.blockTitle}>历次节点记录</summary>
+      {(props.revisions ?? []).filter(r => r.templateMarket?.receipts[detail.nodeId as keyof typeof r.templateMarket.receipts]).map(r => <details key={r.revision} className={W.block}>
+        <summary>修订 {r.revision} · {r.updatedAt ?? r.templateMarket?.updatedAt}</summary>
+        <StructuredValue value={r.templateMarket?.receipts[detail.nodeId as keyof typeof r.templateMarket.receipts]?.output} />
+      </details>)}
+    </details>}
+  </>
+  return <section className={W.detail} data-workflow-node-detail={detail.nodeId}
+    data-workflow-node-current={String(detail.current !== false)}>
+    {props.questionnaireProps === undefined ? <>{before}{after}</> : <QuestionnairePanel {...props.questionnaireProps}
+      executionBlocked={executionFault} before={before} after={after} contained={props.market !== undefined} />}
   </section>
 }

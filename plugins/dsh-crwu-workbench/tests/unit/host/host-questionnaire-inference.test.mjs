@@ -19,6 +19,15 @@ async function infer(structured, patch = {}) {
   return { result, request: runtime.calls.starts[0].request }
 }
 
+test('inference preserves explicit modern answer protocol and deferral permission', async () => {
+  const modern = question({ answerProtocol: 2, allowDefer: true, control: 'radio', options: [{ value: 'listing', label: '挂牌价' }] })
+  const result = (await infer({ questions: [modern] })).result
+  assert.equal(result.ok, true, result.error)
+  assert.equal(result.outputs.questions[0].allowDefer, true)
+  const missing = { ...modern }; delete missing.allowDefer
+  assert.equal((await infer({ questions: [missing] })).result.ok, false)
+})
+
 test('every regular stage can return only typed employee blockers with complete submitted context', async () => {
   for (const stage of ['elements', 'rights', 'plan', 'evidence', 'calculation', 'review', 'delivery']) {
     const structured = { questions: [question()] }

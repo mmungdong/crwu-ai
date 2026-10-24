@@ -1,3 +1,4 @@
+import type { TemplateMarketNodeId } from '../../../../shared/contracts/valuation-template-market.ts'
 /**
  * Closed input parsing for the advanced valuation-workflow panel operations.
  *
@@ -18,6 +19,7 @@ import type {
   ValuationWorkflowStage,
 } from '../../../../shared/contracts/valuation-workflow.ts'
 import type { WorkflowCalculationReceipt } from './types.ts'
+import { isQuestionAnswerShape } from '../../../../shared/contracts/valuation-question-answer.ts'
 import type { ValuationQuestionEdit, ValuationQuestionSubmit } from '../../../../shared/contracts/valuation-questionnaire.ts'
 
 export type WorkflowActionKind = 'answer' | 'revise' | 'approve-plan' | 'questions-draft' | 'questions-submit'
@@ -29,7 +31,7 @@ export interface ParsedWorkflowAction {
   /** Closed payload handed to the runtime; never the raw args. */
   payload: Record<string, unknown> | null
   /** Business stage a revise node maps to; empty for every other action. */
-  stage: ValuationWorkflowStage | 'intent' | ''
+  stage: ValuationWorkflowStage | TemplateMarketNodeId | 'intent' | ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,11 +62,7 @@ export function parseQuestionEdit(value: unknown, submit: boolean): ValuationQue
     || !isRecord(value.noteEdits) || Object.keys(value.noteEdits).length > 10000) return null
   if (submit && !identifier(value.submissionId)) return null
   for (const [id, answer] of Object.entries(value.answers)) {
-    if (!identifier(id) || !isRecord(answer) || !Object.hasOwn(answer, 'value')
-      || Object.keys(answer).some((key) => !['value', 'unknown', 'reason'].includes(key))
-      || !bounded(answer.value, 20_000)
-      || (Object.hasOwn(answer, 'unknown') && typeof answer.unknown !== 'boolean')
-      || (Object.hasOwn(answer, 'reason') && !bounded(answer.reason, 4_000))) return null
+    if (!identifier(id) || !isQuestionAnswerShape(answer)) return null
   }
   if (!Object.entries(value.noteEdits).every(([id, note]) => identifier(id) && bounded(note, 20_000))) return null
   return JSON.parse(JSON.stringify(value)) as ValuationQuestionEdit | ValuationQuestionSubmit
@@ -73,7 +71,7 @@ export function parseQuestionEdit(value: unknown, submit: boolean): ValuationQue
 export interface NodeStageResolution {
   ok: boolean
   error: string
-  stage: ValuationWorkflowStage | ''
+  stage: ValuationWorkflowStage | TemplateMarketNodeId | ''
   /** A real compiled node that owns no business stage (router/sentinel) is read-only. */
   readonly: boolean
 }
@@ -93,7 +91,7 @@ export function stageOfCompiledNode(
   if (graph === null) return { ok: false, error: '实际编译的估值图不可读', stage: '', readonly: false }
   const node = graph.nodes.find((candidate) => candidate.nodeId === id)
   if (node === undefined) return { ok: false, error: '节点不在实际编译的估值图里', stage: '', readonly: false }
-  const stage = node.stage
+  const stage = node.templateMarketNodeId ?? node.stage
   if (stage === undefined) return { ok: false, error: '该节点只读，不能作为修订起点', stage: '', readonly: true }
   return { ok: true, error: '', stage, readonly: false }
 }
@@ -101,10 +99,10 @@ export function stageOfCompiledNode(
 /** The actual compiled node id that owns one stage; `''` when the descriptor lost it. */
 export function compiledNodeIdOfStage(
   graph: ValuationWorkflowGraphView | null,
-  stage: ValuationWorkflowStage,
+  stage: ValuationWorkflowStage | TemplateMarketNodeId,
 ): string {
   if (graph === null) return ''
-  return graph.nodes.find((candidate) => candidate.stage === stage)?.nodeId ?? ''
+  return graph.nodes.find((candidate) => candidate.templateMarketNodeId === stage || candidate.stage === stage)?.nodeId ?? ''
 }
 
 /**
@@ -130,7 +128,7 @@ export function parseWorkflowAction(
     if (edit === null) return fail('问卷只接受节点、图版本、问卷版本、回答、补充说明与备注修改')
     const node = graph?.nodes.find((candidate) => candidate.nodeId === edit.nodeId)
     if (node === undefined) return fail('节点不在实际编译的估值图里')
-    const stage = node.stage ?? (node.nodeId === 'valuation:intent-router' ? 'intent' : '')
+    const stage = node.templateMarketNodeId ?? node.stage ?? (node.nodeId === 'valuation:intent-router' ? 'intent' : '')
     if (stage === '') return fail('该节点不能保存或提交问卷')
     return { ok: true, error: '', action, stage, payload: { ...edit, nodeId: stage } }
   }
@@ -185,7 +183,8 @@ export function parseWorkflowAction(
   if (submissionId === '' || reason === '' || source === '') {
     return fail('修订命令缺少提交标识、理由或来源')
   }
-  if (!Array.isArray(payload.changes) || payload.changes.length === 0) {
+  if (!Array.isArray(payload.changes) || (payload.changes.length === 0
+    && !graph?.nodes.some(node => node.nodeId === text(payload.nodeId) && node.templateMarketNodeId !== undefined))) {
     return fail('修订必须给出变更清单')
   }
   const changes: Array<{ field: string; value: unknown }> = []
@@ -210,7 +209,7 @@ export interface ParsedWorkflowPreview {
   ok: boolean
   error: string
   nodeId: string
-  stage: ValuationWorkflowStage | ''
+  stage: ValuationWorkflowStage | TemplateMarketNodeId | ''
   expectedRevision: number
   changes: Array<{ field: string; value: unknown }>
 }
@@ -243,10 +242,10 @@ export function parseWorkflowPreview(
   return { ok: true, error: '', nodeId, stage: resolved.stage, expectedRevision, changes }
 }
 
-export type WorkflowArtifactKind = 'template' | 'workbook' | 'report' | 'trace' | 'data'
+export type WorkflowArtifactKind = 'template' | 'workbook' | 'report' | 'trace' | 'data' | 'candidates' | 'workpaper'
 
 export const WORKFLOW_ARTIFACT_KINDS: readonly WorkflowArtifactKind[] = [
-  'template', 'workbook', 'report', 'trace', 'data',
+  'template', 'workbook', 'report', 'trace', 'data', 'candidates', 'workpaper',
 ]
 
 /** Explicit path-like keys a panel may not use; only the closed kind is accepted. */
@@ -272,14 +271,14 @@ export function parseArtifactRequest(args: Record<string, unknown>): ParsedArtif
 }
 
 /** Closed legacy filename aliases for the four real calculated deliverables. */
-const CALCULATED_ALIASES: Record<Exclude<WorkflowArtifactKind, 'template'>, readonly string[]> = {
+const CALCULATED_ALIASES: Record<'workbook' | 'report' | 'trace' | 'data', readonly string[]> = {
   workbook: ['估值底稿.xlsx', '估值底稿.xls'],
   report: ['估值报告.html', '估值报告.htm'],
   trace: ['计算轨迹.json'],
   data: ['估值报告数据.json'],
 }
 
-const CALCULATED_LABELS: Record<Exclude<WorkflowArtifactKind, 'template'>, string> = {
+const CALCULATED_LABELS: Record<'workbook' | 'report' | 'trace' | 'data', string> = {
   workbook: '估值底稿',
   report: '估值报告',
   trace: '计算轨迹',
@@ -323,6 +322,18 @@ function baseName(relativePath: string): string {
 export function resolveWorkflowArtifact(
   input: ResolveArtifactInput,
 ): { ok: boolean; artifact: ResolvedWorkflowArtifact | null; error: string } {
+  const market = input.dto?.templateMarket
+  if (market) {
+    const template = input.kind === 'template' ? market.plan?.template : null
+    const file = market.artifacts.find(a => a.kind === input.kind || (input.kind === 'workbook' && a.kind === 'workpaper'))
+    const relativePath = template?.relativePath ?? file?.relativePath
+    const digest = template?.digest ?? file?.digest
+    if (!relativePath || !digest) return { ok: false, artifact: null, error: '本轮尚未生成或登记这个文件' }
+    const labels: Partial<Record<WorkflowArtifactKind, string>> = { template: '计算表模板', candidates: '候选案例表', workpaper: '原模板回填底稿', workbook: '原模板回填底稿', trace: '逐字段填表轨迹' }
+    return { ok: true, error: '', artifact: { kind: input.kind, label: labels[input.kind] ?? input.kind, relativePath, digest,
+      ...(file ? { sizeBytes: file.bytes } : {}), referenceMode: true } }
+  }
+  if (input.kind === 'candidates' || input.kind === 'workpaper') return { ok: false, artifact: null, error: '旧版运行没有这类已登记成果' }
   if (input.kind === 'template') {
     const template = input.dto?.plan?.template
     if (template === null || template === undefined) {

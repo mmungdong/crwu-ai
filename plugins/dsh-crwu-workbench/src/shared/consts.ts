@@ -351,7 +351,9 @@ export const DEVELOPER_CONTACT_URL = 'https://n.dingtalk.com/dingding/h5-profile
 // Protocol 48: concrete node failure reasons, requirements and recovery actions.
 // Protocol 49: workspace cleanup (plan + apply) and the `workspace-cleanup` consent
 // capability. The new operations are unusable from an older Host, so the number moves.
-export const WORKBENCH_PROTOCOL = 49
+// Protocol 51: the template-market workface consumes Host-projected per-node
+// summaries and the new eleven-node v2 flow. An older Host cannot supply them.
+export const WORKBENCH_PROTOCOL = 52
 
 /**
  * 补充要求（用户原样输入）的**长度上限**：Client 与 Host 同一把尺子。

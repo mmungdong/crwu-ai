@@ -1,3 +1,4 @@
+import type { TemplateMarketNodeId } from '../../../../shared/contracts/valuation-template-market.ts'
 /**
  * Read-only Host projection for the valuation workflow pane.
  *
@@ -25,6 +26,7 @@ import {
   type ValuationWorkflowStageView,
 } from '../../../../shared/contracts/valuation-workflow.ts'
 import type { ValuationWorkflowQuestionnaire } from '../../../../shared/contracts/valuation-questionnaire.ts'
+import { TEMPLATE_MARKET_NODES } from '../../../../shared/contracts/valuation-template-market.ts'
 import { nodeFailure, readNodeFailure } from './failure.ts'
 
 export interface WorkflowInputContext {
@@ -559,7 +561,9 @@ function globalInputsOf(
     editable: boolean,
     stage?: ValuationWorkflowStage,
   ): void => {
-    const nodeId = stage === undefined ? '' : ownerNodeIdOf(graph, stage)
+    const nodeId = snapshot.templateMarket && stage !== undefined
+      ? graph.nodes.find(n => n.templateMarketNodeId === (stage === 'rights' ? 'materials' : 'collection-plan'))?.nodeId ?? ''
+      : stage === undefined ? '' : ownerNodeIdOf(graph, stage)
     if (editable && nodeId === '') return
     fields.push({
       field,
@@ -586,7 +590,7 @@ function globalInputsOf(
       '当前估值条件', 'confirmed', true, 'elements')
     push('baseDate', INPUT_LABELS.baseDate ?? 'baseDate', current.baseDate,
       '当前估值条件', 'confirmed', true, 'elements')
-    push('mode', INPUT_LABELS.mode ?? 'mode', current.mode,
+    if (!snapshot.templateMarket) push('mode', INPUT_LABELS.mode ?? 'mode', current.mode,
       '当前估值条件', 'confirmed', true, 'elements')
   }
   return fields
@@ -618,7 +622,70 @@ function projectQuestionnaire(
   return result
 }
 
+function projectMarketSnapshot(input: ProjectWorkflowSnapshotInput): ProjectedWorkflowView {
+  const { snapshot } = input
+  const market = snapshot.templateMarket!
+  const graph = cloneJson(input.graph)
+  for (const node of graph.nodes) {
+    const receipt = node.templateMarketNodeId ? market.receipts[node.templateMarketNodeId] : undefined
+    const interrupted = snapshot.status === 'failed' && market.status === 'running' && receipt?.state === 'running'
+    node.state = interrupted ? 'failed' : receipt?.state ?? 'pending'
+    node.gaps = interrupted ? [snapshot.error || '本轮执行中断，请核对当前任务']
+      : receipt?.output?.failure ? [...new Set([receipt.output.failure.reason, ...receipt.output.failure.requirements].filter(Boolean))]
+        : receipt?.output?.limitations ?? []
+  }
+  const marketNodes = (TEMPLATE_MARKET_NODES as readonly string[]).map((id) => {
+    const receipt = market.receipts[id as keyof typeof market.receipts]
+    const data = receipt?.output?.data as Record<string, unknown> | null | undefined
+    const meta = (() => {
+      if (receipt === undefined || data === null || data === undefined) return ''
+      if (id === 'templates') return `${(data.profiles as unknown[] | undefined)?.length ?? 0} 个模板`
+      if (id === 'materials') return `${Object.keys((data.subjectFacts as Record<string, unknown> | undefined) ?? {}).length} 项事实`
+      if (id === 'collection-plan') return `${(data.plan as { providers?: string[] } | undefined)?.providers?.length ?? 0} 个来源`
+      if (id === 'confirm-plan') return (data.accepted as boolean | undefined) === true ? '已确认' : '待确认'
+      if (id === 'search-listings') return `${(data.candidates as unknown[] | undefined)?.length ?? 0} 条候选`
+      if (id === 'candidate-workbook') return `${(data.caseIds as unknown[] | undefined)?.length ?? 0} 条候选`
+      if (id === 'select-cases') return `${(data.selectedCaseIds as unknown[] | undefined)?.length ?? 0} 个案例`
+      if (id === 'inspect-details') return `${(data.candidates as unknown[] | undefined)?.length ?? 0} 个案例`
+      if (id === 'check-inputs') return `${(data.decision as { path?: string } | undefined)?.path ?? '待确认'}`
+      if (id === 'fill-template') return `${(data.artifacts as unknown[] | undefined)?.length ?? 0} 个交付件`
+      if (id === 'validate-delivery') return `${(data.deliveryKind as string | undefined) ?? '待交付'}`
+      return ''
+    })()
+    const projected = graph.nodes.find(node => node.templateMarketNodeId === id)
+    return { nodeId: id as TemplateMarketNodeId, state: projected?.state ?? receipt?.state ?? 'pending',
+      summary: projected?.state === 'failed' ? projected.gaps[0] ?? snapshot.error : receipt?.output?.summary ?? '', meta }
+  })
+  const accepted = Object.values(market.receipts).filter(r => r.state === 'passed' || r.state === 'partial').length
+  const progress: ValuationWorkflowProgressView = { runId: snapshot.runId, revision: snapshot.revision, status: snapshot.status,
+    outcome: snapshot.outcome, deliveryKind: snapshot.delivery?.kind ?? null, referenceDelivered: snapshot.delivery?.referenceDelivered === true,
+    formalComplete: snapshot.delivery?.formalComplete === true, waiting: snapshot.status === 'waiting-user', stages: [],
+    acceptedTaskCount: accepted, plannedTaskCount: null, percentage: null, clarification: null,
+    questionnaire: cloneJson(market.questionnaire), updatedAt: snapshot.updatedAt, graph, plan: null, result: null,
+    revisions: cloneJson(snapshot.revisions), globalInputs: globalInputsOf(snapshot, graph), market: cloneJson({ currentNode: market.currentNode, plan: market.plan,
+      candidates: market.candidates, candidateVersion: market.candidateVersion, selectedCaseIds: market.selectedCaseIds,
+      artifacts: market.artifacts, nodes: marketNodes,
+      recovery: { retryAllowed: snapshot.status === 'failed' && snapshot.errorKind !== 'stop-unknown' && snapshot.errorKind !== 'infrastructure',
+        reason: snapshot.error } }) }
+  const node = graph.nodes.find(n => n.nodeId === input.selectedNodeId)
+  if (!node?.templateMarketNodeId) return { progress, detail: null }
+  const receipt = market.receipts[node.templateMarketNodeId]
+  const fields = (data: unknown): ValuationWorkflowNodeFieldView[] => !isRecord(data) ? [] : Object.entries(data).map(([field, value]) =>
+    ({ field, label: field, value: formatFieldValue(value), rawValue: cloneJson(value), source: '节点已保存回执', sourceKind: 'program' }))
+  const output = receipt?.output
+  return { progress, detail: { nodeId: node.nodeId, stage: null, label: node.label, revision: snapshot.revision,
+    current: market.currentNode === node.templateMarketNodeId, sessionId: '', inputs: fields(receipt?.inputs), outputs: fields(output?.data),
+    knowledge: market.plan?.requirements.fields.flatMap(f => f.basis.map(b => ({ sourceId: b.sourceId, path: market.knowledge.find(k => k.sourceId === b.sourceId)?.location ?? '', section: f.label, quote: b.quote }))) ?? [],
+    readSources: (receipt?.inputs?.knowledge ?? []).map(k => ({ sourceId: k.sourceId, path: k.location, digest: k.digest, coverage: '已载入节点上下文' })),
+    gaps: node.gaps, ...(output?.failure ? { failure: cloneJson(output.failure) }
+      : node.state === 'failed' ? { failure: { kind: 'system' as const, reason: snapshot.error || node.gaps[0] || '本轮执行中断', requirements: node.gaps,
+        actions: [snapshot.errorKind === 'stop-unknown' ? '核对子会话停止状态，暂不能重试' : '保留当前任务，核对原因后恢复'] } } : {}),
+    dependents: graph.nodes.filter(n => n.templateMarketNodeId && graph.edges.some(e => e.source === node.nodeId && e.target === n.nodeId)).map(n => ({ nodeId: n.nodeId, label: n.label })),
+    rawInputs: deepRecord(receipt?.inputs), rawOutputs: deepRecord(output) } }
+}
+
 export function projectWorkflowSnapshot(input: ProjectWorkflowSnapshotInput): ProjectedWorkflowView {
+  if (input.snapshot.templateMarket) return projectMarketSnapshot(input)
   const { snapshot, graph } = input
   const acceptedTaskCount = VALUATION_WORKFLOW_STAGES
     .filter((stage) => snapshot.stages[stage].state === 'passed' || snapshot.stages[stage].state === 'partial')

@@ -1,3 +1,4 @@
+import type { TemplateMarketState, TemplateMarketNodeId } from './valuation-template-market.ts'
 /**
  * Wire types for the embedded valuation workflow (protocol 43).
  *
@@ -196,6 +197,8 @@ export interface ValuationWorkflowQuestionOption {
 }
 
 export interface ValuationWorkflowQuestion {
+  answerProtocol?: 2
+  allowDefer?: boolean
   questionId: string
   field: string
   prompt: string
@@ -265,7 +268,7 @@ export interface ValuationWorkflowDelivery {
 
 /** One reviewed field change recorded with the exact value it replaced. */
 export interface ValuationWorkflowRevisionChange {
-  nodeId: ValuationWorkflowStage
+  nodeId: ValuationWorkflowStage | TemplateMarketNodeId
   field: string
   before: unknown
   after: unknown
@@ -276,6 +279,7 @@ export interface ValuationWorkflowRevisionChange {
 }
 
 export interface ValuationWorkflowRevisionRecord {
+  templateMarket?: TemplateMarketState
   revision: number
   status: ValuationWorkflowStatus
   outcome: ValuationWorkflowOutcome | null
@@ -293,6 +297,8 @@ export interface ValuationWorkflowRevisionRecord {
 }
 
 export interface ValuationWorkflowSnapshot {
+  templateMarket?: TemplateMarketState
+  flowVersion?: 'legacy-v1' | 'template-market-v2'
   runId: string
   revision: number
   status: ValuationWorkflowStatus
@@ -404,6 +410,7 @@ export interface ValuationWorkflowNodeView {
 
 /** One actual compiled graph node, by its exact native id. */
 export interface ValuationWorkflowGraphNodeView {
+  templateMarketNodeId?: TemplateMarketNodeId
   nodeId: string
   label: string
   state: ValuationWorkflowStageState
@@ -427,6 +434,11 @@ export interface ValuationWorkflowGraphView {
 }
 
 export interface ValuationWorkflowProgressView {
+  market?: Pick<TemplateMarketState, 'currentNode' | 'plan' | 'candidates' | 'candidateVersion' | 'selectedCaseIds' | 'artifacts'> & {
+    /** Host-computed per-node summary/meta; never parsed from raw Node data by the Client. */
+    nodes?: Array<{ nodeId: TemplateMarketNodeId; state: string; summary: string; meta: string }>
+    recovery?: { retryAllowed: boolean; reason: string }
+  }
   runId: string
   revision: number
   status: ValuationWorkflowStatus
