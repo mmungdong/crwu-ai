@@ -1,3 +1,4 @@
+import { normalizeQuestionAnswer } from '../../../shared/contracts/valuation-question-answer.ts'
 import type {
   ValuationWorkflowGraphView,
   ValuationWorkflowNodeView,
@@ -233,8 +234,7 @@ function orderedEdit(input: ValuationQuestionEdit, questionnaire?: ValuationWork
   const clean: ValuationQuestionEdit['answers'] = {}
   for (const key of Object.keys(answers).sort()) {
     const answer = answers[key]
-    clean[key] = { value: normalize ? answer.value.trim() : answer.value,
-      ...(answer.unknown === true ? { unknown: true, reason: normalize ? text(answer.reason) : answer.reason ?? '' } : {}) }
+    clean[key] = normalizeQuestionAnswer(answer, normalize)
   }
   const noteEdits: Record<string, string> = {}
   for (const key of Object.keys(input.noteEdits).sort()) noteEdits[key] = normalize ? input.noteEdits[key].trim() : input.noteEdits[key]
@@ -977,7 +977,9 @@ export function createValuationWorkflowController(
       const reason = text(input?.reason)
       const source = text(input?.source)
       const expectedRevision = typeof input?.expectedRevision === 'number' ? input.expectedRevision : -1
-      if (nodeId === '' || expectedRevision < 0 || reason === '' || source === '' || changes.length === 0) {
+      const failedMarketRetry = state.current?.progress?.status === 'failed'
+        && state.current.progress.market?.recovery?.retryAllowed === true
+      if (nodeId === '' || expectedRevision < 0 || reason === '' || source === '' || (changes.length === 0 && !failedMarketRetry)) {
         write({ error: MESSAGES.revisionMissing })
         return false
       }

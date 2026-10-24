@@ -109,6 +109,8 @@ export function valuationWorkflowPort(): ValuationWorkflowPort {
   }
 }
 
+export { createValuationExperienceController } from './valuation/controller.ts'
+export type { ValuationExperienceController } from './valuation/controller.ts'
 export { createValuationWorkflowController }
 export type {
   ValuationWorkflowController,

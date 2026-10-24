@@ -67,23 +67,19 @@ test('global inputs can be changed and rerun without opening a node', async () =
   assert.deepEqual(revised[0].changes, [{ field: 'purpose', value: '资产处置参考' }])
 })
 
-test('clear is present during preparation and returns to overview only after Host success', async () => {
+test('the redesigned workface has no legacy clear action and returns to the overview without clearing the draft', async () => {
   const { AssetAssessmentWorkflow } = await import('../../../src/client/modules/report-evaluation/ui/AssetAssessmentWorkflow.tsx')
   const { initialValuationState } = await import('../../../src/client/modules/report-evaluation/model/valuation-state.ts')
-  const deferred = createDeferred(), calls = []
+  const calls = []
   const state = { current: { ok: true, empty: false, projectId: 'p1', parentSessionId: 'parent', phase: 'preparing', snapshot: null, progress: null }, detail: null, busy: false, loading: false, error: '' }
-  const props = { workflow: { getState: () => state, subscribe: () => () => {}, clear: async () => await deferred.promise },
+  const props = { workflow: { getState: () => state, subscribe: () => () => {}, clear: async () => { calls.push('clear'); return true } },
     evaluation: { getState: initialValuationState, subscribe: () => () => {}, resetDraft: () => calls.push('reset') },
     step: 'valuation', onStep: (step) => calls.push(step), onOpenParentSession() {} }
-  let tree = render(AssetAssessmentWorkflow, props).tree
-  assert.ok(find(tree, attr('data-asset-workflow-clear')), 'clear cannot disappear during preparation')
-  find(tree, attr('data-asset-workflow-clear')).props.onClick()
-  tree = rerender(AssetAssessmentWorkflow, props)
-  find(tree, attr('data-asset-workflow-clear-confirm')).props.onClick()
-  assert.deepEqual(calls, [])
-  deferred.resolve(true)
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(calls, ['reset', 'overview'])
+  const tree = render(AssetAssessmentWorkflow, props).tree
+  assert.equal(find(tree, attr('data-asset-workflow-clear')), null, 'the legacy destructive clear is not part of the new page')
+  assert.equal(find(tree, attr('data-asset-workflow-clear-confirm')), null)
+  find(tree, (node) => node.props?.['data-back-overview'] === 'true').props.onClick()
+  assert.deepEqual(calls, ['overview'])
 })
 
 test('selecting a node immediately opens its loading drawer', async () => {

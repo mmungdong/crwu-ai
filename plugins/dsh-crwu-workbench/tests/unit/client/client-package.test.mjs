@@ -209,7 +209,7 @@ test('apply registers every slot through slots.inject', () => {
 
   // 只有两处走 effect：样式元素，以及自助更新状态（轮询定时器 + 面板开关的监听器）。
   // 槽位注入直接调用（与 DSH 自带的客户端插件一致）。
-  assert.deepEqual(effects.map((entry) => entry.label), ['crwu-workbench: styles', 'crwu-workbench: valuation workflow', 'crwu-workbench: update state'])
+  assert.deepEqual(effects.map((entry) => entry.label), ['crwu-workbench: styles', 'crwu-workbench: valuation workflow', 'crwu-workbench: valuation experience', 'crwu-workbench: update state'])
   assert.deepEqual(injections.map((entry) => entry.name), [
     'sidebar.footer.action', 'main', 'tool.view.cordis', 'conversation.session.header.utilities',
   ], '四个槽位缺一不可：少了会话头那个，界面上就没有办法登记审核父级')
@@ -3332,68 +3332,47 @@ test('侧栏分组卡上的子项就是模块切换：报告审核 ⇄ 环境信
   assert.equal(onReportPage(back), true)
 })
 
-test('报告评估 是房地产估值模块：资料入口 + 方法 + 可选基准日（不再是 Coming Soon）', async () => {
+test('报告评估 是房地产估值模块：对象选择 → 资料与信息 → 核对', async () => {
   stubOps({ boot: { body: bootOk() }, env: { body: okEnvBody() } })
   const services = fakeServices()
   const workflow = { getState: () => ({ current: { ok: true, empty: true, projectId: '', parentSessionId: '', error: '' }, detail: null, loading: false, busy: false, error: '' }), subscribe: () => () => {}, activate: async () => {}, deactivate() {} }
   const { modules } = await mountChecked(services)
 
   modules.navigate('eval', { state: environmentStateOf(okEnvBody()) })
-  // 协议 35：进页面先过门禁。这一条测的是**正文**（资料入口 / 方法 / 基准日），
-  // 所以注入一个"门禁已放行 + 草稿"的控制器；门禁自身的行为在
-  // `client-valuation-handoff.test.mjs` 里逐条覆盖。
   const evaluation = fakeEvaluationController({ phase: 'draft' })
   let after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   find(after, (node) => node.props?.['data-business-step'] === 'valuation').props.onClick()
   after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   await settle()
   after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
-  // 面板这一页现在是估值模块（`crwu-valuation`），不再是占位页。
-  const pane = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes('crwu-valuation'))
-  assert.ok(pane, '估值模块的容器要在')
+
+  const pane = find(after, (node) => node.props?.['data-valuation-experience'] === 'true')
+  assert.ok(pane, '新的估值体验容器要在')
+  assert.ok(find(pane, (node) => node.props?.['data-intake-stage'] === 'object'), '先选择对象，不直接落在上传页')
   const paneText = textOf(pane)
-  // Page identity comes from the top "valuation" tab: the valuation node declares no navPageHead
-  // (the duplicate large heading from the screenshot feedback, 2026-10-16). Other nodes keep it.
-  const head = find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.navPageHead))
-  assert.equal(head, null, '估值页不再重复画一个大页头')
-  const valuationTab = findAll(after, (node) => node.props?.role === 'tab'
-    && textOf(node) === zhCN.navParentValuation)
-  assert.equal(valuationTab.length, 0, '业务步骤替代旧估值页签')
-  assert.ok(find(after, (node) => node.props?.['data-workflow-step'] === 'valuation'))
-  // 占位页那套话术（"将来提供" / "开发中" / 去报告审核）都不该再出现。
-  // 被删掉的 Coming Soon 文案（`features/report-eval/` 已整体移除）：逐字钉住"不许复活"。
   for (const banned of ['该模块正在开发中', '开发中', '目前可以继续使用', '敬请期待', '重磅', '赋能']) {
     assert.equal(paneText.includes(banned), false, `不该再出现「${banned}」`)
   }
-  // 评估方法是**统一的单选下拉**，初始停在"请选择评估方法"（自动判定是选项，不是默认值）。
-  // 四个选项（自动判定 / 市场法 / 收益法 / 成本法）在展开时才渲染到 DOM —— 那份清单与
-  // "四项全可选 + 推荐标记"由 `client-valuation-pane.test.mjs` 直接渲染控件逐条钉住。
-  const methodSelect = find(pane, (node) => node.props?.['data-valuation-select'] === 'method')
-  assert.ok(methodSelect, '评估方法要用统一单选下拉（与资产类型同一种控件）')
-  const methodTrigger = find(methodSelect, (node) => node.props?.role === 'combobox')
-  assert.ok(methodTrigger, '方法下拉要有 combobox 语义')
-  assert.equal(methodTrigger.props['aria-expanded'], false, '收起时不画浮层')
-  assert.equal(methodTrigger.props.disabled, false, '草稿阶段表单可编辑')
-  // 触发器左端就是**当前值**（这份草稿已经选了市场法）；未选时显示占位。
-  assert.equal(textOf(methodSelect).includes(zhCN.valuationMethodMarket), true, '触发器显示当前选择')
-  assert.equal(textOf(methodSelect).includes(zhCN.valuationMethodPlaceholder), false,
-    '已经选好时不再显示占位')
-  // 两个必填项都要有统一标记（星号 + 读屏"必填"）。
-  assert.equal(paneText.includes(zhCN.valuationFieldRequired), true, '必填项要有统一标记')
-  assert.equal(paneText.includes(zhCN.valuationActionDisabledNoMethod), false, '两个必填项都选好了就不该报缺')
-  // 基准日是**可选**的：界面上必须写明，否则用户会以为必须填。
-  assert.ok(paneText.includes(zhCN.valuationBaseDateOptional), '基准日要标明可选')
-  // 已有资料、没扫完之前不能点「确认」（按钮禁用 + 可见原因），也不能现在就画抽屉。
-  assert.equal(textOf(pane).includes(zhCN.valuationDrawerTitle), false, '还没确认时不该出现抽屉')
-  const confirmButton = findAll(pane, (node) => node.type === 'button'
-    && String(node.props?.className ?? '').includes('crwu-valuation-btn-primary'))
-  assert.equal(confirmButton.length, 1, '工作面只有一个 primary')
-  assert.equal(textOf(confirmButton[0]), zhCN.valuationConfirm, '主操作逐字是「核对资料」')
-  assert.equal(textOf(confirmButton[0]).includes('检查并确认'), false, '旧的「检查并确认」不许回来')
-  // 占位页不画报告列表、也不画环境四层。
-  const text = textOf(after)
+  assert.equal(find(after, (node) => String(node.props?.className ?? '').split(/\s+/).includes(WORKBENCH_CLASSES.navPageHead)), null,
+    '估值页不再重复画一个大页头')
+  assert.equal(findAll(after, (node) => node.props?.role === 'tab' && textOf(node) === zhCN.navParentValuation).length, 0,
+    '业务步骤替代旧估值页签')
+
+  // 选择房地产 → 资料与信息；资料、模板与手填字段在同一个项目内衔接。
+  find(pane, (node) => node.props?.['data-object-category'] === 'realestate').props.onClick()
+  after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  find(after, (node) => node.props?.['data-intake-next-info'] === 'true').props.onClick()
+  after = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  assert.ok(find(after, (node) => node.props?.['data-intake-doc-panel'] === 'true'), '资料清单要在')
+  assert.ok(find(after, (node) => node.props?.['data-pick-files'] === 'true'), '选择文件走真实入口')
+  assert.ok(find(after, (node) => node.props?.['data-intake-template-panel'] === 'true'), '模板独立于产权资料')
+  assert.ok(find(after, (node) => node.props?.['data-intake-field'] === 'projectName'), '项目名称可填')
+  assert.ok(find(after, (node) => node.props?.['data-intake-field'] === 'baseDate'), '基准日可选')
+  assert.ok(find(after, (node) => node.props?.['data-method-choice'] === 'market'), '市场法是当前可用方法')
+  assert.equal(textOf(after).includes('收益法'), true, '未接通方法要如实标注')
+  assert.equal(textOf(after).includes('暂未接通'), true)
   assert.equal(onReportPage(after), false)
-  assert.equal(text.includes(zhCN.envLayerPackages), false)
+  assert.equal(textOf(after).includes(zhCN.envLayerPackages), false)
 })
 
 // ── 两级目录（一级 = 业务大类，二级 = 该业务下的功能页面）────────────────────
@@ -3554,29 +3533,21 @@ test('切一级目录不丢估值草稿：控制器由 apply 层持有，切走�
   let tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   find(tree, (node) => node.props?.['data-business-step'] === 'valuation').props.onClick()
   tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  find(tree, (node) => node.props?.['data-object-category'] === 'realestate').props.onClick()
+  tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
+  find(tree, (node) => node.props?.['data-intake-next-info'] === 'true').props.onClick()
+  tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   await settle()
   tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
-  // 文件行的主标题是**文件名**，完整路径只留在 `title` 里（§4：显示绝对路径反而认不出资料）。
   assert.equal(textOf(tree).includes('估值报告.pdf'), true, '已选资料要画出来')
   assert.equal(textOf(tree).includes('/tmp/估值报告.pdf'), false, '完整路径不做主标题')
-  assert.equal(
-    findAll(tree, (node) => node.props?.title === '/tmp/估值报告.pdf').length >= 1,
-    true,
-    '完整路径要能在详情 / 悬停里看到',
-  )
-  // 补充要求在 `<textarea>` 的 value 上（不是文本子节点），所以按 value 断言。
-  assert.equal(
-    findAll(tree, (node) => node.props?.value === '多考虑地铁因素').length,
-    1,
-    '补充要求要画出来',
-  )
+  assert.equal(findAll(tree, (node) => node.props?.title === '/tmp/估值报告.pdf').length >= 1, true, '完整路径要能在悬停里看到')
+  assert.equal(findAll(tree, (node) => node.props?.value === '多考虑地铁因素').length, 1, '补充要求要画出来')
 
-  // 切到审核：估值页卸载，但草稿在控制器里（不是页面组件的 state）。
   modules.navigate('audit', { state: environmentStateOf(okEnvBody()) })
   tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   assert.equal(textOf(tree).includes('估值报告.pdf'), false, '审核页上不该画估值页的内容')
 
-  // 切回估值 / 房地产：选择、方法、基准日、补充要求原样还在。
   modules.navigateParent('valuation', { state: environmentStateOf(okEnvBody()) })
   tree = rerender(WorkbenchPanel, { services, modules, evaluation, workflow })
   assert.equal(textOf(tree).includes('估值报告.pdf'), true, '切回来草稿必须还在')

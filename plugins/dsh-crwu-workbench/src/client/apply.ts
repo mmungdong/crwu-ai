@@ -9,6 +9,7 @@ import { WorkbenchPanel } from './shell/WorkbenchPanel.tsx'
 import { createLocalAuditPaneController } from './modules/local-audit/ui/LocalAuditPane.tsx'
 import {
   createReportEvaluationPaneController,
+  createValuationExperienceController,
   createValuationWorkflowController,
   reportEvaluationPaneServices,
   valuationWorkflowPort,
@@ -128,6 +129,12 @@ export function apply(ctx: ClientContext): void {
     // 交接被 Host 接受 → 刷新同一个工作流控制器（不新建运行时、不创建第二个会话）。
     onHandoff: () => { void workflow.refresh() },
   })
+  /**
+   * New valuation interaction: one instance at apply level so intake drafts survive page
+   * switches. It only projects the two real controllers above; no extra Host state.
+   */
+  const experience = createValuationExperienceController({ evaluation, workflow })
+  ctx.effect(() => () => { experience.dispose() }, 'crwu-workbench: valuation experience')
   // 自助更新同理，而且这条是**硬要求**：侧栏那枚版本徽标与面板里的更新面板必须共用
   // 唯一一份更新状态（各自建 store 就会各发一次 status/check，还会出现"徽标说有更新、
   // 面板说已是最新"）。开关状态也挂在实例上（侧栏徽标要能打开面板里的那只 Dialog）。
@@ -182,6 +189,7 @@ export function apply(ctx: ClientContext): void {
       envStatus,
       localAudit,
       evaluation,
+      experience,
       workflow,
       build: buildStore,
       modules,

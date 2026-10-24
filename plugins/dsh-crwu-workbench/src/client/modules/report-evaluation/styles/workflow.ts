@@ -136,6 +136,12 @@ export const VALUATION_WORKFLOW_CLASSES = {
   answerSelect: 'crwu-valuation-workflow-answer-select',
   clarifyActions: 'crwu-valuation-workflow-clarification-actions',
   answerSubmit: 'crwu-valuation-workflow-answer-submit',
+  modernAnswer: 'crwu-valuation-workflow-modern-answer',
+  candidates: 'crwu-valuation-workflow-candidates',
+  candidate: 'crwu-valuation-workflow-candidate',
+  marketSummary: 'crwu-valuation-workflow-market-summary',
+  questionBody: 'crwu-valuation-workflow-question-body',
+  questionFooter: 'crwu-valuation-workflow-question-footer',
   result: 'crwu-valuation-workflow-result',
 } as const
 
@@ -593,6 +599,22 @@ export const WORKFLOW_STYLE_TEXT = `
   font-size: 13px; line-height: 20px; color: var(--crwu-text-primary); cursor: pointer;
 }
 .crwu-valuation-workflow-answer-option input { accent-color: var(--crwu-interactive); }
+.crwu-valuation-workflow-modern-answer { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.crwu-valuation-workflow-modern-answer .crwu-valuation-workflow-answer-group { flex-direction: column; }
+.crwu-valuation-workflow-modern-answer .crwu-valuation-workflow-answer-option { min-height: 44px; padding: 4px 10px; border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-sm, 8px); }
+.crwu-valuation-workflow-modern-answer .crwu-valuation-workflow-answer-option:has(input:checked) { border-color: var(--crwu-interactive); background: var(--crwu-interactive-soft); }
+.crwu-valuation-workflow-modern-answer .crwu-valuation-workflow-answer-input { width: 100%; min-height: 44px; }
+.crwu-valuation-workflow-candidates { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.crwu-valuation-workflow-candidate { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-md, 10px); background: var(--crwu-surface-subtle); min-width: 0; overflow-wrap: anywhere; }
+.crwu-valuation-workflow-market-summary { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--crwu-border); border-radius: var(--crwu-radius-md, 10px); background: var(--crwu-surface-subtle); min-width: 0; }
+.crwu-valuation-workflow-question-body, .crwu-valuation-workflow-question-footer { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+[data-workflow-questionnaire-modern="true"] { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 0; border: 0; }
+[data-workflow-questionnaire-modern="true"] > .crwu-valuation-workflow-question-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; }
+[data-workflow-questionnaire-modern="true"] > .crwu-valuation-workflow-question-footer { flex: none; padding: 14px 20px; border-top: 1px solid var(--crwu-border); background: var(--crwu-surface); }
+[data-workflow-questionnaire-modern="true"] .crwu-valuation-workflow-answer-submit { width: 100%; min-height: 44px; }
+[data-workflow-glass="true"]:has([data-workflow-questionnaire-modern="true"]) { width: min(580px, 100vw); }
+[data-workflow-glass="true"]:has([data-workflow-questionnaire-modern="true"]) .crwu-audit-side-drawer-body { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 0; }
+[data-workflow-glass="true"]:has([data-workflow-questionnaire-modern="true"]) .crwu-valuation-workflow-detail { flex: 1; min-height: 0; }
 .crwu-valuation-workflow-clarification-actions { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 
 /*

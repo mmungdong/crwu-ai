@@ -946,7 +946,7 @@ test('SideDrawer：报告审核那张抽屉的渲染路径没有任何新参数'
 
 test('协议 49 与冻结清单同步：验证窗口、Graph 与清理操作均有登记', async () => {
   const { WORKBENCH_PROTOCOL } = await import(new URL('src/shared/consts.ts', ROOT).href)
-  assert.equal(WORKBENCH_PROTOCOL, 49)
+  assert.equal(WORKBENCH_PROTOCOL, 52)
   const { FROZEN_OPERATIONS } = await import(new URL('tests/helpers/frozen-inventory.mjs', ROOT).href)
   assert.equal(FROZEN_OPERATIONS.includes('workspace-cleanup-plan'), true)
   assert.equal(FROZEN_OPERATIONS.includes('valuation-browser-open-verification'), true)

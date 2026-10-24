@@ -827,7 +827,7 @@ test('WorkbenchPanel 不再持有估值轮询；报告审核的轮询不动', ()
 })
 
 test('协议号升到 49，且只在 shared/consts.ts 一处声明', () => {
-  assert.equal(WORKBENCH_PROTOCOL, 49)
+  assert.equal(WORKBENCH_PROTOCOL, 52)
   const source = readFileSync(new URL('src/shared/consts.ts', ROOT), 'utf8')
   assert.equal((source.match(/WORKBENCH_PROTOCOL =/g) ?? []).length, 1)
 })

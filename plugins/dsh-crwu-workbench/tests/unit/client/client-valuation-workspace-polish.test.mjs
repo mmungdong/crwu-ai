@@ -238,8 +238,10 @@ test('shell: valuation step owns page identity without the old tab', async () =>
   assert.equal(valuationTab.length, 0, 'business steps replace the old valuation tab')
   assert.ok(findAll(tree, (node) => node.props?.['data-workflow-step'] === 'valuation').length)
   assert.equal(hasClassDeep(tree, C.pagePaper), true, 'valuation still uses the shared work paper')
-  assert.equal(findAll(tree, (node) => hasClass(node, 'crwu-valuation')).length, 1,
-    'the real valuation pane must render inside the shell')
+  assert.equal(findAll(tree, (node) => node.props?.['data-valuation-experience'] === 'true').length, 1,
+    'the new valuation experience must render inside the shell')
+  assert.equal(findAll(tree, (node) => node.props?.['data-intake-stage'] === 'object').length, 1,
+    'a fresh valuation starts on object selection, not the upload form')
 })
 
 test('shell: audit page heading behaviour is unchanged (no navPageHead, surface still renders)', async () => {
@@ -416,16 +418,18 @@ test('capability: creating-session keeps every capability action locked', () => 
 
 // ── Shell wiring: capability actions flow through the real controller ────────
 
-test('shell: capability login inside WorkbenchPanel reaches the real port', async () => {
-  const port = fakePort({ preflight: async () => BLOCKED })
+test('shell: intake file picking inside WorkbenchPanel reaches the real picker', async () => {
+  const picked = []
+  const port = fakePort({ fileInput: async () => { picked.push('files'); return [] } })
   const controller = controllerOf(port)
-  controller.checkAuth()
+  const { tree, props } = await mountShell('valuation', controller)
+  find(tree, (node) => node.props?.['data-object-category'] === 'realestate').props.onClick()
+  let next = rerender(WorkbenchPanel, props)
+  find(next, (node) => node.props?.['data-intake-next-info'] === 'true').props.onClick()
+  next = rerender(WorkbenchPanel, props)
+  const pick = find(next, (node) => node.props?.['data-pick-files'] === 'true')
+  assert.ok(pick, 'the intake must expose the real file picker')
+  pick.props.onClick()
   await tick()
-  const { tree } = await mountShell('valuation', controller)
-  const loginButton = findAll(tree, (node) => node.type === 'button'
-    && node.props?.['data-valuation-capability-action'] === 'login')[0]
-  assert.ok(loginButton, 'the shell must surface the real login action')
-  loginButton.props.onClick()
-  await tick()
-  assert.deepEqual(port.calls.login, [{ siteId: 'lianjia' }])
+  assert.deepEqual(picked, ['files'])
 })

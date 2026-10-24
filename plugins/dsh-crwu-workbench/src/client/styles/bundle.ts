@@ -18,6 +18,8 @@ import { LOCAL_AUDIT_STYLE_TEXT } from '../modules/local-audit/styles/pane.ts'
 import { REPORT_AUDIT_STYLE_TEXT } from '../modules/report-audit/styles/pane.ts'
 import { VALUATION_STYLE_TEXT } from '../modules/report-evaluation/styles/pane.ts'
 import { WORKFLOW_STYLE_TEXT } from '../modules/report-evaluation/styles/workflow.ts'
+import { MARKET_WORKFACE_STYLE_TEXT } from '../modules/report-evaluation/market/styles.ts'
+import { VALUATION_EXPERIENCE_STYLE_TEXT } from '../modules/report-evaluation/valuation/styles.ts'
 import { UPDATE_STYLE_TEXT } from '../modules/update/styles/pane.ts'
 
 /**
@@ -60,6 +62,8 @@ const OWNED_STYLE_TEXTS: ReadonlyArray<{ owner: string; text: string }> = [
   { owner: 'modules/local-audit/styles/pane', text: LOCAL_AUDIT_STYLE_TEXT },
   { owner: 'modules/report-evaluation/styles/pane', text: VALUATION_STYLE_TEXT },
   { owner: 'modules/report-evaluation/styles/workflow', text: WORKFLOW_STYLE_TEXT },
+  { owner: 'modules/report-evaluation/market/styles', text: MARKET_WORKFACE_STYLE_TEXT },
+  { owner: 'modules/report-evaluation/valuation/styles', text: VALUATION_EXPERIENCE_STYLE_TEXT },
 ]
 
 /** 各所有者贡献的样式（测试据此断言"谁的规则在谁的文件里"）。 */

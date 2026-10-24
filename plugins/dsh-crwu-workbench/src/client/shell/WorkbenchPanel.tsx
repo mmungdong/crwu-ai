@@ -37,11 +37,13 @@ import {
   TAB_PANEL_ID,
   type PageId,
 } from './navigation.ts'
-import type { ReportEvaluationController } from '../modules/report-evaluation/ui/ReportEvaluationPane.tsx'
 import {
   createReportEvaluationPaneController,
+  createValuationExperienceController,
   createValuationWorkflowController,
   reportEvaluationPaneServices,
+  type ReportEvaluationController,
+  type ValuationExperienceController,
   valuationWorkflowPort,
   type ValuationWorkflowController,
 } from '../modules/report-evaluation/index.ts'
@@ -133,6 +135,8 @@ export interface WorkbenchPanelProps {
    * 缺省（单测直接渲染组件）时页面显示"暂不可用"，而不是抛错。
    */
   evaluation?: ReportEvaluationController
+  /** 估值页新交互的控制器（资料草稿与六步工作面）；缺省时就地建一份。 */
+  experience?: ValuationExperienceController
   /**
    * 「估值」工作流的图控制器（协议 43）。
    *
@@ -200,6 +204,19 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
     })
   }
   const evaluationController: ReportEvaluationController = props.evaluation ?? evaluationFallback.current
+  const experienceFallback = React.useRef<ValuationExperienceController | null>(null)
+  if (props.experience === undefined && experienceFallback.current === null) {
+    experienceFallback.current = createValuationExperienceController({
+      evaluation: evaluationController,
+      workflow: workflowController,
+    })
+  }
+  const experienceController: ValuationExperienceController = props.experience
+    ?? (experienceFallback.current as ValuationExperienceController)
+  React.useEffect(() => {
+    if (props.experience !== undefined) return undefined
+    return () => { experienceFallback.current?.dispose() }
+  }, [props.experience])
   const snapshot = useEnvStatus(envStatus)
   const env = snapshot.env
   const envState = environmentStateOf(env)
@@ -1178,6 +1195,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps): React.ReactElement {
       return <AssetAssessmentWorkflow
         workflow={workflowController}
         evaluation={evaluationController}
+        experience={experienceController}
         step={workflowStep}
         onStep={setWorkflowStep}
         onOpenParentSession={openParentSession}

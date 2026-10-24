@@ -122,9 +122,21 @@ export const CRWU_TOKEN_STYLE_TEXT = `
   /* 投影：只在这五个语义槽里，组件不自己拼阴影 */
   --crwu-shadow-tab: 0 1px 2px rgba(0, 0, 0, 0.06);
   --crwu-shadow-surface: 0 1px 2px rgba(0, 0, 0, 0.025), 0 8px 28px rgba(0, 0, 0, 0.035);
+  --crwu-shadow-footer: 0 -8px 24px rgba(0, 0, 0, 0.03);
   --crwu-shadow-menu: 0 10px 30px rgba(0, 0, 0, 0.12);
   --crwu-shadow-tip: 0 6px 20px rgba(0, 0, 0, 0.22);
   --crwu-shadow-dialog: 0 24px 60px rgba(0, 0, 0, 0.18);
+  /* Market workface palette (approved prototype baseline). */
+  --mv-bg: #F5F5F7; --mv-surface: #FFFFFF; --mv-soft: #F8F9FB; --mv-hover: #F5F6F7;
+  --mv-fg: #171A21; --mv-text: #414246; --mv-muted: #686F7D;
+  --mv-line: rgba(0, 0, 0, 0.06); --mv-line-strong: rgba(0, 0, 0, 0.10);
+  --mv-control: #D5D9E1; --mv-accent: #1668DC; --mv-accent-hover: #0958D9;
+  --mv-accent-soft: #EFF5FF; --mv-accent-line: #B5CEF3; --mv-on-accent: #FFFFFF;
+  --mv-success: #3F9D6A; --mv-success-soft: #EEF7F2; --mv-success-line: #BFE0CF; --mv-success-text: #2F7A52;
+  --mv-warn: #D4A043; --mv-warn-soft: #FBF5E7; --mv-warn-line: #E6D2A6; --mv-warn-text: #866014;
+  --mv-danger: #B33228; --mv-danger-soft: #FCF0EF; --mv-danger-line: #E9C6C2; --mv-danger-text: #A5362D;
+  --mv-shadow: 0 1px 2px rgba(0, 0, 0, 0.025), 0 8px 28px rgba(0, 0, 0, 0.035);
+
 }
 /* 深色：同一套语义名的另一份取值。品牌红与风险色保持上面那份（它们不随主题变）。 */
 body[data-ds-dark-theme] [data-crwu-scope="workbench"] {
@@ -195,8 +207,19 @@ body[data-ds-dark-theme] [data-crwu-scope="workbench"] {
 
   --crwu-shadow-tab: 0 1px 2px rgba(0, 0, 0, 0.35);
   --crwu-shadow-surface: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 28px rgba(0, 0, 0, 0.28);
+  --crwu-shadow-footer: 0 -8px 24px rgba(0, 0, 0, 0.35);
   --crwu-shadow-menu: 0 10px 30px rgba(0, 0, 0, 0.45);
   --crwu-shadow-tip: 0 6px 20px rgba(0, 0, 0, 0.45);
   --crwu-shadow-dialog: 0 24px 60px rgba(0, 0, 0, 0.50);
+  --mv-bg: #101216; --mv-surface: #191C22; --mv-soft: #22262F; --mv-hover: #232833;
+  --mv-fg: #F1F3F7; --mv-text: #D6DBE4; --mv-muted: #ABB3C1;
+  --mv-line: rgba(255, 255, 255, 0.07); --mv-line-strong: rgba(255, 255, 255, 0.13);
+  --mv-control: #3B414D; --mv-accent: #286BD6; --mv-accent-hover: #3578E5;
+  --mv-accent-soft: #22334C; --mv-accent-line: #486C9D; --mv-on-accent: #FFFFFF;
+  --mv-success: #5FB483; --mv-success-soft: #1B2B23; --mv-success-line: #335847; --mv-success-text: #7FC9A5;
+  --mv-warn: #D4A043; --mv-warn-soft: #2C2618; --mv-warn-line: #5A4A28; --mv-warn-text: #E5C279;
+  --mv-danger: #E06A60; --mv-danger-soft: #2C1D1D; --mv-danger-line: #5C3733; --mv-danger-text: #F0A39B;
+  --mv-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.22);
+
 }
 `

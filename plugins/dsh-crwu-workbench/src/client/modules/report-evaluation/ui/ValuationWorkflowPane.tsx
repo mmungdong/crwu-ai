@@ -236,13 +236,16 @@ export function ValuationWorkflowPane(props: ValuationWorkflowPaneProps): React.
     </div>
     : <NodeInspector
       detail={activeDetail}
+      market={progress.market}
+      revisions={progress.revisions}
+      onOpenArtifact={props.onOpenArtifact}
       stale={stale}
       busy={props.busy === true}
       retryAnswer={retryAnswer}
       canRetry={canRetry}
       onRetryAnswerChange={setRetryAnswer}
       onRetrySubmit={submitRetry}
-      onRetryNode={activeDetail.stage === null ? undefined : () => {
+      onRetryNode={activeDetail.stage === null && progress.market === undefined ? undefined : () => {
         if (stale || props.busy || ['preparing', 'awaiting-agent', 'running'].includes(props.runPhase ?? '') || progress.status === 'running') return
         props.onSubmitRevision({ nodeId: activeDetail.nodeId, expectedRevision: activeDetail.revision,
           changes: [{ field: 'promptSupplement', value: '员工请求在故障处理后重新执行本节点；保留并使用已有完整问答，不编造新答案。' }],
@@ -255,6 +258,8 @@ export function ValuationWorkflowPane(props: ValuationWorkflowPaneProps): React.
       onSubmitClarification={submitAnswers}
       questionnaireProps={progress.questionnaire !== undefined && props.onSaveQuestionDraft !== undefined && props.onSubmitQuestions !== undefined ? {
         questionnaire: progress.questionnaire,
+        candidates: progress.market?.candidates,
+        candidateVersion: progress.market?.candidateVersion,
         nodeId: activeDetail.nodeId,
         revision: progress.revision,
         running: ['preparing', 'awaiting-agent', 'running'].includes(props.runPhase ?? '') || progress.status === 'running',
@@ -357,8 +362,17 @@ export function ValuationWorkflowPane(props: ValuationWorkflowPaneProps): React.
         data-workflow-reference-delivered={String(progress.referenceDelivered === true)}
         data-workflow-formal-complete={String(progress.formalComplete === true)}>
         <h3 className={W.panelTitle}>
-          {progress.formalComplete === true ? '正式成果已完成' : '参考成果已交付（非正式评估结论）'}
+          {progress.market ? '已填底稿已交付' : progress.formalComplete === true ? '正式成果已完成' : '参考成果已交付（非正式评估结论）'}
         </h3>
+        {progress.market ? <>
+          <p className={W.hint}>计算重算与专业复核尚未完成；请查看工作簿中的填表说明。</p>
+          {progress.market.artifacts.map(file => <p className={W.hint} key={file.relativePath}>{file.relativePath}</p>)}
+          {props.onOpenArtifact ? <div className={W.planActions}>
+            {['candidates', 'workpaper', 'trace'].filter(kind => progress.market!.artifacts.some(a => a.kind === kind)).map(kind =>
+              <Button key={kind} variant="secondary" size="sm" onClick={() => props.onOpenArtifact?.(kind)}>
+                {kind === 'candidates' ? '打开候选案例表' : kind === 'workpaper' ? '打开原模板回填底稿' : '打开填表轨迹'}</Button>)}
+          </div> : null}
+        </> : null}
       </section>}
 
     {plan === null

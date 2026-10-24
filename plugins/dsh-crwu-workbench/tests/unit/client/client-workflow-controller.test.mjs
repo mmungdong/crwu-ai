@@ -304,3 +304,15 @@ test('a changed snapshot refreshes selected node errors even when its run and re
   assert.deepEqual(f.controller.getState().detail.gaps, [])
   f.controller.deactivate()
 })
+
+
+test('explicit failed-market retry dispatches an empty patch without inventing a prompt supplement', async () => {
+  const f = await fixture({ current: async () => ({ ...current(), phase: 'failed',
+    snapshot: { ...current().snapshot, status: 'failed', templateMarket: { currentNode: 'templates' } },
+    progress: { ...current().progress, status: 'failed', market: { currentNode: 'templates', recovery: { retryAllowed: true, reason: '' } } } }) })
+  await f.controller.activate()
+  assert.equal(await f.controller.revise({ nodeId: 'graph:templates', expectedRevision: 3, changes: [], reason: '修复后重试', source: '员工' }), true)
+  assert.equal(f.calls.action.length, 1)
+  assert.deepEqual(f.calls.action[0].payload.changes, [])
+  f.controller.dispose()
+})

@@ -23,8 +23,8 @@ test('清理明细的展示上限统一为 500', () => {
   assert.equal(WORKSPACE_CLEANUP_ENTRY_LIMIT, 500)
 })
 
-test('协议 49、授权收据 2，新增 workspace-cleanup 能力', () => {
-  assert.equal(WORKBENCH_PROTOCOL, 49)
+test('协议 50 保留授权收据 2 与 workspace-cleanup 能力', () => {
+  assert.equal(WORKBENCH_PROTOCOL, 52)
   assert.equal(LOCAL_ACCESS_SCHEMA_VERSION, 2)
   assert.equal(LOCAL_ACCESS_CAPABILITIES.at(-1), 'workspace-cleanup')
 })
