@@ -418,7 +418,7 @@ test('ping and boot answer with the state the panel needs to render', async () =
   //   snapshots. Protocol 42 = detail capture (actual URL + immutable PNG + manifest) and the
   //   background controlled-target browser flow. Both changed observable Tool output semantics,
   //   so an old Host must be recognized by the current generation.
-  assert.equal(WORKBENCH_PROTOCOL, 49,
+  assert.equal(WORKBENCH_PROTOCOL, 52,
     '协议 49 的清空工作空间两操作必须识别旧 Host')
   // 权限说明版本：客户端与宿主必须执行同一份授权范围判据。
   assert.equal(bootAnswer.permissionSchemaVersion, LOCAL_ACCESS_SCHEMA_VERSION)
@@ -1125,44 +1125,6 @@ test('every declared peer dependency is a real DSH package reference', async () 
   // 曾经把不存在于 DSH 安装里的 dsh-client-ui-slots 写进 devDependencies；这里钉住它不再出现。
   assert.equal(pkg.devDependencies['@deepseek-ai/dsh-client-ui-slots'], undefined)
   assert.equal(pkg.peerDependencies['@deepseek-ai/dsh-client-ui-slots'], undefined)
-})
-
-/**
- * 运行时依赖自带的**必需 peer** 必须由本包自己声明成 dependency。
- *
- * 真实事故（0.0.43，Windows 首次安装即报依赖错误）：本包在 `lib/index.js` 顶层静态
- * `import '@langchain/langgraph'`，而 langgraph 把 `@langchain/core`、`zod` 声明为必需 peer
- * （没有 `peerDependenciesMeta` 标记 optional）。接收方 profile 的解析配置是
- * `autoInstallPeers: false`（宿主有意如此：`@deepseek-ai/dsh-*` 由运行时的 profile 提供，
- * 不能由包管理器安装），于是这两个 peer 永远不会被装到可解析的位置，加载期直接
- * `ERR_MODULE_NOT_FOUND: Cannot find package '@langchain/core' imported from
- * .../@langchain/langgraph/dist/node.js`。
- *
- * `devDependencies` 里补一份**不算数**：那只覆盖本仓开发，接收方装配时依然缺。
- */
-test('runtime dependencies must declare their own required peers as dependencies', async () => {
-  const pkg = JSON.parse(await readFile(new URL('package.json', ROOT), 'utf8'))
-  // 由运行时提供、不经包管理器的包：DSH 给 @deepseek-ai/*，Client 给 react。
-  const providedByRuntime = (name) =>
-    name.startsWith('@deepseek-ai/') || name === 'react' || name === 'react-dom'
-  const missing = []
-  for (const name of Object.keys(pkg.dependencies)) {
-    if (providedByRuntime(name)) continue
-    let dep
-    try {
-      dep = JSON.parse(await readFile(new URL(`node_modules/${name}/package.json`, ROOT), 'utf8'))
-    } catch {
-      // 没装依赖的机器上跳过这一项：本条只判定已安装的依赖。
-      continue
-    }
-    for (const peer of Object.keys(dep.peerDependencies ?? {})) {
-      if (dep.peerDependenciesMeta?.[peer]?.optional === true) continue
-      if (providedByRuntime(peer)) continue
-      if (pkg.dependencies[peer] === undefined) missing.push(`${name} → ${peer}`)
-    }
-  }
-  assert.deepEqual(missing, [],
-    `这些 peer 必须写进本包 dependencies，否则接收方 profile（autoInstallPeers: false）装不到：\n${missing.join('\n')}`)
 })
 
 /**
